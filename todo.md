@@ -57,6 +57,22 @@ Work items, grouped by the phase they belong to in
       builder `addStorage`/`useMemoryStorage`; end-to-end test: state survives a silo restart
 - [ ] Redis (default) + Postgres providers (need real infra; integration-tested)
 
+## Phase 5 — Timers and reminders
+
+- [x] In-memory timers — `registerTimer` fires the callback as a turn via the injectable clock;
+      fixed-rate periodic; cancelled on deactivation
+- [ ] Reminders — `Remindable`, `ReminderTable` contract + in-memory table, hash-range ownership,
+      reminder service that reactivates the grain and delivers `receiveReminder`
+- [ ] Redis (default) + Postgres reminder tables (need real infra)
+
 ## Deferred (later phases)
 
-- Phase 5 timers/reminders; Phase 6 event streams. See [`docs/13`](docs/13-roadmap-and-phases.md).
+- Phase 6 event streams. See [`docs/13`](docs/13-roadmap-and-phases.md).
+
+## On approach to v1 completion
+
+- [ ] **Executable** worked example `examples/thermostat` — real runnable entry point (not snippets)
+      over in-memory providers + in-process/WebSocket transport, with a smoke run wired into the test
+      suite so it can't rot. (Phase 6 exit criterion: thermostat runs end-to-end.)
+- [ ] Reconcile `docs/11` (public API) and `README` with the shipped API; add getting-started/run docs
+- [ ] Final docs accuracy pass before declaring v1 done

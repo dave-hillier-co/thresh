@@ -1,12 +1,15 @@
 import { newActivationId, type ActivationId } from "@tsva/core/activation-id";
+import type { Duration } from "@tsva/core/duration";
 import { GrainCallError } from "@tsva/core/errors";
 import type { Grain } from "@tsva/core/grain";
 import type { GrainContext } from "@tsva/core/grain-context";
 import type { GrainId } from "@tsva/core/grain-id";
 import { getGrainInterface } from "@tsva/core/grain-interface";
 import type { GrainRuntime } from "@tsva/core/grain-runtime";
+import type { GrainTimer } from "@tsva/core/grain-timer";
 import type { ActivationReason, DeactivationReason } from "@tsva/core/reasons";
 import type { InvocationRequest } from "@tsva/core/request";
+import { GrainTimerImpl } from "@tsva/runtime/grain-timer-impl";
 import { invocationContext } from "@tsva/runtime/invocation-context";
 import type { TimeProvider } from "@tsva/runtime/time-provider";
 import { TurnScheduler } from "@tsva/runtime/turn-scheduler";
@@ -32,6 +35,7 @@ export class ActivationData implements GrainContext {
   private lastActiveMs: number;
   private keepAliveUntilMs = 0;
   private deactivateRequested = false;
+  private readonly timers = new Set<GrainTimerImpl>();
 
   constructor(
     id: GrainId,
@@ -83,9 +87,24 @@ export class ActivationData implements GrainContext {
       .finally(() => this.touch());
   }
 
+  /** Register a non-durable timer that fires as a turn; cancelled on deactivation. */
+  registerTimer(callback: () => Promise<void>, due: Duration, period?: Duration): GrainTimer {
+    const timer = new GrainTimerImpl(
+      this.time,
+      (cb) => this.scheduler.schedule({ options: {}, run: cb }),
+      callback,
+      due,
+      period,
+    );
+    this.timers.add(timer);
+    return timer;
+  }
+
   async deactivate(reason: DeactivationReason): Promise<void> {
     if (this.state === "invalid" || this.state === "deactivating") return;
     this.state = "deactivating";
+    for (const timer of this.timers) timer.dispose();
+    this.timers.clear();
     await this.scheduler
       .schedule({ options: {}, run: () => this.instance.onDeactivate(reason) })
       .catch(() => undefined);
