@@ -31,3 +31,19 @@ export class GrainCallTimeoutError extends Error {
     this.name = "GrainCallTimeoutError";
   }
 }
+
+/**
+ * Raised when a persistent write/clear loses an optimistic-concurrency check:
+ * the stored etag no longer matches the one the grain last read, so another
+ * incarnation has written in between.
+ */
+export class InconsistentStateError extends Error {
+  constructor(
+    message: string,
+    readonly expectedEtag: string | undefined,
+    readonly storedEtag: string | undefined,
+  ) {
+    super(message);
+    this.name = "InconsistentStateError";
+  }
+}

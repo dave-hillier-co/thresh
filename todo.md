@@ -47,7 +47,16 @@ Work items, grouped by the phase they belong to in
       health + drain; `start()` flips readiness, `stop()` drains
 - [ ] kind cluster e2e — 3-silo `StatefulSet`, pod-kill reactivation, rolling update (needs a live cluster)
 
+## Phase 4 — Persistence
+
+- [x] `GrainStorage` contract + `StateHolder`; `PersistentState` facet with etag optimistic
+      concurrency; `InconsistentStateError`
+- [x] In-memory provider (`MemoryGrainStorage`); `@persistentState` decorator records fields per
+      instance for runtime injection
+- [ ] Runtime wiring — inject the facet into `@persistentState` fields, read-on-activate,
+      `getStorage`; builder `addStorage(name, provider)`
+- [ ] Redis (default) + Postgres providers (need real infra; integration-tested)
+
 ## Deferred (later phases)
 
-- Phase 4 persistence; Phase 5 timers/reminders; Phase 6 event streams.
-  See [`docs/13`](docs/13-roadmap-and-phases.md).
+- Phase 5 timers/reminders; Phase 6 event streams. See [`docs/13`](docs/13-roadmap-and-phases.md).
