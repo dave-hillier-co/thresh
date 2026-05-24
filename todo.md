@@ -41,7 +41,8 @@ Work items, grouped by the phase they belong to in
 - [ ] Real `@kubernetes/client-node` EndpointSlice watch adapter (the `EndpointWatch` implementation)
 - [x] Health endpoints (`/ready`, `/live`, `/startup`) — `HealthCheck` probe logic + `HealthServer`
 - [x] Graceful drain — `GracefulShutdown` flips readiness then stops the node; `SIGTERM` handler
-- [ ] Hosting builder (`createSilo().useKubernetesMembership()…`) tying node + health + drain together
+- [x] Hosting builder (`createSilo()…build()`) → `SiloHost` tying node + membership + transport +
+      health + drain; `start()` flips readiness, `stop()` drains
 - [ ] kind cluster e2e — 3-silo `StatefulSet`, pod-kill reactivation, rolling update (needs a live cluster)
 
 ## Deferred (later phases)

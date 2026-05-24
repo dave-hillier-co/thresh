@@ -86,6 +86,12 @@ const silo = createSilo({ clusterId: process.env.CLUSTER_ID! })
 await silo.start();   // joins membership, begins accepting calls
 ```
 
+In the current implementation `createSilo({ clusterId, local })` takes the silo's own
+`SiloAddress`, grains are registered with the interfaces they serve
+(`registerGrain(ThermostatGrain, { interfaces: [IThermostat, IThermostatControl] })`, since
+TypeScript interfaces are erased at runtime), and `build()` returns a `SiloHost` whose `start()`
+brings the silo online (flipping readiness) and `stop()` drains it.
+
 ### External client
 
 ```ts

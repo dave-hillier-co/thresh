@@ -49,9 +49,18 @@ importers:
 
   packages/hosting:
     dependencies:
+      '@tsva/clustering-k8s':
+        specifier: workspace:*
+        version: link:../clustering-k8s
       '@tsva/core':
         specifier: workspace:*
         version: link:../core
+      '@tsva/messaging':
+        specifier: workspace:*
+        version: link:../messaging
+      '@tsva/runtime':
+        specifier: workspace:*
+        version: link:../runtime
 
   packages/messaging:
     dependencies:
