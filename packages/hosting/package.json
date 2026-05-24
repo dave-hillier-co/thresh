@@ -10,6 +10,7 @@
     "@tsva/core": "workspace:*",
     "@tsva/messaging": "workspace:*",
     "@tsva/runtime": "workspace:*",
-    "@tsva/clustering-k8s": "workspace:*"
+    "@tsva/clustering-k8s": "workspace:*",
+    "@tsva/persistence": "workspace:*"
   }
 }

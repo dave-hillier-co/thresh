@@ -98,7 +98,10 @@ sequenceDiagram
 
 - **Read on activate (default).** The runtime reads declared states before the first message, so
   `onActivate` and the first method see populated `value`. A grain can opt for lazy reads if startup
-  cost matters.
+  cost matters. In the implementation `@persistentState(name, { defaultValue })` records the field;
+  a catalog hook injects the facet (bound to the grain id and its provider) and reads it before
+  `onActivate`. The default provider is named `"default"` (Redis in production, the in-memory
+  provider for dev/tests, configured via `addStorage` / `useMemoryStorage` on the builder).
 - **Write is explicit.** Nothing is persisted until the grain calls `write()`. This keeps the
   durability boundary visible in the code (Orleans takes the same stance).
 - **Flush on deactivate is the grain's choice.** A grain that wants last-moment durability writes in

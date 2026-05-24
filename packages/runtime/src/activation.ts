@@ -26,6 +26,9 @@ export class ActivationData implements GrainContext {
   runtime!: GrainRuntime;
   state: ActivationState = "creating";
 
+  /** Runs once before `onActivate` (e.g. read persistent state); set by the catalog. */
+  preActivate: (() => Promise<void>) | undefined;
+
   private lastActiveMs: number;
   private keepAliveUntilMs = 0;
   private deactivateRequested = false;
@@ -51,6 +54,7 @@ export class ActivationData implements GrainContext {
         options: {},
         reentrancyId: this.activationId,
         run: async () => {
+          if (this.preActivate !== undefined) await this.preActivate();
           await this.instance.onActivate(reason);
           this.state = "valid";
         },

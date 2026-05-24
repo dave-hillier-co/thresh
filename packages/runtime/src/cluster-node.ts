@@ -43,6 +43,8 @@ export interface ClusterNodeOptions {
   time?: TimeProvider;
   callTimeoutMs?: number;
   defaultCollectionAgeSeconds?: number;
+  /** Bind/read persistent state before `onActivate` (provided by the hosting layer). */
+  stateBinder?: (instance: Grain, grainId: GrainId) => Promise<void>;
   /** Injectable RNG for deterministic placement in tests. */
   random?: () => number;
 }
@@ -118,6 +120,7 @@ export class ClusterNode {
       time,
       defaultCollectionAgeSeconds: options.defaultCollectionAgeSeconds ?? 900,
       onDeactivated: (a) => this.onDeactivated(a),
+      ...(options.stateBinder !== undefined ? { activateState: options.stateBinder } : {}),
     });
     this.dispatcher = new DistributedDispatcher({
       local: options.local,

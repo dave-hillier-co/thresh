@@ -3,6 +3,7 @@ export interface PersistentStateField {
   fieldName: string;
   stateName: string;
   provider?: string;
+  defaultValue?: () => unknown;
 }
 
 // Per-instance registry populated by the decorator's initializer during

@@ -21,6 +21,8 @@ export interface CatalogOptions {
   defaultCollectionAgeSeconds: number;
   /** Called after an activation has been deactivated (idle collection or shutdown). */
   onDeactivated?: (activation: ActivationData) => void;
+  /** Bind/read persistent state before `onActivate` (provided by the hosting layer). */
+  activateState?: (instance: Grain, grainId: GrainId) => Promise<void>;
 }
 
 /** Registry of live activations on this silo, keyed by grain id. */
@@ -81,6 +83,10 @@ export class Catalog {
     const instance = new reg.ctor();
     instance.setContext(activation);
     activation.instance = instance;
+    const activateState = this.options.activateState;
+    if (activateState !== undefined) {
+      activation.preActivate = () => activateState(instance, id);
+    }
     activation.beginActivate("incoming-call");
     return activation;
   }

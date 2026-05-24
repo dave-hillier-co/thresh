@@ -58,6 +58,9 @@ importers:
       '@tsva/messaging':
         specifier: workspace:*
         version: link:../messaging
+      '@tsva/persistence':
+        specifier: workspace:*
+        version: link:../persistence
       '@tsva/runtime':
         specifier: workspace:*
         version: link:../runtime

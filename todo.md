@@ -53,8 +53,8 @@ Work items, grouped by the phase they belong to in
       concurrency; `InconsistentStateError`
 - [x] In-memory provider (`MemoryGrainStorage`); `@persistentState` decorator records fields per
       instance for runtime injection
-- [ ] Runtime wiring — inject the facet into `@persistentState` fields, read-on-activate,
-      `getStorage`; builder `addStorage(name, provider)`
+- [x] Runtime wiring — catalog `activateState` hook injects facets + reads them before `onActivate`;
+      builder `addStorage`/`useMemoryStorage`; end-to-end test: state survives a silo restart
 - [ ] Redis (default) + Postgres providers (need real infra; integration-tested)
 
 ## Deferred (later phases)

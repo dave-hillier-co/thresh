@@ -10,6 +10,8 @@ import { registerPersistentField } from "./persistent-state-metadata";
 export interface PersistentStateOptions {
   /** Storage provider name; defaults to the silo's default provider. */
   provider?: string;
+  /** Factory for the initial value before any record exists. Defaults to `{}`. */
+  defaultValue?: () => unknown;
 }
 
 /** Registers a class as a grain implementation. */
@@ -42,6 +44,7 @@ export function persistentState(stateName: string, options: PersistentStateOptio
         fieldName,
         stateName,
         ...(options.provider !== undefined ? { provider: options.provider } : {}),
+        ...(options.defaultValue !== undefined ? { defaultValue: options.defaultValue } : {}),
       });
     });
   };

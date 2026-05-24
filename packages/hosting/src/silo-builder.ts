@@ -7,9 +7,13 @@ import {
   type EndpointWatch,
   type KubernetesMembershipOptions,
 } from "@tsva/clustering-k8s/kubernetes-membership";
+import type { GrainStorage } from "@tsva/core/grain-storage";
 import { InProcessTransport, type InProcessNetwork } from "@tsva/messaging/in-process-transport";
 import type { Transport } from "@tsva/messaging/transport";
 import { WebSocketTransport } from "@tsva/messaging/web-socket-transport";
+import { MemoryGrainStorage } from "@tsva/persistence/memory-grain-storage";
+import { bindPersistentStates } from "@tsva/persistence/state-activator";
+import { StorageRegistry } from "@tsva/persistence/storage-registry";
 import { ClusterNode } from "@tsva/runtime/cluster-node";
 import { StaticMembershipService } from "@tsva/runtime/static-membership";
 import { HealthCheck } from "@tsva/hosting/health-check";
@@ -31,9 +35,21 @@ export class SiloBuilder {
   private membership: MembershipService | undefined;
   private transport: Transport | undefined;
   private healthPort: number | undefined;
+  private storage: StorageRegistry | undefined;
   private readonly registrations: Registration[] = [];
 
   constructor(private readonly config: SiloConfig) {}
+
+  /** Register a named storage provider (the first becomes "default" if unnamed). */
+  addStorage(name: string, provider: GrainStorage): this {
+    (this.storage ??= new StorageRegistry()).add(name, provider);
+    return this;
+  }
+
+  /** Convenience: register an in-memory "default" provider (dev/tests). */
+  useMemoryStorage(provider: GrainStorage = new MemoryGrainStorage()): this {
+    return this.addStorage("default", provider);
+  }
 
   useStaticMembership(silos: readonly SiloAddress[]): this {
     this.membership = new StaticMembershipService(this.config.local, silos);
@@ -82,11 +98,15 @@ export class SiloBuilder {
     if (this.membership === undefined) throw new Error("silo: no membership configured");
     if (this.transport === undefined) throw new Error("silo: no transport configured");
     const health = new HealthCheck();
+    const storage = this.storage;
     const node = new ClusterNode({
       local: this.config.local,
       clusterId: this.config.clusterId,
       membership: this.membership,
       transport: this.transport,
+      ...(storage !== undefined
+        ? { stateBinder: (instance, grainId) => bindPersistentStates(instance, grainId, storage) }
+        : {}),
     });
     for (const r of this.registrations) node.registerGrain(r.ctor, { interfaces: r.interfaces });
     return buildSiloHost({
