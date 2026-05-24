@@ -19,6 +19,8 @@ export interface CatalogOptions {
   factory: GrainFactory;
   time: TimeProvider;
   defaultCollectionAgeSeconds: number;
+  /** Called after an activation has been deactivated (idle collection or shutdown). */
+  onDeactivated?: (activation: ActivationData) => void;
 }
 
 /** Registry of live activations on this silo, keyed by grain id. */
@@ -27,10 +29,23 @@ export class Catalog {
 
   constructor(private readonly options: CatalogOptions) {}
 
+  /** Single-silo path (Phase 1): create with a fresh activation id if absent. */
   getOrCreate(id: GrainId): ActivationData {
     const existing = this.activations.get(id.toString());
     if (existing !== undefined && existing.state !== "invalid") return existing;
     const created = this.create(id);
+    this.activations.set(id.toString(), created);
+    return created;
+  }
+
+  /**
+   * Multi-silo path: activate with the activation id the dispatcher won via
+   * directory CAS. Returns an existing live activation if one is already here.
+   */
+  activateLocal(id: GrainId, activationId: string): ActivationData {
+    const existing = this.activations.get(id.toString());
+    if (existing !== undefined && existing.state !== "invalid") return existing;
+    const created = this.create(id, activationId);
     this.activations.set(id.toString(), created);
     return created;
   }
@@ -43,7 +58,14 @@ export class Catalog {
     return this.activations.get(id.toString())?.state === "valid";
   }
 
-  private create(id: GrainId): ActivationData {
+  /** Live activation count, used by activation-count placement. */
+  count(): number {
+    let n = 0;
+    for (const a of this.activations.values()) if (a.state !== "invalid") n++;
+    return n;
+  }
+
+  private create(id: GrainId, activationId?: string): ActivationData {
     const reg = this.options.grainTypes.get(id.type);
     if (reg === undefined) throw new GrainCallError(`no grain type registered: ${id.type}`);
     const ageSeconds =
@@ -53,6 +75,7 @@ export class Catalog {
       this.options.time,
       ageSeconds * 1000,
       reg.metadata.reentrant,
+      activationId,
     );
     activation.runtime = new GrainRuntimeImpl(this.options.factory, activation);
     const instance = new reg.ctor();
@@ -67,12 +90,17 @@ export class Catalog {
       if (activation.isStale()) {
         await activation.deactivate({ code: "idle", description: "idle collection" });
       }
-      if (activation.state === "invalid") this.activations.delete(key);
+      if (activation.state === "invalid") {
+        this.activations.delete(key);
+        this.options.onDeactivated?.(activation);
+      }
     }
   }
 
   async deactivateAll(reason: DeactivationReason): Promise<void> {
-    await Promise.all([...this.activations.values()].map((a) => a.deactivate(reason)));
+    const all = [...this.activations.values()];
+    await Promise.all(all.map((a) => a.deactivate(reason)));
     this.activations.clear();
+    for (const a of all) this.options.onDeactivated?.(a);
   }
 }

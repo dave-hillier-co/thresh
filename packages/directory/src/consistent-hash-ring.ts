@@ -19,8 +19,10 @@ const DEFAULT_VNODES = 100;
  */
 export class ConsistentHashRing {
   private readonly nodes: RingNode[];
+  private readonly members: readonly SiloAddress[];
 
   constructor(silos: readonly SiloAddress[], vnodes: number = DEFAULT_VNODES) {
+    this.members = [...silos];
     const nodes: RingNode[] = [];
     for (const silo of silos) {
       for (let v = 0; v < vnodes; v++) {
@@ -33,6 +35,11 @@ export class ConsistentHashRing {
 
   get isEmpty(): boolean {
     return this.nodes.length === 0;
+  }
+
+  /** The distinct silos the ring was built from. */
+  silos(): readonly SiloAddress[] {
+    return this.members;
   }
 
   ownerOf(grainId: GrainId): SiloAddress {

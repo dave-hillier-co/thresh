@@ -19,7 +19,7 @@ export type ActivationState = "creating" | "activating" | "valid" | "deactivatin
  */
 export class ActivationData implements GrainContext {
   readonly id: GrainId;
-  readonly activationId: ActivationId = newActivationId();
+  readonly activationId: ActivationId;
   readonly scheduler: TurnScheduler;
 
   instance!: Grain;
@@ -35,8 +35,10 @@ export class ActivationData implements GrainContext {
     private readonly time: TimeProvider,
     private readonly collectionAgeMs: number,
     reentrant: boolean,
+    activationId: ActivationId = newActivationId(),
   ) {
     this.id = id;
+    this.activationId = activationId;
     this.scheduler = new TurnScheduler({ reentrant });
     this.lastActiveMs = time.now();
   }

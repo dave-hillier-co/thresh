@@ -116,6 +116,11 @@ sequenceDiagram
   trading a few redundant reactivations for much less handoff machinery; the roadmap
   ([13](13-roadmap-and-phases.md)) starts there and adds handoff later.
 
+The implementation reaches the owning partition through a pluggable **directory peer**: direct
+in-process calls for single-process and local-dev clusters today, with transport-backed RPC arriving
+alongside Kubernetes hosting ([10](10-kubernetes-hosting.md), Phase 3). On a view change each silo
+recomputes the ring and drops entries pointing at, or owned by, silos that have left.
+
 All of this is keyed off the membership view *version*, so concurrent view changes are linearised by
 version and a silo never mixes entries from two different ring topologies.
 

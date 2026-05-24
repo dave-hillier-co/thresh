@@ -27,7 +27,9 @@ Work items, grouped by the phase they belong to in
 - [x] Slice 8: partitioned directory CAS + location cache — race→one winner/loser forwards, cache
       hit, stale invalidation
 - [x] Slice 9: placement strategies — random, preferLocal, activationCount, statelessWorker
-- [ ] Slice 10: static membership + rebalancing — remove silo → ring rebalances, grains reactivate
+- [x] Slice 10: static membership + distributed dispatcher + rebalancing — cross-silo routing,
+      single activation via directory CAS, location cache, remove silo → ring rebalances + grains
+      reactivate (in-process transport; WebSocket in slice 11)
 - [ ] Slice 11: WebSocket transport — cross-silo over real sockets, preamble handshake, clusterId mismatch rejected
 
 ## Deferred (later phases)
