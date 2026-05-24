@@ -23,6 +23,9 @@ export interface Message {
   interfaceId: number;
   methodId: number;
 
+  /** Marks a system request (e.g. a directory partition operation) vs a grain call. */
+  system?: "directory" | undefined;
+
   responseKind?: ResponseKind | undefined;
   requestContext?: RequestContext | undefined;
 

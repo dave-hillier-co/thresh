@@ -45,6 +45,9 @@ Key points:
 - **`requestContext` propagates ambient data** (trace ids, deadlines, custom headers) along the
   entire call chain, mirroring Orleans `RequestContext`. It also carries the call-chain reentrancy
   id used by the turn scheduler.
+- **System operations reuse the envelope.** Directory partition operations are marked with a
+  `system` flag and travel over the same connections and correlation table as grain calls, so the
+  distributed directory needs no separate channel (see [06](06-grain-directory-and-placement.md)).
 
 ## Transport
 

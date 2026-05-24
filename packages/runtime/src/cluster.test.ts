@@ -8,7 +8,6 @@ import type { MembershipService } from "@tsva/core/membership";
 import { SiloAddress } from "@tsva/core/silo-address";
 import { InProcessNetwork, InProcessTransport } from "@tsva/messaging/in-process-transport";
 import { ClusterNode } from "@tsva/runtime/cluster-node";
-import { InProcessDirectoryPeer } from "@tsva/runtime/in-process-directory-peer";
 import { StaticMembershipService } from "@tsva/runtime/static-membership";
 
 interface ICounter extends GrainWithStringKey {
@@ -62,21 +61,18 @@ function buildCluster(count: number) {
   const network = new InProcessNetwork();
   const addresses = Array.from({ length: count }, (_, i) => silo(i));
   const membership = new StaticMembershipService(addresses[0]!, addresses);
-  const byRingKey = new Map<string, ClusterNode>();
-  const peer = new InProcessDirectoryPeer((s) => byRingKey.get(s.ringKey)?.partition);
 
+  // No directoryPeer: each node routes directory operations over the transport.
   const nodes = addresses.map((local) => {
     const node = new ClusterNode({
       local,
       clusterId: CLUSTER,
       membership: new MembershipView(membership, local),
       transport: new InProcessTransport(network, CLUSTER),
-      directoryPeer: peer,
       random: () => 0, // deterministic placement -> first candidate (silo-0)
     });
     node.registerGrain(CounterGrain, { interfaces: [ICounter] });
     node.registerGrain(LocalGrain, { interfaces: [ILocal] });
-    byRingKey.set(local.ringKey, node);
     return node;
   });
 

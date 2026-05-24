@@ -1,5 +1,6 @@
 import { GrainCallError, RejectionError } from "@tsva/core/errors";
 import type { Grain } from "@tsva/core/grain";
+import type { GrainAddress } from "@tsva/core/grain-address";
 import type { GrainId } from "@tsva/core/grain-id";
 import type { GrainInterface } from "@tsva/core/grain-interface";
 import { getGrainInterface } from "@tsva/core/grain-interface";
@@ -36,8 +37,8 @@ export interface ClusterNodeOptions {
   clusterId: string;
   membership: MembershipService;
   transport: Transport;
-  /** Reaches peer directory partitions (in-process for now; transport-backed in Phase 3). */
-  directoryPeer: DirectoryPeer;
+  /** Reaches peer directory partitions; defaults to routing over the transport. */
+  directoryPeer?: DirectoryPeer;
   serializer?: Serializer;
   time?: TimeProvider;
   callTimeoutMs?: number;
@@ -49,6 +50,16 @@ export interface ClusterNodeOptions {
 interface RejectionPayload {
   message: string;
   kind: RejectionError["kind"];
+}
+
+/** A directory partition operation routed to the owning silo over the transport. */
+type DirectoryOp =
+  | { kind: "lookup"; grainId: GrainId }
+  | { kind: "register"; addr: GrainAddress; previous?: GrainAddress | undefined }
+  | { kind: "unregister"; addr: GrainAddress };
+
+function directoryOpGrainId(op: DirectoryOp): GrainId {
+  return op.kind === "lookup" ? op.grainId : op.addr.grainId;
 }
 
 const newChainId = () => Guid.newGuid().toString();
@@ -76,6 +87,16 @@ export class ClusterNode {
   private ring: ConsistentHashRing;
   private listener: Listener | undefined;
 
+  /** Routes directory operations to the owning silo's partition over the transport. */
+  private readonly transportPeer: DirectoryPeer = {
+    lookup: (owner, grainId) => this.sendDirectory(owner, { kind: "lookup", grainId }),
+    register: (owner, addr, previous) =>
+      this.sendDirectory(owner, { kind: "register", addr, previous }) as Promise<GrainAddress>,
+    unregister: async (owner, addr) => {
+      await this.sendDirectory(owner, { kind: "unregister", addr });
+    },
+  };
+
   constructor(private readonly options: ClusterNodeOptions) {
     const time = options.time ?? systemTimeProvider;
     this.callTimeoutMs = options.callTimeoutMs ?? 30_000;
@@ -89,7 +110,7 @@ export class ClusterNode {
       options.local,
       this.partition,
       () => this.ring,
-      options.directoryPeer,
+      options.directoryPeer ?? this.transportPeer,
     );
     this.catalog = new Catalog({
       grainTypes: this.grainTypes,
@@ -185,11 +206,13 @@ export class ClusterNode {
   }
 
   private onDeactivated(activation: ActivationData): void {
-    void this.directory.unregister({
-      grainId: activation.id,
-      silo: this.options.local,
-      activationId: activation.activationId,
-    });
+    void this.directory
+      .unregister({
+        grainId: activation.id,
+        silo: this.options.local,
+        activationId: activation.activationId,
+      })
+      .catch(() => undefined); // best-effort; the silo may be shutting down
     this.cache.invalidate(activation.id);
   }
 
@@ -233,7 +256,68 @@ export class ClusterNode {
       this.correlation.complete(message);
       return;
     }
+    if (message.system === "directory") {
+      void this.handleDirectoryRequest(message);
+      return;
+    }
     void this.receiveRequest(message);
+  }
+
+  private async sendDirectory(
+    owner: SiloAddress,
+    op: DirectoryOp,
+  ): Promise<GrainAddress | undefined> {
+    const conn = await this.connections.get(owner);
+    const correlationId = nextCorrelationId();
+    const message: Message = {
+      correlationId,
+      direction: "request",
+      system: "directory",
+      targetGrain: directoryOpGrainId(op),
+      sendingSilo: this.options.local,
+      interfaceId: 0,
+      methodId: 0,
+      body: this.serializer.serialize(op),
+    };
+    const pending = this.correlation.register(correlationId, this.callTimeoutMs);
+    conn.send(message);
+    const result = this.interpretResponse(await pending);
+    // A "not found" lookup serializes back as null; normalise to undefined.
+    return result == null ? undefined : (result as GrainAddress);
+  }
+
+  private async handleDirectoryRequest(message: Message): Promise<void> {
+    const replyTo = message.sendingSilo;
+    if (replyTo === undefined) return;
+    try {
+      const op = this.serializer.deserialize<DirectoryOp>(message.body);
+      const result = this.applyDirectoryOp(op);
+      await this.reply(
+        replyTo,
+        responseTo(message, "success", this.serializer.serialize(result), this.options.local),
+      );
+    } catch (err) {
+      const kind = err instanceof RejectionError ? "rejection" : "error";
+      const body =
+        err instanceof RejectionError
+          ? this.serializer.serialize({ message: err.message, kind: err.kind })
+          : this.serializer.serialize({
+              message: err instanceof Error ? err.message : String(err),
+            });
+      await this.reply(replyTo, responseTo(message, kind, body, this.options.local));
+    }
+  }
+
+  private applyDirectoryOp(op: DirectoryOp): GrainAddress | undefined {
+    switch (op.kind) {
+      case "lookup":
+        return this.partition.lookup(op.grainId);
+      case "register":
+        return this.partition.register(op.addr, op.previous);
+      case "unregister":
+        this.partition.unregister(op.addr);
+        return undefined;
+    }
   }
 
   private async receiveRequest(message: Message): Promise<void> {
@@ -277,7 +361,12 @@ export class ClusterNode {
   }
 
   private async reply(to: SiloAddress, message: Message): Promise<void> {
-    const conn = await this.connections.get(to);
-    conn.send(message);
+    try {
+      const conn = await this.connections.get(to);
+      conn.send(message);
+    } catch {
+      // The caller has gone (e.g. drained mid-call); dropping the reply is fine —
+      // it will re-resolve on retry.
+    }
   }
 }

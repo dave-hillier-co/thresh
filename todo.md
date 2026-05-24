@@ -36,6 +36,8 @@ Work items, grouped by the phase they belong to in
 
 - [x] EndpointSlice parsing → ready silo set; watch-driven `KubernetesMembership` (versioned
       snapshots, ready = active, podUid distinguishes incarnations)
+- [x] Transport-backed directory RPC — directory ops route to the owning silo as `system` messages
+      over the transport (default; in-process peer kept for single-process tests)
 - [ ] Real `@kubernetes/client-node` EndpointSlice watch adapter (the `EndpointWatch` implementation)
 - [x] Health endpoints (`/ready`, `/live`, `/startup`) — `HealthCheck` probe logic + `HealthServer`
 - [x] Graceful drain — `GracefulShutdown` flips readiness then stops the node; `SIGTERM` handler
