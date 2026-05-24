@@ -47,6 +47,12 @@ importers:
         specifier: workspace:*
         version: link:../core
 
+  packages/hosting:
+    dependencies:
+      '@tsva/core':
+        specifier: workspace:*
+        version: link:../core
+
   packages/messaging:
     dependencies:
       '@msgpack/msgpack':

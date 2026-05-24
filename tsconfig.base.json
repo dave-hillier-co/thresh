@@ -26,7 +26,8 @@
       "@tsva/messaging/*": ["./packages/messaging/src/*"],
       "@tsva/directory/*": ["./packages/directory/src/*"],
       "@tsva/runtime/*": ["./packages/runtime/src/*"],
-      "@tsva/clustering-k8s/*": ["./packages/clustering-k8s/src/*"]
+      "@tsva/clustering-k8s/*": ["./packages/clustering-k8s/src/*"],
+      "@tsva/hosting/*": ["./packages/hosting/src/*"]
     }
   }
 }

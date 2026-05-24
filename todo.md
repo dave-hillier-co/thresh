@@ -37,7 +37,7 @@ Work items, grouped by the phase they belong to in
 - [x] EndpointSlice parsing → ready silo set; watch-driven `KubernetesMembership` (versioned
       snapshots, ready = active, podUid distinguishes incarnations)
 - [ ] Real `@kubernetes/client-node` EndpointSlice watch adapter (the `EndpointWatch` implementation)
-- [ ] Health endpoints (`/ready`, `/live`, `/startup`)
+- [x] Health endpoints (`/ready`, `/live`, `/startup`) — `HealthCheck` probe logic + `HealthServer`
 - [ ] Hosting builder (`createSilo().useKubernetesMembership()…`) + graceful drain on `SIGTERM`
 - [ ] kind cluster e2e — 3-silo `StatefulSet`, pod-kill reactivation, rolling update (needs a live cluster)
 
