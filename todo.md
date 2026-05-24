@@ -26,7 +26,7 @@ Work items, grouped by the phase they belong to in
 - [x] Slice 7: consistent-hash ring — deterministic ownership, balance, fractional reshuffle on join/leave
 - [x] Slice 8: partitioned directory CAS + location cache — race→one winner/loser forwards, cache
       hit, stale invalidation
-- [ ] Slice 9: placement strategies — random, preferLocal, activationCount, statelessWorker
+- [x] Slice 9: placement strategies — random, preferLocal, activationCount, statelessWorker
 - [ ] Slice 10: static membership + rebalancing — remove silo → ring rebalances, grains reactivate
 - [ ] Slice 11: WebSocket transport — cross-silo over real sockets, preamble handshake, clusterId mismatch rejected
 
