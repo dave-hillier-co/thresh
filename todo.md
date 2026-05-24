@@ -70,9 +70,15 @@ Work items, grouped by the phase they belong to in
 - [ ] Multi-silo reminder ownership from the ring + rebalance on view change (single-silo owns the
       whole ring today); Redis (default) + Postgres reminder tables (need real infra)
 
-## Deferred (later phases)
+## Phase 6 — Event streams
 
-- Phase 6 event streams. See [`docs/13`](docs/13-roadmap-and-phases.md).
+- [x] Stream contracts (`StreamProvider`/`AsyncStream`/`StreamHandler`/`StreamSubscriptionHandle`/
+      `SequenceToken`); in-memory provider with ordered delivery, per-subscription cursor + resume,
+      rewind via start token, at-least-once redelivery, namespace/key isolation
+- [ ] Grain-facing wiring — `getStreamProvider` on the runtime; deliver `onNext` as a turn;
+      subscriptions survive deactivation (`getSubscriptions`/`resume` on reactivate); builder
+      `useMemoryStreams`
+- [ ] Redis Streams provider + pulling agents / queue ownership over the ring (need real infra)
 
 ## On approach to v1 completion
 

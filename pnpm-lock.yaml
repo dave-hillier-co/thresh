@@ -108,6 +108,12 @@ importers:
         specifier: workspace:*
         version: link:../messaging
 
+  packages/streams:
+    dependencies:
+      '@tsva/core':
+        specifier: workspace:*
+        version: link:../core
+
 packages:
 
   '@emnapi/core@1.10.0':
