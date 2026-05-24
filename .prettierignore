@@ -1,0 +1,8 @@
+node_modules
+dist
+*.tsbuildinfo
+coverage
+pnpm-lock.yaml
+
+# Hand-authored markdown (docs, README, ADRs) — not subject to code formatting.
+**/*.md

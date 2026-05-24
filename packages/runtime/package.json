@@ -1,0 +1,14 @@
+{
+  "name": "@tsva/runtime",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./*": "./src/*.ts"
+  },
+  "dependencies": {
+    "@tsva/core": "workspace:*",
+    "@tsva/directory": "workspace:*",
+    "@tsva/messaging": "workspace:*"
+  }
+}

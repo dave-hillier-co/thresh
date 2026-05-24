@@ -1,0 +1,108 @@
+import { describe, expect, it } from "vitest";
+import { newActivationId } from "@tsva/core/activation-id";
+import type { GrainAddress } from "@tsva/core/grain-address";
+import { GrainId } from "@tsva/core/grain-id";
+import { SiloAddress } from "@tsva/core/silo-address";
+import { LocalDirectoryPartition } from "@tsva/directory/local-directory-partition";
+import { LocationCache } from "@tsva/directory/location-cache";
+
+const siloA = new SiloAddress("silo-A", "ua", "a:1");
+const siloB = new SiloAddress("silo-B", "ub", "b:1");
+const addr = (key: string, silo: SiloAddress, activationId = newActivationId()): GrainAddress => ({
+  grainId: new GrainId("Counter", key),
+  silo,
+  activationId,
+});
+
+describe("LocalDirectoryPartition", () => {
+  it("registers a new grain and looks it up", () => {
+    const dir = new LocalDirectoryPartition();
+    const a = addr("x", siloA);
+    expect(dir.register(a)).toBe(a);
+    expect(dir.lookup(a.grainId)).toEqual(a);
+  });
+
+  it("is compare-and-set: a racing second registration returns the first winner", () => {
+    const dir = new LocalDirectoryPartition();
+    const first = addr("x", siloA);
+    const second = addr("x", siloB);
+    expect(dir.register(first)).toBe(first);
+    // Loser observes the winner and must forward to it.
+    expect(dir.register(second)).toBe(first);
+    expect(dir.lookup(first.grainId)).toEqual(first);
+  });
+
+  it("replaces an entry only when the expected previous is supplied", () => {
+    const dir = new LocalDirectoryPartition();
+    const stale = addr("x", siloA);
+    const moved = addr("x", siloB);
+    dir.register(stale);
+    expect(dir.register(moved, stale)).toBe(moved);
+    expect(dir.lookup(moved.grainId)).toEqual(moved);
+  });
+
+  it("ignores a replace whose expected previous does not match", () => {
+    const dir = new LocalDirectoryPartition();
+    const current = addr("x", siloA);
+    const wrongPrevious = addr("x", siloB);
+    const attempt = addr("x", siloB);
+    dir.register(current);
+    expect(dir.register(attempt, wrongPrevious)).toBe(current);
+  });
+
+  it("unregisters only the matching activation", () => {
+    const dir = new LocalDirectoryPartition();
+    const a = addr("x", siloA);
+    dir.register(a);
+    dir.unregister({ ...a, activationId: "different" });
+    expect(dir.lookup(a.grainId)).toEqual(a);
+    dir.unregister(a);
+    expect(dir.lookup(a.grainId)).toBeUndefined();
+  });
+
+  it("bulk-unregisters every entry pointing at a departed silo", () => {
+    const dir = new LocalDirectoryPartition();
+    dir.register(addr("x", siloA));
+    dir.register(addr("y", siloB));
+    dir.register(addr("z", siloA));
+    dir.unregisterSilo(siloA);
+    expect(dir.size).toBe(1);
+    expect(dir.lookup(new GrainId("Counter", "y"))).toBeDefined();
+  });
+});
+
+describe("LocationCache", () => {
+  it("serves a cached hit without a directory round-trip, and re-resolves after invalidation", () => {
+    const cache = new LocationCache();
+    const dir = new LocalDirectoryPartition();
+    const a = addr("x", siloA);
+    dir.register(a);
+
+    let lookups = 0;
+    const resolve = (grainId: GrainId): GrainAddress | undefined => {
+      const hit = cache.get(grainId);
+      if (hit !== undefined) return hit;
+      lookups++;
+      const found = dir.lookup(grainId);
+      if (found !== undefined) cache.put(found);
+      return found;
+    };
+
+    expect(resolve(a.grainId)).toEqual(a);
+    expect(resolve(a.grainId)).toEqual(a);
+    expect(lookups).toBe(1); // second call served from cache
+
+    cache.invalidate(a.grainId); // e.g. after a rejected send
+    expect(resolve(a.grainId)).toEqual(a);
+    expect(lookups).toBe(2); // re-resolved through the directory
+  });
+
+  it("drops cached entries pointing at a departed silo", () => {
+    const cache = new LocationCache();
+    cache.put(addr("x", siloA));
+    cache.put(addr("y", siloB));
+    cache.invalidateSilo(siloA);
+    expect(cache.get(new GrainId("Counter", "x"))).toBeUndefined();
+    expect(cache.get(new GrainId("Counter", "y"))).toBeDefined();
+  });
+});
