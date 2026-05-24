@@ -102,6 +102,9 @@ in-memory providers.
 - **Grain-interface versioning** for incompatible rolling upgrades.
 - **Multi-cluster / geo-distribution.**
 - **Additional providers** (other databases; other stream backings/queue adapters).
+- **Reducer grains** — an additive command→events→pure-reducer programming model with immutable
+  state, over the single-writer/single-turn actor. Persistence is orthogonal: snapshot (events
+  transient, as in React) or an append-only event log ([ADR 0006](adr/0006-reducer-grains.md)).
 
 ## Cross-cutting, throughout
 
