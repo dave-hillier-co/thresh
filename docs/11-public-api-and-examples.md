@@ -86,11 +86,25 @@ const silo = createSilo({ clusterId: process.env.CLUSTER_ID! })
 await silo.start();   // joins membership, begins accepting calls
 ```
 
-In the current implementation `createSilo({ clusterId, local })` takes the silo's own
-`SiloAddress`, grains are registered with the interfaces they serve
-(`registerGrain(ThermostatGrain, { interfaces: [IThermostat, IThermostatControl] })`, since
-TypeScript interfaces are erased at runtime), and `build()` returns a `SiloHost` whose `start()`
-brings the silo online (flipping readiness) and `stop()` drains it.
+### What is implemented today
+
+The snippets above are the target surface. The shipped surface differs in a few concrete ways:
+
+- `createSilo({ clusterId, local })` takes the silo's own `SiloAddress`; `build()` returns a
+  `SiloHost` whose `start()` brings the silo online (flipping readiness) and `stop()` drains it.
+- Grains are registered with the interfaces they serve —
+  `registerGrain(ThermostatGrain, { interfaces: [IThermostat, IThermostatControl] })` — because
+  TypeScript interfaces are erased at runtime and cannot be reflected.
+- Builder providers shipped so far are **in-memory**: `useMemoryStorage()` / `addStorage(name, p)`,
+  `useReminders(table?)`, and (with the stream grain-wiring) `useMemoryStreams()`. The
+  `addRedisStorage` / `useRedisReminders` / `addRedisStreams` methods are future work behind the same
+  builder shape.
+- Persistent state is declared with `@persistentState(name, { defaultValue })` and injected before
+  `onActivate`; the `getStorage` accessor on `GrainRuntime` is not implemented (the decorator is the
+  supported path). `registerTimer`, `registerReminder` / `unregisterReminder` are wired;
+  `getStreamProvider` lands with the stream grain-wiring.
+- Transport is `useInProcessTransport(network)` or `useWebSocketTransport()`; membership is
+  `useStaticMembership([...])` or `useKubernetesMembership(watch)`.
 
 ### External client
 

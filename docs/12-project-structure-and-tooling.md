@@ -28,6 +28,11 @@ ts-virtual-actors/
     thermostat/                # the worked example from docs/11
 ```
 
+Implemented today: `core`, `messaging`, `directory`, `runtime`, `clustering-k8s`, `persistence`,
+`reminders`, `streams`, `hosting`. The `client` package and `examples/thermostat` are not yet
+present, and the `persistence` / `reminders` / `streams` packages currently ship their **in-memory**
+providers — Redis/Postgres backings are future work behind the same interfaces.
+
 ### Dependency direction
 
 ```mermaid
@@ -52,6 +57,10 @@ flowchart LR
 `core` has no internal dependencies. `hosting` composes everything into a runnable silo. `client`
 depends only on what an external caller needs (proxies, transport, serialization).
 
+In the implementation, `runtime` depends on `core`, `messaging` and `directory`; the
+`clustering-k8s`, `persistence`, `reminders` and `streams` packages depend only on `core` and are
+composed by `hosting`. The clock (`TimeProvider`) lives in `core` since several packages read it.
+
 ## Module conventions
 
 Per the project house style:
@@ -65,12 +74,17 @@ Per the project house style:
 
 ## TypeScript configuration
 
-- `tsconfig.base.json` with `strict: true`, `exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`.
-- Decorators: the runtime relies on decorator metadata; configure the chosen decorator mode
-  consistently across packages (standard ECMAScript decorators with a metadata shim, or
-  `experimentalDecorators` + `emitDecoratorMetadata` — pinned in the base config).
-- `moduleResolution: "bundler"` / `"nodenext"` as appropriate; ESM output.
-- Project references between packages for fast incremental builds.
+- `tsconfig.base.json` pins `strict`, `exactOptionalPropertyTypes` and `noUncheckedIndexedAccess`
+  across every package.
+- **Standard TC39 decorators** (`experimentalDecorators: false`), and **no `reflect-metadata`**:
+  `@grain` / `@reentrant` record metadata in a constructor `WeakMap`, and `@persistentState` uses the
+  decorator's `addInitializer` to register the field per instance — so no decorator-metadata
+  reflection (`Symbol.metadata`) is required.
+- `moduleResolution: "bundler"`, ESM. Each package's `exports` maps `./*` to `./src/*.ts` (with
+  matching `tsconfig` `paths`), so the dev loop runs straight from TypeScript source with **no build
+  or emit step**; `tsc --noEmit` type-checks the whole workspace.
+- Tests run under **Vitest**, which transpiles with **SWC** (`unplugin-swc`) rather than its default
+  esbuild/Oxc, because those do not yet support standard decorators.
 
 ## Testing strategy
 
@@ -114,9 +128,10 @@ Mockist isolation is avoided.
 
 ## Lint, format, CI
 
-- ESLint + a formatter (Prettier or Biome) pinned in the root; one config inherited by all packages.
-- `markdownlint` and a link checker over `docs/` (see [13](13-roadmap-and-phases.md) verification).
-- CI runs: typecheck, lint, unit + single-silo + multi-silo integration on every PR; cluster tests
-  on a schedule / label.
+- **ESLint + Prettier** pinned at the root; one flat config inherited by all packages. (`pnpm lint`
+  runs both; `pnpm format` writes.) Markdown under `docs/` is hand-authored and excluded from
+  Prettier.
+- CI target: `pnpm typecheck`, `pnpm lint`, and `pnpm test` (unit + single-silo + multi-silo
+  integration) on every PR; cluster tests on a schedule / label.
 - Tooling is installed via the package manager (`pnpm add -D ...`), never by hand-editing
   `package.json`.

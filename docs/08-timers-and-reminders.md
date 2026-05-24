@@ -159,6 +159,13 @@ failure, only briefly delayed. This is the durability guarantee timers cannot of
 Redis is the default; see [ADR 0005](adr/0005-redis-default-providers.md). Configured on the hosting
 builder, e.g. `silo.useRedisReminders({ url: process.env.REDIS_URL })`.
 
+The implementation ships in-memory timers (`registerTimer`, fired as turns via the injectable clock,
+cancelled on deactivation) and the in-memory `ReminderTable` + `LocalReminderService` (hash-range
+ownership, periodic firing, durable cursors via the table, silo-handoff via `refreshOwnership`). A
+grain's `registerReminder` delegates to the service, and a tick reactivates the grain and delivers
+`receiveReminder` as a turn. A single silo currently owns the whole ring; multi-silo ring-derived
+ownership and the Redis/Postgres tables are future work.
+
 ## Choosing between them
 
 - Need it to survive restarts or fire after the grain has been idle for a long time? **Reminder.**
