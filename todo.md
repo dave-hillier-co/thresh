@@ -93,6 +93,18 @@ Work items, grouped by the phase they belong to in
 - [x] Reconcile `docs/11` (public API), `docs/12`, `README` with the shipped API + getting-started/run docs
 - [ ] Final docs accuracy pass before declaring v1 done
 
+## Reducer grains ([ADR 0006](docs/adr/0006-reducer-grains.md))
+
+- [x] Snapshot mode — `@reducerState(name, { initial, reduce })` facet + `ReducerState<S, E>`
+      contract; command handlers `raise` events folded through a pure reducer into immutable state;
+      the folded state is persisted as a snapshot via the existing `GrainStorage` (events transient),
+      bound before `onActivate` alongside `@persistentState`. Unit + end-to-end tests (fold, command
+      validation, survives a silo restart).
+- [ ] Worked example exercising `@reducerState` (e.g. a bank account) as a runnable demo + smoke test
+- [ ] Reflect `@reducerState` in `docs/07` (persistence) and `docs/11` (public API)
+- [ ] Event-log mode — append-only `EventLog` provider + replay-from-snapshot on activation; opt-in
+      publication of raised events to the grain's stream; event upcasting (needs real infra)
+
 ## Examples as acceptance tests
 
 Runnable example apps that double as end-to-end acceptance tests, driving capabilities that

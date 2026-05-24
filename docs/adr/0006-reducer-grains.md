@@ -1,6 +1,6 @@
 # ADR 0006 — Reducer grains (event-routed, immutable state)
 
-- Status: Proposed
+- Status: Accepted — snapshot mode implemented (`@reducerState`); event-log mode is future work
 - Context docs: [02 — The actor model](../02-actor-model.md),
   [07 — Persistence](../07-persistence.md), [09 — Event streams](../09-event-streams.md)
 

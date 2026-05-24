@@ -15,6 +15,7 @@ import type { ReminderTable } from "@tsva/core/reminder";
 import { systemTimeProvider, type TimeProvider } from "@tsva/core/time-provider";
 import { MemoryGrainStorage } from "@tsva/persistence/memory-grain-storage";
 import { bindPersistentStates } from "@tsva/persistence/state-activator";
+import { bindReducerStates } from "@tsva/persistence/reducer-state-activator";
 import { StorageRegistry } from "@tsva/persistence/storage-registry";
 import type { StreamProvider } from "@tsva/core/stream";
 import { LocalReminderService } from "@tsva/reminders/local-reminder-service";
@@ -162,7 +163,12 @@ export class SiloBuilder {
         : {}),
       ...(this.config.random !== undefined ? { random: this.config.random } : {}),
       ...(storage !== undefined
-        ? { stateBinder: (instance, grainId) => bindPersistentStates(instance, grainId, storage) }
+        ? {
+            stateBinder: async (instance, grainId) => {
+              await bindPersistentStates(instance, grainId, storage);
+              await bindReducerStates(instance, grainId, storage);
+            },
+          }
         : {}),
       ...(this.reminderTable !== undefined ? { reminderRegistry: () => reminderService } : {}),
       ...(this.streamProviders.size > 0

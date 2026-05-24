@@ -6,6 +6,8 @@ import {
   type GrainOptions,
 } from "./grain-metadata";
 import { registerPersistentField } from "./persistent-state-metadata";
+import { registerReducerField } from "./reducer-state-metadata";
+import type { Reducer } from "./reducer-state";
 
 export interface PersistentStateOptions {
   /** Storage provider name; defaults to the silo's default provider. */
@@ -45,6 +47,40 @@ export function persistentState(stateName: string, options: PersistentStateOptio
         stateName,
         ...(options.provider !== undefined ? { provider: options.provider } : {}),
         ...(options.defaultValue !== undefined ? { defaultValue: options.defaultValue } : {}),
+      });
+    });
+  };
+}
+
+export interface ReducerStateOptions<TState, TEvent> {
+  /** The state before any event has been folded in. */
+  initial: () => TState;
+  /** Pure fold of an event onto state (no I/O, no grain calls, no clock). */
+  reduce: Reducer<TState, TEvent>;
+  /** Storage provider name; defaults to the silo's default provider. */
+  provider?: string;
+}
+
+/**
+ * Injects a `ReducerState<TState, TEvent>` facet into a grain field (see
+ * [ADR 0006](../../docs/adr/0006-reducer-grains.md)). The runtime binds and reads
+ * its snapshot before `onActivate`; command handlers `raise` events that fold
+ * through `reduce` into immutable state, and `write` persists the snapshot.
+ */
+export function reducerState<TState, TEvent>(
+  stateName: string,
+  options: ReducerStateOptions<TState, TEvent>,
+) {
+  return function (_value: undefined, context: ClassFieldDecoratorContext): void {
+    if (context.kind !== "field") throw new Error("@reducerState must decorate a field");
+    const fieldName = String(context.name);
+    context.addInitializer(function (this: unknown) {
+      registerReducerField(this as object, {
+        fieldName,
+        stateName,
+        initial: options.initial as () => unknown,
+        reduce: options.reduce as (state: unknown, event: unknown) => unknown,
+        ...(options.provider !== undefined ? { provider: options.provider } : {}),
       });
     });
   };
