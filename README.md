@@ -65,7 +65,17 @@ Read these in order for a full picture of the design and its build order.
 - [13 — Roadmap and phases](docs/13-roadmap-and-phases.md)
 - [Architecture decision records](docs/adr/)
 
-## Status
+## Developing
 
-This repository currently contains the **design documents** only. Implementation proceeds in the
-phases described in the [roadmap](docs/13-roadmap-and-phases.md).
+A [pnpm](https://pnpm.io) workspace of `@tsva/*` packages (see
+[project structure](docs/12-project-structure-and-tooling.md)). Requires Node 22+ and pnpm.
+
+```sh
+pnpm install      # install workspace dependencies
+pnpm test         # run the Vitest suites
+pnpm typecheck    # type-check every package
+pnpm lint         # ESLint + Prettier
+```
+
+Work proceeds test-first in vertical slices that map to the
+[roadmap](docs/13-roadmap-and-phases.md); [`todo.md`](todo.md) tracks outstanding items.

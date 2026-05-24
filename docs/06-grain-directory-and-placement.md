@@ -44,7 +44,9 @@ flowchart TB
 
 - The hash space is a ring. Each silo owns a number of **virtual nodes** (ranges) spread around the
   ring, so ownership is balanced and a join/leave only reshuffles a fraction of the space (Orleans
-  uses 30 virtual partitions per silo by default).
+  uses 30 virtual partitions per silo by default). This implementation places ~100 virtual nodes per
+  silo, hashing both vnodes and grain ids with an FNV-1a digest plus a MurmurHash3 finalizer for the
+  avalanche that even distribution depends on.
 - `hash(GrainId)` maps a grain to a point on the ring; the silo owning that range is the
   **directory owner** for that grain and holds its `GrainAddress`.
 
