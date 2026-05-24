@@ -133,6 +133,11 @@ in-process transport, and double as acceptance tests in the suite. Start each wi
   receive every message as a turn on their own activation. A member that deactivates while idle
   resumes its own durable subscription on reactivation, recovering exactly the messages it missed
   (see consumer-scoped subscriptions in [09](09-event-streams.md)).
+- **`@tsva/example-cluster`** — three silos in one process over the **real WebSocket transport**,
+  sharing one membership view. Records issued from any silo route to a single leaderboard activation
+  (directory compare-and-set); killing the hosting silo and dropping it from the view reactivates the
+  grain on a surviving silo on the next call (see [06](06-grain-directory-and-placement.md)). Uses
+  `createSilo(...).useMembership(shared).useWebSocketTransport()`.
 - **`@tsva/example-thermostat`** — the full Orleans README example, below.
 
 ## Worked example: IoT thermostat (the Orleans README example, in TypeScript)

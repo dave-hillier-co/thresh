@@ -48,6 +48,21 @@ importers:
         specifier: workspace:*
         version: link:../../packages/messaging
 
+  examples/cluster:
+    dependencies:
+      '@tsva/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@tsva/hosting':
+        specifier: workspace:*
+        version: link:../../packages/hosting
+      '@tsva/messaging':
+        specifier: workspace:*
+        version: link:../../packages/messaging
+      '@tsva/runtime':
+        specifier: workspace:*
+        version: link:../../packages/runtime
+
   examples/greeter:
     dependencies:
       '@tsva/core':

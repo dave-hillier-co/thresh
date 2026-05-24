@@ -35,6 +35,8 @@ export interface SiloConfig {
   collectionAgeSeconds?: number;
   /** How often the idle-collection sweep runs (defaults to 60s). */
   collectionIntervalSeconds?: number;
+  /** Injectable RNG for deterministic placement in examples/tests. */
+  random?: () => number;
 }
 
 interface Registration {
@@ -84,6 +86,17 @@ export class SiloBuilder {
 
   useStaticMembership(silos: readonly SiloAddress[]): this {
     this.membership = new StaticMembershipService(this.config.local, silos);
+    return this;
+  }
+
+  /**
+   * Inject a membership service directly. Use this to share one view across
+   * several in-process silos (so a view change reaches all of them) or to supply
+   * a custom provider; `useStaticMembership` / `useKubernetesMembership` are the
+   * common cases.
+   */
+  useMembership(service: MembershipService): this {
+    this.membership = service;
     return this;
   }
 
@@ -145,6 +158,7 @@ export class SiloBuilder {
       ...(this.config.collectionIntervalSeconds !== undefined
         ? { collectionIntervalSeconds: this.config.collectionIntervalSeconds }
         : {}),
+      ...(this.config.random !== undefined ? { random: this.config.random } : {}),
       ...(storage !== undefined
         ? { stateBinder: (instance, grainId) => bindPersistentStates(instance, grainId, storage) }
         : {}),

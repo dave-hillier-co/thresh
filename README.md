@@ -85,6 +85,7 @@ exercised as a smoke test in the suite so it can't rot. Start with the greeter.
 ```sh
 pnpm --filter @tsva/example-greeter start     # core actor model: activation, turns, idle reset
 pnpm --filter @tsva/example-chat start         # stream fan-out to many members + durable resume
+pnpm --filter @tsva/example-cluster start      # 3 silos over WebSocket: cross-silo routing + failover
 pnpm --filter @tsva/example-thermostat start   # durable state + a reminder + a telemetry stream
 ```
 
@@ -93,6 +94,9 @@ pnpm --filter @tsva/example-thermostat start   # durable state + a reminder + a 
   after going idle.
 - [`examples/chat`](examples/chat) — a room fans each message out to every member; a member that
   deactivated while idle resumes *its own* durable subscription and recovers exactly what it missed.
+- [`examples/cluster`](examples/cluster) — three silos over the real WebSocket transport. Calls from
+  any silo route to one shared activation (directory CAS); when the hosting silo dies the grain
+  reactivates on a survivor.
 - [`examples/thermostat`](examples/thermostat) — the Orleans README example: `@persistentState`, a
   durable self-check reminder, and a telemetry stream consumed by an aggregator.
 

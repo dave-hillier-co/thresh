@@ -107,3 +107,8 @@ previously had only unit coverage. Outside-in / ATDD: failing example first, the
       `ActivationCollector` and accepts `collectionAgeSeconds` / `collectionIntervalSeconds`
       (previously only the bare `Silo` swept idle activations), surfaced by the greeter/chat
       reactivation slices.
+- [x] `examples/cluster` — multi-silo end-to-end over the **real WebSocket transport** (previously
+      only the in-process cluster test and a WebSocket unit test existed): cross-silo routing to one
+      activation via directory CAS, and reactivation on a survivor when the hosting silo leaves the
+      view. Added builder seams `useMembership(service)` (share one view across in-process silos) and
+      `random` (deterministic placement) to `createSilo`.

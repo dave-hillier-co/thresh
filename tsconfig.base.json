@@ -33,7 +33,8 @@
       "@tsva/streams/*": ["./packages/streams/src/*"],
       "@tsva/example-thermostat/*": ["./examples/thermostat/src/*"],
       "@tsva/example-greeter/*": ["./examples/greeter/src/*"],
-      "@tsva/example-chat/*": ["./examples/chat/src/*"]
+      "@tsva/example-chat/*": ["./examples/chat/src/*"],
+      "@tsva/example-cluster/*": ["./examples/cluster/src/*"]
     }
   }
 }
