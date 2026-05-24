@@ -11,6 +11,7 @@ import { activeSilos, type MembershipService } from "@tsva/core/membership";
 import { Guid } from "@tsva/core/guid";
 import type { GrainReferenceIdentity } from "@tsva/core/grain-reference";
 import type { ReminderRegistry, TickStatus } from "@tsva/core/reminder";
+import type { StreamProvider } from "@tsva/core/stream";
 import type { InvocationRequest } from "@tsva/core/request";
 import type { SiloAddress } from "@tsva/core/silo-address";
 import { ConsistentHashRing } from "@tsva/directory/consistent-hash-ring";
@@ -48,6 +49,8 @@ export interface ClusterNodeOptions {
   stateBinder?: (instance: Grain, grainId: GrainId) => Promise<void>;
   /** Resolves the reminder registry a grain's `registerReminder` delegates to. */
   reminderRegistry?: () => ReminderRegistry | undefined;
+  /** Resolves the stream provider a grain's `getStreamProvider` returns. */
+  streamProvider?: (name?: string) => StreamProvider | undefined;
   /** Injectable RNG for deterministic placement in tests. */
   random?: () => number;
 }
@@ -127,6 +130,7 @@ export class ClusterNode {
       ...(options.reminderRegistry !== undefined
         ? { reminderRegistry: options.reminderRegistry }
         : {}),
+      ...(options.streamProvider !== undefined ? { streamProvider: options.streamProvider } : {}),
     });
     this.dispatcher = new DistributedDispatcher({
       local: options.local,

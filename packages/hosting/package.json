@@ -12,6 +12,7 @@
     "@tsva/runtime": "workspace:*",
     "@tsva/clustering-k8s": "workspace:*",
     "@tsva/persistence": "workspace:*",
-    "@tsva/reminders": "workspace:*"
+    "@tsva/reminders": "workspace:*",
+    "@tsva/streams": "workspace:*"
   }
 }

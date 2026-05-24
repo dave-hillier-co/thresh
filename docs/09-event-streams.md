@@ -157,6 +157,7 @@ The implementation ships the in-memory `MemoryStreamProvider`: events addressed 
 `(provider, namespace, key)`, ordered delivery to each subscriber, a per-subscription cursor that
 only advances after `onNext` resolves (so a thrown handler is redelivered — at-least-once), resume
 from the cursor after a consumer drops, and rewind via a `startToken`. The grain-facing
-`getStreamProvider` (delivering `onNext` as a turn and re-binding durable subscriptions on
-reactivation), the Redis Streams provider, and the pulling-agent / queue-ownership machinery are
-future work behind the same `StreamProvider` interface.
+`getStreamProvider` (configured with `useMemoryStreams` on the builder) delivers each `onNext` as a
+turn on the consumer's activation and re-binds durable subscriptions on reactivation via
+`getSubscriptions`/`resume`. The Redis Streams provider and the pulling-agent / queue-ownership
+machinery are future work behind the same `StreamProvider` interface.

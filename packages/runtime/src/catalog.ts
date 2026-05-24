@@ -5,6 +5,7 @@ import type { GrainMetadata } from "@tsva/core/grain-metadata";
 import type { GrainType } from "@tsva/core/grain-type";
 import type { DeactivationReason } from "@tsva/core/reasons";
 import type { ReminderRegistry } from "@tsva/core/reminder";
+import type { StreamProvider } from "@tsva/core/stream";
 import { ActivationData } from "@tsva/runtime/activation";
 import type { GrainFactory } from "@tsva/runtime/grain-factory";
 import { GrainRuntimeImpl } from "@tsva/runtime/grain-runtime-impl";
@@ -26,6 +27,8 @@ export interface CatalogOptions {
   activateState?: (instance: Grain, grainId: GrainId) => Promise<void>;
   /** Resolves the reminder registry a grain's `registerReminder` delegates to. */
   reminderRegistry?: () => ReminderRegistry | undefined;
+  /** Resolves the stream provider a grain's `getStreamProvider` returns. */
+  streamProvider?: (name?: string) => StreamProvider | undefined;
 }
 
 /** Registry of live activations on this silo, keyed by grain id. */
@@ -82,11 +85,14 @@ export class Catalog {
       reg.metadata.reentrant,
       activationId,
     );
-    activation.runtime = new GrainRuntimeImpl(
-      this.options.factory,
-      activation,
-      this.options.reminderRegistry,
-    );
+    activation.runtime = new GrainRuntimeImpl(this.options.factory, activation, {
+      ...(this.options.reminderRegistry !== undefined
+        ? { reminders: this.options.reminderRegistry }
+        : {}),
+      ...(this.options.streamProvider !== undefined
+        ? { streams: this.options.streamProvider }
+        : {}),
+    });
     const instance = new reg.ctor();
     instance.setContext(activation);
     activation.instance = instance;

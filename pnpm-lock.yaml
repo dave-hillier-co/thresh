@@ -67,6 +67,9 @@ importers:
       '@tsva/runtime':
         specifier: workspace:*
         version: link:../runtime
+      '@tsva/streams':
+        specifier: workspace:*
+        version: link:../streams
 
   packages/messaging:
     dependencies:

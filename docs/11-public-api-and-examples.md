@@ -96,13 +96,12 @@ The snippets above are the target surface. The shipped surface differs in a few 
   `registerGrain(ThermostatGrain, { interfaces: [IThermostat, IThermostatControl] })` — because
   TypeScript interfaces are erased at runtime and cannot be reflected.
 - Builder providers shipped so far are **in-memory**: `useMemoryStorage()` / `addStorage(name, p)`,
-  `useReminders(table?)`, and (with the stream grain-wiring) `useMemoryStreams()`. The
-  `addRedisStorage` / `useRedisReminders` / `addRedisStreams` methods are future work behind the same
-  builder shape.
+  `useReminders(table?)`, `useMemoryStreams()`. The `addRedisStorage` / `useRedisReminders` /
+  `addRedisStreams` methods are future work behind the same builder shape.
 - Persistent state is declared with `@persistentState(name, { defaultValue })` and injected before
   `onActivate`; the `getStorage` accessor on `GrainRuntime` is not implemented (the decorator is the
-  supported path). `registerTimer`, `registerReminder` / `unregisterReminder` are wired;
-  `getStreamProvider` lands with the stream grain-wiring.
+  supported path). `registerTimer`, `registerReminder` / `unregisterReminder` and
+  `getStreamProvider` (which delivers each `onNext` as a turn) are all wired.
 - Transport is `useInProcessTransport(network)` or `useWebSocketTransport()`; membership is
   `useStaticMembership([...])` or `useKubernetesMembership(watch)`.
 

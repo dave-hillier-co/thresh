@@ -75,9 +75,9 @@ Work items, grouped by the phase they belong to in
 - [x] Stream contracts (`StreamProvider`/`AsyncStream`/`StreamHandler`/`StreamSubscriptionHandle`/
       `SequenceToken`); in-memory provider with ordered delivery, per-subscription cursor + resume,
       rewind via start token, at-least-once redelivery, namespace/key isolation
-- [ ] Grain-facing wiring — `getStreamProvider` on the runtime; deliver `onNext` as a turn;
-      subscriptions survive deactivation (`getSubscriptions`/`resume` on reactivate); builder
-      `useMemoryStreams`
+- [x] Grain-facing wiring — `getStreamProvider` delivers `onNext` as a turn on the consumer's
+      activation; durable subscriptions resume via `getSubscriptions`/`resume`; builder
+      `useMemoryStreams`; end-to-end producer→consumer test
 - [ ] Redis Streams provider + pulling agents / queue ownership over the ring (need real infra)
 
 ## On approach to v1 completion

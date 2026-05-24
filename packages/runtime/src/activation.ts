@@ -88,6 +88,14 @@ export class ActivationData implements GrainContext {
       .finally(() => this.touch());
   }
 
+  /** Run a stream delivery callback as a turn; rejects if the activation is gone. */
+  runStreamTurn(callback: () => Promise<void>): Promise<unknown> {
+    if (this.state === "invalid" || this.state === "deactivating") {
+      return Promise.reject(new GrainCallError(`activation unavailable: ${this.id.toString()}`));
+    }
+    return this.scheduler.schedule({ options: {}, run: callback });
+  }
+
   /** Deliver a reminder tick to the grain as a turn (if it implements Remindable). */
   deliverReminder(name: string, status: TickStatus): Promise<unknown> {
     this.touch();

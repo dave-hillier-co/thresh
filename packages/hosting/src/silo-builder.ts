@@ -16,8 +16,10 @@ import { systemTimeProvider, type TimeProvider } from "@tsva/core/time-provider"
 import { MemoryGrainStorage } from "@tsva/persistence/memory-grain-storage";
 import { bindPersistentStates } from "@tsva/persistence/state-activator";
 import { StorageRegistry } from "@tsva/persistence/storage-registry";
+import type { StreamProvider } from "@tsva/core/stream";
 import { LocalReminderService } from "@tsva/reminders/local-reminder-service";
 import { MemoryReminderTable } from "@tsva/reminders/memory-reminder-table";
+import { MemoryStreamProvider } from "@tsva/streams/memory-stream-provider";
 import { ClusterNode } from "@tsva/runtime/cluster-node";
 import { StaticMembershipService } from "@tsva/runtime/static-membership";
 import { HealthCheck } from "@tsva/hosting/health-check";
@@ -43,6 +45,7 @@ export class SiloBuilder {
   private healthPort: number | undefined;
   private storage: StorageRegistry | undefined;
   private reminderTable: ReminderTable | undefined;
+  private readonly streamProviders = new Map<string, StreamProvider>();
   private readonly registrations: Registration[] = [];
 
   constructor(private readonly config: SiloConfig) {}
@@ -50,6 +53,17 @@ export class SiloBuilder {
   /** Enable durable reminders backed by the given table (in-memory by default). */
   useReminders(table: ReminderTable = new MemoryReminderTable()): this {
     this.reminderTable = table;
+    return this;
+  }
+
+  /** Register a stream provider (in-memory by default), named "default" unless given. */
+  useMemoryStreams(name = "default"): this {
+    this.streamProviders.set(name, new MemoryStreamProvider(name));
+    return this;
+  }
+
+  addStreamProvider(name: string, provider: StreamProvider): this {
+    this.streamProviders.set(name, provider);
     return this;
   }
 
@@ -125,6 +139,12 @@ export class SiloBuilder {
         ? { stateBinder: (instance, grainId) => bindPersistentStates(instance, grainId, storage) }
         : {}),
       ...(this.reminderTable !== undefined ? { reminderRegistry: () => reminderService } : {}),
+      ...(this.streamProviders.size > 0
+        ? {
+            streamProvider: (name?: string) =>
+              this.streamProviders.get(name ?? "default") ?? this.streamProviders.get("default"),
+          }
+        : {}),
     });
     for (const r of this.registrations) node.registerGrain(r.ctor, { interfaces: r.interfaces });
 
