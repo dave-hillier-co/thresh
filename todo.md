@@ -106,6 +106,16 @@ Work items, grouped by the phase they belong to in
 - [ ] Event-log mode — append-only `EventLog` provider + replay-from-snapshot on activation; opt-in
       publication of raised events to the grain's stream; event upcasting (needs real infra)
 
+## External client
+
+- [x] `@tsva/client` — gateway-routed `createClient({ clusterId, local, transport, gateway })`; not a
+      silo (hosts no grains), forwards every `getGrain` call to a gateway silo and awaits the reply
+      over a connection back to the client. Registers grains for interface→type resolution. In-process
+      acceptance test (routing to a single activation, application-error propagation, unregistered
+      interface rejected).
+- [ ] Higher-level gateway discovery (`gateway: { url }`) + a WebSocket client e2e (needs the gateway
+      Service shape from docs/10)
+
 ## Examples as acceptance tests
 
 Runnable example apps that double as end-to-end acceptance tests, driving capabilities that

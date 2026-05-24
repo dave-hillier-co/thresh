@@ -31,6 +31,7 @@
       "@tsva/persistence/*": ["./packages/persistence/src/*"],
       "@tsva/reminders/*": ["./packages/reminders/src/*"],
       "@tsva/streams/*": ["./packages/streams/src/*"],
+      "@tsva/client/*": ["./packages/client/src/*"],
       "@tsva/example-thermostat/*": ["./examples/thermostat/src/*"],
       "@tsva/example-greeter/*": ["./examples/greeter/src/*"],
       "@tsva/example-chat/*": ["./examples/chat/src/*"],

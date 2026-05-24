@@ -108,18 +108,28 @@ The snippets above are the target surface. The shipped surface differs in a few 
 
 ### External client
 
+A client (`@tsva/client`) is not a silo — it hosts no grains — but it uses the same `getGrain` proxy
+mechanism, forwarding every call to a **gateway** silo that routes it to the grain's activation and
+replies. The client is itself reachable (it listens) so responses return over a connection to it.
+
 ```ts
-const client = await createClient({
+const client = createClient({
   clusterId: process.env.CLUSTER_ID!,
-  gateway: { url: process.env.GATEWAY_URL! },   // the gateway Service (10)
-}).connect();
+  local: clientAddress,                         // the client's own reachable address
+  transport: new WebSocketTransport(clusterId), // or an in-process transport for tests
+  gateway: gatewaySiloAddress,                  // the gateway silo (10)
+}).registerGrain(ThermostatGrain, { interfaces: [IThermostat] });
+
+await client.connect();
 
 const thermostat = client.getGrain<IThermostat>(IThermostat, deviceId);
 await thermostat.onUpdate(update);
 ```
 
-A client uses the same `getGrain` and the same proxy mechanism as a grain; it simply routes through
-a gateway silo rather than placing calls locally.
+As with a silo, grains are registered with the interfaces they serve so the client can address the
+same activation a silo-side caller would (TypeScript interfaces are erased — see "What is implemented
+today" above). The shipped client takes the gateway's `SiloAddress` and a transport; a higher-level
+gateway-discovery shape (`gateway: { url }`) is future work.
 
 ## Runnable examples
 

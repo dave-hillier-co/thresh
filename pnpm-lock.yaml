@@ -102,6 +102,18 @@ importers:
         specifier: workspace:*
         version: link:../../packages/messaging
 
+  packages/client:
+    dependencies:
+      '@tsva/core':
+        specifier: workspace:*
+        version: link:../core
+      '@tsva/messaging':
+        specifier: workspace:*
+        version: link:../messaging
+      '@tsva/runtime':
+        specifier: workspace:*
+        version: link:../runtime
+
   packages/clustering-k8s:
     dependencies:
       '@tsva/core':
