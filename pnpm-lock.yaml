@@ -61,6 +61,9 @@ importers:
       '@tsva/persistence':
         specifier: workspace:*
         version: link:../persistence
+      '@tsva/reminders':
+        specifier: workspace:*
+        version: link:../reminders
       '@tsva/runtime':
         specifier: workspace:*
         version: link:../runtime

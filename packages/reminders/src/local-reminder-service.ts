@@ -1,6 +1,11 @@
 import { durationToMs, type Duration } from "@tsva/core/duration";
 import type { GrainId } from "@tsva/core/grain-id";
-import type { ReminderEntry, ReminderTable, TickStatus } from "@tsva/core/reminder";
+import type {
+  ReminderEntry,
+  ReminderRegistry,
+  ReminderTable,
+  TickStatus,
+} from "@tsva/core/reminder";
 import type { TimeProvider, TimerHandle } from "@tsva/core/time-provider";
 
 /** Delivers a due reminder: the silo wires this to reactivate the grain and call `receiveReminder`. */
@@ -27,7 +32,7 @@ function inRanges(hash: number, ranges: readonly HashRange[]): boolean {
  * owning silo's death: another silo that takes over the range re-reads the table
  * and resumes firing (`refreshOwnership`). Driven by the injectable clock.
  */
-export class LocalReminderService {
+export class LocalReminderService implements ReminderRegistry {
   private readonly scheduled = new Map<string, Scheduled>();
   private ranges: readonly HashRange[];
 

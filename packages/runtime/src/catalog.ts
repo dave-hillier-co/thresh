@@ -4,6 +4,7 @@ import type { GrainId } from "@tsva/core/grain-id";
 import type { GrainMetadata } from "@tsva/core/grain-metadata";
 import type { GrainType } from "@tsva/core/grain-type";
 import type { DeactivationReason } from "@tsva/core/reasons";
+import type { ReminderRegistry } from "@tsva/core/reminder";
 import { ActivationData } from "@tsva/runtime/activation";
 import type { GrainFactory } from "@tsva/runtime/grain-factory";
 import { GrainRuntimeImpl } from "@tsva/runtime/grain-runtime-impl";
@@ -23,6 +24,8 @@ export interface CatalogOptions {
   onDeactivated?: (activation: ActivationData) => void;
   /** Bind/read persistent state before `onActivate` (provided by the hosting layer). */
   activateState?: (instance: Grain, grainId: GrainId) => Promise<void>;
+  /** Resolves the reminder registry a grain's `registerReminder` delegates to. */
+  reminderRegistry?: () => ReminderRegistry | undefined;
 }
 
 /** Registry of live activations on this silo, keyed by grain id. */
@@ -79,7 +82,11 @@ export class Catalog {
       reg.metadata.reentrant,
       activationId,
     );
-    activation.runtime = new GrainRuntimeImpl(this.options.factory, activation);
+    activation.runtime = new GrainRuntimeImpl(
+      this.options.factory,
+      activation,
+      this.options.reminderRegistry,
+    );
     const instance = new reg.ctor();
     instance.setContext(activation);
     activation.instance = instance;

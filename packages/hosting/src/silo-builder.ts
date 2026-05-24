@@ -11,9 +11,13 @@ import type { GrainStorage } from "@tsva/core/grain-storage";
 import { InProcessTransport, type InProcessNetwork } from "@tsva/messaging/in-process-transport";
 import type { Transport } from "@tsva/messaging/transport";
 import { WebSocketTransport } from "@tsva/messaging/web-socket-transport";
+import type { ReminderTable } from "@tsva/core/reminder";
+import { systemTimeProvider, type TimeProvider } from "@tsva/core/time-provider";
 import { MemoryGrainStorage } from "@tsva/persistence/memory-grain-storage";
 import { bindPersistentStates } from "@tsva/persistence/state-activator";
 import { StorageRegistry } from "@tsva/persistence/storage-registry";
+import { LocalReminderService } from "@tsva/reminders/local-reminder-service";
+import { MemoryReminderTable } from "@tsva/reminders/memory-reminder-table";
 import { ClusterNode } from "@tsva/runtime/cluster-node";
 import { StaticMembershipService } from "@tsva/runtime/static-membership";
 import { HealthCheck } from "@tsva/hosting/health-check";
@@ -23,6 +27,8 @@ import { buildSiloHost, type SiloHost } from "@tsva/hosting/silo-host";
 export interface SiloConfig {
   clusterId: string;
   local: SiloAddress;
+  /** Shared clock (defaults to the system clock); inject a fake for tests. */
+  time?: TimeProvider;
 }
 
 interface Registration {
@@ -36,9 +42,16 @@ export class SiloBuilder {
   private transport: Transport | undefined;
   private healthPort: number | undefined;
   private storage: StorageRegistry | undefined;
+  private reminderTable: ReminderTable | undefined;
   private readonly registrations: Registration[] = [];
 
   constructor(private readonly config: SiloConfig) {}
+
+  /** Enable durable reminders backed by the given table (in-memory by default). */
+  useReminders(table: ReminderTable = new MemoryReminderTable()): this {
+    this.reminderTable = table;
+    return this;
+  }
 
   /** Register a named storage provider (the first becomes "default" if unnamed). */
   addStorage(name: string, provider: GrainStorage): this {
@@ -99,22 +112,37 @@ export class SiloBuilder {
     if (this.transport === undefined) throw new Error("silo: no transport configured");
     const health = new HealthCheck();
     const storage = this.storage;
+    const time = this.config.time;
+    let reminderService: LocalReminderService | undefined;
+
     const node = new ClusterNode({
       local: this.config.local,
       clusterId: this.config.clusterId,
       membership: this.membership,
       transport: this.transport,
+      ...(time !== undefined ? { time } : {}),
       ...(storage !== undefined
         ? { stateBinder: (instance, grainId) => bindPersistentStates(instance, grainId, storage) }
         : {}),
+      ...(this.reminderTable !== undefined ? { reminderRegistry: () => reminderService } : {}),
     });
     for (const r of this.registrations) node.registerGrain(r.ctor, { interfaces: r.interfaces });
+
+    if (this.reminderTable !== undefined) {
+      reminderService = new LocalReminderService(
+        this.reminderTable,
+        time ?? systemTimeProvider,
+        (grainId, name, status) => node.deliverReminder(grainId, name, status),
+      );
+    }
+
     return buildSiloHost({
       node,
       health,
       healthServer: this.healthPort !== undefined ? new HealthServer(health) : undefined,
       healthPort: this.healthPort,
       membership: this.membership,
+      reminderService,
     });
   }
 }

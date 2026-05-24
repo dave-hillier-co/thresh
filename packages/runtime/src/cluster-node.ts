@@ -10,6 +10,7 @@ import type { GrainKeyFor } from "@tsva/core/key-kinds";
 import { activeSilos, type MembershipService } from "@tsva/core/membership";
 import { Guid } from "@tsva/core/guid";
 import type { GrainReferenceIdentity } from "@tsva/core/grain-reference";
+import type { ReminderRegistry, TickStatus } from "@tsva/core/reminder";
 import type { InvocationRequest } from "@tsva/core/request";
 import type { SiloAddress } from "@tsva/core/silo-address";
 import { ConsistentHashRing } from "@tsva/directory/consistent-hash-ring";
@@ -45,6 +46,8 @@ export interface ClusterNodeOptions {
   defaultCollectionAgeSeconds?: number;
   /** Bind/read persistent state before `onActivate` (provided by the hosting layer). */
   stateBinder?: (instance: Grain, grainId: GrainId) => Promise<void>;
+  /** Resolves the reminder registry a grain's `registerReminder` delegates to. */
+  reminderRegistry?: () => ReminderRegistry | undefined;
   /** Injectable RNG for deterministic placement in tests. */
   random?: () => number;
 }
@@ -121,6 +124,9 @@ export class ClusterNode {
       defaultCollectionAgeSeconds: options.defaultCollectionAgeSeconds ?? 900,
       onDeactivated: (a) => this.onDeactivated(a),
       ...(options.stateBinder !== undefined ? { activateState: options.stateBinder } : {}),
+      ...(options.reminderRegistry !== undefined
+        ? { reminderRegistry: options.reminderRegistry }
+        : {}),
     });
     this.dispatcher = new DistributedDispatcher({
       local: options.local,
@@ -157,6 +163,11 @@ export class ClusterNode {
 
   isActive(id: GrainId): boolean {
     return this.catalog.isActive(id);
+  }
+
+  /** Activate the grain (if needed) and deliver a reminder tick as a turn. */
+  async deliverReminder(grainId: GrainId, name: string, status: TickStatus): Promise<void> {
+    await this.catalog.getOrCreate(grainId).deliverReminder(name, status);
   }
 
   async start(): Promise<void> {

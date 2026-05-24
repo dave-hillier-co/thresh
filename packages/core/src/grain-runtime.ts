@@ -10,6 +10,8 @@ import type { GrainKeyFor } from "./key-kinds";
 export interface GrainRuntime {
   getGrain<T>(def: GrainInterface<T>, key: GrainKeyFor<T>): T;
   registerTimer(callback: () => Promise<void>, due: Duration, period?: Duration): GrainTimer;
+  registerReminder(name: string, due: Duration, period: Duration): Promise<void>;
+  unregisterReminder(name: string): Promise<void>;
   deactivateOnIdle(): void;
   delayDeactivation(by: Duration): void;
 }

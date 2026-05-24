@@ -64,9 +64,11 @@ Work items, grouped by the phase they belong to in
 - [x] Reminders core — `Remindable`/`TickStatus`, `ReminderTable` contract + in-memory table (etag),
       `LocalReminderService` with hash-range ownership, periodic firing, and silo-handoff
       (`refreshOwnership` re-reads the table)
-- [ ] Grain-facing wiring — `registerReminder`/`unregisterReminder` on the runtime; `onFire`
-      reactivates the grain and delivers `receiveReminder` as a turn; ranges from the ring + rebalance
-- [ ] Redis (default) + Postgres reminder tables (need real infra)
+- [x] Grain-facing wiring — `registerReminder`/`unregisterReminder` on the runtime; the silo's
+      `onFire` reactivates the grain and delivers `receiveReminder` as a turn; builder `useReminders`;
+      end-to-end test (grain registers → fires → delivered)
+- [ ] Multi-silo reminder ownership from the ring + rebalance on view change (single-silo owns the
+      whole ring today); Redis (default) + Postgres reminder tables (need real infra)
 
 ## Deferred (later phases)
 

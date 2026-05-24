@@ -41,3 +41,12 @@ export interface ReminderTable {
   readForGrain(grainId: GrainId): Promise<ReminderEntry[]>;
   readRange(hashBegin: number, hashEnd: number): Promise<ReminderEntry[]>;
 }
+
+/**
+ * The runtime-facing handle a grain's `registerReminder` delegates to. The
+ * reminder service implements it; the hosting layer injects it into the runtime.
+ */
+export interface ReminderRegistry {
+  register(grainId: GrainId, name: string, due: Duration, period: Duration): Promise<void>;
+  unregister(grainId: GrainId, name: string): Promise<void>;
+}

@@ -7,6 +7,12 @@ import { GracefulShutdown } from "@tsva/hosting/graceful-shutdown";
 import type { HealthCheck } from "@tsva/hosting/health-check";
 import type { HealthServer } from "@tsva/hosting/health-server";
 
+/** The reminder service the host drives (a `LocalReminderService`). */
+export interface ReminderService {
+  refreshOwnership(ranges: ReadonlyArray<readonly [number, number]>): Promise<void>;
+  stop(): void;
+}
+
 export interface SiloHostParts {
   node: ClusterNode;
   health: HealthCheck;
@@ -14,7 +20,11 @@ export interface SiloHostParts {
   healthPort: number | undefined;
   shutdown: GracefulShutdown;
   membership: MembershipService;
+  reminderService?: ReminderService | undefined;
 }
+
+// Single-silo hosting owns the whole ring; multi-silo ownership from the ring is a refinement.
+const WHOLE_RING: readonly [number, number] = [0, 0x1_0000_0000];
 
 /**
  * A started silo: the cluster node plus its health probes and drain coordinator.
@@ -43,6 +53,7 @@ export class SiloHost {
     if (this.parts.healthServer !== undefined && this.parts.healthPort !== undefined) {
       await this.parts.healthServer.listen(this.parts.healthPort);
     }
+    await this.parts.reminderService?.refreshOwnership([WHOLE_RING]);
     this.watchMembership();
     this.parts.health.update({
       membershipHealthy: this.parts.membership.current().silos.length > 0,
@@ -52,6 +63,7 @@ export class SiloHost {
 
   async stop(): Promise<void> {
     this.membershipWatch?.abort();
+    this.parts.reminderService?.stop();
     await this.parts.shutdown.drain();
     await this.parts.healthServer?.close();
   }
