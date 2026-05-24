@@ -77,5 +77,14 @@ pnpm typecheck    # type-check every package
 pnpm lint         # ESLint + Prettier
 ```
 
-Work proceeds test-first in vertical slices that map to the
-[roadmap](docs/13-roadmap-and-phases.md); [`todo.md`](todo.md) tracks outstanding items.
+Run the worked example end-to-end (a thermostat grain with durable state, a
+reminder and a telemetry stream, over in-memory providers and the in-process
+transport):
+
+```sh
+pnpm --filter @tsva/example-thermostat start
+```
+
+It is also exercised as a smoke test in the suite. Work proceeds test-first in
+vertical slices that map to the [roadmap](docs/13-roadmap-and-phases.md);
+[`todo.md`](todo.md) tracks outstanding items.

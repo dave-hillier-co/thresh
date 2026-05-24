@@ -30,7 +30,8 @@
       "@tsva/hosting/*": ["./packages/hosting/src/*"],
       "@tsva/persistence/*": ["./packages/persistence/src/*"],
       "@tsva/reminders/*": ["./packages/reminders/src/*"],
-      "@tsva/streams/*": ["./packages/streams/src/*"]
+      "@tsva/streams/*": ["./packages/streams/src/*"],
+      "@tsva/example-thermostat/*": ["./examples/thermostat/src/*"]
     }
   }
 }

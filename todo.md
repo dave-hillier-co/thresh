@@ -82,8 +82,9 @@ Work items, grouped by the phase they belong to in
 
 ## On approach to v1 completion
 
-- [ ] **Executable** worked example `examples/thermostat` — real runnable entry point (not snippets)
-      over in-memory providers + in-process/WebSocket transport, with a smoke run wired into the test
-      suite so it can't rot. (Phase 6 exit criterion: thermostat runs end-to-end.)
-- [ ] Reconcile `docs/11` (public API) and `README` with the shipped API; add getting-started/run docs
+- [x] **Executable** worked example `examples/thermostat` — runnable entry point
+      (`pnpm --filter @tsva/example-thermostat start`, via vite-node) exercising `@persistentState`,
+      a reminder, and a telemetry stream over in-memory providers + in-process transport; a smoke
+      test runs the full demo in the suite so it can't rot
+- [x] Reconcile `docs/11` (public API), `docs/12`, `README` with the shipped API + getting-started/run docs
 - [ ] Final docs accuracy pass before declaring v1 done
