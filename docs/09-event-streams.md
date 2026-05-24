@@ -36,8 +36,8 @@ interface AsyncStream<T> {
   readonly id: StreamId;
   publish(event: T): Promise<void>;
   subscribe(handler: StreamHandler<T>, options?: SubscribeOptions): Promise<StreamSubscriptionHandle<T>>;
-  // re-bind existing subscriptions after reactivation:
-  getSubscriptions(): Promise<StreamSubscriptionHandle<T>[]>;
+  // re-bind this consumer's existing subscriptions after reactivation:
+  getSubscriptions(consumerId?: string): Promise<StreamSubscriptionHandle<T>[]>;
 }
 
 interface StreamHandler<T> {
@@ -53,6 +53,7 @@ interface StreamSubscriptionHandle<T> {
 
 interface SubscribeOptions {
   startToken?: SequenceToken;   // rewind to a position the backing store still has
+  consumerId?: string;          // scopes the subscription to a consumer; the runtime binds it
 }
 ```
 
@@ -92,6 +93,22 @@ class AggregatorGrain extends Grain implements IAggregator {
 
 Delivery into a consuming grain happens **as a turn** on that grain's activation, so stream handlers
 respect single-threaded execution just like method calls (see [02](02-actor-model.md)).
+
+### Fan-out and per-consumer subscriptions
+
+Many grains can subscribe to the *same* stream — a room stream with many members, a topic with many
+followers. Each subscriber gets every event, delivered as a turn on its own activation. Because a
+subscription is durable and outlives the consumer's activation, `getSubscriptions()` is **scoped to
+the calling grain**: the runtime binds the consumer's identity, so a consumer that deactivated while
+idle reacquires *its own* subscription (and cursor) on reactivation rather than a neighbour's. The
+`subs[0]` re-bind pattern above is therefore correct even when thousands of consumers share one
+stream. The runnable [`examples/chat`](11-public-api-and-examples.md) exercises exactly this:
+a member that goes idle and is collected later resumes from where it left off, recovering only the
+messages it missed.
+
+Delivery is decoupled from `subscribe`/`resume` — those return without awaiting delivery, because a
+grain may subscribe or resume from within a turn and each `onNext` is itself a turn on the same
+activation; awaiting would deadlock the consumer against its own queue.
 
 ## Architecture: pulling agents over physical queues
 

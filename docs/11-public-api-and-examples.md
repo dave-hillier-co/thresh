@@ -120,6 +120,21 @@ await thermostat.onUpdate(update);
 A client uses the same `getGrain` and the same proxy mechanism as a grain; it simply routes through
 a gateway silo rather than placing calls locally.
 
+## Runnable examples
+
+Three examples under [`examples/`](../examples) run end-to-end over in-memory providers and the
+in-process transport, and double as acceptance tests in the suite. Start each with
+`pnpm --filter <name> start`.
+
+- **`@tsva/example-greeter`** — the smallest grain. Demonstrates the core actor guarantees with no
+  providers: `onActivate` before the first call, serialized turns, and volatile state resetting when
+  an idle grain is collected and reactivated.
+- **`@tsva/example-chat`** — stream fan-out. A room publishes to one stream; many member grains each
+  receive every message as a turn on their own activation. A member that deactivates while idle
+  resumes its own durable subscription on reactivation, recovering exactly the messages it missed
+  (see consumer-scoped subscriptions in [09](09-event-streams.md)).
+- **`@tsva/example-thermostat`** — the full Orleans README example, below.
+
 ## Worked example: IoT thermostat (the Orleans README example, in TypeScript)
 
 ### Interfaces

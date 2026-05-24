@@ -88,3 +88,22 @@ Work items, grouped by the phase they belong to in
       test runs the full demo in the suite so it can't rot
 - [x] Reconcile `docs/11` (public API), `docs/12`, `README` with the shipped API + getting-started/run docs
 - [ ] Final docs accuracy pass before declaring v1 done
+
+## Examples as acceptance tests
+
+Runnable example apps that double as end-to-end acceptance tests, driving capabilities that
+previously had only unit coverage. Outside-in / ATDD: failing example first, then make it pass.
+
+- [x] `examples/greeter` — minimal getting-started grain; acceptance assertions for the Phase-1 exit
+      criteria (activate-before-first-call, serialized turns, volatile state resets on idle
+      reactivation). Doubles as the README quick-start.
+- [x] `examples/chat` — stream fan-out to multiple distinct consumer grains: many users subscribe to
+      one room stream; ordered delivery to all, room isolation, and durable resume per consumer.
+- [x] Consumer-scoped stream subscriptions — a consumer reacquires its **own** durable subscription
+      under fan-out (`getSubscriptions` filtered by the activation's grain id), driven by the chat
+      durable-resume slice. Stream delivery is decoupled from `subscribe`/`resume` so a grain can
+      subscribe mid-turn without deadlocking against its own queue.
+- [x] Idle collection in the hosted (`ClusterNode`) path — `createSilo` now starts an
+      `ActivationCollector` and accepts `collectionAgeSeconds` / `collectionIntervalSeconds`
+      (previously only the bare `Silo` swept idle activations), surfaced by the greeter/chat
+      reactivation slices.

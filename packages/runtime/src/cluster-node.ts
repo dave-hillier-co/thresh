@@ -25,6 +25,7 @@ import { nextCorrelationId, responseTo, type Message } from "@tsva/messaging/mes
 import { MessagePackSerializer } from "@tsva/messaging/msgpack-serializer";
 import type { Serializer } from "@tsva/messaging/serializer";
 import type { Listener, Transport } from "@tsva/messaging/transport";
+import { ActivationCollector } from "@tsva/runtime/activation-collector";
 import { Catalog, type RegisteredGrain } from "@tsva/runtime/catalog";
 import type { ActivationData } from "@tsva/runtime/activation";
 import { DistributedDispatcher } from "@tsva/runtime/distributed-dispatcher";
@@ -45,6 +46,8 @@ export interface ClusterNodeOptions {
   time?: TimeProvider;
   callTimeoutMs?: number;
   defaultCollectionAgeSeconds?: number;
+  /** How often the idle-collection sweep runs (defaults to 60s). */
+  collectionIntervalSeconds?: number;
   /** Bind/read persistent state before `onActivate` (provided by the hosting layer). */
   stateBinder?: (instance: Grain, grainId: GrainId) => Promise<void>;
   /** Resolves the reminder registry a grain's `registerReminder` delegates to. */
@@ -89,6 +92,7 @@ export class ClusterNode {
   private readonly factory: GrainFactory;
   private readonly serializer: Serializer;
   private readonly catalog: Catalog;
+  private readonly collector: ActivationCollector;
   private readonly dispatcher: DistributedDispatcher;
   private readonly directory: DistributedGrainDirectory;
   private readonly callTimeoutMs: number;
@@ -146,6 +150,11 @@ export class ClusterNode {
       }),
     });
     this.factory.setDispatcher(this.dispatcher);
+    this.collector = new ActivationCollector(
+      this.catalog,
+      time,
+      (options.collectionIntervalSeconds ?? 60) * 1000,
+    );
   }
 
   registerGrain<G extends Grain>(
@@ -178,9 +187,11 @@ export class ClusterNode {
     this.listener = await this.options.transport.listen(this.options.local, (message) =>
       this.onMessage(message),
     );
+    this.collector.start();
   }
 
   async stop(): Promise<void> {
+    this.collector.stop();
     await this.listener?.close();
     await this.connections.closeAll();
     await this.catalog.deactivateAll({ code: "shutting-down", description: "node stopping" });

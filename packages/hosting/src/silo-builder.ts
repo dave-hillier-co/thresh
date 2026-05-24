@@ -31,6 +31,10 @@ export interface SiloConfig {
   local: SiloAddress;
   /** Shared clock (defaults to the system clock); inject a fake for tests. */
   time?: TimeProvider;
+  /** Idle-deactivation threshold for grains without their own `collectionAgeSeconds`. */
+  collectionAgeSeconds?: number;
+  /** How often the idle-collection sweep runs (defaults to 60s). */
+  collectionIntervalSeconds?: number;
 }
 
 interface Registration {
@@ -135,6 +139,12 @@ export class SiloBuilder {
       membership: this.membership,
       transport: this.transport,
       ...(time !== undefined ? { time } : {}),
+      ...(this.config.collectionAgeSeconds !== undefined
+        ? { defaultCollectionAgeSeconds: this.config.collectionAgeSeconds }
+        : {}),
+      ...(this.config.collectionIntervalSeconds !== undefined
+        ? { collectionIntervalSeconds: this.config.collectionIntervalSeconds }
+        : {}),
       ...(storage !== undefined
         ? { stateBinder: (instance, grainId) => bindPersistentStates(instance, grainId, storage) }
         : {}),

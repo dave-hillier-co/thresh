@@ -77,14 +77,24 @@ pnpm typecheck    # type-check every package
 pnpm lint         # ESLint + Prettier
 ```
 
-Run the worked example end-to-end (a thermostat grain with durable state, a
-reminder and a telemetry stream, over in-memory providers and the in-process
-transport):
+### Examples
+
+Each example runs end-to-end over in-memory providers and the in-process transport, and is also
+exercised as a smoke test in the suite so it can't rot. Start with the greeter.
 
 ```sh
-pnpm --filter @tsva/example-thermostat start
+pnpm --filter @tsva/example-greeter start     # core actor model: activation, turns, idle reset
+pnpm --filter @tsva/example-chat start         # stream fan-out to many members + durable resume
+pnpm --filter @tsva/example-thermostat start   # durable state + a reminder + a telemetry stream
 ```
 
-It is also exercised as a smoke test in the suite. Work proceeds test-first in
-vertical slices that map to the [roadmap](docs/13-roadmap-and-phases.md);
-[`todo.md`](todo.md) tracks outstanding items.
+- [`examples/greeter`](examples/greeter) — the smallest grain: `onActivate` runs before the first
+  call, concurrent calls are serialized turns, and volatile state resets when the grain reactivates
+  after going idle.
+- [`examples/chat`](examples/chat) — a room fans each message out to every member; a member that
+  deactivated while idle resumes *its own* durable subscription and recovers exactly what it missed.
+- [`examples/thermostat`](examples/thermostat) — the Orleans README example: `@persistentState`, a
+  durable self-check reminder, and a telemetry stream consumed by an aggregator.
+
+Work proceeds test-first in vertical slices that map to the
+[roadmap](docs/13-roadmap-and-phases.md); [`todo.md`](todo.md) tracks outstanding items.

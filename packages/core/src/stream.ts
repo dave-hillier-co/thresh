@@ -27,6 +27,12 @@ export interface StreamSubscriptionHandle<T> {
 export interface SubscribeOptions {
   /** Rewind to a position the backing store still retains. */
   startToken?: SequenceToken;
+  /**
+   * Identifies the subscribing consumer. The runtime binds this to the calling
+   * grain's activation; it scopes `getSubscriptions` so that, when many consumers
+   * share one stream, each reacquires only its own durable subscription.
+   */
+  consumerId?: string;
 }
 
 /** A managed event stream addressed by identity; producers publish, consumers subscribe. */
@@ -37,8 +43,12 @@ export interface AsyncStream<T> {
     handler: StreamHandler<T>,
     options?: SubscribeOptions,
   ): Promise<StreamSubscriptionHandle<T>>;
-  /** Re-bind existing durable subscriptions after reactivation. */
-  getSubscriptions(): Promise<StreamSubscriptionHandle<T>[]>;
+  /**
+   * Re-bind existing durable subscriptions after reactivation. When `consumerId`
+   * is given, only that consumer's subscriptions are returned (others sharing the
+   * stream are excluded); omitting it returns every subscription on the stream.
+   */
+  getSubscriptions(consumerId?: string): Promise<StreamSubscriptionHandle<T>[]>;
 }
 
 export interface StreamProvider {

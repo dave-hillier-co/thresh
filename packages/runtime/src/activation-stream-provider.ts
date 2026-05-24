@@ -22,10 +22,16 @@ export class ActivationStreamProvider implements StreamProvider {
   constructor(
     private readonly base: StreamProvider,
     private readonly runTurn: RunTurn,
+    /** The calling grain's identity; scopes durable subscriptions to this consumer. */
+    private readonly consumerId: string,
   ) {}
 
   getStream<T>(namespace: string, key: GrainKey): AsyncStream<T> {
-    return new TurnDeliveringStream(this.base.getStream<T>(namespace, key), this.runTurn);
+    return new TurnDeliveringStream(
+      this.base.getStream<T>(namespace, key),
+      this.runTurn,
+      this.consumerId,
+    );
   }
 }
 
@@ -33,6 +39,7 @@ class TurnDeliveringStream<T> implements AsyncStream<T> {
   constructor(
     private readonly inner: AsyncStream<T>,
     private readonly runTurn: RunTurn,
+    private readonly consumerId: string,
   ) {}
 
   get id(): StreamId {
@@ -47,12 +54,15 @@ class TurnDeliveringStream<T> implements AsyncStream<T> {
     handler: StreamHandler<T>,
     options?: SubscribeOptions,
   ): Promise<StreamSubscriptionHandle<T>> {
-    const handle = await this.inner.subscribe(wrapHandler(handler, this.runTurn), options);
+    const handle = await this.inner.subscribe(wrapHandler(handler, this.runTurn), {
+      ...options,
+      consumerId: this.consumerId,
+    });
     return new TurnDeliveringHandle(handle, this.runTurn);
   }
 
   async getSubscriptions(): Promise<StreamSubscriptionHandle<T>[]> {
-    const handles = await this.inner.getSubscriptions();
+    const handles = await this.inner.getSubscriptions(this.consumerId);
     return handles.map((h) => new TurnDeliveringHandle(h, this.runTurn));
   }
 }

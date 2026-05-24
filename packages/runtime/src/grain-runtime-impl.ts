@@ -41,7 +41,11 @@ export class GrainRuntimeImpl implements GrainRuntime {
   getStreamProvider(name?: string): StreamProvider {
     const base = this.services.streams?.(name);
     if (base === undefined) throw new Error("streams are not configured on this silo");
-    return new ActivationStreamProvider(base, (cb) => this.activation.runStreamTurn(cb));
+    return new ActivationStreamProvider(
+      base,
+      (cb) => this.activation.runStreamTurn(cb),
+      this.activation.id.toString(),
+    );
   }
 
   deactivateOnIdle(): void {

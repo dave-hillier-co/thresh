@@ -18,19 +18,25 @@ class MemorySubscription<T> implements StreamSubscriptionHandle<T> {
   handler: StreamHandler<T> | undefined;
   cursor: number;
   pumping = false;
+  readonly consumerId: string | undefined;
 
   constructor(
     private readonly stream: MemoryStream<T>,
     handler: StreamHandler<T> | undefined,
     cursor: number,
+    consumerId?: string,
   ) {
     this.handler = handler;
     this.cursor = cursor;
+    this.consumerId = consumerId;
   }
 
   async resume(handler: StreamHandler<T>): Promise<void> {
     this.handler = handler;
-    await this.stream.deliverTo(this);
+    // Deliver asynchronously: a grain may call resume from within a turn, and
+    // each onNext runs as a turn on that same activation — awaiting here would
+    // deadlock the consumer against its own queue.
+    void this.stream.deliverTo(this);
   }
 
   async unsubscribe(): Promise<void> {
@@ -55,14 +61,16 @@ class MemoryStream<T> implements AsyncStream<T> {
   ): Promise<StreamSubscriptionHandle<T>> {
     // Default to "from now"; a startToken rewinds to a retained position.
     const cursor = options?.startToken?.value ?? this.events.length;
-    const sub = new MemorySubscription<T>(this, handler, cursor);
+    const sub = new MemorySubscription<T>(this, handler, cursor, options?.consumerId);
     this.subscriptions.push(sub);
-    await this.deliverTo(sub);
+    // Deliver asynchronously (see resume): the subscriber may be mid-turn.
+    void this.deliverTo(sub);
     return sub;
   }
 
-  async getSubscriptions(): Promise<StreamSubscriptionHandle<T>[]> {
-    return [...this.subscriptions];
+  async getSubscriptions(consumerId?: string): Promise<StreamSubscriptionHandle<T>[]> {
+    if (consumerId === undefined) return [...this.subscriptions];
+    return this.subscriptions.filter((s) => s.consumerId === consumerId);
   }
 
   removeSubscription(sub: MemorySubscription<T>): void {
