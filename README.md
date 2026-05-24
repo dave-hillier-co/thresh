@@ -86,6 +86,7 @@ exercised as a smoke test in the suite so it can't rot. Start with the greeter.
 pnpm --filter @tsva/example-greeter start     # core actor model: activation, turns, idle reset
 pnpm --filter @tsva/example-chat start         # stream fan-out to many members + durable resume
 pnpm --filter @tsva/example-cluster start      # 3 silos over WebSocket: cross-silo routing + failover
+pnpm --filter @tsva/example-bank start         # reducer grains: events fold to immutable state
 pnpm --filter @tsva/example-thermostat start   # durable state + a reminder + a telemetry stream
 ```
 
@@ -97,6 +98,9 @@ pnpm --filter @tsva/example-thermostat start   # durable state + a reminder + a 
 - [`examples/cluster`](examples/cluster) — three silos over the real WebSocket transport. Calls from
   any silo route to one shared activation (directory CAS); when the hosting silo dies the grain
   reactivates on a survivor.
+- [`examples/bank`](examples/bank) — reducer grains ([ADR 0006](docs/adr/0006-reducer-grains.md)):
+  account commands `raise` events folded by a pure reducer into immutable state, persisted as a
+  snapshot that survives a silo restart.
 - [`examples/thermostat`](examples/thermostat) — the Orleans README example: `@persistentState`, a
   durable self-check reminder, and a telemetry stream consumed by an aggregator.
 

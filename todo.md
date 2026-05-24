@@ -100,8 +100,9 @@ Work items, grouped by the phase they belong to in
       the folded state is persisted as a snapshot via the existing `GrainStorage` (events transient),
       bound before `onActivate` alongside `@persistentState`. Unit + end-to-end tests (fold, command
       validation, survives a silo restart).
-- [ ] Worked example exercising `@reducerState` (e.g. a bank account) as a runnable demo + smoke test
-- [ ] Reflect `@reducerState` in `docs/07` (persistence) and `docs/11` (public API)
+- [x] Worked example `examples/bank` — accounts as reducer grains (deposit/withdraw/transfer);
+      runnable demo + smoke test; events fold to immutable state, snapshot survives a silo restart
+- [x] Reflect `@reducerState` in `docs/07` (persistence), `docs/11` (public API + examples), `README`
 - [ ] Event-log mode — append-only `EventLog` provider + replay-from-snapshot on activation; opt-in
       publication of raised events to the grain's stream; event upcasting (needs real infra)
 

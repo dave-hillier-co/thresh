@@ -1,0 +1,59 @@
+import { SiloAddress } from "@tsva/core/silo-address";
+import { InProcessNetwork } from "@tsva/messaging/in-process-transport";
+import { MemoryGrainStorage } from "@tsva/persistence/memory-grain-storage";
+import { createSilo } from "@tsva/hosting/silo-builder";
+import type { SiloHost } from "@tsva/hosting/silo-host";
+import { AccountGrain } from "@tsva/example-bank/account-grain";
+import { IAccount, type AccountState } from "@tsva/example-bank/interfaces";
+
+export interface BankDemoResult {
+  alice: AccountState;
+  bob: AccountState;
+  /** Alice's statement after a silo restart — proves the folded snapshot is durable. */
+  aliceAfterRestart: AccountState;
+}
+
+const local = new SiloAddress("silo-0", "uid-0", "silo-0:11111");
+
+export function buildBankSilo(storage: MemoryGrainStorage): SiloHost {
+  return createSilo({ clusterId: "bank", local })
+    .useStaticMembership([local])
+    .useInProcessTransport(new InProcessNetwork())
+    .useMemoryStorage(storage)
+    .registerGrain(AccountGrain, { interfaces: [IAccount] })
+    .build();
+}
+
+/**
+ * Runs the bank end-to-end: deposits and a transfer are expressed as events
+ * folded into immutable account state, persisted as snapshots. Then a fresh silo
+ * over the same store reloads the snapshots — only the folded state is durable,
+ * the events are transient.
+ */
+export async function runBankDemo(): Promise<BankDemoResult> {
+  const storage = new MemoryGrainStorage(); // the durable backend, shared across "restarts"
+
+  const silo = buildBankSilo(storage);
+  await silo.start();
+  let alice: AccountState;
+  let bob: AccountState;
+  try {
+    await silo.getGrain(IAccount, "alice").deposit(10_000); // $100.00
+    await silo.getGrain(IAccount, "alice").deposit(5_000); // $50.00
+    await silo.getGrain(IAccount, "bob").deposit(2_000); // $20.00
+    await silo.getGrain(IAccount, "alice").transferTo("bob", 3_000); // $30.00 → bob
+    alice = await silo.getGrain(IAccount, "alice").statement();
+    bob = await silo.getGrain(IAccount, "bob").statement();
+  } finally {
+    await silo.stop(); // pod dies; only the folded snapshot is durable
+  }
+
+  const restarted = buildBankSilo(storage); // new pod, same durable store
+  await restarted.start();
+  try {
+    const aliceAfterRestart = await restarted.getGrain(IAccount, "alice").statement();
+    return { alice, bob, aliceAfterRestart };
+  } finally {
+    await restarted.stop();
+  }
+}

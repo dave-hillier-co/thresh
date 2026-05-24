@@ -1,0 +1,18 @@
+{
+  "name": "@tsva/example-bank",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./*": "./src/*.ts"
+  },
+  "scripts": {
+    "start": "vite-node --config ../../vitest.config.ts src/main.ts"
+  },
+  "dependencies": {
+    "@tsva/core": "workspace:*",
+    "@tsva/hosting": "workspace:*",
+    "@tsva/messaging": "workspace:*",
+    "@tsva/persistence": "workspace:*"
+  }
+}

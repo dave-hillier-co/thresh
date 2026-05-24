@@ -129,6 +129,17 @@ silo
 
 A grain then names a non-default provider with `@persistentState("ledger", { provider: "reporting" })`.
 
+## Reducer grains: an event-routed alternative
+
+The `@persistentState` facet above is the **mutable** model: read, mutate `value`, `write()`. An
+additive alternative is the **reducer** facet `@reducerState(name, { initial, reduce })`, where
+command handlers `raise` past-tense events that a pure reducer folds into *immutable* state. In
+**snapshot mode** it persists the folded state through the same `GrainStorage` + etag machinery
+described here (the events are transient); an append-only event log is a future mode. The two facets
+coexist — a grain opts into whichever it wants. See
+[ADR 0006](adr/0006-reducer-grains.md) for the model, rationale and the snapshot-vs-event-log split,
+and [`examples/bank`](../examples/bank) for a worked aggregate.
+
 ## What persistence does not do
 
 - It does not give cross-grain ACID transactions (that is a deferred feature — see

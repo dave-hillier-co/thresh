@@ -24,6 +24,7 @@ abstract class Grain {
 @grain(options?: GrainOptions)        // register an implementation
 @reentrant()                          // class-level full reentrancy
 @persistentState(name, opts?)         // inject a PersistentState<T> facet (07)
+@reducerState(name, { initial, reduce })  // inject a ReducerState<S, E> facet (ADR 0006)
 @serializable(opts?)                  // register a wire/state type (04)
 
 interface GrainOptions {
@@ -122,7 +123,7 @@ a gateway silo rather than placing calls locally.
 
 ## Runnable examples
 
-Three examples under [`examples/`](../examples) run end-to-end over in-memory providers and the
+The examples under [`examples/`](../examples) run end-to-end over in-memory providers and the
 in-process transport, and double as acceptance tests in the suite. Start each with
 `pnpm --filter <name> start`.
 
@@ -138,6 +139,10 @@ in-process transport, and double as acceptance tests in the suite. Start each wi
   (directory compare-and-set); killing the hosting silo and dropping it from the view reactivates the
   grain on a surviving silo on the next call (see [06](06-grain-directory-and-placement.md)). Uses
   `createSilo(...).useMembership(shared).useWebSocketTransport()`.
+- **`@tsva/example-bank`** — reducer grains ([ADR 0006](adr/0006-reducer-grains.md)): account
+  commands validate, then `raise` past-tense events that a pure reducer folds into immutable state.
+  Snapshot mode persists the folded state via `GrainStorage`, surviving a silo restart; the events
+  are transient.
 - **`@tsva/example-thermostat`** — the full Orleans README example, below.
 
 ## Worked example: IoT thermostat (the Orleans README example, in TypeScript)

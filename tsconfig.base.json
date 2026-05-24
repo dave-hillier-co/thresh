@@ -34,7 +34,8 @@
       "@tsva/example-thermostat/*": ["./examples/thermostat/src/*"],
       "@tsva/example-greeter/*": ["./examples/greeter/src/*"],
       "@tsva/example-chat/*": ["./examples/chat/src/*"],
-      "@tsva/example-cluster/*": ["./examples/cluster/src/*"]
+      "@tsva/example-cluster/*": ["./examples/cluster/src/*"],
+      "@tsva/example-bank/*": ["./examples/bank/src/*"]
     }
   }
 }

@@ -36,6 +36,21 @@ importers:
         specifier: ^4.1.7
         version: 4.1.7(@types/node@25.9.1)(vite@8.0.14(@types/node@25.9.1))
 
+  examples/bank:
+    dependencies:
+      '@tsva/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@tsva/hosting':
+        specifier: workspace:*
+        version: link:../../packages/hosting
+      '@tsva/messaging':
+        specifier: workspace:*
+        version: link:../../packages/messaging
+      '@tsva/persistence':
+        specifier: workspace:*
+        version: link:../../packages/persistence
+
   examples/chat:
     dependencies:
       '@tsva/core':
