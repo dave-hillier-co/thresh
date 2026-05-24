@@ -27,6 +27,7 @@ function grainIdFrom(obj: Record<string, unknown>): GrainId {
 
 /** Replace runtime value types with tagged, transport-safe plain forms. */
 export function encodeValue(value: unknown): unknown {
+  if (value instanceof Uint8Array) return value; // binary (e.g. a Message body) passes through
   if (typeof value === "bigint") return { [T]: "bigint", value: value.toString() };
   if (value instanceof Guid) return { [T]: "guid", value: value.toString() };
   if (value instanceof GrainId) return { [T]: "grainId", ...grainIdFields(value) };
@@ -48,6 +49,7 @@ export function encodeValue(value: unknown): unknown {
 
 /** Reverse `encodeValue`, rehydrating value types (and, optionally, grain refs). */
 export function decodeValue(value: unknown, ctx: CodecContext = {}): unknown {
+  if (value instanceof Uint8Array) return value;
   if (Array.isArray(value)) return value.map((v) => decodeValue(v, ctx));
   if (value === null || typeof value !== "object") return value;
 

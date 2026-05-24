@@ -1,0 +1,89 @@
+import { afterEach, describe, expect, it } from "vitest";
+import { RejectionError } from "@tsva/core/errors";
+import { GrainId } from "@tsva/core/grain-id";
+import { SiloAddress } from "@tsva/core/silo-address";
+import { CorrelationTable } from "@tsva/messaging/correlation-table";
+import { JsonSerializer } from "@tsva/messaging/json-serializer";
+import { nextCorrelationId, responseTo, type Message } from "@tsva/messaging/message";
+import type { ConnectionPreamble, Listener } from "@tsva/messaging/transport";
+import { WebSocketTransport } from "@tsva/messaging/web-socket-transport";
+
+const CLUSTER = "c1";
+const body = new JsonSerializer();
+const loopback = (name: string) => new SiloAddress(name, `uid-${name}`, "127.0.0.1:0");
+const preamble = (self: SiloAddress, clusterId = CLUSTER): ConnectionPreamble => ({
+  protocolVersion: 1,
+  siloAddress: self,
+  clusterId,
+});
+const request = (
+  correlationId: bigint,
+  direction: "request" | "oneWay",
+  payload: number,
+): Message => ({
+  correlationId,
+  direction,
+  targetGrain: new GrainId("Doubler", "x"),
+  interfaceId: 0,
+  methodId: 0,
+  body: body.serialize(payload),
+});
+
+const openListeners: Listener[] = [];
+afterEach(async () => {
+  await Promise.all(openListeners.splice(0).map((l) => l.close()));
+});
+
+describe("WebSocketTransport", () => {
+  it("routes a request and its response across two silos over real sockets", async () => {
+    const transportA = new WebSocketTransport(CLUSTER);
+    const transportB = new WebSocketTransport(CLUSTER);
+    const table = new CorrelationTable();
+
+    const listenerA = await transportA.listen(loopback("A"), (msg) => {
+      table.complete(msg);
+    });
+    const listenerB = await transportB.listen(loopback("B"), async (msg, from) => {
+      const arg = body.deserialize<number>(msg.body);
+      const conn = await transportB.connect(from, preamble(listenerB.address));
+      conn.send(responseTo(msg, "success", body.serialize(arg * 2), listenerB.address));
+    });
+    openListeners.push(listenerA, listenerB);
+
+    const conn = await transportA.connect(listenerB.address, preamble(listenerA.address));
+    const corr = nextCorrelationId();
+    const pending = table.register(corr, 2000);
+    conn.send(request(corr, "request", 21));
+
+    const response = await pending;
+    expect(response.responseKind).toBe("success");
+    expect(body.deserialize<number>(response.body)).toBe(42);
+  });
+
+  it("delivers a one-way message with no response", async () => {
+    const transportA = new WebSocketTransport(CLUSTER);
+    const transportB = new WebSocketTransport(CLUSTER);
+    let received: number | undefined;
+
+    const listenerB = await transportB.listen(loopback("B"), (msg) => {
+      received = body.deserialize<number>(msg.body);
+    });
+    openListeners.push(listenerB);
+
+    const conn = await transportA.connect(listenerB.address, preamble(loopback("A")));
+    conn.send(request(nextCorrelationId(), "oneWay", 7));
+
+    await expect.poll(() => received, { timeout: 2000 }).toBe(7);
+  });
+
+  it("rejects a connection from a different cluster", async () => {
+    const transportA = new WebSocketTransport("other");
+    const transportB = new WebSocketTransport(CLUSTER);
+    const listenerB = await transportB.listen(loopback("B"), () => undefined);
+    openListeners.push(listenerB);
+
+    await expect(
+      transportA.connect(listenerB.address, preamble(loopback("A"), "other")),
+    ).rejects.toBeInstanceOf(RejectionError);
+  });
+});

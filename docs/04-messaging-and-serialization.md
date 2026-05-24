@@ -68,6 +68,10 @@ interface Connection {
 
 - **One duplex WebSocket per silo pair**, reused for all traffic between them, multiplexed by
   `correlationId`. This avoids per-call connection setup and head-of-line blocking across grains.
+  The current implementation opens one client→server socket per direction (responses travel back
+  over the reverse connection) and pools them in a `ConnectionManager`; collapsing each pair onto a
+  single reused duplex socket is a later optimization. The preamble is exchanged on connect and the
+  server acks it, so a cross-`clusterId` peer is rejected before any message flows.
 - **Lazy and pooled.** Connections open on first use and are kept alive; a `ConnectionManager`
   tracks outbound/inbound connections per peer and reconnects on transient failure.
 - **Preamble handshake.** On connect, each side sends a preamble identifying itself, mirroring

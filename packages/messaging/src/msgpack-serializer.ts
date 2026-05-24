@@ -7,7 +7,8 @@ export class MessagePackSerializer implements Serializer {
   constructor(private readonly options: SerializerOptions = {}) {}
 
   serialize(value: unknown): Uint8Array {
-    return encode(encodeValue(value));
+    // ignoreUndefined so optional envelope fields round-trip as absent, not null.
+    return encode(encodeValue(value), { ignoreUndefined: true });
   }
 
   deserialize<T>(bytes: Uint8Array): T {

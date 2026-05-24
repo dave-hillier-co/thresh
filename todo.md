@@ -30,7 +30,7 @@ Work items, grouped by the phase they belong to in
 - [x] Slice 10: static membership + distributed dispatcher + rebalancing — cross-silo routing,
       single activation via directory CAS, location cache, remove silo → ring rebalances + grains
       reactivate (in-process transport; WebSocket in slice 11)
-- [ ] Slice 11: WebSocket transport — cross-silo over real sockets, preamble handshake, clusterId mismatch rejected
+- [x] Slice 11: WebSocket transport — cross-silo over real sockets, preamble handshake, clusterId mismatch rejected
 
 ## Deferred (later phases)
 
