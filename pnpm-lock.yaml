@@ -87,6 +87,12 @@ importers:
         specifier: workspace:*
         version: link:../core
 
+  packages/reminders:
+    dependencies:
+      '@tsva/core':
+        specifier: workspace:*
+        version: link:../core
+
   packages/runtime:
     dependencies:
       '@tsva/core':

@@ -1,18 +1,3 @@
-/** An opaque handle to a scheduled timer. */
-export type TimerHandle = unknown;
-
-/**
- * The runtime's single source of time. All timeouts and idle calculations read
- * it, so tests can substitute a deterministic fake clock.
- */
-export interface TimeProvider {
-  now(): number;
-  setTimer(handler: () => void, delayMs: number): TimerHandle;
-  clearTimer(handle: TimerHandle): void;
-}
-
-export const systemTimeProvider: TimeProvider = {
-  now: () => Date.now(),
-  setTimer: (handler, delayMs) => setTimeout(handler, delayMs),
-  clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
-};
+// The clock is a shared primitive; it lives in core. Re-exported here so
+// existing `@tsva/runtime/time-provider` imports keep working.
+export * from "@tsva/core/time-provider";

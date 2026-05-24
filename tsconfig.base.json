@@ -28,7 +28,8 @@
       "@tsva/runtime/*": ["./packages/runtime/src/*"],
       "@tsva/clustering-k8s/*": ["./packages/clustering-k8s/src/*"],
       "@tsva/hosting/*": ["./packages/hosting/src/*"],
-      "@tsva/persistence/*": ["./packages/persistence/src/*"]
+      "@tsva/persistence/*": ["./packages/persistence/src/*"],
+      "@tsva/reminders/*": ["./packages/reminders/src/*"]
     }
   }
 }

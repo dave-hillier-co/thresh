@@ -61,8 +61,11 @@ Work items, grouped by the phase they belong to in
 
 - [x] In-memory timers — `registerTimer` fires the callback as a turn via the injectable clock;
       fixed-rate periodic; cancelled on deactivation
-- [ ] Reminders — `Remindable`, `ReminderTable` contract + in-memory table, hash-range ownership,
-      reminder service that reactivates the grain and delivers `receiveReminder`
+- [x] Reminders core — `Remindable`/`TickStatus`, `ReminderTable` contract + in-memory table (etag),
+      `LocalReminderService` with hash-range ownership, periodic firing, and silo-handoff
+      (`refreshOwnership` re-reads the table)
+- [ ] Grain-facing wiring — `registerReminder`/`unregisterReminder` on the runtime; `onFire`
+      reactivates the grain and delivers `receiveReminder` as a turn; ranges from the ring + rebalance
 - [ ] Redis (default) + Postgres reminder tables (need real infra)
 
 ## Deferred (later phases)
