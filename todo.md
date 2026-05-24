@@ -32,7 +32,16 @@ Work items, grouped by the phase they belong to in
       reactivate (in-process transport; WebSocket in slice 11)
 - [x] Slice 11: WebSocket transport — cross-silo over real sockets, preamble handshake, clusterId mismatch rejected
 
+## Phase 3 — Kubernetes membership and hosting
+
+- [x] EndpointSlice parsing → ready silo set; watch-driven `KubernetesMembership` (versioned
+      snapshots, ready = active, podUid distinguishes incarnations)
+- [ ] Real `@kubernetes/client-node` EndpointSlice watch adapter (the `EndpointWatch` implementation)
+- [ ] Health endpoints (`/ready`, `/live`, `/startup`)
+- [ ] Hosting builder (`createSilo().useKubernetesMembership()…`) + graceful drain on `SIGTERM`
+- [ ] kind cluster e2e — 3-silo `StatefulSet`, pod-kill reactivation, rolling update (needs a live cluster)
+
 ## Deferred (later phases)
 
-- Phase 3 Kubernetes membership/hosting; Phase 4 persistence; Phase 5 timers/reminders;
-  Phase 6 event streams. See [`docs/13`](docs/13-roadmap-and-phases.md).
+- Phase 4 persistence; Phase 5 timers/reminders; Phase 6 event streams.
+  See [`docs/13`](docs/13-roadmap-and-phases.md).

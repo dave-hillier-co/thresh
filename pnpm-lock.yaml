@@ -33,6 +33,12 @@ importers:
         specifier: ^4.1.7
         version: 4.1.7(@types/node@25.9.1)(vite@8.0.14(@types/node@25.9.1))
 
+  packages/clustering-k8s:
+    dependencies:
+      '@tsva/core':
+        specifier: workspace:*
+        version: link:../core
+
   packages/core: {}
 
   packages/directory:

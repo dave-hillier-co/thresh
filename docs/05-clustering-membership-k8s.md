@@ -96,6 +96,13 @@ flowchart LR
 Because every silo watches the same source of truth (the API server), the views converge without a
 gossip protocol. The API server's watch stream is the push mechanism Orleans gets from gossip.
 
+The implementation models the watch as an `EndpointWatch` source feeding a `KubernetesMembership`
+service: ready endpoints become `active` silos (the pod name and UID come from each endpoint's
+`targetRef`, so a restarted pod is recognised by its new UID), and each reconciliation publishes a
+new versioned snapshot. The parsing and reconciliation are unit-tested against fixture slices; the
+adapter binding `EndpointWatch` to the real `@kubernetes/client-node` watch, the health endpoints,
+and the kind end-to-end test are the remaining Phase-3 work.
+
 ## Failure detection
 
 A silo is considered failed when **Kubernetes removes it from the ready endpoint set**, which
