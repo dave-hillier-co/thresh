@@ -99,9 +99,11 @@ gossip protocol. The API server's watch stream is the push mechanism Orleans get
 The implementation models the watch as an `EndpointWatch` source feeding a `KubernetesMembership`
 service: ready endpoints become `active` silos (the pod name and UID come from each endpoint's
 `targetRef`, so a restarted pod is recognised by its new UID), and each reconciliation publishes a
-new versioned snapshot. The parsing and reconciliation are unit-tested against fixture slices; the
-adapter binding `EndpointWatch` to the real `@kubernetes/client-node` watch, the health endpoints,
-and the kind end-to-end test are the remaining Phase-3 work.
+new versioned snapshot. A `WatchedEndpoints` source aggregates the per-resource watch events
+(added / modified / deleted) into the current slice set the membership reconciles. The parsing,
+aggregation and reconciliation are unit-tested against fixture slices and synthetic events; binding
+`WatchedEndpoints` to the real `@kubernetes/client-node` watch and the kind end-to-end test are the
+remaining Phase-3 work.
 
 ## Failure detection
 

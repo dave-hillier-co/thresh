@@ -38,7 +38,9 @@ Work items, grouped by the phase they belong to in
       snapshots, ready = active, podUid distinguishes incarnations)
 - [x] Transport-backed directory RPC — directory ops route to the owning silo as `system` messages
       over the transport (default; in-process peer kept for single-process tests)
-- [ ] Real `@kubernetes/client-node` EndpointSlice watch adapter (the `EndpointWatch` implementation)
+- [x] `WatchedEndpoints` — aggregates incremental watch events (ADDED/MODIFIED/DELETED) into the
+      ready set; drives `KubernetesMembership`
+- [ ] Thin `@kubernetes/client-node` glue feeding `WatchedEndpoints` (needs the client dep + a cluster)
 - [x] Health endpoints (`/ready`, `/live`, `/startup`) — `HealthCheck` probe logic + `HealthServer`
 - [x] Graceful drain — `GracefulShutdown` flips readiness then stops the node; `SIGTERM` handler
 - [x] Hosting builder (`createSilo()…build()`) → `SiloHost` tying node + membership + transport +
