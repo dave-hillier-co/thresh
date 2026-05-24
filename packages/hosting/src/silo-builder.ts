@@ -37,6 +37,8 @@ export interface SiloConfig {
   collectionIntervalSeconds?: number;
   /** Injectable RNG for deterministic placement in examples/tests. */
   random?: () => number;
+  /** How often each silo re-reads its reminder ranges from the table (defaults to 60s). */
+  reminderRefreshSeconds?: number;
 }
 
 interface Registration {
@@ -177,6 +179,8 @@ export class SiloBuilder {
         this.reminderTable,
         time ?? systemTimeProvider,
         (grainId, name, status) => node.deliverReminder(grainId, name, status),
+        node.ownedHashRanges(),
+        (this.config.reminderRefreshSeconds ?? 60) * 1000,
       );
     }
 

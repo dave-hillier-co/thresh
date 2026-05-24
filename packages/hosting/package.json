@@ -7,12 +7,13 @@
     "./*": "./src/*.ts"
   },
   "dependencies": {
-    "@tsva/core": "workspace:*",
-    "@tsva/messaging": "workspace:*",
-    "@tsva/runtime": "workspace:*",
     "@tsva/clustering-k8s": "workspace:*",
+    "@tsva/core": "workspace:*",
+    "@tsva/directory": "workspace:*",
+    "@tsva/messaging": "workspace:*",
     "@tsva/persistence": "workspace:*",
     "@tsva/reminders": "workspace:*",
+    "@tsva/runtime": "workspace:*",
     "@tsva/streams": "workspace:*"
   }
 }

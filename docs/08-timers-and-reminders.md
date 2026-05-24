@@ -124,10 +124,16 @@ interface ReminderEntry {
 ### Distribution across silos
 
 Reminder *responsibility* is partitioned across silos by the **same consistent-hash ring** the
-directory uses (see [06](06-grain-directory-and-placement.md)): each silo owns a hash range and is
-responsible for firing the reminders whose `grainId` hashes into its range. On startup and on every
-membership change, each silo reads its range from the table (`readRange`) and schedules those
-reminders locally.
+directory uses (see [06](06-grain-directory-and-placement.md)): each silo owns the hash ranges the
+ring assigns it (`ConsistentHashRing.rangesFor`) and is responsible for firing the reminders whose
+`grainId` hashes into them. On startup and on every membership change, each silo reads its ranges
+from the table (`readRange`) and schedules those reminders locally. It also re-reads them
+periodically, so a reminder registered on a silo that does not own it (registration just writes the
+durable table) is discovered and fired by the silo that does.
+
+A fired tick is **routed to the grain's single activation through the dispatcher** (directory →
+placement), exactly like a method call — so the silo that owns the *reminder* never spins up a second
+activation when the grain lives elsewhere; an idle grain is reactivated wherever it is placed.
 
 ```mermaid
 flowchart LR
@@ -163,8 +169,8 @@ The implementation ships in-memory timers (`registerTimer`, fired as turns via t
 cancelled on deactivation) and the in-memory `ReminderTable` + `LocalReminderService` (hash-range
 ownership, periodic firing, durable cursors via the table, silo-handoff via `refreshOwnership`). A
 grain's `registerReminder` delegates to the service, and a tick reactivates the grain and delivers
-`receiveReminder` as a turn. A single silo currently owns the whole ring; multi-silo ring-derived
-ownership and the Redis/Postgres tables are future work.
+`receiveReminder` as a turn on its single activation. Ownership is ring-derived and rebalances on
+membership change across silos; the Redis/Postgres tables are future work.
 
 ## Choosing between them
 

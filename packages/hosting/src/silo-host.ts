@@ -23,9 +23,6 @@ export interface SiloHostParts {
   reminderService?: ReminderService | undefined;
 }
 
-// Single-silo hosting owns the whole ring; multi-silo ownership from the ring is a refinement.
-const WHOLE_RING: readonly [number, number] = [0, 0x1_0000_0000];
-
 /**
  * A started silo: the cluster node plus its health probes and drain coordinator.
  * `start` brings it online and flips readiness; `stop` drains gracefully.
@@ -53,7 +50,7 @@ export class SiloHost {
     if (this.parts.healthServer !== undefined && this.parts.healthPort !== undefined) {
       await this.parts.healthServer.listen(this.parts.healthPort);
     }
-    await this.parts.reminderService?.refreshOwnership([WHOLE_RING]);
+    await this.parts.reminderService?.refreshOwnership(this.parts.node.ownedHashRanges());
     this.watchMembership();
     this.parts.health.update({
       membershipHealthy: this.parts.membership.current().silos.length > 0,
@@ -76,6 +73,8 @@ export class SiloHost {
       for await (const snapshot of this.parts.membership.updates()) {
         if (abort.signal.aborted) return;
         this.parts.node.updateView();
+        // Ring changed: take over (or release) reminder ranges accordingly.
+        await this.parts.reminderService?.refreshOwnership(this.parts.node.ownedHashRanges());
         this.parts.health.update({ membershipHealthy: snapshot.silos.length > 0 });
       }
     })();

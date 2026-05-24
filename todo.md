@@ -67,8 +67,12 @@ Work items, grouped by the phase they belong to in
 - [x] Grain-facing wiring — `registerReminder`/`unregisterReminder` on the runtime; the silo's
       `onFire` reactivates the grain and delivers `receiveReminder` as a turn; builder `useReminders`;
       end-to-end test (grain registers → fires → delivered)
-- [ ] Multi-silo reminder ownership from the ring + rebalance on view change (single-silo owns the
-      whole ring today); Redis (default) + Postgres reminder tables (need real infra)
+- [x] Multi-silo reminder ownership from the ring + rebalance on view change — each silo owns the
+      hash ranges the consistent-hash ring assigns it (`ring.rangesFor`), refreshed on every
+      membership change; a reminder registered on a non-owner is discovered by the owner via periodic
+      table refresh; delivery routes through the dispatcher so a tick reaches the grain's single
+      activation (not a second one on the owner). `Date` added to the wire codec for `TickStatus`.
+- [ ] Redis (default) + Postgres reminder tables (need real infra; integration-tested)
 
 ## Phase 6 — Event streams
 

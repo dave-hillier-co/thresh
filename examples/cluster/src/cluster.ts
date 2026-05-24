@@ -21,6 +21,32 @@ function freePort(): Promise<number> {
   });
 }
 
+const tick = () => new Promise((r) => setTimeout(r, 0));
+
+/**
+ * Run an idempotent call, retrying until it converges. Right after a silo dies,
+ * the first attempts from another silo can race the cluster's view update (a
+ * cached location still points at the departed silo); we bound each attempt so a
+ * call to a gone silo can't stall the caller, and retry until routing re-resolves.
+ */
+export async function untilConverged<T>(call: () => Promise<T>): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 50; attempt++) {
+    await tick();
+    const pending = call();
+    pending.catch(() => undefined); // a bounded-out attempt may settle later; don't leak it
+    try {
+      return await Promise.race([
+        pending,
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("retry")), 250)),
+      ]);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError;
+}
+
 export interface Cluster {
   readonly silos: SiloHost[];
   readonly addresses: SiloAddress[];

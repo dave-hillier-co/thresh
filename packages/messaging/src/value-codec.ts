@@ -28,6 +28,7 @@ function grainIdFrom(obj: Record<string, unknown>): GrainId {
 /** Replace runtime value types with tagged, transport-safe plain forms. */
 export function encodeValue(value: unknown): unknown {
   if (value instanceof Uint8Array) return value; // binary (e.g. a Message body) passes through
+  if (value instanceof Date) return { [T]: "date", value: value.getTime() };
   if (typeof value === "bigint") return { [T]: "bigint", value: value.toString() };
   if (value instanceof Guid) return { [T]: "guid", value: value.toString() };
   if (value instanceof GrainId) return { [T]: "grainId", ...grainIdFields(value) };
@@ -59,6 +60,8 @@ export function decodeValue(value: unknown, ctx: CodecContext = {}): unknown {
     switch (tag) {
       case "bigint":
         return BigInt(obj.value as string);
+      case "date":
+        return new Date(obj.value as number);
       case "guid":
         return Guid.parse(obj.value as string);
       case "grainId":

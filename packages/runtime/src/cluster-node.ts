@@ -10,7 +10,7 @@ import type { GrainKeyFor } from "@tsva/core/key-kinds";
 import { activeSilos, type MembershipService } from "@tsva/core/membership";
 import { Guid } from "@tsva/core/guid";
 import type { GrainReferenceIdentity } from "@tsva/core/grain-reference";
-import type { ReminderRegistry, TickStatus } from "@tsva/core/reminder";
+import { RemindableInterface, type ReminderRegistry, type TickStatus } from "@tsva/core/reminder";
 import type { StreamProvider } from "@tsva/core/stream";
 import type { InvocationRequest } from "@tsva/core/request";
 import type { SiloAddress } from "@tsva/core/silo-address";
@@ -178,9 +178,26 @@ export class ClusterNode {
     return this.catalog.isActive(id);
   }
 
-  /** Activate the grain (if needed) and deliver a reminder tick as a turn. */
+  /** The hash ranges this silo owns on the current ring (drives reminder ownership). */
+  ownedHashRanges(): Array<[number, number]> {
+    return this.ring.rangesFor(this.options.local);
+  }
+
+  /**
+   * Deliver a reminder tick to the grain's single activation. Routed through the
+   * dispatcher (directory → placement) rather than activated locally, so the silo
+   * that owns the reminder does not spin up a second activation when the grain
+   * lives elsewhere; the tick reactivates an idle grain wherever it is placed.
+   */
   async deliverReminder(grainId: GrainId, name: string, status: TickStatus): Promise<void> {
-    await this.catalog.getOrCreate(grainId).deliverReminder(name, status);
+    await this.dispatcher.invoke({
+      target: grainId,
+      interfaceId: RemindableInterface.id,
+      methodId: 0,
+      args: [name, status],
+      options: {},
+      reentrancyId: newChainId(),
+    });
   }
 
   async start(): Promise<void> {

@@ -109,6 +109,9 @@ importers:
       '@tsva/core':
         specifier: workspace:*
         version: link:../core
+      '@tsva/directory':
+        specifier: workspace:*
+        version: link:../directory
       '@tsva/messaging':
         specifier: workspace:*
         version: link:../messaging

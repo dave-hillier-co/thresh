@@ -1,11 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { GrainId } from "@tsva/core/grain-id";
 import { ILeaderboard } from "@tsva/example-cluster/interfaces";
-import { buildWebSocketCluster } from "@tsva/example-cluster/cluster";
+import { buildWebSocketCluster, untilConverged } from "@tsva/example-cluster/cluster";
 import { runClusterDemo } from "@tsva/example-cluster/demo";
 
 const LEADERBOARD = new GrainId("Leaderboard", "global");
-const flush = () => new Promise((r) => setTimeout(r, 0));
 
 describe("WebSocket cluster (cross-silo routing acceptance)", () => {
   it("routes calls from every silo to one shared activation over real sockets", async () => {
@@ -41,13 +40,11 @@ describe("WebSocket cluster (cross-silo routing acceptance)", () => {
       // The hosting silo dies: stop it and drop it from the shared view.
       await cluster.silos[hostIndex]!.stop();
       cluster.membership.removeSilo(cluster.addresses[hostIndex]!);
-      await flush();
-      await flush();
 
       // A surviving silo's next call reactivates the grain elsewhere (fresh, since
-      // state was in-memory on the dead silo).
+      // state was in-memory on the dead silo); it retries while routing re-resolves.
       const survivor = cluster.silos.find((_, i) => i !== hostIndex)!;
-      await survivor.getGrain(ILeaderboard, "global").record("grace", 5);
+      await untilConverged(() => survivor.getGrain(ILeaderboard, "global").record("grace", 5));
 
       const survivingHosts = cluster.silos.filter(
         (s, i) => i !== hostIndex && s.isActive(LEADERBOARD),

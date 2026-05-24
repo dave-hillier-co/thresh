@@ -8,7 +8,6 @@ import { getGrainInterface } from "@tsva/core/grain-interface";
 import type { GrainRuntime } from "@tsva/core/grain-runtime";
 import type { GrainTimer } from "@tsva/core/grain-timer";
 import type { ActivationReason, DeactivationReason } from "@tsva/core/reasons";
-import type { Remindable, TickStatus } from "@tsva/core/reminder";
 import type { InvocationRequest } from "@tsva/core/request";
 import { GrainTimerImpl } from "@tsva/runtime/grain-timer-impl";
 import { invocationContext } from "@tsva/runtime/invocation-context";
@@ -94,20 +93,6 @@ export class ActivationData implements GrainContext {
       return Promise.reject(new GrainCallError(`activation unavailable: ${this.id.toString()}`));
     }
     return this.scheduler.schedule({ options: {}, run: callback });
-  }
-
-  /** Deliver a reminder tick to the grain as a turn (if it implements Remindable). */
-  deliverReminder(name: string, status: TickStatus): Promise<unknown> {
-    this.touch();
-    return this.scheduler.schedule({
-      options: {},
-      run: async () => {
-        const remindable = this.instance as Partial<Remindable>;
-        if (typeof remindable.receiveReminder === "function") {
-          await remindable.receiveReminder(name, status);
-        }
-      },
-    });
   }
 
   /** Register a non-durable timer that fires as a turn; cancelled on deactivation. */

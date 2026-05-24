@@ -1,6 +1,6 @@
 import { GrainId } from "@tsva/core/grain-id";
 import { ILeaderboard, type ScoreEntry } from "@tsva/example-cluster/interfaces";
-import { buildWebSocketCluster } from "@tsva/example-cluster/cluster";
+import { buildWebSocketCluster, untilConverged } from "@tsva/example-cluster/cluster";
 
 export interface ClusterDemoResult {
   /** Which silo the single leaderboard activation landed on. */
@@ -12,7 +12,6 @@ export interface ClusterDemoResult {
 }
 
 const LEADERBOARD = new GrainId("Leaderboard", "global");
-const flush = () => new Promise((r) => setTimeout(r, 0));
 
 /**
  * Runs three silos over the real WebSocket transport. Records scores from every
@@ -35,11 +34,10 @@ export async function runClusterDemo(): Promise<ClusterDemoResult> {
     // The hosting silo dies.
     await cluster.silos[hostIndex]!.stop();
     cluster.membership.removeSilo(cluster.addresses[hostIndex]!);
-    await flush();
-    await flush();
 
+    // A survivor records again; it retries while the cluster re-resolves the grain.
     const survivor = cluster.silos.find((_, i) => i !== hostIndex)!;
-    await survivor.getGrain(ILeaderboard, "global").record("grace", 5);
+    await untilConverged(() => survivor.getGrain(ILeaderboard, "global").record("grace", 5));
     const newHostIndex = cluster.silos.findIndex(
       (s, i) => i !== hostIndex && s.isActive(LEADERBOARD),
     );

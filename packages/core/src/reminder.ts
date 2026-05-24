@@ -1,10 +1,21 @@
 import type { Duration } from "./duration";
+import { defineGrainInterface, type GrainInterface } from "./grain-interface";
 import type { GrainId } from "./grain-id";
 
 /** Implemented by grains that receive durable reminder ticks. */
 export interface Remindable {
   receiveReminder(name: string, status: TickStatus): Promise<void>;
 }
+
+/**
+ * System interface used to route a reminder tick to a grain's single activation
+ * through the normal dispatch path (directory → placement), so delivery never
+ * creates a second activation on the silo that merely owns the reminder.
+ */
+export const RemindableInterface: GrainInterface<Remindable> = defineGrainInterface<Remindable>(
+  "system.Remindable",
+  { methods: ["receiveReminder"] },
+);
 
 export interface TickStatus {
   firstTickAt: Date;

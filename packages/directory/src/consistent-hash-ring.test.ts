@@ -66,4 +66,37 @@ describe("ConsistentHashRing", () => {
     const moved = ids.filter((id) => !before.ownerOf(id).equals(after.ownerOf(id))).length;
     expect(moved / ids.length).toBeLessThan(0.45);
   });
+
+  describe("rangesFor (reminder ownership)", () => {
+    const inRanges = (hash: number, ranges: ReadonlyArray<readonly [number, number]>) =>
+      ranges.some(([b, e]) => (b <= e ? hash >= b && hash < e : hash >= b || hash < e));
+
+    it("assigns every hash to exactly one silo's ranges", () => {
+      const all = silos(3);
+      const ring = new ConsistentHashRing(all);
+      const ranges = new Map(all.map((s) => [s.ringKey, ring.rangesFor(s)]));
+      for (const id of grainIds(500)) {
+        const hash = id.getUniformHashCode();
+        const owners = all.filter((s) => inRanges(hash, ranges.get(s.ringKey)!));
+        expect(owners).toHaveLength(1);
+      }
+    });
+
+    it("gives a lone silo the whole ring", () => {
+      const ring = new ConsistentHashRing([silo(0)]);
+      const ranges = ring.rangesFor(silo(0));
+      for (const id of grainIds(500)) {
+        expect(inRanges(id.getUniformHashCode(), ranges)).toBe(true);
+      }
+    });
+
+    it("is agreed by every silo computing the ring from the same view", () => {
+      const all = silos(3);
+      const a = new ConsistentHashRing(all);
+      const b = new ConsistentHashRing([silo(2), silo(0), silo(1)]); // different order
+      for (const s of all) {
+        expect(a.rangesFor(s)).toEqual(b.rangesFor(s));
+      }
+    });
+  });
 });

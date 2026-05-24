@@ -111,3 +111,79 @@ describe("LocalReminderService", () => {
     expect(fired[0]!.grainId.equals(billing)).toBe(true);
   });
 });
+
+describe("LocalReminderService — multi-silo ownership", () => {
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+  const hash = billing.getUniformHashCode();
+  // Complementary ranges: A owns exactly the billing hash, B owns the rest.
+  const ownsHash: HashRange = [hash, hash + 1];
+  const ownsRest: HashRange = [hash + 1, hash];
+
+  it("fires only on the silo that owns the grain's hash", async () => {
+    const time = new FakeTimeProvider();
+    const table = new MemoryReminderTable();
+    const a = recorder();
+    const b = recorder();
+    const owner = new LocalReminderService(table, time, a.onFire, [ownsHash]);
+    const other = new LocalReminderService(table, time, b.onFire, [ownsRest]);
+    await owner.refreshOwnership([ownsHash]);
+    await other.refreshOwnership([ownsRest]);
+
+    await owner.register(billing, "invoice", { ms: 1000 }, { ms: 1_000_000 });
+    time.advance(1000);
+    await flush();
+
+    expect(a.fired).toHaveLength(1);
+    expect(b.fired).toHaveLength(0);
+  });
+
+  it("lets the owner discover a reminder registered on a non-owner via periodic refresh", async () => {
+    const time = new FakeTimeProvider();
+    const table = new MemoryReminderTable();
+    const a = recorder();
+    const b = recorder();
+    const refresh = 10_000;
+    const owner = new LocalReminderService(table, time, a.onFire, [ownsHash], refresh);
+    const other = new LocalReminderService(table, time, b.onFire, [ownsRest], refresh);
+    await owner.refreshOwnership([ownsHash]);
+    await other.refreshOwnership([ownsRest]);
+
+    // Registered on the silo that does NOT own it: lands in the table only.
+    await other.register(billing, "invoice", { ms: 50_000 }, { ms: 1_000_000 });
+
+    // The owner's periodic refresh reads the table and schedules it...
+    time.advance(refresh);
+    await flush();
+    // ...and it fires on the owner at its due time.
+    time.advance(40_000);
+    await flush();
+
+    expect(a.fired).toHaveLength(1);
+    expect(b.fired).toHaveLength(0);
+  });
+
+  it("hands the reminder to the new owner when ranges change", async () => {
+    const time = new FakeTimeProvider();
+    const table = new MemoryReminderTable();
+    const a = recorder();
+    const b = recorder();
+    const a1 = new LocalReminderService(table, time, a.onFire, [ownsHash]);
+    const b1 = new LocalReminderService(table, time, b.onFire, [ownsRest]);
+    await a1.refreshOwnership([ownsHash]);
+    await b1.refreshOwnership([ownsRest]);
+
+    await a1.register(billing, "invoice", { ms: 1000 }, { ms: 1_000_000 });
+    time.advance(1000);
+    await flush();
+    expect(a.fired).toHaveLength(1);
+
+    // Ownership of the hash moves from A to B (e.g. A left the view).
+    await a1.refreshOwnership([ownsRest]);
+    await b1.refreshOwnership([ownsHash]);
+    time.advance(1000);
+    await flush();
+
+    expect(a.fired).toHaveLength(1); // A stopped firing it
+    expect(b.fired).toHaveLength(1); // B took over from the table
+  });
+});

@@ -29,6 +29,13 @@ describe.each(serializers)("%s", (_name, make) => {
     expect((s.deserialize(s.serialize(g)) as Guid).equals(g)).toBe(true);
   });
 
+  it("round-trips a Date (e.g. a reminder TickStatus)", () => {
+    const d = new Date("2026-05-25T12:34:56.000Z");
+    const back = s.deserialize<Date>(s.serialize(d));
+    expect(back).toBeInstanceOf(Date);
+    expect(back.getTime()).toBe(d.getTime());
+  });
+
   it("round-trips a GrainId of each key kind", () => {
     for (const id of [
       new GrainId("Counter", "tenant-42"),
