@@ -1,0 +1,92 @@
+import { randomUUID } from "node:crypto";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { createClient } from "redis";
+import { GrainId } from "@tsva/core/grain-id";
+import { Guid } from "@tsva/core/guid";
+import { RedisSubscriptionRegistry } from "@tsva/streams/redis-subscription-registry";
+
+const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
+type Client = ReturnType<typeof createClient>;
+
+async function reachable(url: string): Promise<Client | undefined> {
+  const probe = createClient({ url });
+  probe.on("error", () => {});
+  try {
+    await probe.connect();
+    await probe.ping();
+    return probe;
+  } catch {
+    try {
+      await probe.destroy();
+    } catch {
+      /* never connected */
+    }
+    return undefined;
+  }
+}
+
+async function deleteAll(c: Client, match: string): Promise<void> {
+  for await (const keys of c.scanIterator({ MATCH: match })) {
+    if (keys.length > 0) await c.del(keys);
+  }
+}
+
+const client = await reachable(REDIS_URL);
+const prefix = `tsva-test:subs:${randomUUID()}`;
+const makeRegistry = () => new RedisSubscriptionRegistry(client!, prefix, "default");
+
+const ids = (subs: GrainId[]) => subs.map((g) => g.toString()).sort();
+
+afterAll(async () => {
+  if (client === undefined) return;
+  await deleteAll(client, `${prefix}*`);
+  await client.destroy();
+});
+
+describe.skipIf(client === undefined)("RedisSubscriptionRegistry", () => {
+  beforeEach(async () => {
+    await deleteAll(client!, `${prefix}*`);
+  });
+
+  it("records subscribers for a stream and lists them", async () => {
+    const reg = makeRegistry();
+    await reg.subscribe("room/general", new GrainId("ChatUser", "alice"));
+    await reg.subscribe("room/general", new GrainId("ChatUser", "bob"));
+    expect(ids(await reg.subscribers("room/general"))).toEqual(["ChatUser/alice", "ChatUser/bob"]);
+  });
+
+  it("is idempotent: re-subscribing does not duplicate", async () => {
+    const reg = makeRegistry();
+    const alice = new GrainId("ChatUser", "alice");
+    await reg.subscribe("room/general", alice);
+    await reg.subscribe("room/general", alice);
+    expect(await reg.subscribers("room/general")).toHaveLength(1);
+  });
+
+  it("removes a subscriber on unsubscribe", async () => {
+    const reg = makeRegistry();
+    const alice = new GrainId("ChatUser", "alice");
+    const bob = new GrainId("ChatUser", "bob");
+    await reg.subscribe("room/general", alice);
+    await reg.subscribe("room/general", bob);
+    await reg.unsubscribe("room/general", alice);
+    expect(ids(await reg.subscribers("room/general"))).toEqual(["ChatUser/bob"]);
+  });
+
+  it("isolates subscribers by stream", async () => {
+    const reg = makeRegistry();
+    await reg.subscribe("room/one", new GrainId("ChatUser", "alice"));
+    await reg.subscribe("room/two", new GrainId("ChatUser", "bob"));
+    expect(ids(await reg.subscribers("room/one"))).toEqual(["ChatUser/alice"]);
+    expect(await reg.subscribers("room/empty")).toEqual([]);
+  });
+
+  it("round-trips the full grain id (kind and key), not just its string", async () => {
+    const reg = makeRegistry();
+    const guid = Guid.parse("00000000-0000-0000-0000-0000000000ab");
+    const subscriber = new GrainId("Device", guid);
+    await reg.subscribe("telemetry/x", subscriber);
+    const [back] = await reg.subscribers("telemetry/x");
+    expect(back?.equals(subscriber)).toBe(true);
+  });
+});
