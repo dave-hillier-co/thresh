@@ -93,7 +93,14 @@ Work items, grouped by the phase they belong to in
 - [x] Grain-facing wiring — `getStreamProvider` delivers `onNext` as a turn on the consumer's
       activation; durable subscriptions resume via `getSubscriptions`/`resume`; builder
       `useMemoryStreams`; end-to-end producer→consumer test
-- [ ] Redis Streams provider + pulling agents / queue ownership over the ring (need real infra)
+- [x] Redis Streams provider — `RedisStreamProvider` appends events with XADD (ordered, durable);
+      each consumer's cursor is stored in Redis so a reactivated consumer resumes from where it left
+      off, even on a different silo after a restart; delivery is a non-blocking XRANGE poll (shares
+      the silo connection, works cross-silo) and the cursor advances only after `onNext` resolves
+      (at-least-once). Builder `addRedisStreams(name, { url, keyPrefix? })`. Integration-tested
+      (skip-if-down): ordered delivery, fan-out, namespace/key isolation, start-token rewind, and
+      durable resume across a fresh provider replaying only the missed events.
+- [ ] Pulling agents / queue ownership over the ring (partition streams across silos; need real infra)
 
 ## On approach to v1 completion
 

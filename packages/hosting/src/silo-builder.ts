@@ -24,6 +24,7 @@ import { LocalReminderService } from "@tsva/reminders/local-reminder-service";
 import { MemoryReminderTable } from "@tsva/reminders/memory-reminder-table";
 import { RedisReminderTable } from "@tsva/reminders/redis-reminder-table";
 import { MemoryStreamProvider } from "@tsva/streams/memory-stream-provider";
+import { RedisStreamProvider } from "@tsva/streams/redis-stream-provider";
 import { ClusterNode } from "@tsva/runtime/cluster-node";
 import { StaticMembershipService } from "@tsva/runtime/static-membership";
 import { HealthCheck } from "@tsva/hosting/health-check";
@@ -100,6 +101,30 @@ export class SiloBuilder {
   addStreamProvider(name: string, provider: StreamProvider): this {
     this.streamProviders.set(name, provider);
     return this;
+  }
+
+  /**
+   * Register a Redis-backed stream provider (durable, cluster-shared). The
+   * client connects when the silo starts and disconnects when it stops; the
+   * provider's poll loops are stopped on shutdown. `keyPrefix` namespaces keys
+   * (defaults to `"tsva"`).
+   */
+  addRedisStreams(name: string, options: { url: string; keyPrefix?: string }): this {
+    const client = createClient({ url: options.url });
+    client.on("error", () => {});
+    const provider = new RedisStreamProvider(
+      client,
+      name,
+      options.keyPrefix !== undefined ? { keyPrefix: options.keyPrefix } : {},
+    );
+    this.starters.push(async () => {
+      await client.connect();
+    });
+    this.closers.push(async () => {
+      await provider.stop();
+      await client.close();
+    });
+    return this.addStreamProvider(name, provider);
   }
 
   /** Register a named storage provider (the first becomes "default" if unnamed). */
