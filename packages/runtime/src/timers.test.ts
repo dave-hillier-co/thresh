@@ -13,9 +13,7 @@ interface ITicker extends GrainWithStringKey {
   stop(): Promise<void>;
   getTicks(): Promise<number>;
 }
-const ITicker = defineGrainInterface<ITicker>("ITicker", {
-  methods: ["startPeriodic", "startOnce", "stop", "getTicks"],
-});
+const ITicker = defineGrainInterface<ITicker>("ITicker");
 
 @grain()
 class TickerGrain extends Grain implements ITicker {

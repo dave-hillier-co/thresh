@@ -193,7 +193,7 @@ export class ClusterNode {
     await this.dispatcher.invoke({
       target: grainId,
       interfaceId: RemindableInterface.id,
-      methodId: 0,
+      method: "receiveReminder",
       args: [name, status],
       options: {},
       reentrancyId: newChainId(),
@@ -215,7 +215,7 @@ export class ClusterNode {
     await this.dispatcher.invoke({
       target: grainId,
       interfaceId: StreamConsumerInterface.id,
-      methodId: 0,
+      method: "deliverStreamEvent",
       args: [streamKey, event, token],
       options: {},
       reentrancyId: newChainId(),
@@ -296,7 +296,7 @@ export class ClusterNode {
       sendingSilo: this.options.local,
       sendingGrain: req.sender,
       interfaceId: req.interfaceId,
-      methodId: req.methodId,
+      method: req.method,
       requestContext: { reentrancyId: req.reentrancyId },
       body: this.serializer.serialize(req.args),
     };
@@ -344,7 +344,7 @@ export class ClusterNode {
       targetGrain: directoryOpGrainId(op),
       sendingSilo: this.options.local,
       interfaceId: 0,
-      methodId: 0,
+      method: "",
       body: this.serializer.serialize(op),
     };
     const pending = this.correlation.register(correlationId, this.callTimeoutMs);
@@ -411,18 +411,15 @@ export class ClusterNode {
   }
 
   private toRequest(message: Message): InvocationRequest {
+    // Method dispatch is by name; the interface (if registered) only supplies the
+    // per-method invocation options the receiving scheduler needs.
     const iface = getGrainInterface(message.interfaceId);
-    if (iface === undefined)
-      throw new RejectionError(`unknown interface ${message.interfaceId}`, "deserialization");
-    const methodName = iface.methods[message.methodId];
-    if (methodName === undefined)
-      throw new RejectionError(`unknown method ${message.methodId}`, "deserialization");
     return {
       target: message.targetGrain,
       interfaceId: message.interfaceId,
-      methodId: message.methodId,
+      method: message.method,
       args: this.serializer.deserialize<unknown[]>(message.body),
-      options: iface.options[methodName] ?? {},
+      options: iface?.options[message.method] ?? {},
       reentrancyId: message.requestContext?.reentrancyId ?? newChainId(),
       ...(message.sendingGrain !== undefined ? { sender: message.sendingGrain } : {}),
     };

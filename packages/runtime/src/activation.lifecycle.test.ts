@@ -13,7 +13,6 @@ interface ICounter extends GrainWithStringKey {
 }
 
 const ICounter = defineGrainInterface<ICounter>("ICounter.lifecycle", {
-  methods: ["increment", "get"],
   options: { get: { readOnly: true } },
 });
 

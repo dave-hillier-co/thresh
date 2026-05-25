@@ -11,7 +11,7 @@ import { createSilo } from "@tsva/hosting/silo-builder";
 interface ICounter extends GrainWithStringKey {
   increment(by: number): Promise<number>;
 }
-const ICounter = defineGrainInterface<ICounter>("ICounter.hosting", { methods: ["increment"] });
+const ICounter = defineGrainInterface<ICounter>("ICounter.hosting");
 
 @grain()
 class CounterGrain extends Grain implements ICounter {

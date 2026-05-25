@@ -39,6 +39,5 @@ export interface IAccount extends GrainWithStringKey {
 }
 
 export const IAccount = defineGrainInterface<IAccount>("example.bank.IAccount", {
-  methods: ["deposit", "withdraw", "transferTo", "statement"],
   options: { statement: { readOnly: true } },
 });

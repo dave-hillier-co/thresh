@@ -17,12 +17,9 @@ export interface IChatUser extends GrainWithStringKey {
   history(): Promise<ChatMessage[]>;
 }
 
-export const IChatRoom = defineGrainInterface<IChatRoom>("example.IChatRoom", {
-  methods: ["say"],
-});
+export const IChatRoom = defineGrainInterface<IChatRoom>("example.IChatRoom");
 
 export const IChatUser = defineGrainInterface<IChatUser>("example.IChatUser", {
-  methods: ["join", "history"],
   options: { history: { readOnly: true } },
 });
 

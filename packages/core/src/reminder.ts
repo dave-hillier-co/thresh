@@ -12,10 +12,8 @@ export interface Remindable {
  * through the normal dispatch path (directory → placement), so delivery never
  * creates a second activation on the silo that merely owns the reminder.
  */
-export const RemindableInterface: GrainInterface<Remindable> = defineGrainInterface<Remindable>(
-  "system.Remindable",
-  { methods: ["receiveReminder"] },
-);
+export const RemindableInterface: GrainInterface<Remindable> =
+  defineGrainInterface<Remindable>("system.Remindable");
 
 export interface TickStatus {
   firstTickAt: Date;

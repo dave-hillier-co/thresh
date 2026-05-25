@@ -12,3 +12,4 @@ Each ADR captures one significant decision, its context, the rationale, and its 
 - [0008 — Cross-grain ACID transactions](0008-cross-grain-transactions.md)
 - [0007 — Functional grains (factory closures instead of classes)](0007-functional-grains.md)
 - [0008 — Message-dispatch reducer grains (no per-grain interface, no codegen)](0008-message-dispatch-reducer-grains.md)
+- [0009 — Message dispatch as the substrate (typed interfaces are a compile-time view)](0009-message-dispatch-substrate.md)

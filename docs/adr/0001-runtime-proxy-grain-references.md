@@ -1,6 +1,8 @@
 # ADR 0001 — Runtime ES `Proxy` grain references
 
-- Status: Accepted
+- Status: Accepted. The runtime-`Proxy` decision stands; the **numeric method-table / `methodId` wire
+  mapping below is superseded by [ADR 0009](0009-message-dispatch-substrate.md)** — calls now
+  dispatch by method name and an interface declares no method table.
 - Context doc: [02 — The actor model](../02-actor-model.md)
 
 ## Context

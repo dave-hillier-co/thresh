@@ -8,8 +8,10 @@ import type { InvokeMethodOptions } from "./invoke-options";
  */
 export interface InvocationRequest {
   target: GrainId;
+  /** Interface id — routes `getGrain` to the hosting type and rehydrates refs. */
   interfaceId: number;
-  methodId: number;
+  /** The method name; the receiving activation dispatches the message by name. */
+  method: string;
   args: unknown[];
   options: InvokeMethodOptions;
   /** Call-chain reentrancy id, generated at the root and propagated. */

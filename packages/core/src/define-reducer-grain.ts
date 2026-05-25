@@ -80,7 +80,6 @@ export function defineReducerGrain<S, A>(
   const { initial, reduce, stateName = name, provider, ...grainOptions } = options;
 
   const iface = defineGrainInterface<ReducerClient<S, A>>(name, {
-    methods: ["dispatch", "query"],
     options: { query: { readOnly: true } },
   });
 

@@ -29,7 +29,6 @@ interface IAccount extends GrainWithStringKey {
   transactions(): Promise<number>;
 }
 const IAccount = defineGrainInterface<IAccount>("IAccount.reducer", {
-  methods: ["deposit", "withdraw", "balance", "transactions"],
   options: { balance: { readOnly: true }, transactions: { readOnly: true } },
 });
 

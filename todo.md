@@ -216,6 +216,18 @@ order, starting with transactions.
 - [ ] More effect kinds (timer/reminder/stream-publish/self-dispatch) + an injectable effect
       interpreter for testing; decide on per-action invocation options (interleave/oneWay).
 
+## Message dispatch as the substrate ([ADR 0009](docs/adr/0009-message-dispatch-substrate.md))
+
+- [x] Make method-name dispatch the wire/runtime substrate: `InvocationRequest`/`Message` carry
+      `method: string`, the activation invokes `instance[method](...args)`, and the runtime `Proxy`
+      dispatches by the accessed property name. Removed the ordered method table — `methodId` and the
+      `methods: [...]` array are gone; `defineGrainInterface(name, { options? })` is now a compile-time
+      view (TS type + sparse options). `interfaceId` retained as internal routing/options/rehydration
+      plumbing (no developer-facing method table). Proxy guards `then` so a ref is never thenable.
+      Superseded the `methodId` portion of ADR 0001; reconciled docs/01/02/04/11. Full suite green.
+- [ ] Optional follow-on: collapse `interfaceId` to a bare grain-type token (drop the registry,
+      `resolveGrainType`, and the registration `interfaces: [...]` mapping).
+
 ## External client
 
 - [x] `@tsva/client` — gateway-routed `createClient({ clusterId, local, transport, gateway })`; not a

@@ -17,6 +17,5 @@ export interface ILeaderboard extends GrainWithStringKey {
 }
 
 export const ILeaderboard = defineGrainInterface<ILeaderboard>("example.ILeaderboard", {
-  methods: ["record", "top"],
   options: { top: { readOnly: true } },
 });
