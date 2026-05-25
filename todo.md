@@ -40,12 +40,23 @@ Work items, grouped by the phase they belong to in
       over the transport (default; in-process peer kept for single-process tests)
 - [x] `WatchedEndpoints` — aggregates incremental watch events (ADDED/MODIFIED/DELETED) into the
       ready set; drives `KubernetesMembership`
-- [ ] Thin `@kubernetes/client-node` glue feeding `WatchedEndpoints` (needs the client dep + a cluster)
+- [x] Thin `@kubernetes/client-node` glue feeding `WatchedEndpoints` — `createKubernetesClientSource`
+      (lists + watches the headless Service's EndpointSlices by the `kubernetes.io/service-name`
+      label) behind an `EndpointSliceSource` boundary; `KubernetesEndpointWatch` drives the
+      aggregator and re-lists/re-watches on watch close. `pod-environment` reads the downward-API
+      `SiloAddress`; `useKubernetesMembership` runs the watch's start/stop with the silo. The
+      membership view always includes the local silo so a first/only pod can bootstrap (readiness
+      gates on membership being healthy). Unit-tested sociably with a fake source.
 - [x] Health endpoints (`/ready`, `/live`, `/startup`) — `HealthCheck` probe logic + `HealthServer`
 - [x] Graceful drain — `GracefulShutdown` flips readiness then stops the node; `SIGTERM` handler
 - [x] Hosting builder (`createSilo()…build()`) → `SiloHost` tying node + membership + transport +
       health + drain; `start()` flips readiness, `stop()` drains
-- [ ] kind cluster e2e — 3-silo `StatefulSet`, pod-kill reactivation, rolling update (needs a live cluster)
+- [x] Cluster e2e — `examples/k8s-silo` deploys a 3-silo `StatefulSet` (headless Service + RBAC +
+      in-cluster Redis, see `examples/k8s-silo/deploy/`) and asserts the Phase-3 exit criteria
+      against a real cluster: the cluster forms, calls route to one activation across pods, killing
+      the host pod reactivates the grain on a survivor (state intact via Redis), and a rolling
+      update preserves state. Opt-in and env-gated (`K8S_E2E=1`); verified on Docker Desktop
+      Kubernetes. The silo runs from the image under vite-node (no build step).
 
 ## Phase 4 — Persistence
 
@@ -131,8 +142,10 @@ Work items, grouped by the phase they belong to in
 - [x] Docs accuracy pass — reconciled `docs/11` ("what is implemented today": `useMembership`,
       collection/refresh/`random` config, `@reducerState`, the `client` package) and `docs/12`
       (package list + `examples/*`) with the shipped surface
-- [ ] Declare v1 done — gated on the infra-bound durable providers below (Redis/Postgres, k8s glue +
-      kind e2e), which can't be verified without real infrastructure
+- [ ] Declare v1 done — the core model, persistence/reminders/streams on Redis, and Kubernetes
+      hosting (membership glue + cluster e2e) are shipped and verified. Remaining: the optional
+      Postgres providers below (alternatives to the Redis defaults; need a Postgres instance to
+      verify).
 
 ## Reducer grains ([ADR 0006](docs/adr/0006-reducer-grains.md))
 
@@ -175,6 +188,11 @@ previously had only unit coverage. Outside-in / ATDD: failing example first, the
       `ActivationCollector` and accepts `collectionAgeSeconds` / `collectionIntervalSeconds`
       (previously only the bare `Silo` swept idle activations), surfaced by the greeter/chat
       reactivation slices.
+- [x] `examples/k8s-silo` — a silo deployed to **real Kubernetes** (StatefulSet + headless Service +
+      RBAC + in-cluster Redis), with a small HTTP-over-grain API so the e2e drives grains through
+      the cluster. Asserts the Phase-3 exit criteria (cluster forms, single-activation routing,
+      pod-kill reactivation, rolling-update state survival). Env-gated (`K8S_E2E=1`); verified on
+      Docker Desktop Kubernetes.
 - [x] `examples/cluster` — multi-silo end-to-end over the **real WebSocket transport** (previously
       only the in-process cluster test and a WebSocket unit test existed): cross-silo routing to one
       activation via directory CAS, and reactivation on a survivor when the hosting silo leaves the

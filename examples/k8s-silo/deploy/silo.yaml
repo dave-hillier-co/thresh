@@ -1,0 +1,58 @@
+# Headless Service: its EndpointSlices are the membership source of truth and
+# give each pod stable DNS for silo-to-silo WebSocket connections.
+apiVersion: v1
+kind: Service
+metadata:
+  name: silo-headless
+  labels: { app: silo }
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: false # only ready pods are members
+  selector: { app: silo }
+  ports:
+    - { name: silo, port: 11111 }
+    - { name: health, port: 8080 }
+    - { name: api, port: 8081 }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: silo
+spec:
+  serviceName: silo-headless
+  replicas: 3
+  podManagementPolicy: Parallel # start all silos together so the cluster forms quickly
+  selector:
+    matchLabels: { app: silo }
+  template:
+    metadata:
+      labels: { app: silo }
+    spec:
+      serviceAccountName: silo
+      terminationGracePeriodSeconds: 30 # time to drain in-flight turns + flush state
+      containers:
+        - name: silo
+          image: tsva-k8s-silo:dev
+          imagePullPolicy: IfNotPresent # built into the local Docker daemon (docker-desktop / kind load)
+          ports:
+            - { name: silo, containerPort: 11111 }
+            - { name: health, containerPort: 8080 }
+            - { name: api, containerPort: 8081 }
+          env:
+            - { name: POD_NAME, valueFrom: { fieldRef: { fieldPath: metadata.name } } }
+            - { name: POD_UID, valueFrom: { fieldRef: { fieldPath: metadata.uid } } }
+            - { name: POD_NAMESPACE, valueFrom: { fieldRef: { fieldPath: metadata.namespace } } }
+            - { name: POD_IP, valueFrom: { fieldRef: { fieldPath: status.podIP } } }
+            - { name: CLUSTER_ID, value: k8s-silo }
+            - { name: SILO_SERVICE, value: silo-headless }
+            - { name: REDIS_URL, value: "redis://redis:6379" }
+          readinessProbe:
+            httpGet: { path: /ready, port: health }
+            periodSeconds: 2
+          livenessProbe:
+            httpGet: { path: /live, port: health }
+            periodSeconds: 10
+          startupProbe:
+            httpGet: { path: /startup, port: health }
+            failureThreshold: 60
+            periodSeconds: 2

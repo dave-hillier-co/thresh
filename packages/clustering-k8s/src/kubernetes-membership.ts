@@ -53,7 +53,12 @@ export class KubernetesMembership implements MembershipService {
   }
 
   private onSlices(slices: EndpointSlice[]): void {
-    const ready = dedupe(readySilosFromSlices(slices, this.options.portName));
+    // Always include the local silo: a silo is a member of its own cluster view
+    // even before its endpoint shows ready (it isn't ready until it can serve,
+    // which the readiness probe gates on membership being healthy — including
+    // self breaks that bootstrap cycle), and a transient empty watch must not
+    // make a silo believe the whole cluster vanished.
+    const ready = dedupe([this.local, ...readySilosFromSlices(slices, this.options.portName)]);
     const silos: SiloMember[] = ready.map((address) => ({ address, status: "active" }));
     this.snapshot = { version: this.snapshot.version + 1, silos };
     const waiters = this.waiters;

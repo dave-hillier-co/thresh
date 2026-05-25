@@ -120,8 +120,7 @@ describe("KubernetesMembership", () => {
     const membership = new KubernetesMembership(local, watch, { portName: "silo" });
     watch.emit([slice([{ ip: "10.0.0.5", name: "silo-2", uid: "uid-old", ready: true }])]);
     watch.emit([slice([{ ip: "10.0.0.6", name: "silo-2", uid: "uid-new", ready: true }])]);
-    const active = activeSilos(membership.current());
-    expect(active).toHaveLength(1);
-    expect(active[0]!.podUid).toBe("uid-new");
+    const silo2 = activeSilos(membership.current()).find((s) => s.ringKey === "silo-2");
+    expect(silo2?.podUid).toBe("uid-new");
   });
 });

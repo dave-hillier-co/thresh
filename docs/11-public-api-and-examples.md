@@ -146,9 +146,10 @@ gateway-discovery shape (`gateway: { url }`) is future work.
 
 ## Runnable examples
 
-The examples under [`examples/`](../examples) run end-to-end over in-memory providers and the
+Most examples under [`examples/`](../examples) run end-to-end over in-memory providers and the
 in-process transport, and double as acceptance tests in the suite. Start each with
-`pnpm --filter <name> start`.
+`pnpm --filter <name> start`. One — `@tsva/example-k8s-silo` — deploys to a real Kubernetes cluster
+instead (see [10](10-kubernetes-hosting.md)).
 
 - **`@tsva/example-greeter`** — the smallest grain. Demonstrates the core actor guarantees with no
   providers: `onActivate` before the first call, serialized turns, and volatile state resetting when
@@ -167,6 +168,12 @@ in-process transport, and double as acceptance tests in the suite. Start each wi
   Snapshot mode persists the folded state via `GrainStorage`, surviving a silo restart; the events
   are transient.
 - **`@tsva/example-thermostat`** — the full Orleans README example, below.
+- **`@tsva/example-k8s-silo`** — a silo on **Kubernetes**: membership from the headless Service's
+  EndpointSlices, WebSocket transport over per-pod IPs, durable state in an in-cluster Redis, health
+  probes, and a small HTTP API over a counter grain. Its opt-in end-to-end test (`K8S_E2E=1`) builds
+  the image, deploys the `StatefulSet`, and asserts the Phase-3 exit criteria — cluster formation,
+  single-activation routing across pods, pod-kill reactivation on a survivor, and rolling-update
+  state survival. See [10](10-kubernetes-hosting.md).
 
 ## Worked example: IoT thermostat (the Orleans README example, in TypeScript)
 

@@ -57,8 +57,9 @@ See the shutdown sequence in [03](03-runtime-and-silo.md).
 
 ## Reference manifests
 
-> Illustrative, not final. `<cluster>` is the application/cluster name; image and resources are
-> placeholders.
+> `<cluster>` is the application/cluster name; image and resources are placeholders. A working,
+> deployable set of these manifests ships in [`examples/k8s-silo/deploy/`](../examples/k8s-silo/deploy)
+> (see [Running the example](#running-the-example)).
 
 ### ServiceAccount and RBAC (watch endpoints)
 
@@ -199,3 +200,33 @@ reminder/stream ownership can rebalance without losing availability.
   providers and a static membership list instead of the Kubernetes watch (selected by configuration
   on the hosting builder — see [11](11-public-api-and-examples.md)). This is how unit and
   integration tests run without a cluster (see [12](12-project-structure-and-tooling.md)).
+
+## Running the example
+
+[`examples/k8s-silo`](../examples/k8s-silo) is a runnable silo wired for Kubernetes: membership from
+the headless Service's EndpointSlices (`createKubernetesClientSource` → `KubernetesEndpointWatch` →
+`useKubernetesMembership`), WebSocket transport over per-pod IPs, durable state in an in-cluster
+Redis, the health probes above, and a small HTTP API in front of a counter grain so calls can be
+driven through the cluster. The `SiloAddress` comes from the downward-API variables via
+`siloAddressFromPodEnv` (see [05](05-clustering-membership-k8s.md)). A silo always counts itself a
+member of its own view, so a first or only pod can pass its readiness probe and bootstrap the
+cluster.
+
+The image needs no build step — the silo runs under `vite-node`. Build it into the local daemon and
+deploy:
+
+```sh
+docker build -t tsva-k8s-silo:dev -f examples/k8s-silo/Dockerfile .   # kind: then `kind load docker-image tsva-k8s-silo:dev`
+kubectl create namespace tsva
+kubectl -n tsva apply -f examples/k8s-silo/deploy/   # rbac, redis, headless Service + StatefulSet
+kubectl -n tsva rollout status statefulset/silo
+```
+
+An opt-in end-to-end test (`examples/k8s-silo/src/k8s-e2e.test.ts`) builds the image, deploys it, and
+asserts the Phase-6/Phase-3 exit criteria — the cluster forms, calls route to one activation across
+pods, killing the host pod reactivates the grain on a survivor with state intact, and a rolling
+update preserves state. It is gated on a reachable cluster:
+
+```sh
+K8S_E2E=1 pnpm exec vitest run examples/k8s-silo/src/k8s-e2e.test.ts
+```

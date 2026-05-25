@@ -1,0 +1,27 @@
+# Minimal, namespace-scoped RBAC: silos read-only watch the EndpointSlices that
+# define membership. See docs/10.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: silo
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: silo-membership
+rules:
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: silo-membership
+subjects:
+  - kind: ServiceAccount
+    name: silo
+roleRef:
+  kind: Role
+  name: silo-membership
+  apiGroup: rbac.authorization.k8s.io

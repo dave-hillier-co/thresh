@@ -179,8 +179,21 @@ export class SiloBuilder {
     return this;
   }
 
+  /**
+   * Drive membership from Kubernetes EndpointSlices. Pass a `KubernetesEndpointWatch`
+   * (built from `createKubernetesClientSource`); its `start`/`stop` lifecycle is run
+   * with the silo so the watch is established before the node joins and torn down on
+   * drain.
+   */
   useKubernetesMembership(watch: EndpointWatch, options?: KubernetesMembershipOptions): this {
     this.membership = new KubernetesMembership(this.config.local, watch, options);
+    const lifecycle = watch as Partial<{ start(): Promise<void>; stop(): void }>;
+    if (typeof lifecycle.start === "function") {
+      this.starters.push(() => lifecycle.start!());
+    }
+    if (typeof lifecycle.stop === "function") {
+      this.closers.push(async () => lifecycle.stop!());
+    }
     return this;
   }
 

@@ -104,5 +104,13 @@ pnpm --filter @tsva/example-thermostat start   # durable state + a reminder + a 
 - [`examples/thermostat`](examples/thermostat) — the Orleans README example: `@persistentState`, a
   durable self-check reminder, and a telemetry stream consumed by an aggregator.
 
+One example deploys to a real cluster rather than running in-process:
+
+- [`examples/k8s-silo`](examples/k8s-silo) — a silo on Kubernetes: a `StatefulSet` with membership
+  from the headless Service's EndpointSlices, durable state in an in-cluster Redis, and an
+  HTTP-over-grain API. Its opt-in end-to-end test (`K8S_E2E=1`) deploys it and asserts the cluster
+  forms, calls route to one activation across pods, a killed pod's grain reactivates on a survivor,
+  and a rolling update keeps state. See [docs/10](docs/10-kubernetes-hosting.md).
+
 Work proceeds test-first in vertical slices that map to the
 [roadmap](docs/13-roadmap-and-phases.md); [`todo.md`](todo.md) tracks outstanding items.

@@ -30,6 +30,7 @@ ts-virtual-actors/
     cluster/                   # 3 silos over WebSocket: routing + failover
     bank/                      # reducer grains (ADR 0006)
     thermostat/                # the worked example from docs/11
+    k8s-silo/                  # a silo deployed to real Kubernetes (opt-in e2e)
 ```
 
 Implemented today: `core`, `messaging`, `directory`, `runtime`, `clustering-k8s`, `persistence`,

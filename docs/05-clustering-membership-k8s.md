@@ -101,9 +101,18 @@ service: ready endpoints become `active` silos (the pod name and UID come from e
 `targetRef`, so a restarted pod is recognised by its new UID), and each reconciliation publishes a
 new versioned snapshot. A `WatchedEndpoints` source aggregates the per-resource watch events
 (added / modified / deleted) into the current slice set the membership reconciles. The parsing,
-aggregation and reconciliation are unit-tested against fixture slices and synthetic events; binding
-`WatchedEndpoints` to the real `@kubernetes/client-node` watch and the kind end-to-end test are the
-remaining Phase-3 work.
+aggregation and reconciliation are unit-tested against fixture slices and synthetic events.
+`createKubernetesClientSource` binds this to the real `@kubernetes/client-node` watch — it lists and
+watches the EndpointSlices the well-known `kubernetes.io/service-name` label selects for the headless
+Service, and re-lists/re-watches when the watch closes (a Kubernetes watch is finite). The
+[`examples/k8s-silo`](../examples/k8s-silo) deployment exercises the whole path end-to-end on a real
+cluster (see [10](10-kubernetes-hosting.md)).
+
+A silo always includes **itself** in its own membership view, even before its endpoint shows ready.
+This is both correct (a silo is a member of its own cluster) and necessary to bootstrap: readiness
+gates on membership being healthy, so a first or only pod — absent from the EndpointSlices until it
+is ready — would otherwise deadlock waiting to see a peer that is waiting on it. It also keeps a
+silo from concluding the whole cluster vanished during a transient empty watch.
 
 ## Failure detection
 
