@@ -4,7 +4,7 @@ import type { GrainKey } from "@tsva/core/grain-key";
 import type { GrainRuntime } from "@tsva/core/grain-runtime";
 import type { GrainTimer } from "@tsva/core/grain-timer";
 import type { ReminderRegistry } from "@tsva/core/reminder";
-import type { StreamProvider } from "@tsva/core/stream";
+import { isActivationBound, type StreamProvider } from "@tsva/core/stream";
 import type { ActivationData } from "@tsva/runtime/activation";
 import { ActivationStreamProvider } from "@tsva/runtime/activation-stream-provider";
 import type { GrainFactory } from "@tsva/runtime/grain-factory";
@@ -41,6 +41,15 @@ export class GrainRuntimeImpl implements GrainRuntime {
   getStreamProvider(name?: string): StreamProvider {
     const base = this.services.streams?.(name);
     if (base === undefined) throw new Error("streams are not configured on this silo");
+    // Pulling-agent providers deliver through the dispatcher to a handler bound on
+    // this activation; the memory provider instead wraps each onNext as a turn.
+    if (isActivationBound(base)) {
+      return base.bindActivation({
+        grainId: this.activation.id,
+        setHandler: (key, handler) => this.activation.setStreamHandler(key, handler),
+        clearHandler: (key) => this.activation.clearStreamHandler(key),
+      });
+    }
     return new ActivationStreamProvider(
       base,
       (cb) => this.activation.runStreamTurn(cb),

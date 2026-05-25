@@ -1,3 +1,5 @@
+import type { GrainId } from "./grain-id";
+import { defineGrainInterface, type GrainInterface } from "./grain-interface";
 import type { GrainKey } from "./grain-key";
 
 /** Identifies one stream: `(provider, namespace, key)`. */
@@ -53,4 +55,46 @@ export interface AsyncStream<T> {
 
 export interface StreamProvider {
   getStream<T>(namespace: string, key: GrainKey): AsyncStream<T>;
+}
+
+/**
+ * System extension a pulling agent invokes (through the dispatcher) to hand an
+ * event to a subscriber grain's single activation. The runtime intercepts it and
+ * runs the activation's registered handler as a turn — the grain never declares
+ * this method. Mirrors the reminder delivery path (`Remindable`).
+ */
+export interface StreamConsumer {
+  deliverStreamEvent(streamKey: string, event: unknown, token: number): Promise<void>;
+}
+
+export const StreamConsumerInterface: GrainInterface<StreamConsumer> =
+  defineGrainInterface<StreamConsumer>("system.StreamConsumer", {
+    methods: ["deliverStreamEvent"],
+  });
+
+/**
+ * Lets the runtime register a subscribing grain's handler on its activation so a
+ * pulling-agent delivery (which arrives as a `StreamConsumer` turn) reaches it.
+ * The memory provider does not need this — it wraps `onNext` as a turn directly.
+ */
+export interface StreamActivationBinding {
+  readonly grainId: GrainId;
+  setHandler(streamKey: string, handler: StreamHandler<unknown>): void;
+  clearHandler(streamKey: string): void;
+}
+
+/**
+ * A silo-level stream provider whose delivery is driven by pulling agents. The
+ * runtime calls `bindActivation` so each subscribing grain registers its handler
+ * on its own activation; the agent then routes events there through the
+ * dispatcher. `MemoryStreamProvider` is a plain `StreamProvider` (no binding).
+ */
+export interface ActivationBoundStreamProvider extends StreamProvider {
+  bindActivation(binding: StreamActivationBinding): StreamProvider;
+}
+
+export function isActivationBound(
+  provider: StreamProvider,
+): provider is ActivationBoundStreamProvider {
+  return typeof (provider as ActivationBoundStreamProvider).bindActivation === "function";
 }

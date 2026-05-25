@@ -105,11 +105,14 @@ Work items, grouped by the phase they belong to in
       queue the ring assigns it; delivery routes to subscribers via a `StreamConsumer` system
       extension; the queue cursor commits after delivery (at-least-once) so a new owner resumes
       losslessly. Slices:
-  - [ ] Slice 1 — queue model + durable per-queue cursor + `QueuePullingAgent` (pull a queue, deliver
+  - [x] Slice 1 — queue model + durable per-queue cursor + `QueuePullingAgent` (pull a queue, deliver
         to a sink, commit the cursor). Integration-tested against real Redis, single process.
-  - [ ] Slice 2 — durable pub-sub subscription registry (`streamId → subscribers`) in Redis.
-  - [ ] Slice 3 — `StreamConsumer` system extension + runtime handler registry + `deliverStreamEvent`
-        via the dispatcher; single-silo end-to-end (produce → agent → consumer turn).
+  - [x] Slice 2 — durable pub-sub subscription registry (`streamKey → subscriber grain ids`) in Redis.
+  - [x] Slice 3 — `StreamConsumer` system extension + per-activation handler registry +
+        `node.deliverStreamEvent` via the dispatcher; `RedisPullingStreamProvider` wired through
+        `addRedisStreams` (superseding the per-consumer poll provider). Single-silo end-to-end:
+        fan-out of a room's messages to multiple subscribed user grains, in order, with isolation.
+        Each silo currently runs an agent for every queue (ownership is slice 4).
   - [ ] Slice 4 — ring-based queue ownership + rebalance (`PullingAgentManager`, wired in hosting like
         reminders); multi-silo end-to-end: owner leaves the view, a survivor resumes from the cursor.
 

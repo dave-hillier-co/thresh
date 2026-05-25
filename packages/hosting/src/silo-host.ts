@@ -23,6 +23,8 @@ export interface SiloHostParts {
   reminderService?: ReminderService | undefined;
   /** Run before the node starts — e.g. connect durable provider clients. */
   onStart?: ReadonlyArray<() => Promise<void>>;
+  /** Run after the node is started — e.g. start pulling agents that deliver via the dispatcher. */
+  onStarted?: ReadonlyArray<() => Promise<void>>;
   /** Run after the node drains — e.g. disconnect durable provider clients. */
   onStop?: ReadonlyArray<() => Promise<void>>;
 }
@@ -55,6 +57,7 @@ export class SiloHost {
     if (this.parts.healthServer !== undefined && this.parts.healthPort !== undefined) {
       await this.parts.healthServer.listen(this.parts.healthPort);
     }
+    for (const hook of this.parts.onStarted ?? []) await hook();
     await this.parts.reminderService?.refreshOwnership(this.parts.node.ownedHashRanges());
     this.watchMembership();
     this.parts.health.update({

@@ -24,7 +24,7 @@ import { LocalReminderService } from "@tsva/reminders/local-reminder-service";
 import { MemoryReminderTable } from "@tsva/reminders/memory-reminder-table";
 import { RedisReminderTable } from "@tsva/reminders/redis-reminder-table";
 import { MemoryStreamProvider } from "@tsva/streams/memory-stream-provider";
-import { RedisStreamProvider } from "@tsva/streams/redis-stream-provider";
+import { RedisPullingStreamProvider } from "@tsva/streams/redis-pulling-stream-provider";
 import { ClusterNode } from "@tsva/runtime/cluster-node";
 import { StaticMembershipService } from "@tsva/runtime/static-membership";
 import { HealthCheck } from "@tsva/hosting/health-check";
@@ -62,6 +62,7 @@ export class SiloBuilder {
   private readonly registrations: Registration[] = [];
   private readonly starters: Array<() => Promise<void>> = [];
   private readonly closers: Array<() => Promise<void>> = [];
+  private readonly pullingStreams: RedisPullingStreamProvider[] = [];
 
   constructor(private readonly config: SiloConfig) {}
 
@@ -112,16 +113,17 @@ export class SiloBuilder {
   addRedisStreams(name: string, options: { url: string; keyPrefix?: string }): this {
     const client = createClient({ url: options.url });
     client.on("error", () => {});
-    const provider = new RedisStreamProvider(
+    const provider = new RedisPullingStreamProvider(
       client,
       name,
       options.keyPrefix !== undefined ? { keyPrefix: options.keyPrefix } : {},
     );
+    this.pullingStreams.push(provider);
     this.starters.push(async () => {
       await client.connect();
     });
     this.closers.push(async () => {
-      await provider.stop();
+      provider.stop();
       await client.close();
     });
     return this.addStreamProvider(name, provider);
@@ -264,6 +266,21 @@ export class SiloBuilder {
       );
     }
 
+    // Pulling-agent stream providers deliver through the dispatcher to subscriber
+    // activations, so they need the started node. (Ring-based queue ownership is a
+    // later slice; for now a silo runs an agent for every queue.)
+    const onStarted: Array<() => Promise<void>> = [];
+    for (const provider of this.pullingStreams) {
+      provider.setDeliver((grainId, streamKey, event, token) =>
+        node.deliverStreamEvent(grainId, streamKey, event, token),
+      );
+      onStarted.push(async () => {
+        provider.startAgentsFor(
+          Array.from({ length: provider.physicalQueueCount }, (_unused, i) => i),
+        );
+      });
+    }
+
     return buildSiloHost({
       node,
       health,
@@ -272,6 +289,7 @@ export class SiloBuilder {
       membership: this.membership,
       reminderService,
       onStart: this.starters,
+      onStarted,
       onStop: this.closers,
     });
   }

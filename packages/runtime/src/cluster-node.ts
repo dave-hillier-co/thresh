@@ -11,7 +11,7 @@ import { activeSilos, type MembershipService } from "@tsva/core/membership";
 import { Guid } from "@tsva/core/guid";
 import type { GrainReferenceIdentity } from "@tsva/core/grain-reference";
 import { RemindableInterface, type ReminderRegistry, type TickStatus } from "@tsva/core/reminder";
-import type { StreamProvider } from "@tsva/core/stream";
+import { StreamConsumerInterface, type StreamProvider } from "@tsva/core/stream";
 import type { InvocationRequest } from "@tsva/core/request";
 import type { SiloAddress } from "@tsva/core/silo-address";
 import { ConsistentHashRing } from "@tsva/directory/consistent-hash-ring";
@@ -195,6 +195,28 @@ export class ClusterNode {
       interfaceId: RemindableInterface.id,
       methodId: 0,
       args: [name, status],
+      options: {},
+      reentrancyId: newChainId(),
+    });
+  }
+
+  /**
+   * Deliver a stream event to a subscriber grain's single activation, routed
+   * through the dispatcher (directory → placement) as a `StreamConsumer` system
+   * call — so a pulling agent on the queue's owner reaches the consumer wherever
+   * it lives, reactivating it if idle, exactly like reminder delivery.
+   */
+  async deliverStreamEvent(
+    grainId: GrainId,
+    streamKey: string,
+    event: unknown,
+    token: number,
+  ): Promise<void> {
+    await this.dispatcher.invoke({
+      target: grainId,
+      interfaceId: StreamConsumerInterface.id,
+      methodId: 0,
+      args: [streamKey, event, token],
       options: {},
       reentrancyId: newChainId(),
     });

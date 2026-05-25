@@ -176,9 +176,12 @@ only advances after `onNext` resolves (so a thrown handler is redelivered — at
 from the cursor after a consumer drops, and rewind via a `startToken`. The grain-facing
 `getStreamProvider` (configured with `useMemoryStreams` on the builder) delivers each `onNext` as a
 turn on the consumer's activation and re-binds durable subscriptions on reactivation via
-`getSubscriptions`/`resume`. A durable `RedisStreamProvider` also ships (`addRedisStreams`): events
-are appended with XADD under monotonic ids, each consumer's cursor is stored in Redis (so it resumes
-on any silo after a restart), and delivery is a non-blocking XRANGE poll that advances the cursor
-only after `onNext` resolves — interchangeable with the in-memory provider. The pulling-agent /
-queue-ownership machinery (partitioning streams across silos over the ring) is future work behind the
-same `StreamProvider` interface.
+`getSubscriptions`/`resume`. A durable `RedisPullingStreamProvider` also ships (`addRedisStreams`),
+built on **pulling agents** ([ADR 0007](adr/0007-stream-pulling-agents.md)): all streams are
+multiplexed over a fixed set of physical Redis-Stream queues; an agent per queue pulls events and
+routes each to its stream's subscribers — discovered in a durable pub-sub registry — through the
+dispatcher as a `StreamConsumer` system call (the same delivery path reminders use), committing the
+queue cursor only after delivery (at-least-once). Subscriptions and cursors live in Redis, surviving
+deactivation and silo failure. Assigning queue ownership to silos by the consistent-hash ring (so it
+rebalances on membership change and a new owner resumes from the committed cursor) is the remaining
+slice of ADR 0007; until then each silo runs an agent for every queue.

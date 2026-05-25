@@ -9,6 +9,7 @@ import type { GrainRuntime } from "@tsva/core/grain-runtime";
 import type { GrainTimer } from "@tsva/core/grain-timer";
 import type { ActivationReason, DeactivationReason } from "@tsva/core/reasons";
 import type { InvocationRequest } from "@tsva/core/request";
+import { SequenceToken, StreamConsumerInterface, type StreamHandler } from "@tsva/core/stream";
 import { GrainTimerImpl } from "@tsva/runtime/grain-timer-impl";
 import { invocationContext } from "@tsva/runtime/invocation-context";
 import type { TimeProvider } from "@tsva/runtime/time-provider";
@@ -36,6 +37,8 @@ export class ActivationData implements GrainContext {
   private keepAliveUntilMs = 0;
   private deactivateRequested = false;
   private readonly timers = new Set<GrainTimerImpl>();
+  /** Handlers for pulling-agent stream delivery, keyed by `namespace/key`. */
+  private readonly streamHandlers = new Map<string, StreamHandler<unknown>>();
 
   constructor(
     id: GrainId,
@@ -85,6 +88,15 @@ export class ActivationData implements GrainContext {
         },
       })
       .finally(() => this.touch());
+  }
+
+  /** Bind a pulling-agent stream handler so a delivered `StreamConsumer` turn reaches it. */
+  setStreamHandler(streamKey: string, handler: StreamHandler<unknown>): void {
+    this.streamHandlers.set(streamKey, handler);
+  }
+
+  clearStreamHandler(streamKey: string): void {
+    this.streamHandlers.delete(streamKey);
   }
 
   /** Run a stream delivery callback as a turn; rejects if the activation is gone. */
@@ -141,6 +153,14 @@ export class ActivationData implements GrainContext {
   }
 
   private async callMethod(req: InvocationRequest): Promise<unknown> {
+    // Stream delivery is a system extension, not a grain method: route it to the
+    // handler the grain registered when it subscribed. Already on a turn here.
+    if (req.interfaceId === StreamConsumerInterface.id) {
+      const [streamKey, event, token] = req.args as [string, unknown, number];
+      const handler = this.streamHandlers.get(streamKey);
+      if (handler !== undefined) await handler.onNext(event, new SequenceToken(token));
+      return undefined;
+    }
     const iface = getGrainInterface(req.interfaceId);
     if (iface === undefined) throw new GrainCallError(`unknown interface ${req.interfaceId}`);
     const methodName = iface.methods[req.methodId];
