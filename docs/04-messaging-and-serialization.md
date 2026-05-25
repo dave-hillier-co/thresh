@@ -6,6 +6,7 @@ communicate, and how payloads are serialized.
 > Orleans references: `Orleans.Core/Messaging/Message.cs`,
 > `Orleans.Core/Networking/Connection.cs`,
 > `Orleans.Core/Networking/ConnectionPreamble.cs`,
+> `Orleans.Core.Abstractions/Runtime/RequestContext.cs`,
 > `Orleans.Runtime/Messaging/MessageCenter.cs`,
 > `Orleans.Serialization/Serializer.cs`.
 
@@ -45,7 +46,13 @@ Key points:
   find the owning silo; if unknown, placement decides. See [06](06-grain-directory-and-placement.md).
 - **`requestContext` propagates ambient data** (trace ids, deadlines, custom headers) along the
   entire call chain, mirroring Orleans `RequestContext`. It also carries the call-chain reentrancy
-  id used by the turn scheduler.
+  id used by the turn scheduler, and is where the transaction context of
+  [ADR 0008](adr/0008-cross-grain-transactions.md) rides. Faithful to Orleans, the context is
+  **ambient**: it is not a parameter a grain passes, but an async-scoped value (Node's
+  `AsyncLocalStorage`, the analogue of Orleans' `AsyncLocal`-backed static `RequestContext`) that the
+  runtime establishes for the duration of a turn. The grain proxy reads it when building an outbound
+  request, the dispatcher serializes it onto `Message.requestContext`, and the receiving silo
+  re-establishes it before invoking the target — so it flows across silos transparently.
 - **System operations reuse the envelope.** Directory partition operations are marked with a
   `system` flag and travel over the same connections and correlation table as grain calls, so the
   distributed directory needs no separate channel (see [06](06-grain-directory-and-placement.md)).

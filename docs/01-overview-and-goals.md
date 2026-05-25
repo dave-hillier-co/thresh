@@ -24,8 +24,9 @@ primitives so the runtime can be smaller and the operational model more familiar
   reentrancy, on-demand activation, managed lifecycle, persistence, timers, reminders and streams —
   the concepts a developer touches should map cleanly onto Orleans.
 - **Idiomatic TypeScript.** Strongly-typed grain interfaces via `interface` + runtime `Proxy`
-  references; decorators for declaration; `Promise`-based async throughout. No build-time code
-  generation step.
+  references; grains authored as **factory closures with hooks** in a React-inspired functional style
+  (the class + decorator form is retained underneath as the substrate / interop surface);
+  `Promise`-based async throughout. No build-time code generation step.
 - **Kubernetes-native operations.** Membership, failure detection and discovery come from
   Kubernetes. A `StatefulSet` of silos behind a headless `Service`; liveness/readiness probes as the
   failure detector.
@@ -70,24 +71,39 @@ gives us. See [06 — Grain directory and placement](06-grain-directory-and-plac
 
 ## How this differs from Orleans
 
-- **Grain references are runtime ES `Proxy` objects**, not compile-time generated classes. A typed
-  interface is just a compile-time view; the proxy turns calls into messages dispatched by method
-  name, so there is no generated method table. See
+The default is **faithfulness**: where this project departs from Orleans, the departure falls into
+exactly one of three sanctioned categories, and nowhere else —
+
+1. **TypeScript idioms** — runtime `Proxy` references and runtime-registered serialization in place of
+   compile-time code generation; no build step.
+2. **Kubernetes-native hosting** — membership, failure detection and discovery delegated to the
+   orchestrator instead of Orleans' built-in clustering.
+3. **Functional / reducer (Elm-style) authoring** — grains written as factory closures with hooks,
+   and a message-dispatch reducer grain, layered over the Orleans-faithful class substrate.
+
+Each difference below is tagged to one of these; everything not listed is intentionally the *same* as
+Orleans.
+
+- **Grain references are runtime ES `Proxy` objects** *(TypeScript idioms)*, not compile-time
+  generated classes. A typed interface is just a compile-time view; the proxy turns calls into
+  messages dispatched by method name, so there is no generated method table. See
   [ADR 0001](adr/0001-runtime-proxy-grain-references.md) and
   [ADR 0011](adr/0011-message-dispatch-substrate.md).
-- **Authoring offers an idiomatic-TS option.** Beside the Orleans-faithful class + decorator grain,
-  the runtime accepts a functional authoring style (factory closures + hooks, à la React) and a
-  message-dispatch reducer grain (`useReducer`-shaped). All three are the *same* virtual actor with
+- **Authoring is functional by default** *(functional/reducer authoring)*. A grain is written as a
+  factory closure with hooks (`defineGrain` + `usePersistentState` / `useReducerState`, à la React),
+  with a `useReducer`-shaped message-dispatch reducer grain (`defineReducerGrain`) as its
+  zero-boilerplate specialization. The Orleans-faithful class + decorator grain is what these are
+  built on and remains supported as an interop surface. All are the *same* virtual actor with
   identical activation, single-turn and lifecycle guarantees — only how you write a grain differs.
-  The class style remains the default; the rest are additive. See
-  [ADR 0009](adr/0009-functional-grains.md), [ADR 0010](adr/0010-message-dispatch-reducer-grains.md).
-- **Transport is WebSocket/HTTP**, not a custom TCP protocol. See
-  [ADR 0002](adr/0002-websocket-transport.md).
-- **Membership is Kubernetes**, not a pluggable membership table with gossip. See
-  [ADR 0004](adr/0004-kubernetes-for-membership.md).
-- **Single-threaded execution is enforced by a per-activation turn queue**, since Node.js is
-  cooperatively concurrent rather than truly single-threaded per object. The *guarantee* (one turn
-  at a time per grain) is identical to Orleans; the mechanism differs. See
+  See [ADR 0009](adr/0009-functional-grains.md),
+  [ADR 0010](adr/0010-message-dispatch-reducer-grains.md).
+- **Transport is WebSocket/HTTP** *(TypeScript idioms — use the Node ecosystem's native protocols)*,
+  not a custom TCP protocol. See [ADR 0002](adr/0002-websocket-transport.md).
+- **Membership is Kubernetes** *(Kubernetes-native hosting)*, not a pluggable membership table with
+  gossip. See [ADR 0004](adr/0004-kubernetes-for-membership.md).
+- **Single-threaded execution is enforced by a per-activation turn queue** *(TypeScript idioms — the
+  Node runtime is cooperatively concurrent rather than truly single-threaded per object)*. The
+  *guarantee* (one turn at a time per grain) is identical to Orleans; only the mechanism differs. See
   [02 — The actor model](02-actor-model.md).
 
 What is intentionally the *same*: the grain directory is an **in-silo distributed hash table** over

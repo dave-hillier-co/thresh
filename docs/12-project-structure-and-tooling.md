@@ -14,7 +14,7 @@ ts-virtual-actors/
   tsconfig.base.json
   docs/
   packages/
-    core/                      # abstractions: GrainId, interfaces, decorators, envelope types
+    core/                      # abstractions: GrainId, interfaces, defineGrain/defineReducerGrain, decorators, envelope types
     messaging/                 # Transport interface, WebSocket transport, Serializer
     runtime/                   # silo, catalog, turn scheduler, dispatcher, placement
     directory/                 # DHT grain directory + location cache + ring
@@ -77,7 +77,9 @@ Per the project house style:
   (`@tsva/core/grain-id`, not `@tsva/core`). This keeps import graphs legible and avoids accidental
   cycles.
 - **One primary export per file**, named for the file.
-- **Decorators and `Proxy`** are the only "magic"; everything else is plain classes and functions.
+- **`Proxy`** (for grain references) is the only real "magic"; the default `defineGrain` authoring
+  surface is plain functions and closures, and the class decorators it wraps are the lone remaining
+  decorator use.
 - Package names use a scope, e.g. `@tsva/core`, `@tsva/runtime`.
 
 ## TypeScript configuration

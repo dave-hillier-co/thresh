@@ -1,8 +1,9 @@
 # ADR 0009 — Functional grains (factory closures instead of classes)
 
-- Status: Proposed — spike landed (`defineGrain` + `useReducerState` / `usePersistentState`, a
-  functional `examples/bank` account grain, end-to-end test). The class + decorator style remains the
-  default and only documented surface.
+- Status: Accepted — `defineGrain` + `useReducerState` / `usePersistentState` shipped, with a
+  functional `examples/bank` account grain and an end-to-end test. **Functional authoring is now the
+  documented default**; the class + decorator style is retained as the runtime substrate and an
+  interop surface (see [02](../02-actor-model.md), [11](../11-public-api-and-examples.md)).
 - Context docs: [02 — The actor model](../02-actor-model.md),
   [07 — Persistence](../07-persistence.md), [ADR 0001](0001-runtime-proxy-grain-references.md),
   [ADR 0006](0006-reducer-grains.md)
@@ -37,8 +38,10 @@ compatible with the existing machinery? It is — the shell is the only thing th
 
 ## Decision
 
-Offer a **functional authoring API as an additive alternative**, not a replacement, layered above the
-existing runtime exactly as reducer grains were layered above persistence.
+Offer a **functional authoring API** layered above the existing runtime exactly as reducer grains
+were layered above persistence, and make it **the default authoring style**. The class + decorator
+grain remains valid — it is what `defineGrain` is built on — but it is documented as the substrate /
+interop surface rather than the shape a developer reaches for first.
 
 **The model:**
 
@@ -86,18 +89,19 @@ untouched; the two styles coexist and a grain opts in by how it is written. Pass
   lifecycle semantics. This is exactly the project's stated split — a *faithful programming model*
   expressed *idiomatically in TypeScript* ([01 — goals](../01-overview-and-goals.md)) — the same kind
   of move as runtime `Proxy` references or the Kubernetes membership swap: the guarantee is identical,
-  the way you express it differs. [02](../02-actor-model.md) and the examples stay class-first; a
-  functional variant of that material is needed only if this becomes a documented or default style.
-  Deferred until the ergonomics prove out.
+  the way you express it differs. [02](../02-actor-model.md), [07](../07-persistence.md) and
+  [11](../11-public-api-and-examples.md) now lead with the functional style and keep the class form as
+  a short interop note; the Orleans source citations remain, since the runtime they map onto is
+  unchanged.
 - **The factory runs once per activation, not per render.** Hooks must be called in the factory body
   (so facet metadata is registered before the pre-activation read), but there is no cross-render
   ordering constraint — the rules-of-hooks tension that React carries does not arise here.
 - **Reminders and streams need no new hooks today** — `ctx.runtime` exposes `registerReminder` /
   `getStreamProvider`, and `receiveReminder` is just another returned method. `useReminder` /
   `useTimer` sugar is optional future work, as is a `useActivate` effect form of the lifecycle hooks.
-- **Two authoring styles to document and maintain** until/unless one is deprecated. The spike keeps
-  the new surface deliberately small (`defineGrain` + two hooks) to bound that cost while the
-  direction is evaluated.
+- **Two authoring styles to maintain**, but only one to teach: the docs lead functional and treat the
+  class as interop, so the new surface stays the small one a reader learns (`defineGrain` + the facet
+  hooks) while the class substrate is documented where it is actually needed.
 
 ## Alternatives considered
 

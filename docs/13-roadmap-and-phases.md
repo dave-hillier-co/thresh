@@ -4,12 +4,20 @@ Implementation order, with explicit scope and testable exit criteria per phase. 
 the previous and ends in something demonstrable. The target is **Orleans parity** (see
 [01](01-overview-and-goals.md)); this is a rolling roadmap, not a single versioned release.
 
+> Orleans references (parity targets for remaining work): `Orleans.Transactions/*` (transactions),
+> `Orleans.Core.Abstractions/Core/IGrainCallFilter.cs` (grain call filters),
+> `Orleans.Core.Abstractions/Placement/PlacementFilterStrategy.cs` (placement filters),
+> `Orleans.Serialization/Versioning/*` (interface versioning),
+> `Orleans.Runtime/Diagnostics/ActivityPropagationGrainCallFilter.cs` (trace propagation).
+
 ## Status
 
 **Shipped and verified (phases 1–6):** the core actor model, persistence, timers and reminders, and
 event streams — all on **Redis** (the default durable backend) — plus Kubernetes hosting (membership
 from EndpointSlices, health, drain, and a cluster e2e). Reducer grains (snapshot mode) and the
-external client also ship.
+external client also ship. Authoring is **functional by default** — `defineGrain` + hooks and the
+`defineReducerGrain` dispatch grain ([ADR 0009](adr/0009-functional-grains.md),
+[ADR 0010](adr/0010-message-dispatch-reducer-grains.md)) — over the retained class substrate.
 
 **Remaining for parity:** cross-grain ACID transactions
 ([ADR 0008](adr/0008-cross-grain-transactions.md)) — the next priority — then grain-interface
@@ -127,6 +135,13 @@ commit protocol with recovery. The next priority; designed in
   with no explicit `subscribe` call (Orleans' `[ImplicitStreamSubscription]`).
 - **Directory range handoff** — replace the phase-2 drop-and-rebuild with a versioned, lossless
   handoff on membership change (per [06](06-grain-directory-and-placement.md)).
+- **Grain call filters** — incoming/outgoing interception around grain calls for cross-cutting
+  concerns (auth, retries, trace propagation), mirroring Orleans' `IIncomingGrainCallFilter` /
+  `IOutgoingGrainCallFilter`. This is also the seam the observability work below plugs into.
+- **Placement filters** — prune the candidate silo set by metadata before a placement strategy runs
+  (Orleans' `PlacementFilterStrategy`); pairs with the additional placement strategies
+  (`SiloRoleBasedPlacement`, `ResourceOptimizedPlacement`) noted in
+  [06](06-grain-directory-and-placement.md).
 
 ## Deferred (not parity gaps)
 
@@ -139,7 +154,10 @@ commit protocol with recovery. The next priority; designed in
 
 ## Cross-cutting, throughout
 
-- OpenTelemetry traces (propagated via request context, [04](04-messaging-and-serialization.md)),
-  metrics (activations, turn latency, directory hit rate, reminder/stream lag) and structured logs.
+- OpenTelemetry traces, metrics (activations, turn latency, directory hit rate, reminder/stream lag)
+  and structured logs. Faithful to Orleans, tracing is a **grain call filter** that injects/extracts
+  W3C trace context through the ambient request context ([04](04-messaging-and-serialization.md)) —
+  the analogue of Orleans' `ActivityPropagationGrainCallFilter` — so spans stitch across grain calls
+  and silos. This depends on the grain-call-filter seam listed above.
 - The injectable clock and deterministic placement test aids from
   [12](12-project-structure-and-tooling.md) land in phase 1 and are maintained as features are added.

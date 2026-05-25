@@ -8,12 +8,12 @@ import {
 } from "@tsva/example-bank/interfaces";
 
 /**
- * The bank account of `account-grain.ts`, written in the functional style: a
- * factory closure instead of a class, `useReducerState` instead of the
- * `@reducerState` field decorator, and `ctx` threaded explicitly instead of
- * `this`. The reducer authoring (`initialAccount` / `reduceAccount`) is shared
- * verbatim — only the grain shell changes. It registers exactly as a class grain
- * does, so the two styles coexist behind one runtime.
+ * A bank account as a multi-method functional grain: a factory closure with
+ * `useReducerState`, and `ctx` threaded explicitly instead of `this`. Command
+ * handlers validate, then `raise` past-tense events that the pure reducer
+ * (`reduceAccount`) folds into immutable state; snapshot mode persists the folded
+ * state. Compare with `account-reducer-grain.ts`, which reduces the same model to
+ * a single `dispatch`/`query` surface with no per-method interface.
  */
 export const AccountGrain = defineGrain<IAccount>("Account", (ctx) => {
   const state = useReducerState<AccountState, AccountEvent>(ctx, "account", {

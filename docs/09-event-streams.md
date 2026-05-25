@@ -63,32 +63,33 @@ This mirrors Orleans' `IStreamProvider` / `IAsyncStream<T>` / `StreamSubscriptio
 ### Producer example
 
 ```ts
-@grain()
-class DeviceGrain extends Grain implements IDevice {
-  async report(reading: Reading): Promise<void> {
-    const stream = this.runtime.getStreamProvider().getStream<Reading>("telemetry", this.id.key);
+const DeviceGrain = defineGrain<IDevice>("Device", (ctx) => ({
+  report: async (reading: Reading): Promise<void> => {
+    const stream = ctx.runtime.getStreamProvider().getStream<Reading>("telemetry", ctx.id.key);
     await stream.publish(reading);
-  }
-}
+  },
+}));
 ```
 
 ### Consumer example (grain)
 
 ```ts
-@grain()
-class AggregatorGrain extends Grain implements IAggregator {
-  async onActivate(): Promise<void> {
-    const stream = this.runtime.getStreamProvider().getStream<Reading>("telemetry", this.id.key);
-    // re-attach durable subscriptions, or create one the first time:
-    const subs = await stream.getSubscriptions();
-    if (subs.length > 0) await subs[0].resume(this.handler());
-    else await stream.subscribe(this.handler());
-  }
+const AggregatorGrain = defineGrain<IAggregator>("Aggregator", (ctx) => {
+  const handler = (): StreamHandler<Reading> => ({
+    onNext: async (reading, token) => { /* aggregate; checkpoint via token */ },
+  });
 
-  private handler(): StreamHandler<Reading> {
-    return { onNext: async (reading, token) => { /* aggregate; checkpoint via token */ } };
-  }
-}
+  return {
+    onActivate: async () => {
+      const stream = ctx.runtime.getStreamProvider().getStream<Reading>("telemetry", ctx.id.key);
+      // re-attach durable subscriptions, or create one the first time:
+      const subs = await stream.getSubscriptions();
+      if (subs.length > 0) await subs[0].resume(handler());
+      else await stream.subscribe(handler());
+    },
+    // ... grain methods ...
+  };
+});
 ```
 
 Delivery into a consuming grain happens **as a turn** on that grain's activation, so stream handlers
@@ -152,9 +153,10 @@ flowchart TB
   because that stream maps to a single physical queue.
 - **Rewind.** A consumer can subscribe from an earlier `SequenceToken` if the backing store still
   retains those entries (Redis Stream trimming policy governs retention).
-- **Implicit subscriptions (later phase).** Orleans supports binding a grain type to a stream
-  namespace so the grain is auto-subscribed by key. This is noted in the
-  [roadmap](13-roadmap-and-phases.md) as a follow-on to explicit subscriptions.
+- **Implicit subscriptions (later phase).** Orleans' `[ImplicitStreamSubscription(namespace)]` binds
+  a grain type to a stream namespace so the grain is auto-subscribed by key, with no explicit
+  `subscribe` call. This is noted in the [roadmap](13-roadmap-and-phases.md) as a parity follow-on to
+  explicit subscriptions.
 
 ## Providers
 

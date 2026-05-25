@@ -1,9 +1,9 @@
 # ADR 0010 — Message-dispatch reducer grains (no per-grain interface, no codegen)
 
-- Status: Proposed — spike (`defineReducerGrain` with `dispatch` / `query` + Elm-style effects, an
-  `examples/bank` `account-reducer-grain`, and an end-to-end test). Builds on
-  [ADR 0009](0009-functional-grains.md). The class + `defineGrainInterface` model remains the
-  default.
+- Status: Accepted — `defineReducerGrain` (`dispatch` / `query` + Elm-style effects) shipped, with an
+  `examples/bank` `account-reducer-grain` and an end-to-end test. Builds on
+  [ADR 0009](0009-functional-grains.md), which makes functional authoring the documented default; this
+  is its zero-boilerplate specialization. The `send` effect is the only effect kind shipped so far.
 - Context docs: [02 — The actor model](../02-actor-model.md),
   [07 — Persistence](../07-persistence.md), [ADR 0001](0001-runtime-proxy-grain-references.md),
   [ADR 0006](0006-reducer-grains.md), [ADR 0009](0009-functional-grains.md)
@@ -92,8 +92,8 @@ ordinary two-method interface the existing `Proxy` and dispatcher route.
   `JournaledGrain` is class-based; this expresses the same event-routed model in the `useReducer`
   idiom. The runtime semantics — single activation, single-turn deterministic fold, snapshot
   persistence — are identical, so Orleans parity holds; what changes is how the grain is written.
-  Like [ADR 0009](0009-functional-grains.md) it stays additive and opt-in, and the class +
-  `defineGrainInterface` model remains the default and only documented surface.
+  Like [ADR 0009](0009-functional-grains.md) it is a functional authoring shape; the class +
+  `defineGrainInterface` model is retained as the substrate and interop surface.
 
 ## Alternatives considered
 

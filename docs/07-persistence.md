@@ -16,26 +16,29 @@ store**, defaulting to **Redis**.
 A grain declares one or more named persistent state objects. Each is read on activation (or lazily)
 and written explicitly by the grain. Reads and writes go through a **storage provider**. State is
 kept in memory between writes so reads are served without touching the store, exactly as in Orleans.
+In the functional style, a state object is acquired with the `usePersistentState` hook on the setup
+context ([02](02-actor-model.md)):
 
 ```ts
-@grain()
-class AccountGrain extends Grain implements IAccount {
-  @persistentState("balance")
-  private balance!: PersistentState<BalanceState>;
+const AccountGrain = defineGrain<IAccount>("Account", (ctx) => {
+  const balance = usePersistentState<BalanceState>(ctx, "balance");
 
-  async deposit(amount: number): Promise<void> {
-    this.balance.value.cents += amount;
-    await this.balance.write();   // durably persist
-  }
+  const deposit = async (amount: number): Promise<void> => {
+    balance.value.cents += amount;
+    await balance.write();          // durably persist
+  };
 
-  async getBalance(): Promise<number> {
-    return this.balance.value.cents;   // served from memory, no store hit
-  }
-}
+  const getBalance = async (): Promise<number> =>
+    balance.value.cents;            // served from memory, no store hit
+
+  return { deposit, getBalance };
+});
 ```
 
 A grain may have several named states stored in different providers — e.g. `"profile"` in one store
-and `"inventory"` in another — matching Orleans' multiple-named-state capability.
+and `"inventory"` in another — matching Orleans' multiple-named-state capability. (The class form
+uses the `@persistentState("balance")` field decorator that `usePersistentState` is built on — see
+the interop note in [02](02-actor-model.md).)
 
 ## Interfaces
 
@@ -79,7 +82,9 @@ Each write carries the etag the grain last read. The provider performs a conditi
 stored etag differs, the write is rejected and the runtime raises an `InconsistentStateError`
 (Orleans: `InconsistentStateException`). This protects against two incarnations of the same grain
 (e.g. a brief split-brain, see [05](05-clustering-membership-k8s.md)) clobbering each other's state:
-the stale writer fails and can re-read and retry.
+the stale writer fails and can re-read and retry. An **absent etag** (`undefined`, the state of a
+never-written grain) means an unconditional create — matching Orleans' `IStorage.ETag` semantics,
+where a null etag is the "no prior record" sentinel.
 
 ```mermaid
 sequenceDiagram
@@ -98,8 +103,9 @@ sequenceDiagram
 
 - **Read on activate (default).** The runtime reads declared states before the first message, so
   `onActivate` and the first method see populated `value`. A grain can opt for lazy reads if startup
-  cost matters. In the implementation `@persistentState(name, { defaultValue })` records the field;
-  a catalog hook injects the facet (bound to the grain id and its provider) and reads it before
+  cost matters. In the implementation `usePersistentState(ctx, name, { defaultValue })` — or the
+  `@persistentState(name, { defaultValue })` field decorator it wraps — registers the facet; a
+  catalog hook injects it (bound to the grain id and its provider) and reads it before
   `onActivate`. The default provider is named `"default"` (Redis in production, the in-memory
   provider for dev/tests, configured via `addStorage` / `useMemoryStorage` on the builder).
 - **Write is explicit.** Nothing is persisted until the grain calls `write()`. This keeps the
@@ -127,22 +133,33 @@ silo
   .addPostgresStorage("reporting", { connectionString: process.env.PG_URL });
 ```
 
-A grain then names a non-default provider with `@persistentState("ledger", { provider: "reporting" })`.
+A grain then names a non-default provider with
+`usePersistentState(ctx, "ledger", { provider: "reporting" })` (or the equivalent
+`@persistentState("ledger", { provider: "reporting" })` on a class grain).
 
 ## Reducer grains: an event-routed alternative
 
-The `@persistentState` facet above is the **mutable** model: read, mutate `value`, `write()`. An
-additive alternative is the **reducer** facet `@reducerState(name, { initial, reduce })`, where
-command handlers `raise` past-tense events that a pure reducer folds into *immutable* state. In
-**snapshot mode** it persists the folded state through the same `GrainStorage` + etag machinery
-described here (the events are transient); an append-only event log is a future mode. The two facets
-coexist — a grain opts into whichever it wants. See
-[ADR 0006](adr/0006-reducer-grains.md) for the model, rationale and the snapshot-vs-event-log split,
-and [`examples/bank`](../examples/bank) for a worked aggregate.
+The `usePersistentState` facet above is the **mutable** model: read, mutate `value`, `write()`. An
+alternative is the **reducer** facet `useReducerState(ctx, name, { initial, reduce })`, where command
+handlers `raise` past-tense events that a pure reducer folds into *immutable* state. In **snapshot
+mode** it persists the folded state through the same `GrainStorage` + etag machinery described here
+(the events are transient); an append-only event log is a future mode. The two facets coexist — a
+grain opts into whichever it wants.
+
+Going one step further, `defineReducerGrain(name, { initial, reduce })` makes the *whole* grain a
+single `dispatch(action)` + `query()` message loop with no per-grain method table at all, and
+cross-grain work returned as Elm-style effects — the `useReducer`-shaped end state (see
+[ADR 0010](adr/0010-message-dispatch-reducer-grains.md)). See [ADR 0006](adr/0006-reducer-grains.md)
+for the reducer model, rationale and the snapshot-vs-event-log split, and
+[`examples/bank`](../examples/bank) for both worked forms. The class field decorator
+`@reducerState(name, { initial, reduce })` that `useReducerState` wraps remains available for interop.
 
 ## What persistence does not do
 
-- It does not give cross-grain ACID transactions (that is a deferred feature — see
-  [01 non-goals](01-overview-and-goals.md)).
+- It does not give cross-grain ACID transactions. The etag write here is atomic for a **single
+  grain**; spanning a change across grains is a separate facet — the versioned `TransactionalState`
+  of [ADR 0008](adr/0008-cross-grain-transactions.md), Phase 7 parity work on the
+  [roadmap](13-roadmap-and-phases.md) (mirroring Orleans' `Orleans.Transactions`). The two facets
+  coexist on a grain.
 - It does not automatically write on every field mutation; durability is explicit via `write()`.
 - It does not replace the directory; a grain's *location* is ephemeral and never persisted here.

@@ -12,8 +12,59 @@ referenced and invoked, and the execution guarantees the runtime provides.
 
 ## Grains
 
-A grain is a class extending `Grain` and implementing one or more grain interfaces. It is declared
-with the `@grain()` decorator, which registers it with the runtime's type catalog.
+A grain is authored as a **factory closure** registered with `defineGrain`, in the React-inspired
+functional style that is this project's default (see
+[ADR 0009](adr/0009-functional-grains.md)). The factory runs **once per activation**; it captures
+per-activation state in ordinary closure variables — lock-free under the single-turn model just like
+class fields — and returns the grain's methods (its message surface) plus optional lifecycle hooks.
+
+```ts
+const CounterGrain = defineGrain<ICounter>("Counter", (ctx) => {
+  let count = 0;                       // per-activation state, captured in the closure
+
+  const increment = async (by: number): Promise<number> => {
+    count += by;
+    return count;
+  };
+
+  return { increment };
+});
+```
+
+The factory receives a `GrainSetup` context — the same identity and services a class grain reaches
+through `this`, passed in explicitly — which the facet hooks (`usePersistentState`,
+`useReducerState`, see [07](07-persistence.md)) also read:
+
+```ts
+interface GrainSetup {
+  readonly id: GrainId;                                            // this grain's identity
+  readonly runtime: GrainRuntime;                                  // timers, reminders, streams
+  getGrain<T>(def: GrainInterface<T>, key: GrainKey): T;           // call other grains
+}
+```
+
+Lifecycle hooks are returned alongside the methods rather than overridden:
+
+```ts
+const SessionGrain = defineGrain<ISession>("Session", (ctx) => {
+  // ... build the methods ...
+  return {
+    /* methods, */
+    onActivate: async (reason) => { /* load state, register reminders */ },
+    onDeactivate: async (reason) => { /* flush state */ },
+  };
+});
+```
+
+`onActivate` runs before the first message is processed; `onDeactivate` runs before the activation
+is removed. Both are awaited by the runtime, so a grain can load state on activation and flush it on
+deactivation. This mirrors Orleans' `OnActivateAsync` / `OnDeactivateAsync`.
+
+### The class substrate (interop)
+
+`defineGrain` is built on a `Grain` base class registered with the `@grain()` decorator. That class
+form is fully supported — use it for interop with code that expects a class, or when subclassing
+suits you better — and the rest of this document's guarantees apply to it identically:
 
 ```ts
 @grain()
@@ -26,24 +77,10 @@ class CounterGrain extends Grain implements ICounter {
 }
 ```
 
-The `Grain` base class gives the activation access to its runtime context:
-
-```ts
-abstract class Grain {
-  protected readonly context: GrainContext;     // identity, services, scheduler
-  protected get id(): GrainId;                    // this grain's identity
-  protected get runtime(): GrainRuntime;          // factory, timers, storage
-  protected getGrain<T>(def: GrainInterface<T>, key: GrainKey): T;  // call other grains
-
-  // Lifecycle hooks — override as needed.
-  onActivate(reason: ActivationReason): Promise<void>;
-  onDeactivate(reason: DeactivationReason): Promise<void>;
-}
-```
-
-`onActivate` runs before the first message is processed; `onDeactivate` runs before the activation
-is removed. Both are awaited by the runtime, so a grain can load state on activation and flush it on
-deactivation. This mirrors Orleans' `OnActivateAsync` / `OnDeactivateAsync`.
+The base exposes the same surface through `this` that `GrainSetup` exposes as `ctx` — `id`,
+`runtime`, `getGrain` — and `onActivate` / `onDeactivate` are overridable methods. The Orleans source
+citations throughout these docs map onto this substrate, which is unchanged; the functional API is a
+shell over it.
 
 ## Grain identity
 
@@ -177,8 +214,9 @@ two ways, both mirroring Orleans:
    admit it, allowing the chain to make progress. (Orleans:
    `ICallChainReentrantGrainContext`.)
 
-A grain class may also opt into full reentrancy with `@reentrant()`, meaning all its methods may
-interleave (the developer takes responsibility for any shared-state hazards across `await`).
+A grain may also opt into full reentrancy — all its methods may interleave, and the author takes
+responsibility for shared-state hazards across `await`: pass `{ reentrant: true }` to `defineGrain`,
+or apply `@reentrant()` to a class grain.
 
 ## Activation lifecycle
 
@@ -190,6 +228,15 @@ stateDiagram-v2
     Active --> Deactivating: idle timeout / shutdown / DeactivateOnIdle
     Deactivating --> [*]: onDeactivate() resolved, directory unregistered
 ```
+
+Orleans models activation as an ordered **lifecycle** (`IGrainLifecycle`) whose participants observe
+named stages — principally `SetupState` (1000) then `Activate` (2000), per
+`Orleans.Core.Abstractions/Runtime/GrainLifecycleStage.cs`. We mirror this ordering: the facet
+hooks (`usePersistentState` / `useReducerState`, and the transactional-state facet of
+[ADR 0008](adr/0008-cross-grain-transactions.md)) are **bound and read at the setup stage, before
+`onActivate` runs**, so a grain's persisted state is already populated when the activation hook —
+and the first message — observes it. The diagram's `Activating` spans both stages; `onActivate`
+is the `Activate` stage.
 
 - **Activation is on demand.** The first request for a grain triggers placement
   (see [06](06-grain-directory-and-placement.md)), construction of the instance, the `onActivate`
@@ -205,5 +252,5 @@ stateDiagram-v2
 ## What the developer never writes
 
 No locks, no thread management, no connection handling, no service discovery, no "where does this
-object live" logic. They write a class with `async` methods and an interface. The runtime supplies
-identity, placement, location, single-threaded safety, lifecycle and durability.
+object live" logic. They write a factory closure returning `async` methods, and an interface. The
+runtime supplies identity, placement, location, single-threaded safety, lifecycle and durability.

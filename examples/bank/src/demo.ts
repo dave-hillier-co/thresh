@@ -3,7 +3,7 @@ import { InProcessNetwork } from "@tsva/messaging/in-process-transport";
 import { MemoryGrainStorage } from "@tsva/persistence/memory-grain-storage";
 import { createSilo } from "@tsva/hosting/silo-builder";
 import type { SiloHost } from "@tsva/hosting/silo-host";
-import { AccountGrain } from "@tsva/example-bank/account-grain";
+import { AccountGrain } from "@tsva/example-bank/account-grain-functional";
 import { IAccount, type AccountState } from "@tsva/example-bank/interfaces";
 
 export interface BankDemoResult {

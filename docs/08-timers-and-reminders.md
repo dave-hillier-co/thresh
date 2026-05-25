@@ -31,24 +31,23 @@ execution — see [02](02-actor-model.md)). It is non-durable and is cancelled a
 activation is deactivated.
 
 ```ts
-@grain()
-class SessionGrain extends Grain implements ISession {
-  private heartbeat?: GrainTimer;
+const SessionGrain = defineGrain<ISession>("Session", (ctx) => {
+  let heartbeat: GrainTimer | undefined;
 
-  async onActivate(): Promise<void> {
-    this.heartbeat = this.runtime.registerTimer(
-      () => this.checkIdle(),
-      { seconds: 30 },   // due
-      { seconds: 30 },   // period (omit for one-shot)
-    );
-  }
+  const checkIdle = async (): Promise<void> => { /* runs as a normal turn */ };
 
-  private async checkIdle(): Promise<void> { /* runs as a normal turn */ }
-
-  async onDeactivate(): Promise<void> {
-    this.heartbeat?.dispose();
-  }
-}
+  return {
+    onActivate: async () => {
+      heartbeat = ctx.runtime.registerTimer(
+        checkIdle,
+        { seconds: 30 },   // due
+        { seconds: 30 },   // period (omit for one-shot)
+      );
+    },
+    onDeactivate: async () => heartbeat?.dispose(),
+    // ... grain methods ...
+  };
+});
 ```
 
 ```ts
@@ -66,24 +65,26 @@ collected, the timer goes with it (matching Orleans' default timer behaviour).
 
 A reminder is a **durable, named schedule** attached to a grain identity. It is persisted, so it
 fires even if the grain was deactivated or the hosting silo died — the runtime activates the grain
-(on whichever silo it is then placed) and delivers the tick. Grains receive reminders by
-implementing `Remindable`.
+(on whichever silo it is then placed) and delivers the tick.
+
+A grain receives reminders by returning a `receiveReminder` method (the `Remindable` shape):
 
 ```ts
-@grain()
-class BillingGrain extends Grain implements IBilling, Remindable {
-  async startMonthlyInvoice(): Promise<void> {
-    await this.runtime.registerReminder("invoice", { days: 1 }, { days: 30 });
-  }
+const BillingGrain = defineGrain<IBilling>("Billing", (ctx) => {
+  const issueInvoice = async (): Promise<void> => { /* ... */ };
 
-  async receiveReminder(name: string, tick: TickStatus): Promise<void> {
-    if (name === "invoice") await this.issueInvoice();
-  }
+  return {
+    startMonthlyInvoice: async () =>
+      ctx.runtime.registerReminder("invoice", { days: 1 }, { days: 30 }),
 
-  async stop(): Promise<void> {
-    await this.runtime.unregisterReminder("invoice");
-  }
-}
+    stop: async () => ctx.runtime.unregisterReminder("invoice"),
+
+    // Remindable: the runtime reactivates the grain and delivers the tick as a turn.
+    receiveReminder: async (name: string, _tick: TickStatus) => {
+      if (name === "invoice") await issueInvoice();
+    },
+  };
+});
 ```
 
 ```ts
@@ -97,6 +98,14 @@ interface TickStatus {
   currentTickAt: Date;   // scheduled time of this tick
 }
 ```
+
+**Tick semantics, faithful to Orleans.** A reminder fires at `firstTickAt + N·period`. Ticks are
+**not caught up**: if the owning silo was down or the grain unreachable when a tick was due, that
+tick is skipped rather than replayed in a burst — firing resumes at the next scheduled time, and
+`currentTickAt` always reports the *scheduled* time (which the handler can compare against now to
+detect lateness). Each tick is delivered as an ordinary single-threaded **turn** on the grain's
+activation (it is `IRemindable.ReceiveReminder`, not a free-running callback), so it never races the
+grain's other methods. Unregistering a reminder mid-flight cleanly stops future ticks.
 
 ### Reminder service and table
 

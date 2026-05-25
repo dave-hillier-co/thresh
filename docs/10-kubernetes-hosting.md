@@ -4,6 +4,12 @@ This document describes how a silo cluster is deployed and operated on Kubernete
 that wire up membership, failure detection and discovery (see
 [05 — Clustering](05-clustering-membership-k8s.md)).
 
+> Orleans references: `Orleans.Hosting.Kubernetes/KubernetesClusterAgent.cs`,
+> `Orleans.Hosting.Kubernetes/KubernetesHostingOptions.cs`,
+> `Orleans.Hosting.Kubernetes/KubernetesHostingExtensions.cs`,
+> `Orleans.Runtime/Lifecycle/ISiloLifecycle.cs` (the staged silo start/stop the graceful-drain
+> sequence below mirrors).
+
 ## Topology
 
 ```mermaid
@@ -53,7 +59,9 @@ The silo exposes an HTTP health endpoint. Kubernetes probes drive membership:
 
 When a silo starts draining on `SIGTERM`, `/ready` flips to not-ready first, so Kubernetes removes it
 from endpoints (and thus from every peer's membership view) before it finishes deactivating grains.
-See the shutdown sequence in [03](03-runtime-and-silo.md).
+The drain then tears services down in reverse start order — the same ordered-stop guarantee Orleans
+gets from `ISiloLifecycle` — so transport keeps serving in-flight turns until activations have been
+deactivated and state flushed. See the shutdown sequence in [03](03-runtime-and-silo.md).
 
 ## Reference manifests
 

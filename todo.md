@@ -199,8 +199,16 @@ order, starting with transactions.
       facet-binding machinery, so class and functional styles coexist. Functional `examples/bank`
       account grain (shares `initialAccount` / `reduceAccount` verbatim) + end-to-end test: events
       fold to state, transfer moves funds, snapshot survives a restart, overdraft rejected.
-- [ ] Decide whether functional becomes a documented/default style; if so, functional variants of
-      `docs/02` + the examples, and `useReminder` / `useTimer` / `useActivate` sugar.
+- [x] Decided: **functional is the documented default**; the class + decorator form is retained as
+      the substrate / interop surface. ADR 0009/0010 bumped to Accepted; README + `docs/01`/`02`/`07`/
+      `08`/`09`/`11`/`12`/`13` reoriented functional-first with a short class-substrate note; the
+      `examples/bank` class account grain dropped (functional + dispatch variants kept).
+- [ ] Migrate the remaining examples to functional-first so they match the docs: `examples/greeter`,
+      `examples/chat`, `examples/cluster`, `examples/thermostat`, `examples/k8s-silo` (each currently
+      a `@grain()` class). Keep one class grain somewhere as a living interop example.
+- [ ] Optional ergonomics from the review: move the facet hooks onto `ctx`
+      (`ctx.persistentState(...)` / `ctx.reducerState(...)`) to drop the `INSTANCE`-symbol smuggling
+      and the misleading `use*` prefix; add `useReminder` / `useTimer` / `useActivate` sugar.
 
 ## Message-dispatch reducer grains ([ADR 0010](docs/adr/0010-message-dispatch-reducer-grains.md))
 

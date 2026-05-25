@@ -76,6 +76,20 @@ class ActivationData implements GrainContext {
 `receive` is the single entry point for messages targeting this grain. Responses are matched against
 the correlation table; requests are admitted to the turn scheduler subject to reentrancy rules.
 
+The `ActivationData`/`GrainContext` also plays Orleans' `IGrainContext` role
+(`Orleans.Runtime/IGrainContext.cs`): it owns the grain's **ordered lifecycle**
+(the `SetupState` → `Activate` stages of [02](02-actor-model.md)) and hosts **registered
+components/extensions** — system targets reachable on the activation alongside the user's methods.
+Streams use one today (the `StreamConsumer` extension that delivers events, see
+[09](09-event-streams.md)), and the transactional resource/manager of
+[ADR 0008](adr/0008-cross-grain-transactions.md) is bound the same way, mirroring Orleans'
+`SetComponent<T>` / `GetComponent<T>`.
+
+**Grain call filters** (Orleans' `IIncomingGrainCallFilter` / `IOutgoingGrainCallFilter`,
+`Orleans.Core.Abstractions/Core/IGrainCallFilter.cs`) — the interception point Orleans uses for
+cross-cutting concerns such as trace propagation and authorization — are a parity item on the
+[roadmap](13-roadmap-and-phases.md), not yet implemented.
+
 ## The message loop and turn admission
 
 ```mermaid

@@ -14,6 +14,8 @@ ring — the same design as Orleans — built on top of the Kubernetes-derived m
 > `Orleans.Runtime/GrainDirectory/GrainLocator.cs`,
 > `Orleans.Runtime/GrainDirectory/DhtGrainLocator.cs`,
 > `Orleans.Core.Abstractions/GrainDirectory/IGrainDirectory.cs`,
+> `Orleans.Core.Abstractions/Placement/PlacementStrategy.cs`,
+> `Orleans.Core.Abstractions/Placement/PlacementFilterStrategy.cs`,
 > `Orleans.Runtime/Placement/*`.
 
 ## Why a distributed directory and not an external store
@@ -128,7 +130,8 @@ version and a silo never mixes entries from two different ring topologies.
 ## Placement
 
 When a lookup returns `undefined`, placement chooses the silo. Placement is a pluggable strategy
-over the live silo set, mirroring Orleans' placement directors.
+over the live silo set, mirroring Orleans' `PlacementStrategy` + placement directors
+(`Orleans.Core.Abstractions/Placement/PlacementStrategy.cs`).
 
 ```ts
 interface PlacementStrategy {
@@ -136,16 +139,23 @@ interface PlacementStrategy {
 }
 ```
 
-Built-in strategies (matching Orleans):
+Built-in strategies, each mapping onto an Orleans strategy class:
 
-- **Random (default).** Pick a random live silo. Cheap and well-distributed.
-- **Prefer-local.** Place on the calling silo if it is a candidate, else random. Good when a grain
-  is mostly called by co-located grains.
-- **Activation-count (power-of-k).** Sample k silos and pick the least loaded by activation count.
-  Balances load without a global coordinator.
-- **Stateless-worker.** Not directory-registered; each silo keeps its own local pool of
-  interchangeable activations for a stateless grain type, scaling out CPU-bound work. Calls always
-  resolve locally.
+- **Random (default)** — Orleans `RandomPlacement`. Pick a random live silo. Cheap and
+  well-distributed.
+- **Prefer-local** — Orleans `PreferLocalPlacement`. Place on the calling silo if it is a candidate,
+  else random. Good when a grain is mostly called by co-located grains.
+- **Activation-count (power-of-k)** — Orleans `ActivationCountBasedPlacement`. Sample k silos and
+  pick the least loaded by activation count. Balances load without a global coordinator.
+- **Stateless-worker** — Orleans `StatelessWorkerPlacement`. Not directory-registered; each silo
+  keeps its own local pool of interchangeable activations for a stateless grain type, scaling out
+  CPU-bound work. Calls always resolve locally.
+
+The directory owner itself is chosen by hashing the `GrainId` onto the ring — Orleans' equivalent is
+`HashBasedPlacement`. Orleans ships further strategies we have not ported (`SiloRoleBasedPlacement`,
+`ResourceOptimizedPlacement`) and a **placement-filter** layer (`PlacementFilterStrategy`) that
+prunes candidate silos by metadata before the strategy runs; both are parity items on the
+[roadmap](13-roadmap-and-phases.md), not yet implemented.
 
 A grain type selects its strategy via a decorator option, e.g. `@grain({ placement: "preferLocal" })`
 or `@grain({ stateless: true })`. A per-call **placement hint** in the request context can pin an

@@ -64,6 +64,16 @@ interface SiloMember {
 }
 ```
 
+These four statuses are the subset of Orleans' `SiloStatus` enum
+(`Orleans.Core/Runtime/SiloStatus.cs`: `Created`, `Joining`, `Active`, `ShuttingDown`, `Stopping`,
+`Dead`) that a Kubernetes-derived view can distinguish: `joining` ↔ `Joining`, `active` ↔ `Active`,
+`draining` ↔ `ShuttingDown`/`Stopping`, `dead` ↔ `Dead`. We collapse the two shutdown statuses
+because Kubernetes surfaces only "in the ready endpoint set" or "not", and we never observe
+`Created` because a silo appears in the view only once it is reachable. The whole **membership state
+machine** Orleans drives through its `IMembershipTable` (`Orleans.Core/SystemTargetInterfaces`) is
+replaced by reading these transitions off the API-server watch — the one membership divergence
+Kubernetes hosting buys us.
+
 The snapshot's `version` is the **view number**. Both the grain directory and placement key their
 decisions off it; when the view changes, the directory rebalances its ring and placement updates its
 candidate set. This mirrors the role of Orleans' `ClusterMembershipSnapshot` and

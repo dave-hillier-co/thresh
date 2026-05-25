@@ -19,24 +19,30 @@ reactivates elsewhere on its next call. This is "distributed objects that just w
 
 ## Quick example
 
+A grain is written as a **factory closure** — the React-inspired functional style is the default
+(see [ADR 0009](docs/adr/0009-functional-grains.md)). Per-activation state lives in closure
+variables; durable state and other facets come from hooks on the setup context; the returned object
+is the grain's message surface.
+
 ```ts
-// Interface — the contract callers see.
+// Interface — the contract callers see. A compile-time view; no method table.
 interface IThermostat extends GrainWithStringKey {
   onUpdate(status: ThermostatStatus): Promise<Command[]>;
 }
+const IThermostat = defineGrainInterface<IThermostat>("IThermostat");
 
-// Implementation — runs inside the cluster.
-@grain()
-class ThermostatGrain extends Grain implements IThermostat {
-  @persistentState("status")
-  private status!: PersistentState<ThermostatStatus>;
+// Implementation — a factory closure that runs once per activation.
+const ThermostatGrain = defineGrain<IThermostat>("Thermostat", (ctx) => {
+  const status = usePersistentState<ThermostatStatus>(ctx, "status");
 
-  async onUpdate(status: ThermostatStatus): Promise<Command[]> {
-    this.status.value = status;
-    await this.status.write();
+  const onUpdate = async (next: ThermostatStatus): Promise<Command[]> => {
+    status.value = next;
+    await status.write();
     return [];
-  }
-}
+  };
+
+  return { onUpdate };
+});
 
 // Caller — from a web frontend or another grain.
 const thermostat = client.getGrain<IThermostat>(IThermostat, deviceId);
@@ -44,7 +50,9 @@ const commands = await thermostat.onUpdate(update);
 ```
 
 `client.getGrain` returns a lightweight proxy; the grain is activated on first call, wherever the
-cluster decides to place it. The caller does not know — or need to know — which pod that is.
+cluster decides to place it. The caller does not know — or need to know — which pod that is. The
+class + decorator form this functional API is built on is still supported as an interop surface —
+see [02 — the actor model](docs/02-actor-model.md).
 
 ## Documentation
 
@@ -98,9 +106,11 @@ pnpm --filter @tsva/example-thermostat start   # durable state + a reminder + a 
 - [`examples/cluster`](examples/cluster) — three silos over the real WebSocket transport. Calls from
   any silo route to one shared activation (directory CAS); when the hosting silo dies the grain
   reactivates on a survivor.
-- [`examples/bank`](examples/bank) — reducer grains ([ADR 0006](docs/adr/0006-reducer-grains.md)):
-  account commands `raise` events folded by a pure reducer into immutable state, persisted as a
-  snapshot that survives a silo restart.
+- [`examples/bank`](examples/bank) — reducer grains in the functional style. The account is shown two
+  ways: a multi-method `defineGrain` closure with `useReducerState`, and the zero-boilerplate
+  `defineReducerGrain` whose whole surface is `dispatch(action)` + `query()` with cross-grain work
+  returned as Elm-style effects ([ADR 0010](docs/adr/0010-message-dispatch-reducer-grains.md)). Both
+  fold a pure reducer into immutable state, persisted as a snapshot that survives a silo restart.
 - [`examples/thermostat`](examples/thermostat) — the Orleans README example: `@persistentState`, a
   durable self-check reminder, and a telemetry stream consumed by an aggregator.
 
