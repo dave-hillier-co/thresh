@@ -189,6 +189,19 @@ order, starting with transactions.
       publication of raised events to the grain's stream; event upcasting. **Deferred** — an addition
       beyond Orleans, not a parity item.
 
+## Functional grains ([ADR 0007](docs/adr/0007-functional-grains.md))
+
+- [x] Spike — `defineGrain(name, factory)` (functional counterpart of `@grain()`) plus
+      `useReducerState` / `usePersistentState` hooks (counterparts of the field decorators). The
+      factory runs once per activation with an explicit `ctx` (`id` / `runtime` / `getGrain`), keeps
+      state in closures, and returns the interface methods + optional lifecycle. Produces a `Grain`
+      subclass that registers/activates through the **unchanged** catalog, scheduler, proxy and
+      facet-binding machinery, so class and functional styles coexist. Functional `examples/bank`
+      account grain (shares `initialAccount` / `reduceAccount` verbatim) + end-to-end test: events
+      fold to state, transfer moves funds, snapshot survives a restart, overdraft rejected.
+- [ ] Decide whether functional becomes a documented/default style; if so, functional variants of
+      `docs/02` + the examples, and `useReminder` / `useTimer` / `useActivate` sugar.
+
 ## External client
 
 - [x] `@tsva/client` — gateway-routed `createClient({ clusterId, local, transport, gateway })`; not a
