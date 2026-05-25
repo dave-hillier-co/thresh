@@ -40,7 +40,7 @@ Key points:
 
 - **Methods dispatch by name.** The wire carries the `method` name and the receiving activation
   invokes it directly; `interfaceId` remains only to route to the hosting grain type and rehydrate
-  references (see [ADR 0009](adr/0009-message-dispatch-substrate.md)).
+  references (see [ADR 0011](adr/0011-message-dispatch-substrate.md)).
 - **`targetSilo` is resolved before sending.** The dispatcher consults the grain directory/cache to
   find the owning silo; if unknown, placement decides. See [06](06-grain-directory-and-placement.md).
 - **`requestContext` propagates ambient data** (trace ids, deadlines, custom headers) along the

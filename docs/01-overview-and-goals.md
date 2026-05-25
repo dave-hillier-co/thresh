@@ -74,7 +74,7 @@ gives us. See [06 — Grain directory and placement](06-grain-directory-and-plac
   interface is just a compile-time view; the proxy turns calls into messages dispatched by method
   name, so there is no generated method table. See
   [ADR 0001](adr/0001-runtime-proxy-grain-references.md) and
-  [ADR 0009](adr/0009-message-dispatch-substrate.md).
+  [ADR 0011](adr/0011-message-dispatch-substrate.md).
 - **Transport is WebSocket/HTTP**, not a custom TCP protocol. See
   [ADR 0002](adr/0002-websocket-transport.md).
 - **Membership is Kubernetes**, not a pluggable membership table with gossip. See

@@ -189,7 +189,7 @@ order, starting with transactions.
       publication of raised events to the grain's stream; event upcasting. **Deferred** — an addition
       beyond Orleans, not a parity item.
 
-## Functional grains ([ADR 0007](docs/adr/0007-functional-grains.md))
+## Functional grains ([ADR 0009](docs/adr/0009-functional-grains.md))
 
 - [x] Spike — `defineGrain(name, factory)` (functional counterpart of `@grain()`) plus
       `useReducerState` / `usePersistentState` hooks (counterparts of the field decorators). The
@@ -202,7 +202,7 @@ order, starting with transactions.
 - [ ] Decide whether functional becomes a documented/default style; if so, functional variants of
       `docs/02` + the examples, and `useReminder` / `useTimer` / `useActivate` sugar.
 
-## Message-dispatch reducer grains ([ADR 0008](docs/adr/0008-message-dispatch-reducer-grains.md))
+## Message-dispatch reducer grains ([ADR 0010](docs/adr/0010-message-dispatch-reducer-grains.md))
 
 - [x] Spike — `defineReducerGrain(name, { initial, reduce })`: the whole wire surface is two fixed
       methods (`dispatch(action)` + read-only `query()`), so there is **no per-grain method table**
@@ -210,13 +210,13 @@ order, starting with transactions.
       `<S, A>` carries the types. The reducer is pure and **effects are data** (Elm/Redux):
       `reduce(state, action) => { state, effects? }`; the runtime runs returned effects after folding
       and persisting the snapshot (`call(grain, key, action)` ships; reuses `GrainStorage`). Layered
-      on `defineGrain` (ADR 0007), zero runtime change. `examples/bank` `account-reducer-grain` +
+      on `defineGrain` (ADR 0009), zero runtime change. `examples/bank` `account-reducer-grain` +
       end-to-end test (deposit/withdraw, transfer-as-effect, snapshot survives a restart, overdraft
       rejected by the pure reducer).
 - [ ] More effect kinds (timer/reminder/stream-publish/self-dispatch) + an injectable effect
       interpreter for testing; decide on per-action invocation options (interleave/oneWay).
 
-## Message dispatch as the substrate ([ADR 0009](docs/adr/0009-message-dispatch-substrate.md))
+## Message dispatch as the substrate ([ADR 0011](docs/adr/0011-message-dispatch-substrate.md))
 
 - [x] Make method-name dispatch the wire/runtime substrate: `InvocationRequest`/`Message` carry
       `method: string`, the activation invokes `instance[method](...args)`, and the runtime `Proxy`

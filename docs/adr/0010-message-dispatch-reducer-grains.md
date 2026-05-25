@@ -1,12 +1,12 @@
-# ADR 0008 — Message-dispatch reducer grains (no per-grain interface, no codegen)
+# ADR 0010 — Message-dispatch reducer grains (no per-grain interface, no codegen)
 
 - Status: Proposed — spike (`defineReducerGrain` with `dispatch` / `query` + Elm-style effects, an
   `examples/bank` `account-reducer-grain`, and an end-to-end test). Builds on
-  [ADR 0007](0007-functional-grains.md). The class + `defineGrainInterface` model remains the
+  [ADR 0009](0009-functional-grains.md). The class + `defineGrainInterface` model remains the
   default.
 - Context docs: [02 — The actor model](../02-actor-model.md),
   [07 — Persistence](../07-persistence.md), [ADR 0001](0001-runtime-proxy-grain-references.md),
-  [ADR 0006](0006-reducer-grains.md), [ADR 0007](0007-functional-grains.md)
+  [ADR 0006](0006-reducer-grains.md), [ADR 0009](0009-functional-grains.md)
 
 ## Context
 
@@ -56,7 +56,7 @@ with [ADR 0006](0006-reducer-grains.md)'s pure-fold discipline. Snapshot persist
 `GrainStorage`; events and effects are transient.
 
 It is **additive and layered**: `defineReducerGrain` is built on `defineGrain`
-([ADR 0007](0007-functional-grains.md)) — the dispatch grain is just a functional grain returning
+([ADR 0009](0009-functional-grains.md)) — the dispatch grain is just a functional grain returning
 `{ dispatch, query }` over a `usePersistentState` snapshot. No runtime change: under the hood it is an
 ordinary two-method interface the existing `Proxy` and dispatcher route.
 
@@ -70,7 +70,7 @@ ordinary two-method interface the existing `Proxy` and dispatcher route.
 - **The actor runtime already supplies what a dispatch loop needs** — one activation per key (a single
   writer), one turn at a time (a serialized, deterministic fold), and at-least-once delivery for
   effects through ordinary grain calls.
-- **Layering on [ADR 0007](0007-functional-grains.md) keeps the surface tiny and shows the hierarchy:**
+- **Layering on [ADR 0009](0009-functional-grains.md) keeps the surface tiny and shows the hierarchy:**
   `defineGrain` is the general functional primitive; `defineReducerGrain` is its zero-boilerplate
   specialization.
 
@@ -89,7 +89,7 @@ ordinary two-method interface the existing `Proxy` and dispatcher route.
 - **Rejections are signalled by the reducer throwing** (deterministic, no state change). Modelling
   failures as state/events instead is a style choice left to the author.
 - **It diverges further from the 1:1 Orleans grain-interface mapping** the docs lean on; like
-  [ADR 0007](0007-functional-grains.md) it stays additive and opt-in, and the class +
+  [ADR 0009](0009-functional-grains.md) it stays additive and opt-in, and the class +
   `defineGrainInterface` model remains the default and only documented surface.
 
 ## Alternatives considered
@@ -97,7 +97,7 @@ ordinary two-method interface the existing `Proxy` and dispatcher route.
 1. **Code generation (a TS transformer / build plugin) to derive the method table from the
    interface.** Removes the duplication, but adds a build step, generated artifacts and a tool to
    maintain — the dispatch model removes the same duplication with none of that.
-2. **Stop at multi-method functional grains ([ADR 0007](0007-functional-grains.md)).** Ergonomic, but
+2. **Stop at multi-method functional grains ([ADR 0009](0009-functional-grains.md)).** Ergonomic, but
    each grain still needs its `defineGrainInterface` table, so it doesn't reach "no codegen".
 3. **Effects as imperative awaits inside an impure dispatch handler (no pure reducer).** Simplest, but
    it discards the isolated, testable pure fold that is the whole reason to reach for `useReducer`.

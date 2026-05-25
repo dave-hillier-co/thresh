@@ -20,6 +20,5 @@ export interface ICounter extends GrainWithStringKey {
 }
 
 export const ICounter = defineGrainInterface<ICounter>("k8s.ICounter", {
-  methods: ["increment", "current"],
   options: { current: { readOnly: true } },
 });

@@ -1,4 +1,4 @@
-# ADR 0007 — Functional grains (factory closures instead of classes)
+# ADR 0009 — Functional grains (factory closures instead of classes)
 
 - Status: Proposed — spike landed (`defineGrain` + `useReducerState` / `usePersistentState`, a
   functional `examples/bank` account grain, end-to-end test). The class + decorator style remains the
@@ -108,7 +108,7 @@ untouched; the two styles coexist and a grain opts in by how it is written. Pass
 
 ## Follow-on
 
-[ADR 0008](0008-message-dispatch-reducer-grains.md) builds directly on this: a `defineReducerGrain`
+[ADR 0010](0010-message-dispatch-reducer-grains.md) builds directly on this: a `defineReducerGrain`
 specialization whose only surface is `dispatch(action)` + `query()`, which removes the *per-grain
 method table* (`defineGrainInterface`) entirely — the "skip generating code" end state — by treating
 the grain as a `useReducer`-style message-dispatch loop.

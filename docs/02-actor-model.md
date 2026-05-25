@@ -79,7 +79,7 @@ See [ADR 0001](adr/0001-runtime-proxy-grain-references.md) for the rationale.
 ### Declaring an interface
 
 A grain interface is a **compile-time view** of a grain's message surface
-(see [ADR 0009](adr/0009-message-dispatch-substrate.md)): the TypeScript type plus the handful of
+(see [ADR 0011](adr/0011-message-dispatch-substrate.md)): the TypeScript type plus the handful of
 methods that need non-default invocation options. There is no method table — calls dispatch by
 **method name** on the wire, so nothing here is generated or hand-maintained:
 

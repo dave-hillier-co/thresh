@@ -1,9 +1,9 @@
-# ADR 0009 — Message dispatch as the substrate (typed interfaces are a compile-time view)
+# ADR 0011 — Message dispatch as the substrate (typed interfaces are a compile-time view)
 
 - Status: Accepted — implemented. Supersedes the `methodId` portion of
   [ADR 0001](0001-runtime-proxy-grain-references.md)'s wire mapping; the runtime-`Proxy` decision
-  itself stands. Builds on [ADR 0007](0007-functional-grains.md) and
-  [ADR 0008](0008-message-dispatch-reducer-grains.md).
+  itself stands. Builds on [ADR 0009](0009-functional-grains.md) and
+  [ADR 0010](0010-message-dispatch-reducer-grains.md).
 - Context docs: [02 — The actor model](../02-actor-model.md),
   [04 — Messaging](../04-messaging-and-serialization.md),
   [ADR 0001](0001-runtime-proxy-grain-references.md)
@@ -16,7 +16,7 @@ whose index is the wire `methodId`. That table is hand-maintained boilerplate th
 TypeScript interface — exactly what an Orleans-style code generator emits — and method *order*
 silently defines the wire protocol, so a careless reorder renumbers it.
 
-[ADR 0008](0008-message-dispatch-reducer-grains.md) made single-dispatch reducer grains a thing and
+[ADR 0010](0010-message-dispatch-reducer-grains.md) made single-dispatch reducer grains a thing and
 forced the question: which is the primitive — typed RPC method interfaces, or message dispatch? The
 runtime was *already* message dispatch underneath — an `InvocationRequest` is
 `{ interfaceId, methodId, args }`, and an activation processes it as a turn — so the typed
@@ -37,8 +37,8 @@ it.
 - **`interfaceId` survives only as internal plumbing** — a hash of the interface name used to route a
   `getGrain` to its hosting grain type and to rehydrate references. It is not developer-facing and
   carries no method table.
-- **Every grain is uniformly a message handler** — class, functional ([ADR 0007](0007-functional-grains.md)),
-  or reducer ([ADR 0008](0008-message-dispatch-reducer-grains.md)). A reducer grain is the canonical
+- **Every grain is uniformly a message handler** — class, functional ([ADR 0009](0009-functional-grains.md)),
+  or reducer ([ADR 0010](0010-message-dispatch-reducer-grains.md)). A reducer grain is the canonical
   single-message handler (`dispatch`/`query`); a multi-method grain is a handler with several named
   messages. This settles the layering: there is no RPC method-table layer *beneath* the reducer —
   both sit directly on the same dispatch substrate, and `defineGrain` is the general message-handler

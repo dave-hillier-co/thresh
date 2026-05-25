@@ -45,7 +45,7 @@ interface GrainWithGuidKey    { /* key: Guid   */ }
 ### Defining an interface (02)
 
 A compile-time view — the TypeScript type plus any non-default per-method options; no method table
-(calls dispatch by name, see [ADR 0009](adr/0009-message-dispatch-substrate.md)):
+(calls dispatch by name, see [ADR 0011](adr/0011-message-dispatch-substrate.md)):
 
 ```ts
 const ICounter = defineGrainInterface<ICounter>("ICounter", {

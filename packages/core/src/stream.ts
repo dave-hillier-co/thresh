@@ -68,9 +68,7 @@ export interface StreamConsumer {
 }
 
 export const StreamConsumerInterface: GrainInterface<StreamConsumer> =
-  defineGrainInterface<StreamConsumer>("system.StreamConsumer", {
-    methods: ["deliverStreamEvent"],
-  });
+  defineGrainInterface<StreamConsumer>("system.StreamConsumer");
 
 /**
  * Lets the runtime register a subscribing grain's handler on its activation so a

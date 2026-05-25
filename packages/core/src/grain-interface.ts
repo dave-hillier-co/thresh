@@ -3,7 +3,7 @@ import type { InvokeMethodOptions } from "./invoke-options";
 
 /**
  * A registered grain interface — now a *compile-time view* of a grain's message
- * surface (see [ADR 0009](../../docs/adr/0009-message-dispatch-substrate.md)).
+ * surface (see [ADR 0011](../../docs/adr/0011-message-dispatch-substrate.md)).
  * It carries a stable id (used to route a `getGrain` to the hosting grain type
  * and to rehydrate grain references) and the per-method invocation options.
  *
