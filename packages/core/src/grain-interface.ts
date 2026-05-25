@@ -2,40 +2,39 @@ import { stableHash32 } from "./hash";
 import type { InvokeMethodOptions } from "./invoke-options";
 
 /**
- * A registered grain interface: a stable, ordered method table. Method order
- * gives each method a small integer id used on the wire, decoupling the
- * protocol from method names.
+ * A registered grain interface — now a *compile-time view* of a grain's message
+ * surface (see [ADR 0011](../../docs/adr/0011-message-dispatch-substrate.md)).
+ * It carries a stable id (used to route a `getGrain` to the hosting grain type
+ * and to rehydrate grain references) and the per-method invocation options.
+ *
+ * There is no method table: a call dispatches by **method name** on the wire, so
+ * the interface is purely the TypeScript shape `T` plus the handful of methods
+ * that need non-default invocation options. Nothing here is generated.
  */
 export interface GrainInterface<T> {
   readonly id: number;
   readonly name: string;
-  readonly methods: readonly string[];
-  readonly methodId: ReadonlyMap<string, number>;
   readonly options: Readonly<Record<string, InvokeMethodOptions>>;
   /** Phantom marker so a `GrainInterface<T>` carries its interface type. */
   readonly __t?: T;
 }
 
 export interface GrainInterfaceDefinition<T> {
-  methods: (keyof T & string)[];
+  /** Per-method invocation flags; only the non-default methods need an entry. */
   options?: Partial<Record<keyof T & string, InvokeMethodOptions>>;
 }
 
-// Process-wide registry so a receiving silo can resolve interfaceId -> method
-// table without the caller's static type. Populated as interface modules load.
+// Process-wide registry so a receiving silo can resolve an interfaceId back to
+// its options (and rehydrate references) without the caller's static type.
 const registry = new Map<number, GrainInterface<unknown>>();
 
 export function defineGrainInterface<T>(
   name: string,
-  def: GrainInterfaceDefinition<T>,
+  def: GrainInterfaceDefinition<T> = {},
 ): GrainInterface<T> {
-  const methodId = new Map<string, number>();
-  def.methods.forEach((m, i) => methodId.set(m, i));
   const result: GrainInterface<T> = {
     id: stableHash32(name),
     name,
-    methods: [...def.methods],
-    methodId,
     options: { ...(def.options ?? {}) } as Record<string, InvokeMethodOptions>,
   };
   registry.set(result.id, result as GrainInterface<unknown>);

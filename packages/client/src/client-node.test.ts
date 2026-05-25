@@ -14,16 +14,12 @@ interface ICounter extends GrainWithStringKey {
   increment(by: number): Promise<number>;
   fail(): Promise<void>;
 }
-const ICounter = defineGrainInterface<ICounter>("ICounter.client", {
-  methods: ["increment", "fail"],
-});
+const ICounter = defineGrainInterface<ICounter>("ICounter.client");
 
 interface IUnregistered extends GrainWithStringKey {
   ping(): Promise<void>;
 }
-const IUnregistered = defineGrainInterface<IUnregistered>("IUnregistered.client", {
-  methods: ["ping"],
-});
+const IUnregistered = defineGrainInterface<IUnregistered>("IUnregistered.client");
 
 @grain()
 class CounterGrain extends Grain implements ICounter {

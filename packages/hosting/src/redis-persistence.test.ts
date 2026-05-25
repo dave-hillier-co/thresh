@@ -50,7 +50,6 @@ interface IAccount extends GrainWithStringKey {
   getBalance(): Promise<number>;
 }
 const IAccount = defineGrainInterface<IAccount>("IAccount.redis", {
-  methods: ["deposit", "getBalance"],
   options: { getBalance: { readOnly: true } },
 });
 

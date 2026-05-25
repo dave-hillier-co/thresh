@@ -189,6 +189,45 @@ order, starting with transactions.
       publication of raised events to the grain's stream; event upcasting. **Deferred** — an addition
       beyond Orleans, not a parity item.
 
+## Functional grains ([ADR 0009](docs/adr/0009-functional-grains.md))
+
+- [x] Spike — `defineGrain(name, factory)` (functional counterpart of `@grain()`) plus
+      `useReducerState` / `usePersistentState` hooks (counterparts of the field decorators). The
+      factory runs once per activation with an explicit `ctx` (`id` / `runtime` / `getGrain`), keeps
+      state in closures, and returns the interface methods + optional lifecycle. Produces a `Grain`
+      subclass that registers/activates through the **unchanged** catalog, scheduler, proxy and
+      facet-binding machinery, so class and functional styles coexist. Functional `examples/bank`
+      account grain (shares `initialAccount` / `reduceAccount` verbatim) + end-to-end test: events
+      fold to state, transfer moves funds, snapshot survives a restart, overdraft rejected.
+- [ ] Decide whether functional becomes a documented/default style; if so, functional variants of
+      `docs/02` + the examples, and `useReminder` / `useTimer` / `useActivate` sugar.
+
+## Message-dispatch reducer grains ([ADR 0010](docs/adr/0010-message-dispatch-reducer-grains.md))
+
+- [x] Spike — `defineReducerGrain(name, { initial, reduce })`: the whole wire surface is two fixed
+      methods (`dispatch(action)` + read-only `query()`), so there is **no per-grain method table**
+      (`defineGrainInterface`) to hand-write or generate — the `Action` union is the protocol and
+      `<S, A>` carries the types. The reducer is pure and **effects are data** (Elm/Redux):
+      `reduce(state, action) => { state, effects? }`; the runtime runs returned effects after folding
+      and persisting the snapshot (`call(grain, key, action)` ships; reuses `GrainStorage`). Layered
+      on `defineGrain` (ADR 0009), zero runtime change. `examples/bank` `account-reducer-grain` +
+      end-to-end test (deposit/withdraw, transfer-as-effect, snapshot survives a restart, overdraft
+      rejected by the pure reducer).
+- [ ] More effect kinds (timer/reminder/stream-publish/self-dispatch) + an injectable effect
+      interpreter for testing; decide on per-action invocation options (interleave/oneWay).
+
+## Message dispatch as the substrate ([ADR 0011](docs/adr/0011-message-dispatch-substrate.md))
+
+- [x] Make method-name dispatch the wire/runtime substrate: `InvocationRequest`/`Message` carry
+      `method: string`, the activation invokes `instance[method](...args)`, and the runtime `Proxy`
+      dispatches by the accessed property name. Removed the ordered method table — `methodId` and the
+      `methods: [...]` array are gone; `defineGrainInterface(name, { options? })` is now a compile-time
+      view (TS type + sparse options). `interfaceId` retained as internal routing/options/rehydration
+      plumbing (no developer-facing method table). Proxy guards `then` so a ref is never thenable.
+      Superseded the `methodId` portion of ADR 0001; reconciled docs/01/02/04/11. Full suite green.
+- [ ] Optional follow-on: collapse `interfaceId` to a bare grain-type token (drop the registry,
+      `resolveGrainType`, and the registration `interfaces: [...]` mapping).
+
 ## External client
 
 - [x] `@tsva/client` — gateway-routed `createClient({ clusterId, local, transport, gateway })`; not a

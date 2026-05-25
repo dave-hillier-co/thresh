@@ -4,7 +4,6 @@ import { GrainCallError } from "@tsva/core/errors";
 import type { Grain } from "@tsva/core/grain";
 import type { GrainContext } from "@tsva/core/grain-context";
 import type { GrainId } from "@tsva/core/grain-id";
-import { getGrainInterface } from "@tsva/core/grain-interface";
 import type { GrainRuntime } from "@tsva/core/grain-runtime";
 import type { GrainTimer } from "@tsva/core/grain-timer";
 import type { ActivationReason, DeactivationReason } from "@tsva/core/reasons";
@@ -161,13 +160,9 @@ export class ActivationData implements GrainContext {
       if (handler !== undefined) await handler.onNext(event, new SequenceToken(token));
       return undefined;
     }
-    const iface = getGrainInterface(req.interfaceId);
-    if (iface === undefined) throw new GrainCallError(`unknown interface ${req.interfaceId}`);
-    const methodName = iface.methods[req.methodId];
-    if (methodName === undefined) throw new GrainCallError(`unknown method ${req.methodId}`);
-    const fn = (this.instance as unknown as Record<string, unknown>)[methodName];
+    const fn = (this.instance as unknown as Record<string, unknown>)[req.method];
     if (typeof fn !== "function") {
-      throw new GrainCallError(`grain ${this.id.toString()} has no method ${methodName}`);
+      throw new GrainCallError(`grain ${this.id.toString()} has no method ${req.method}`);
     }
     return await (fn as (...args: unknown[]) => unknown).apply(this.instance, req.args);
   }

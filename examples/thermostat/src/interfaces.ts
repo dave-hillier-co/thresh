@@ -30,17 +30,14 @@ export interface IFleetAggregator extends GrainWithStringKey {
   sampleCount(): Promise<number>;
 }
 
-export const IThermostat = defineGrainInterface<IThermostat>("example.IThermostat", {
-  methods: ["onUpdate"],
-});
+export const IThermostat = defineGrainInterface<IThermostat>("example.IThermostat");
 
 export const IThermostatControl = defineGrainInterface<IThermostatControl>(
   "example.IThermostatControl",
-  { methods: ["getStatus", "updateConfiguration"], options: { getStatus: { readOnly: true } } },
+  { options: { getStatus: { readOnly: true } } },
 );
 
 export const IFleetAggregator = defineGrainInterface<IFleetAggregator>("example.IFleetAggregator", {
-  methods: ["averageTemp", "sampleCount"],
   options: { averageTemp: { readOnly: true }, sampleCount: { readOnly: true } },
 });
 

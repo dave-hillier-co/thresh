@@ -76,14 +76,13 @@ afterAll(async () => {
 interface IChatRoom extends GrainWithStringKey {
   say(text: string): Promise<void>;
 }
-const IChatRoom = defineGrainInterface<IChatRoom>("IChatRoom.cluster", { methods: ["say"] });
+const IChatRoom = defineGrainInterface<IChatRoom>("IChatRoom.cluster");
 
 interface IChatUser extends GrainWithStringKey {
   join(room: string): Promise<void>;
   count(): Promise<number>;
 }
 const IChatUser = defineGrainInterface<IChatUser>("IChatUser.cluster", {
-  methods: ["join", "count"],
   options: { count: { readOnly: true } },
 });
 

@@ -109,7 +109,7 @@ export class ClientNode implements Dispatcher {
       sendingSilo: this.config.local,
       sendingGrain: req.sender,
       interfaceId: req.interfaceId,
-      methodId: req.methodId,
+      method: req.method,
       requestContext: { reentrancyId: req.reentrancyId },
       body: this.serializer.serialize(req.args),
     };

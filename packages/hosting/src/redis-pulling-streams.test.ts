@@ -53,14 +53,13 @@ afterAll(async () => {
 interface IChatRoom extends GrainWithStringKey {
   say(text: string): Promise<void>;
 }
-const IChatRoom = defineGrainInterface<IChatRoom>("IChatRoom.pull", { methods: ["say"] });
+const IChatRoom = defineGrainInterface<IChatRoom>("IChatRoom.pull");
 
 interface IChatUser extends GrainWithStringKey {
   join(room: string): Promise<void>;
   history(): Promise<string[]>;
 }
 const IChatUser = defineGrainInterface<IChatUser>("IChatUser.pull", {
-  methods: ["join", "history"],
   options: { history: { readOnly: true } },
 });
 

@@ -42,11 +42,13 @@ interface GrainWithIntegerKey { /* key: bigint */ }
 interface GrainWithGuidKey    { /* key: Guid   */ }
 ```
 
-### Defining an interface's method table (02)
+### Defining an interface (02)
+
+A compile-time view — the TypeScript type plus any non-default per-method options; no method table
+(calls dispatch by name, see [ADR 0011](adr/0011-message-dispatch-substrate.md)):
 
 ```ts
 const ICounter = defineGrainInterface<ICounter>("ICounter", {
-  methods: ["increment", "decrement", "get"],
   options: { get: { readOnly: true } },
 });
 ```
@@ -189,11 +191,8 @@ interface IThermostatControl extends GrainWithStringKey {
   updateConfiguration(config: ThermostatConfiguration): Promise<void>;
 }
 
-const IThermostat = defineGrainInterface<IThermostat>("IThermostat", {
-  methods: ["onUpdate"],
-});
+const IThermostat = defineGrainInterface<IThermostat>("IThermostat");
 const IThermostatControl = defineGrainInterface<IThermostatControl>("IThermostatControl", {
-  methods: ["getStatus", "updateConfiguration"],
   options: { getStatus: { readOnly: true } },
 });
 ```

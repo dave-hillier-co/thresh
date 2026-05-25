@@ -10,3 +10,6 @@ Each ADR captures one significant decision, its context, the rationale, and its 
 - [0006 — Reducer grains (event-routed, immutable state)](0006-reducer-grains.md)
 - [0007 — Stream pulling agents and ring-based queue ownership](0007-stream-pulling-agents.md)
 - [0008 — Cross-grain ACID transactions](0008-cross-grain-transactions.md)
+- [0009 — Functional grains (factory closures instead of classes)](0009-functional-grains.md)
+- [0010 — Message-dispatch reducer grains (no per-grain interface, no codegen)](0010-message-dispatch-reducer-grains.md)
+- [0011 — Message dispatch as the substrate (typed interfaces are a compile-time view)](0011-message-dispatch-substrate.md)

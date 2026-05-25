@@ -44,14 +44,12 @@ afterAll(async () => {
 interface IDevice extends GrainWithStringKey {
   report(reading: number): Promise<void>;
 }
-const IDevice = defineGrainInterface<IDevice>("IDevice.redis", { methods: ["report"] });
+const IDevice = defineGrainInterface<IDevice>("IDevice.redis");
 
 interface IAggregator extends GrainWithStringKey {
   readings(): Promise<number[]>;
 }
-const IAggregator = defineGrainInterface<IAggregator>("IAggregator.redis", {
-  methods: ["readings"],
-});
+const IAggregator = defineGrainInterface<IAggregator>("IAggregator.redis");
 
 @grain()
 class DeviceGrain extends Grain implements IDevice {

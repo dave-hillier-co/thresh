@@ -25,7 +25,7 @@ const request = (
   direction,
   targetGrain: new GrainId("Doubler", "x"),
   interfaceId: 0,
-  methodId: 0,
+  method: "double",
   body: body.serialize(payload),
 });
 

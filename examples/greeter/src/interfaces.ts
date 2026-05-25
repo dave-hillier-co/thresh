@@ -9,6 +9,5 @@ export interface IGreeter extends GrainWithStringKey {
 }
 
 export const IGreeter = defineGrainInterface<IGreeter>("example.IGreeter", {
-  methods: ["greet", "greetings"],
   options: { greetings: { readOnly: true } },
 });

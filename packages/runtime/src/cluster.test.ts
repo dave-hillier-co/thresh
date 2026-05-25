@@ -13,7 +13,7 @@ import { StaticMembershipService } from "@tsva/runtime/static-membership";
 interface ICounter extends GrainWithStringKey {
   increment(by: number): Promise<number>;
 }
-const ICounter = defineGrainInterface<ICounter>("ICounter.cluster", { methods: ["increment"] });
+const ICounter = defineGrainInterface<ICounter>("ICounter.cluster");
 
 @grain()
 class CounterGrain extends Grain implements ICounter {
@@ -28,7 +28,7 @@ class CounterGrain extends Grain implements ICounter {
 interface ILocal extends GrainWithStringKey {
   ping(): Promise<string>;
 }
-const ILocal = defineGrainInterface<ILocal>("ILocal.cluster", { methods: ["ping"] });
+const ILocal = defineGrainInterface<ILocal>("ILocal.cluster");
 
 @grain({ placement: "preferLocal" })
 class LocalGrain extends Grain implements ILocal {

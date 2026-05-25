@@ -18,9 +18,7 @@ interface IBilling extends GrainWithStringKey {
   scheduleSelfCheck(): Promise<void>;
   checkCount(): Promise<number>;
 }
-const IBilling = defineGrainInterface<IBilling>("IBilling.reminders", {
-  methods: ["scheduleSelfCheck", "checkCount"],
-});
+const IBilling = defineGrainInterface<IBilling>("IBilling.reminders");
 
 @grain()
 class BillingGrain extends Grain implements IBilling, Remindable {

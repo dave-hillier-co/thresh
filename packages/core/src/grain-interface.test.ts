@@ -9,29 +9,20 @@ interface ICounter {
 
 describe("defineGrainInterface", () => {
   const ICounter = defineGrainInterface<ICounter>("ICounter", {
-    methods: ["increment", "decrement", "get"],
     options: { get: { readOnly: true } },
   });
 
-  it("indexes methods by declaration order", () => {
-    expect(ICounter.methodId.get("increment")).toBe(0);
-    expect(ICounter.methodId.get("decrement")).toBe(1);
-    expect(ICounter.methodId.get("get")).toBe(2);
-  });
-
   it("derives a stable interface id from the name", () => {
-    const again = defineGrainInterface<ICounter>("ICounter", {
-      methods: ["increment", "decrement", "get"],
-    });
+    const again = defineGrainInterface<ICounter>("ICounter");
     expect(ICounter.id).toBe(again.id);
   });
 
   it("gives different names different ids", () => {
-    const other = defineGrainInterface<ICounter>("IOther", { methods: ["increment"] });
+    const other = defineGrainInterface<ICounter>("IOther");
     expect(ICounter.id).not.toBe(other.id);
   });
 
-  it("carries per-method invocation options", () => {
+  it("carries per-method invocation options (no method table to declare)", () => {
     expect(ICounter.options.get?.readOnly).toBe(true);
     expect(ICounter.options.increment).toBeUndefined();
   });

@@ -17,7 +17,7 @@ import type { SiloHost } from "@tsva/hosting/silo-host";
 interface IBeacon extends GrainWithStringKey {
   begin(): Promise<void>;
 }
-const IBeacon = defineGrainInterface<IBeacon>("IBeacon.reminders", { methods: ["begin"] });
+const IBeacon = defineGrainInterface<IBeacon>("IBeacon.reminders");
 
 // Total ticks delivered anywhere in the cluster (a second activation would show up here).
 let totalTicks = 0;

@@ -76,16 +76,16 @@ A grain reference is a strongly-typed proxy implementing the grain interface. Un
 generates proxy classes at compile time, we build them at **runtime with an ES `Proxy`**.
 See [ADR 0001](adr/0001-runtime-proxy-grain-references.md) for the rationale.
 
-### Declaring an interface's method table
+### Declaring an interface
 
-A grain interface is registered with a `defineGrainInterface` helper (or an `@grainInterface`
-decorator on an abstract description) that captures a stable, ordered method table. Method ordering
-gives each method a small integer id used on the wire, decoupling the protocol from method names:
+A grain interface is a **compile-time view** of a grain's message surface
+(see [ADR 0011](adr/0011-message-dispatch-substrate.md)): the TypeScript type plus the handful of
+methods that need non-default invocation options. There is no method table — calls dispatch by
+**method name** on the wire, so nothing here is generated or hand-maintained:
 
 ```ts
 const ICounter = defineGrainInterface<ICounter>("ICounter", {
-  methods: ["increment", "decrement", "get"],     // index = methodId
-  options: { get: { readOnly: true } },           // per-method invocation flags
+  options: { get: { readOnly: true } },           // per-method invocation flags only
 });
 ```
 
@@ -95,7 +95,8 @@ reentrancy and response handling (see below).
 ### What the proxy does
 
 `getGrain<ICounter>(ICounter, key)` returns `new Proxy({}, handler)` where the handler's `get` trap
-returns a function that, when called, constructs a request envelope and dispatches it:
+returns a function that, when called, constructs a request envelope keyed by the accessed **method
+name** and dispatches it:
 
 ```ts
 // Conceptually, the proxy turns this:
@@ -103,8 +104,8 @@ await counter.increment(5);
 // into this:
 await runtime.invoke({
   target: new GrainId("Counter", key),
-  interfaceId: ICounter.id,
-  methodId: 0,          // "increment"
+  interfaceId: ICounter.id,   // routes to the hosting type; rehydrates refs
+  method: "increment",        // dispatched by name on the receiver
   args: [5],
   options: ICounter.options.increment ?? NONE,
 });
@@ -112,7 +113,8 @@ await runtime.invoke({
 
 The proxy is lightweight and serializable: it carries only the `GrainId`, the interface id and a
 handle to the runtime. Passing a grain reference as an argument to another grain call serializes to
-just the identity, and rehydrates as a proxy on the receiving side.
+just the identity, and rehydrates as a proxy on the receiving side. (One reserved name: the proxy
+never resolves `then`, so a reference can be safely held or `await`ed without dispatching a call.)
 
 ## Invocation, request envelopes and options
 

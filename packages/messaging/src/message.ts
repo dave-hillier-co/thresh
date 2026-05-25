@@ -21,7 +21,7 @@ export interface Message {
   sendingSilo?: SiloAddress | undefined;
 
   interfaceId: number;
-  methodId: number;
+  method: string;
 
   /** Marks a system request (e.g. a directory partition operation) vs a grain call. */
   system?: "directory" | undefined;
@@ -53,7 +53,7 @@ export function responseTo(
     targetGrain: request.targetGrain,
     sendingSilo,
     interfaceId: request.interfaceId,
-    methodId: request.methodId,
+    method: request.method,
     responseKind,
     body,
   };

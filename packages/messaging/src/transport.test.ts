@@ -27,7 +27,7 @@ const request = (
   targetGrain: new GrainId("Doubler", "x"),
   sendingSilo: A,
   interfaceId: 0,
-  methodId: 0,
+  method: "double",
   body,
 });
 

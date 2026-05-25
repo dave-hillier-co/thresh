@@ -26,8 +26,8 @@ interface Message {
   sendingGrain?: GrainId;         // absent for external-client calls
   sendingSilo?: SiloAddress;
 
-  interfaceId: number;            // which grain interface
-  methodId: number;               // which method (index into the method table)
+  interfaceId: number;            // routes to the hosting type; rehydrates refs
+  method: string;                 // which method — dispatched by name on the receiver
 
   responseKind?: ResponseKind;    // responses only
   requestContext?: RequestContext;// ambient headers/trace, propagated across calls
@@ -38,8 +38,9 @@ interface Message {
 
 Key points:
 
-- **Method identity is numeric.** `interfaceId` + `methodId` decouple the wire format from method
-  names (see the method table in [02](02-actor-model.md)).
+- **Methods dispatch by name.** The wire carries the `method` name and the receiving activation
+  invokes it directly; `interfaceId` remains only to route to the hosting grain type and rehydrate
+  references (see [ADR 0011](adr/0011-message-dispatch-substrate.md)).
 - **`targetSilo` is resolved before sending.** The dispatcher consults the grain directory/cache to
   find the owning silo; if unknown, placement decides. See [06](06-grain-directory-and-placement.md).
 - **`requestContext` propagates ambient data** (trace ids, deadlines, custom headers) along the

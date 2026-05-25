@@ -36,8 +36,9 @@ export class GrainFactory {
         get: (_t, prop): unknown => {
           if (prop === GRAIN_REF) return { grainId: target, interfaceId: def.id };
           if (typeof prop !== "string") return undefined;
-          const methodId = def.methodId.get(prop);
-          if (methodId === undefined) return undefined;
+          // Never appear thenable: a grain ref must not resolve `.then` to a
+          // dispatcher, or awaiting/Promise.resolve-ing one would invoke it.
+          if (prop === "then") return undefined;
           const options = def.options[prop] ?? {};
           return (...args: unknown[]): Promise<unknown> => {
             if (this.dispatcher === undefined) throw new Error("grain factory has no dispatcher");
@@ -45,7 +46,7 @@ export class GrainFactory {
             const req: InvocationRequest = {
               target,
               interfaceId: def.id,
-              methodId,
+              method: prop,
               args,
               options,
               reentrancyId: ambient?.reentrancyId ?? newChainId(),

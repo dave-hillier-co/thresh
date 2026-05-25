@@ -16,9 +16,9 @@ interface IReentrantB extends GrainWithStringKey {
   callViaA(aKey: string): Promise<string>;
 }
 
-const IGate = defineGrainInterface<IGate>("IGate", { methods: ["enter"] });
-const IReentrantA = defineGrainInterface<IReentrantA>("IReentrantA", { methods: ["run", "ping"] });
-const IReentrantB = defineGrainInterface<IReentrantB>("IReentrantB", { methods: ["callViaA"] });
+const IGate = defineGrainInterface<IGate>("IGate");
+const IReentrantA = defineGrainInterface<IReentrantA>("IReentrantA");
+const IReentrantB = defineGrainInterface<IReentrantB>("IReentrantB");
 
 let events: string[] = [];
 let gate: { promise: Promise<void>; resolve: () => void } | undefined;

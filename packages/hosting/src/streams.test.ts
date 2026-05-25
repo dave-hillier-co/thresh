@@ -11,14 +11,12 @@ import { createSilo } from "@tsva/hosting/silo-builder";
 interface IDevice extends GrainWithStringKey {
   report(reading: number): Promise<void>;
 }
-const IDevice = defineGrainInterface<IDevice>("IDevice.stream", { methods: ["report"] });
+const IDevice = defineGrainInterface<IDevice>("IDevice.stream");
 
 interface IAggregator extends GrainWithStringKey {
   readings(): Promise<number[]>;
 }
-const IAggregator = defineGrainInterface<IAggregator>("IAggregator.stream", {
-  methods: ["readings"],
-});
+const IAggregator = defineGrainInterface<IAggregator>("IAggregator.stream");
 
 @grain()
 class DeviceGrain extends Grain implements IDevice {
