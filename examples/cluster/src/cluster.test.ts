@@ -27,7 +27,9 @@ describe("WebSocket cluster (cross-silo routing acceptance)", () => {
     } finally {
       await cluster.stop();
     }
-  });
+    // Real-socket, multi-silo: generous timeout so CPU starvation under a loaded
+    // parallel suite can't time it out (it runs in ~0.4s in isolation).
+  }, 30_000);
 
   it("reactivates the grain on a surviving silo when its host leaves the view", async () => {
     const cluster = await buildWebSocketCluster(3);
@@ -56,7 +58,7 @@ describe("WebSocket cluster (cross-silo routing acceptance)", () => {
     } finally {
       await Promise.all(cluster.silos.map((s) => s.stop().catch(() => undefined)));
     }
-  });
+  }, 30_000);
 
   it("runs the runnable demo end-to-end", async () => {
     const result = await runClusterDemo();
@@ -66,5 +68,5 @@ describe("WebSocket cluster (cross-silo routing acceptance)", () => {
     ]);
     expect(result.afterFailover.newHostSilo).not.toBe(result.hostSilo);
     expect(result.afterFailover.top).toEqual([{ player: "grace", score: 5 }]);
-  });
+  }, 30_000);
 });
