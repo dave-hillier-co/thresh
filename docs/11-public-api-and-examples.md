@@ -96,9 +96,12 @@ The snippets above are the target surface. The shipped surface differs in a few 
 - Grains are registered with the interfaces they serve —
   `registerGrain(ThermostatGrain, { interfaces: [IThermostat, IThermostatControl] })` — because
   TypeScript interfaces are erased at runtime and cannot be reflected.
-- Builder providers shipped so far are **in-memory**: `useMemoryStorage()` / `addStorage(name, p)`,
-  `useReminders(table?)`, `useMemoryStreams()`. The `addRedisStorage` / `useRedisReminders` /
-  `addRedisStreams` methods are future work behind the same builder shape.
+- Both in-memory and Redis providers ship. In-memory (dev/tests): `useMemoryStorage()` /
+  `addStorage(name, p)`, `useReminders(table?)`, `useMemoryStreams()`. Durable Redis:
+  `addRedisStorage(name, { url, keyPrefix? })`, `useRedisReminders({ url, keyPrefix? })`, and
+  `addRedisStreams(name, { url, keyPrefix? })` — each connects its client when the silo starts and
+  disconnects when it stops (via host `onStart`/`onStop` hooks). The Postgres providers and stream
+  partitioning (the `partitions` option above) are future work behind the same builder shape.
 - Persistent state is declared with `@persistentState(name, { defaultValue })` and injected before
   `onActivate`; the `getStorage` accessor on `GrainRuntime` is not implemented (the decorator is the
   supported path). `registerTimer`, `registerReminder` / `unregisterReminder` and

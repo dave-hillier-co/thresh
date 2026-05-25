@@ -176,5 +176,9 @@ only advances after `onNext` resolves (so a thrown handler is redelivered — at
 from the cursor after a consumer drops, and rewind via a `startToken`. The grain-facing
 `getStreamProvider` (configured with `useMemoryStreams` on the builder) delivers each `onNext` as a
 turn on the consumer's activation and re-binds durable subscriptions on reactivation via
-`getSubscriptions`/`resume`. The Redis Streams provider and the pulling-agent / queue-ownership
-machinery are future work behind the same `StreamProvider` interface.
+`getSubscriptions`/`resume`. A durable `RedisStreamProvider` also ships (`addRedisStreams`): events
+are appended with XADD under monotonic ids, each consumer's cursor is stored in Redis (so it resumes
+on any silo after a restart), and delivery is a non-blocking XRANGE poll that advances the cursor
+only after `onNext` resolves — interchangeable with the in-memory provider. The pulling-agent /
+queue-ownership machinery (partitioning streams across silos over the ring) is future work behind the
+same `StreamProvider` interface.

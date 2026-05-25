@@ -170,7 +170,10 @@ cancelled on deactivation) and the in-memory `ReminderTable` + `LocalReminderSer
 ownership, periodic firing, durable cursors via the table, silo-handoff via `refreshOwnership`). A
 grain's `registerReminder` delegates to the service, and a tick reactivates the grain and delivers
 `receiveReminder` as a turn on its single activation. Ownership is ring-derived and rebalances on
-membership change across silos; the Redis/Postgres tables are future work.
+membership change across silos. A durable `RedisReminderTable` also ships (`useRedisReminders`):
+reminders are Redis hashes indexed in a sorted set by grain-hash so `readRange` is a server-side
+range query, with atomic Lua upsert/remove and etag CAS — interchangeable with the in-memory table.
+The Postgres table is future work.
 
 ## Choosing between them
 
