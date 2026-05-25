@@ -182,6 +182,7 @@ multiplexed over a fixed set of physical Redis-Stream queues; an agent per queue
 routes each to its stream's subscribers — discovered in a durable pub-sub registry — through the
 dispatcher as a `StreamConsumer` system call (the same delivery path reminders use), committing the
 queue cursor only after delivery (at-least-once). Subscriptions and cursors live in Redis, surviving
-deactivation and silo failure. Assigning queue ownership to silos by the consistent-hash ring (so it
-rebalances on membership change and a new owner resumes from the committed cursor) is the remaining
-slice of ADR 0007; until then each silo runs an agent for every queue.
+deactivation and silo failure. Queue ownership is assigned to silos by the consistent-hash ring (each
+queue sits at a fixed ring point) and rebalances on every membership change, so when a silo leaves
+the view a survivor takes its queues over and resumes from the committed cursor with no gaps — the
+same hash-range-ownership mechanism reminders use.

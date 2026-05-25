@@ -13,6 +13,7 @@ import type {
   SubscribeOptions,
 } from "@tsva/core/stream";
 import { QueuePullingAgent } from "@tsva/streams/queue-pulling-agent";
+import { ownedQueueIndices, type HashRange } from "@tsva/streams/queue-ownership";
 import { RedisStreamQueue } from "@tsva/streams/redis-stream-queue";
 import { RedisSubscriptionRegistry } from "@tsva/streams/redis-subscription-registry";
 
@@ -75,6 +76,16 @@ export class RedisPullingStreamProvider implements ActivationBoundStreamProvider
   /** Wire how a pulled event reaches a subscriber's activation (the cluster node). */
   setDeliver(deliver: StreamDeliver): void {
     this.deliver = deliver;
+  }
+
+  /**
+   * Adopt the hash ranges this silo owns on the ring: run agents for exactly the
+   * queues whose ring point falls in them, stopping any no longer owned. Called by
+   * the host on start and on every membership change — mirrors how reminders take
+   * over hash ranges, so a queue (and its committed cursor) hands off losslessly.
+   */
+  refreshOwnership(ranges: readonly HashRange[]): void {
+    this.startAgentsFor(ownedQueueIndices(this.name, this.queueCount, ranges));
   }
 
   /** Run pulling agents for exactly these queue indices (idempotent); stop the rest. */

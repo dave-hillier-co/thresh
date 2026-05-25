@@ -1,6 +1,7 @@
 # ADR 0007 — Stream pulling agents and ring-based queue ownership
 
-- Status: Accepted — in progress (queue model + agents being built in slices)
+- Status: Accepted — implemented (queue model, pub-sub registry, consumer-extension delivery, and
+  ring-based queue ownership with rebalance)
 - Context docs: [09 — Event streams](../09-event-streams.md),
   [06 — Grain directory and placement](../06-grain-directory-and-placement.md),
   [ADR 0005 — Redis defaults](0005-redis-default-providers.md)

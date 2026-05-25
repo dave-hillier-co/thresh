@@ -23,8 +23,13 @@ export interface SiloHostParts {
   reminderService?: ReminderService | undefined;
   /** Run before the node starts — e.g. connect durable provider clients. */
   onStart?: ReadonlyArray<() => Promise<void>>;
-  /** Run after the node is started — e.g. start pulling agents that deliver via the dispatcher. */
-  onStarted?: ReadonlyArray<() => Promise<void>>;
+  /**
+   * Run on start and on every membership change with this silo's owned hash
+   * ranges — e.g. take over the stream queues the ring now assigns this silo.
+   */
+  onOwnershipChange?: ReadonlyArray<
+    (ranges: ReadonlyArray<readonly [number, number]>) => Promise<void>
+  >;
   /** Run after the node drains — e.g. disconnect durable provider clients. */
   onStop?: ReadonlyArray<() => Promise<void>>;
 }
@@ -57,8 +62,9 @@ export class SiloHost {
     if (this.parts.healthServer !== undefined && this.parts.healthPort !== undefined) {
       await this.parts.healthServer.listen(this.parts.healthPort);
     }
-    for (const hook of this.parts.onStarted ?? []) await hook();
-    await this.parts.reminderService?.refreshOwnership(this.parts.node.ownedHashRanges());
+    const ranges = this.parts.node.ownedHashRanges();
+    for (const hook of this.parts.onOwnershipChange ?? []) await hook(ranges);
+    await this.parts.reminderService?.refreshOwnership(ranges);
     this.watchMembership();
     this.parts.health.update({
       membershipHealthy: this.parts.membership.current().silos.length > 0,
@@ -82,8 +88,10 @@ export class SiloHost {
       for await (const snapshot of this.parts.membership.updates()) {
         if (abort.signal.aborted) return;
         this.parts.node.updateView();
-        // Ring changed: take over (or release) reminder ranges accordingly.
-        await this.parts.reminderService?.refreshOwnership(this.parts.node.ownedHashRanges());
+        // Ring changed: take over (or release) reminder ranges and stream queues.
+        const updated = this.parts.node.ownedHashRanges();
+        for (const hook of this.parts.onOwnershipChange ?? []) await hook(updated);
+        await this.parts.reminderService?.refreshOwnership(updated);
         this.parts.health.update({ membershipHealthy: snapshot.silos.length > 0 });
       }
     })();

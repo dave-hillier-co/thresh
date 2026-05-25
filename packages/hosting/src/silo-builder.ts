@@ -267,18 +267,17 @@ export class SiloBuilder {
     }
 
     // Pulling-agent stream providers deliver through the dispatcher to subscriber
-    // activations, so they need the started node. (Ring-based queue ownership is a
-    // later slice; for now a silo runs an agent for every queue.)
-    const onStarted: Array<() => Promise<void>> = [];
+    // activations, so they need the started node; the host runs the ownership hook
+    // on start and on every membership change, so each silo runs agents only for
+    // the queues the ring assigns it and takes queues over on rebalance.
+    const onOwnershipChange: Array<
+      (ranges: ReadonlyArray<readonly [number, number]>) => Promise<void>
+    > = [];
     for (const provider of this.pullingStreams) {
       provider.setDeliver((grainId, streamKey, event, token) =>
         node.deliverStreamEvent(grainId, streamKey, event, token),
       );
-      onStarted.push(async () => {
-        provider.startAgentsFor(
-          Array.from({ length: provider.physicalQueueCount }, (_unused, i) => i),
-        );
-      });
+      onOwnershipChange.push(async (ranges) => provider.refreshOwnership(ranges));
     }
 
     return buildSiloHost({
@@ -289,7 +288,7 @@ export class SiloBuilder {
       membership: this.membership,
       reminderService,
       onStart: this.starters,
-      onStarted,
+      onOwnershipChange,
       onStop: this.closers,
     });
   }

@@ -100,11 +100,12 @@ Work items, grouped by the phase they belong to in
       (at-least-once). Builder `addRedisStreams(name, { url, keyPrefix? })`. Integration-tested
       (skip-if-down): ordered delivery, fan-out, namespace/key isolation, start-token rewind, and
       durable resume across a fresh provider replaying only the missed events.
-- [ ] Pulling agents / queue ownership over the ring ([ADR 0007](docs/adr/0007-stream-pulling-agents.md)).
-      Partition streams over a fixed set of physical Redis-Stream queues; each silo runs an agent per
-      queue the ring assigns it; delivery routes to subscribers via a `StreamConsumer` system
-      extension; the queue cursor commits after delivery (at-least-once) so a new owner resumes
-      losslessly. Slices:
+- [x] Pulling agents / queue ownership over the ring ([ADR 0007](docs/adr/0007-stream-pulling-agents.md)).
+      Streams are partitioned over a fixed set of physical Redis-Stream queues; each silo runs an
+      agent per queue the ring assigns it; delivery routes to subscribers via a `StreamConsumer`
+      system extension; the queue cursor commits after delivery (at-least-once) so a new owner resumes
+      losslessly. Completes the Phase 6 exit criterion (queue ownership rebalances on membership
+      change; a new owner resumes from the committed cursor). Slices:
   - [x] Slice 1 — queue model + durable per-queue cursor + `QueuePullingAgent` (pull a queue, deliver
         to a sink, commit the cursor). Integration-tested against real Redis, single process.
   - [x] Slice 2 — durable pub-sub subscription registry (`streamKey → subscriber grain ids`) in Redis.
@@ -113,8 +114,12 @@ Work items, grouped by the phase they belong to in
         `addRedisStreams` (superseding the per-consumer poll provider). Single-silo end-to-end:
         fan-out of a room's messages to multiple subscribed user grains, in order, with isolation.
         Each silo currently runs an agent for every queue (ownership is slice 4).
-  - [ ] Slice 4 — ring-based queue ownership + rebalance (`PullingAgentManager`, wired in hosting like
-        reminders); multi-silo end-to-end: owner leaves the view, a survivor resumes from the cursor.
+  - [x] Slice 4 — ring-based queue ownership + rebalance. Pure `ownedQueueIndices` maps each queue's
+        ring point to an owning silo (disjoint + complete across the cluster); the provider's
+        `refreshOwnership` is wired through a host `onOwnershipChange` hook called on start and every
+        membership change (alongside reminder ownership). Multi-silo end-to-end (skip-if-down): the
+        queue owner leaves the view and a surviving silo resumes delivery from the committed cursor —
+        no gaps, no duplicate redelivery.
 
 ## On approach to v1 completion
 
