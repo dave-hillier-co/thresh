@@ -71,7 +71,7 @@ Work items, grouped by the phase they belong to in
       builder `addRedisStorage(name, { url, keyPrefix? })` connects on `start()` / disconnects on
       `stop()` via host `onStart`/`onStop` hooks. Integration-tested against a real Redis
       (skip-if-down): etag conflicts, value-codec round-trip, and state surviving a silo restart.
-- [ ] Postgres provider (need real infra; integration-tested)
+- [ ] Postgres provider — **deferred** (additional provider, not a parity gap; Redis is the shipped default)
 
 ## Phase 5 — Timers and reminders
 
@@ -94,7 +94,7 @@ Work items, grouped by the phase they belong to in
       Builder `useRedisReminders({ url, keyPrefix? })`. Integration-tested (skip-if-down): CAS,
       range/wrap queries, codec round-trip, firing through `LocalReminderService`, and a successor
       silo resuming a reminder from Redis.
-- [ ] Postgres reminder table (need real infra; integration-tested)
+- [ ] Postgres reminder table — **deferred** (additional provider, not a parity gap; Redis is the shipped default)
 
 ## Phase 6 — Event streams
 
@@ -132,7 +132,7 @@ Work items, grouped by the phase they belong to in
         queue owner leaves the view and a surviving silo resumes delivery from the committed cursor —
         no gaps, no duplicate redelivery.
 
-## On approach to v1 completion
+## Worked examples and docs
 
 - [x] **Executable** worked example `examples/thermostat` — runnable entry point
       (`pnpm --filter @tsva/example-thermostat start`, via vite-node) exercising `@persistentState`,
@@ -142,10 +142,38 @@ Work items, grouped by the phase they belong to in
 - [x] Docs accuracy pass — reconciled `docs/11` ("what is implemented today": `useMembership`,
       collection/refresh/`random` config, `@reducerState`, the `client` package) and `docs/12`
       (package list + `examples/*`) with the shipped surface
-- [ ] Declare v1 done — the core model, persistence/reminders/streams on Redis, and Kubernetes
-      hosting (membership glue + cluster e2e) are shipped and verified. Remaining: the optional
-      Postgres providers below (alternatives to the Redis defaults; need a Postgres instance to
-      verify).
+
+The goal is **Orleans parity** ([docs/13](docs/13-roadmap-and-phases.md)), tracked as a rolling
+roadmap rather than a single v1 release. Phases 1–6 (core model, persistence, reminders, streams on
+Redis, Kubernetes hosting) are shipped and verified. Remaining parity work is below, in priority
+order, starting with transactions.
+
+## Phase 7 — Cross-grain transactions ([ADR 0008](docs/adr/0008-cross-grain-transactions.md))
+
+- [ ] Slice 1 — transaction context + boundaries: `TransactionOption` on method options; the
+      proxy/dispatcher begins/joins a transaction and propagates the context through the request
+      context across silos. In-memory TM, single silo, no durability. Failing test first: two grains
+      updated in one transaction, an induced failure aborts both (no half-apply).
+- [ ] Slice 2 — `TransactionalState<T>` facet: versioned state, per-transaction tentative writes,
+      read/write version tracking; `performUpdate` / `performRead`. Sociable tests over the in-memory
+      path.
+- [ ] Slice 3 — optimistic serializable commit: TM prepare/commit/abort across participants;
+      serializable conflict detection; cascading abort. End-to-end: a transfer across two account
+      grains is atomic, concurrent transfers serialize, a conflicting transaction aborts.
+- [ ] Slice 4 — durability + recovery: persist committed transactional state and commit records
+      (Redis); resolve in-doubt transactions on restart; remote participants over the dispatcher.
+      Multi-silo end-to-end: a silo dies mid-commit and the outcome stays consistent.
+
+## Remaining for parity (after transactions)
+
+- [ ] Grain-interface versioning — multiple interface versions live at once for heterogeneous rolling
+      upgrades, with version-aware placement (Orleans' versioning).
+- [ ] Implicit stream subscriptions — bind a grain type to a namespace and auto-subscribe by key, no
+      explicit `subscribe` call (Orleans' `[ImplicitStreamSubscription]`).
+- [ ] Directory range handoff — replace the phase-2 drop-and-rebuild with a versioned, lossless
+      handoff on membership change (per [docs/06](docs/06-grain-directory-and-placement.md)).
+- [ ] Observability (cross-cutting) — OpenTelemetry traces propagated via request context, metrics
+      (activations, turn latency, directory hit rate, reminder/stream lag), and structured logs.
 
 ## Reducer grains ([ADR 0006](docs/adr/0006-reducer-grains.md))
 
@@ -158,7 +186,8 @@ Work items, grouped by the phase they belong to in
       runnable demo + smoke test; events fold to immutable state, snapshot survives a silo restart
 - [x] Reflect `@reducerState` in `docs/07` (persistence), `docs/11` (public API + examples), `README`
 - [ ] Event-log mode — append-only `EventLog` provider + replay-from-snapshot on activation; opt-in
-      publication of raised events to the grain's stream; event upcasting (needs real infra)
+      publication of raised events to the grain's stream; event upcasting. **Deferred** — an addition
+      beyond Orleans, not a parity item.
 
 ## External client
 

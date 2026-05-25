@@ -35,16 +35,23 @@ primitives so the runtime can be smaller and the operational model more familiar
 - **Operable and observable.** Structured logging, OpenTelemetry traces/metrics, and request-context
   propagation across grain calls.
 
-## Non-goals (for now)
+## Scope: Orleans parity
 
-- **Distributed ACID transactions** across grains (Orleans' transactional state). Deferred.
-- **Multi-cluster / geo-distribution** (Orleans clustering across regions). Deferred.
-- **Grain interface versioning / heterogeneous rolling upgrades** with incompatible contracts.
-  Deferred; v1 assumes a uniform deployment image, which Kubernetes rolling updates already give us.
+The target is **feature parity with current Orleans** for the actor model, persistence, timers and
+reminders, streams, transactions, and Kubernetes hosting. "Done" is defined externally — by what
+Orleans offers — rather than by an internal version label. The [roadmap](13-roadmap-and-phases.md)
+tracks what is shipped versus what remains for parity.
+
+## Non-goals
+
+- **Multi-cluster / geo-distribution** (clustering across regions). Orleans itself **removed** its
+  multi-cluster support in 3.0, so this is out of scope for parity, not merely deferred.
 - **A bespoke high-performance binary wire protocol.** We use WebSocket framing and a pluggable
   serializer rather than reimplementing Orleans' networking stack.
 
-See the [roadmap](13-roadmap-and-phases.md) for what lands in v1 versus later.
+Cross-grain ACID transactions ([ADR 0008](adr/0008-cross-grain-transactions.md)), grain-interface
+versioning and implicit stream subscriptions are Orleans features and so are **parity work on the
+roadmap**, not non-goals.
 
 ## What Kubernetes replaces
 

@@ -1,14 +1,24 @@
 # 13 — Roadmap and phases
 
 Implementation order, with explicit scope and testable exit criteria per phase. Each phase builds on
-the previous and ends in something demonstrable. v1 is the union of phases 1–6.
+the previous and ends in something demonstrable. The target is **Orleans parity** (see
+[01](01-overview-and-goals.md)); this is a rolling roadmap, not a single versioned release.
 
-## v1 scope
+## Status
 
-**In:** core actor model, persistence, timers, reminders, event streams, Kubernetes hosting.
-**Out (deferred):** cross-grain ACID transactions, multi-cluster/geo, grain-interface versioning for
-incompatible rolling upgrades, implicit stream subscriptions. See
-[01 — non-goals](01-overview-and-goals.md).
+**Shipped and verified (phases 1–6):** the core actor model, persistence, timers and reminders, and
+event streams — all on **Redis** (the default durable backend) — plus Kubernetes hosting (membership
+from EndpointSlices, health, drain, and a cluster e2e). Reducer grains (snapshot mode) and the
+external client also ship.
+
+**Remaining for parity:** cross-grain ACID transactions
+([ADR 0008](adr/0008-cross-grain-transactions.md)) — the next priority — then grain-interface
+versioning, implicit stream subscriptions, and lossless directory range handoff. Cross-cutting
+observability (OpenTelemetry traces/metrics, structured logs) remains to be wired throughout.
+
+**Out of scope / deferred:** multi-cluster/geo (Orleans removed it in 3.0), the reducer event-log
+mode, and additional providers (Postgres storage/reminders, other stream backings) — alternatives to
+the shipped Redis defaults, not parity gaps.
 
 ## Phase 1 — Single-silo core actor model
 
@@ -55,9 +65,10 @@ builder; reference manifests; graceful drain on `SIGTERM`.
 ## Phase 4 — Persistence
 
 `PersistentState` facet, `@persistentState`, the storage provider contract, etag concurrency;
-in-memory and **Redis (default)** providers; Postgres provider.
+in-memory and **Redis (default)** providers. (A Postgres provider is deferred as an additional
+provider — not a parity gap.)
 
-- Deliverables: `persistence` with memory/redis/postgres providers; runtime read-on-activate wiring.
+- Deliverables: `persistence` with memory/redis providers; runtime read-on-activate wiring.
 - **Exit criteria:**
   - State written by a grain survives deactivation and pod restart (Redis).
   - A conflicting write (stale etag) raises `InconsistentStateError`.
@@ -67,9 +78,10 @@ in-memory and **Redis (default)** providers; Postgres provider.
 ## Phase 5 — Timers and reminders
 
 In-memory timers; durable reminders with the `ReminderTable` contract, hash-range ownership, and
-rebalancing; **Redis (default)** + Postgres + in-memory tables.
+rebalancing; **Redis (default)** + in-memory tables. (A Postgres table is deferred as an additional
+provider — not a parity gap.)
 
-- Deliverables: timers in `runtime`; `reminders` with memory/redis/postgres tables.
+- Deliverables: timers in `runtime`; `reminders` with memory/redis tables.
 - **Exit criteria:**
   - A timer fires as a turn and is cancelled on deactivation.
   - A reminder fires after the grain has been deactivated, reactivating it.
@@ -93,18 +105,37 @@ in-memory providers.
     with at-least-once delivery (no gaps, possible idempotent redelivery).
   - The worked thermostat example ([11](11-public-api-and-examples.md)) runs end-to-end on kind.
 
-## Post-v1 (deferred)
+## Phase 7 — Cross-grain transactions
 
-- **Implicit stream subscriptions** (bind a grain type to a namespace, auto-subscribe by key).
-- **Directory range handoff** replacing the phase-2 drop-and-rebuild (versioned, lossless handoff
-  per [06](06-grain-directory-and-placement.md)).
-- **Cross-grain ACID transactions.**
-- **Grain-interface versioning** for incompatible rolling upgrades.
-- **Multi-cluster / geo-distribution.**
-- **Additional providers** (other databases; other stream backings/queue adapters).
-- **Reducer grains** — an additive command→events→pure-reducer programming model with immutable
-  state, over the single-writer/single-turn actor. Persistence is orthogonal: snapshot (events
-  transient, as in React) or an append-only event log ([ADR 0006](adr/0006-reducer-grains.md)).
+ACID transactions spanning any number of grains: `[transaction]` method options, an
+`ITransactionalState`-style facet, a transaction manager/agent, and an optimistic, serializable
+commit protocol with recovery. The next priority; designed in
+[ADR 0008](adr/0008-cross-grain-transactions.md).
+
+- **Exit criteria:**
+  - A multi-grain transaction commits atomically; a failure in any participant aborts all of them
+    (a transfer between two account grains never half-applies).
+  - Isolation is serializable: concurrent transactions do not observe each other's uncommitted state.
+  - Committed state is durable and survives a participant's deactivation or silo restart.
+  - A silo failure mid-commit recovers to a consistent outcome (commit or abort, not torn).
+
+## Remaining for parity (after transactions)
+
+- **Grain-interface versioning** — multiple interface versions live at once for heterogeneous rolling
+  upgrades, with version-aware placement (Orleans' versioning).
+- **Implicit stream subscriptions** — bind a grain type to a namespace and auto-subscribe by key,
+  with no explicit `subscribe` call (Orleans' `[ImplicitStreamSubscription]`).
+- **Directory range handoff** — replace the phase-2 drop-and-rebuild with a versioned, lossless
+  handoff on membership change (per [06](06-grain-directory-and-placement.md)).
+
+## Deferred (not parity gaps)
+
+- **Multi-cluster / geo-distribution** — out of scope: Orleans removed it in 3.0.
+- **Additional providers** — Postgres grain storage and reminder table, plus other databases and
+  stream backings/queue adapters. Redis is the shipped default; these are alternatives.
+- **Reducer event-log mode** — the reducer programming model ([ADR 0006](adr/0006-reducer-grains.md))
+  ships in snapshot mode (events transient); the append-only event-log persistence mode is deferred.
+  This is an addition beyond Orleans, not a parity item.
 
 ## Cross-cutting, throughout
 
