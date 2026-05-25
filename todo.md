@@ -202,6 +202,20 @@ order, starting with transactions.
 - [ ] Decide whether functional becomes a documented/default style; if so, functional variants of
       `docs/02` + the examples, and `useReminder` / `useTimer` / `useActivate` sugar.
 
+## Message-dispatch reducer grains ([ADR 0008](docs/adr/0008-message-dispatch-reducer-grains.md))
+
+- [x] Spike — `defineReducerGrain(name, { initial, reduce })`: the whole wire surface is two fixed
+      methods (`dispatch(action)` + read-only `query()`), so there is **no per-grain method table**
+      (`defineGrainInterface`) to hand-write or generate — the `Action` union is the protocol and
+      `<S, A>` carries the types. The reducer is pure and **effects are data** (Elm/Redux):
+      `reduce(state, action) => { state, effects? }`; the runtime runs returned effects after folding
+      and persisting the snapshot (`call(grain, key, action)` ships; reuses `GrainStorage`). Layered
+      on `defineGrain` (ADR 0007), zero runtime change. `examples/bank` `account-reducer-grain` +
+      end-to-end test (deposit/withdraw, transfer-as-effect, snapshot survives a restart, overdraft
+      rejected by the pure reducer).
+- [ ] More effect kinds (timer/reminder/stream-publish/self-dispatch) + an injectable effect
+      interpreter for testing; decide on per-action invocation options (interleave/oneWay).
+
 ## External client
 
 - [x] `@tsva/client` — gateway-routed `createClient({ clusterId, local, transport, gateway })`; not a

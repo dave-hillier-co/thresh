@@ -105,3 +105,10 @@ untouched; the two styles coexist and a grain opts in by how it is written. Pass
 3. **A declarative / generated grain layer above the class (the codegen path hinted in
    [ADR 0006](0006-reducer-grains.md)).** Orthogonal, not mutually exclusive: such a layer could sit
    above either shell. Not a substitute for choosing the hand-written authoring shape.
+
+## Follow-on
+
+[ADR 0008](0008-message-dispatch-reducer-grains.md) builds directly on this: a `defineReducerGrain`
+specialization whose only surface is `dispatch(action)` + `query()`, which removes the *per-grain
+method table* (`defineGrainInterface`) entirely — the "skip generating code" end state — by treating
+the grain as a `useReducer`-style message-dispatch loop.
