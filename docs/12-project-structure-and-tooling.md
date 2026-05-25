@@ -22,16 +22,20 @@ ts-virtual-actors/
     persistence/               # GrainStorage interface + redis/postgres/memory providers
     reminders/                 # reminder service + table providers
     streams/                   # StreamProvider interface + redis-streams/memory providers
-    client/                    # external client (getGrain, stream pub/sub, gateway connection)
-    hosting/                   # silo builder, client builder, health endpoints, K8s glue
+    client/                    # external client (createClient → getGrain via a gateway silo)
+    hosting/                   # silo builder, health endpoints, graceful drain
   examples/
+    greeter/                   # smallest grain: activation, turns, idle reset
+    chat/                      # stream fan-out + durable resume
+    cluster/                   # 3 silos over WebSocket: routing + failover
+    bank/                      # reducer grains (ADR 0006)
     thermostat/                # the worked example from docs/11
 ```
 
 Implemented today: `core`, `messaging`, `directory`, `runtime`, `clustering-k8s`, `persistence`,
-`reminders`, `streams`, `hosting`. The `client` package and `examples/thermostat` are not yet
-present, and the `persistence` / `reminders` / `streams` packages currently ship their **in-memory**
-providers — Redis/Postgres backings are future work behind the same interfaces.
+`reminders`, `streams`, `hosting`, `client`, and the `examples/*` above. The `persistence` /
+`reminders` / `streams` packages currently ship their **in-memory** providers — Redis/Postgres
+backings are future work behind the same interfaces.
 
 ### Dependency direction
 

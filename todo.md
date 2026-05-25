@@ -91,7 +91,11 @@ Work items, grouped by the phase they belong to in
       a reminder, and a telemetry stream over in-memory providers + in-process transport; a smoke
       test runs the full demo in the suite so it can't rot
 - [x] Reconcile `docs/11` (public API), `docs/12`, `README` with the shipped API + getting-started/run docs
-- [ ] Final docs accuracy pass before declaring v1 done
+- [x] Docs accuracy pass — reconciled `docs/11` ("what is implemented today": `useMembership`,
+      collection/refresh/`random` config, `@reducerState`, the `client` package) and `docs/12`
+      (package list + `examples/*`) with the shipped surface
+- [ ] Declare v1 done — gated on the infra-bound durable providers below (Redis/Postgres, k8s glue +
+      kind e2e), which can't be verified without real infrastructure
 
 ## Reducer grains ([ADR 0006](docs/adr/0006-reducer-grains.md))
 

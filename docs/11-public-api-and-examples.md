@@ -104,7 +104,17 @@ The snippets above are the target surface. The shipped surface differs in a few 
   supported path). `registerTimer`, `registerReminder` / `unregisterReminder` and
   `getStreamProvider` (which delivers each `onNext` as a turn) are all wired.
 - Transport is `useInProcessTransport(network)` or `useWebSocketTransport()`; membership is
-  `useStaticMembership([...])` or `useKubernetesMembership(watch)`.
+  `useStaticMembership([...])`, `useKubernetesMembership(watch)`, or `useMembership(service)` to
+  share one view across several in-process silos.
+- `createSilo` also accepts `collectionAgeSeconds` / `collectionIntervalSeconds` (idle collection runs
+  in the hosted path), `reminderRefreshSeconds` (how often a silo re-reads its reminder ranges), and
+  `random` (deterministic placement for tests).
+- Reducer grains ship in **snapshot mode**: `@reducerState(name, { initial, reduce })` injects a
+  `ReducerState<S, E>` facet whose folded state is persisted via `GrainStorage`; see
+  [ADR 0006](adr/0006-reducer-grains.md). The append-only event-log mode is future work.
+- The external client (`@tsva/client`) is implemented for in-process and WebSocket transports
+  (`createClient({ clusterId, local, transport, gateway })`), routing `getGrain` calls through a
+  gateway silo; see "External client" below.
 
 ### External client
 
