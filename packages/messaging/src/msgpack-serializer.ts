@@ -1,6 +1,6 @@
 import { decode, encode } from "@msgpack/msgpack";
 import type { Serializer, SerializerOptions } from "@tsva/messaging/serializer";
-import { decodeValue, encodeValue } from "@tsva/messaging/value-codec";
+import { decodeValue, encodeValue } from "@tsva/core/value-codec";
 
 /** Compact binary serializer; the production default. */
 export class MessagePackSerializer implements Serializer {

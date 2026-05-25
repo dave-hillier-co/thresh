@@ -13,7 +13,9 @@ import type { Transport } from "@tsva/messaging/transport";
 import { WebSocketTransport } from "@tsva/messaging/web-socket-transport";
 import type { ReminderTable } from "@tsva/core/reminder";
 import { systemTimeProvider, type TimeProvider } from "@tsva/core/time-provider";
+import { createClient } from "redis";
 import { MemoryGrainStorage } from "@tsva/persistence/memory-grain-storage";
+import { RedisGrainStorage } from "@tsva/persistence/redis-grain-storage";
 import { bindPersistentStates } from "@tsva/persistence/state-activator";
 import { bindReducerStates } from "@tsva/persistence/reducer-state-activator";
 import { StorageRegistry } from "@tsva/persistence/storage-registry";
@@ -56,6 +58,8 @@ export class SiloBuilder {
   private reminderTable: ReminderTable | undefined;
   private readonly streamProviders = new Map<string, StreamProvider>();
   private readonly registrations: Registration[] = [];
+  private readonly starters: Array<() => Promise<void>> = [];
+  private readonly closers: Array<() => Promise<void>> = [];
 
   constructor(private readonly config: SiloConfig) {}
 
@@ -85,6 +89,29 @@ export class SiloBuilder {
   /** Convenience: register an in-memory "default" provider (dev/tests). */
   useMemoryStorage(provider: GrainStorage = new MemoryGrainStorage()): this {
     return this.addStorage("default", provider);
+  }
+
+  /**
+   * Register a Redis-backed storage provider. The client connects when the silo
+   * starts and disconnects when it stops; `keyPrefix` namespaces keys in a Redis
+   * shared by several clusters (defaults to `"tsva"`).
+   */
+  addRedisStorage(name: string, options: { url: string; keyPrefix?: string }): this {
+    const client = createClient({ url: options.url });
+    client.on("error", () => {}); // surfaced by connect()/commands; don't crash the process
+    this.starters.push(async () => {
+      await client.connect();
+    });
+    this.closers.push(async () => {
+      await client.close();
+    });
+    return this.addStorage(
+      name,
+      new RedisGrainStorage(
+        client,
+        options.keyPrefix !== undefined ? { keyPrefix: options.keyPrefix } : {},
+      ),
+    );
   }
 
   useStaticMembership(silos: readonly SiloAddress[]): this {
@@ -197,6 +224,8 @@ export class SiloBuilder {
       healthPort: this.healthPort,
       membership: this.membership,
       reminderService,
+      onStart: this.starters,
+      onStop: this.closers,
     });
   }
 }

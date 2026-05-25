@@ -55,7 +55,12 @@ Work items, grouped by the phase they belong to in
       instance for runtime injection
 - [x] Runtime wiring — catalog `activateState` hook injects facets + reads them before `onActivate`;
       builder `addStorage`/`useMemoryStorage`; end-to-end test: state survives a silo restart
-- [ ] Redis (default) + Postgres providers (need real infra; integration-tested)
+- [x] Redis provider — `RedisGrainStorage` (state as a Redis hash; conditional Lua scripts give the
+      same etag optimistic-concurrency contract as the in-memory provider, atomic across silos);
+      builder `addRedisStorage(name, { url, keyPrefix? })` connects on `start()` / disconnects on
+      `stop()` via host `onStart`/`onStop` hooks. Integration-tested against a real Redis
+      (skip-if-down): etag conflicts, value-codec round-trip, and state surviving a silo restart.
+- [ ] Postgres provider (need real infra; integration-tested)
 
 ## Phase 5 — Timers and reminders
 

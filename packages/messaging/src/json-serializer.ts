@@ -1,5 +1,5 @@
 import type { Serializer, SerializerOptions } from "@tsva/messaging/serializer";
-import { decodeValue, encodeValue } from "@tsva/messaging/value-codec";
+import { decodeValue, encodeValue } from "@tsva/core/value-codec";
 
 /** Human-readable serializer, useful for debugging and inspection. */
 export class JsonSerializer implements Serializer {

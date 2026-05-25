@@ -21,6 +21,10 @@ export interface SiloHostParts {
   shutdown: GracefulShutdown;
   membership: MembershipService;
   reminderService?: ReminderService | undefined;
+  /** Run before the node starts — e.g. connect durable provider clients. */
+  onStart?: ReadonlyArray<() => Promise<void>>;
+  /** Run after the node drains — e.g. disconnect durable provider clients. */
+  onStop?: ReadonlyArray<() => Promise<void>>;
 }
 
 /**
@@ -45,6 +49,7 @@ export class SiloHost {
   }
 
   async start(): Promise<void> {
+    for (const hook of this.parts.onStart ?? []) await hook();
     await this.parts.node.start();
     this.parts.health.update({ transportReady: true });
     if (this.parts.healthServer !== undefined && this.parts.healthPort !== undefined) {
@@ -63,6 +68,7 @@ export class SiloHost {
     this.parts.reminderService?.stop();
     await this.parts.shutdown.drain();
     await this.parts.healthServer?.close();
+    for (const hook of this.parts.onStop ?? []) await hook();
   }
 
   /** React to membership view changes: rebuild the ring and refresh health. */

@@ -1,12 +1,12 @@
-import { GrainId } from "@tsva/core/grain-id";
-import { keyToString, type GrainKeyKind } from "@tsva/core/grain-key";
-import { grainReferenceIdentity, type GrainReferenceIdentity } from "@tsva/core/grain-reference";
-import { Guid } from "@tsva/core/guid";
-import { SiloAddress } from "@tsva/core/silo-address";
+import { GrainId } from "./grain-id";
+import { keyToString, type GrainKeyKind } from "./grain-key";
+import { grainReferenceIdentity, type GrainReferenceIdentity } from "./grain-reference";
+import { Guid } from "./guid";
+import { SiloAddress } from "./silo-address";
 
-// Tag key for the plain, transport-safe form of a runtime value type. Both the
-// JSON and MessagePack serializers share this transformation so the two stay
-// byte-for-byte compatible in what they can represent.
+// Tag key for the plain, transport-safe form of a runtime value type. The JSON
+// and MessagePack serializers and the durable providers share this
+// transformation so what they can represent stays identical.
 const T = "$tsva";
 
 export interface CodecContext {
@@ -81,4 +81,14 @@ export function decodeValue(value: unknown, ctx: CodecContext = {}): unknown {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(obj)) out[k] = decodeValue(v, ctx);
   return out;
+}
+
+/** JSON string of a value with runtime types tagged; pair with `deserializeValue`. */
+export function serializeValue(value: unknown): string {
+  return JSON.stringify(encodeValue(value));
+}
+
+/** Reverse `serializeValue`, rehydrating runtime value types. */
+export function deserializeValue<T>(json: string, ctx?: CodecContext): T {
+  return decodeValue(JSON.parse(json), ctx) as T;
 }
