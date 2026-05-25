@@ -75,6 +75,12 @@ gives us. See [06 — Grain directory and placement](06-grain-directory-and-plac
   name, so there is no generated method table. See
   [ADR 0001](adr/0001-runtime-proxy-grain-references.md) and
   [ADR 0011](adr/0011-message-dispatch-substrate.md).
+- **Authoring offers an idiomatic-TS option.** Beside the Orleans-faithful class + decorator grain,
+  the runtime accepts a functional authoring style (factory closures + hooks, à la React) and a
+  message-dispatch reducer grain (`useReducer`-shaped). All three are the *same* virtual actor with
+  identical activation, single-turn and lifecycle guarantees — only how you write a grain differs.
+  The class style remains the default; the rest are additive. See
+  [ADR 0009](adr/0009-functional-grains.md), [ADR 0010](adr/0010-message-dispatch-reducer-grains.md).
 - **Transport is WebSocket/HTTP**, not a custom TCP protocol. See
   [ADR 0002](adr/0002-websocket-transport.md).
 - **Membership is Kubernetes**, not a pluggable membership table with gossip. See

@@ -88,8 +88,11 @@ ordinary two-method interface the existing `Proxy` and dispatcher route.
   before credit) — exactly as the existing bank grain documents, not a distributed transaction.
 - **Rejections are signalled by the reducer throwing** (deterministic, no state change). Modelling
   failures as state/events instead is a style choice left to the author.
-- **It diverges further from the 1:1 Orleans grain-interface mapping** the docs lean on; like
-  [ADR 0009](0009-functional-grains.md) it stays additive and opt-in, and the class +
+- **It is a further idiomatic-TS authoring shape, not a semantic divergence.** Orleans'
+  `JournaledGrain` is class-based; this expresses the same event-routed model in the `useReducer`
+  idiom. The runtime semantics — single activation, single-turn deterministic fold, snapshot
+  persistence — are identical, so Orleans parity holds; what changes is how the grain is written.
+  Like [ADR 0009](0009-functional-grains.md) it stays additive and opt-in, and the class +
   `defineGrainInterface` model remains the default and only documented surface.
 
 ## Alternatives considered

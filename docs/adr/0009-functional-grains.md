@@ -80,9 +80,15 @@ untouched; the two styles coexist and a grain opts in by how it is written. Pass
 
 ## Consequences
 
-- **It diverges from the 1:1 Orleans mapping the docs lean on.** [02](../02-actor-model.md) and the
-  examples are written class-first; a functional variant of that material is needed only if this
-  becomes a documented or default style. Deferred until the ergonomics prove out.
+- **It is an authoring shape, not a model change — Orleans parity is untouched.** Orleans has no
+  functional/hooks authoring, so this differs from Orleans' *class + attributes* surface; but the
+  grain it produces is the same virtual actor, with identical activation, single-turn, reentrancy and
+  lifecycle semantics. This is exactly the project's stated split — a *faithful programming model*
+  expressed *idiomatically in TypeScript* ([01 — goals](../01-overview-and-goals.md)) — the same kind
+  of move as runtime `Proxy` references or the Kubernetes membership swap: the guarantee is identical,
+  the way you express it differs. [02](../02-actor-model.md) and the examples stay class-first; a
+  functional variant of that material is needed only if this becomes a documented or default style.
+  Deferred until the ergonomics prove out.
 - **The factory runs once per activation, not per render.** Hooks must be called in the factory body
   (so facet metadata is registered before the pre-activation read), but there is no cross-render
   ordering constraint — the rules-of-hooks tension that React carries does not arise here.
