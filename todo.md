@@ -77,7 +77,13 @@ Work items, grouped by the phase they belong to in
       membership change; a reminder registered on a non-owner is discovered by the owner via periodic
       table refresh; delivery routes through the dispatcher so a tick reaches the grain's single
       activation (not a second one on the owner). `Date` added to the wire codec for `TickStatus`.
-- [ ] Redis (default) + Postgres reminder tables (need real infra; integration-tested)
+- [x] Redis reminder table — `RedisReminderTable` (each reminder a Redis hash; a sorted set indexes
+      them by uniform hash code so `readRange` hash-range ownership is a server-side query, including
+      wrap-around; a per-grain set backs `readForGrain`; atomic Lua upsert/remove with etag CAS).
+      Builder `useRedisReminders({ url, keyPrefix? })`. Integration-tested (skip-if-down): CAS,
+      range/wrap queries, codec round-trip, firing through `LocalReminderService`, and a successor
+      silo resuming a reminder from Redis.
+- [ ] Postgres reminder table (need real infra; integration-tested)
 
 ## Phase 6 — Event streams
 

@@ -188,6 +188,9 @@ importers:
       '@tsva/core':
         specifier: workspace:*
         version: link:../core
+      redis:
+        specifier: ^5.12.1
+        version: 5.12.1
 
   packages/runtime:
     dependencies:

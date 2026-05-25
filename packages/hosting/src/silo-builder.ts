@@ -22,6 +22,7 @@ import { StorageRegistry } from "@tsva/persistence/storage-registry";
 import type { StreamProvider } from "@tsva/core/stream";
 import { LocalReminderService } from "@tsva/reminders/local-reminder-service";
 import { MemoryReminderTable } from "@tsva/reminders/memory-reminder-table";
+import { RedisReminderTable } from "@tsva/reminders/redis-reminder-table";
 import { MemoryStreamProvider } from "@tsva/streams/memory-stream-provider";
 import { ClusterNode } from "@tsva/runtime/cluster-node";
 import { StaticMembershipService } from "@tsva/runtime/static-membership";
@@ -66,6 +67,27 @@ export class SiloBuilder {
   /** Enable durable reminders backed by the given table (in-memory by default). */
   useReminders(table: ReminderTable = new MemoryReminderTable()): this {
     this.reminderTable = table;
+    return this;
+  }
+
+  /**
+   * Enable durable reminders backed by Redis. The client connects when the silo
+   * starts and disconnects when it stops; `keyPrefix` namespaces keys (defaults
+   * to `"tsva"`).
+   */
+  useRedisReminders(options: { url: string; keyPrefix?: string }): this {
+    const client = createClient({ url: options.url });
+    client.on("error", () => {});
+    this.starters.push(async () => {
+      await client.connect();
+    });
+    this.closers.push(async () => {
+      await client.close();
+    });
+    this.reminderTable = new RedisReminderTable(
+      client,
+      options.keyPrefix !== undefined ? { keyPrefix: options.keyPrefix } : {},
+    );
     return this;
   }
 
