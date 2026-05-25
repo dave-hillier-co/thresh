@@ -100,7 +100,18 @@ Work items, grouped by the phase they belong to in
       (at-least-once). Builder `addRedisStreams(name, { url, keyPrefix? })`. Integration-tested
       (skip-if-down): ordered delivery, fan-out, namespace/key isolation, start-token rewind, and
       durable resume across a fresh provider replaying only the missed events.
-- [ ] Pulling agents / queue ownership over the ring (partition streams across silos; need real infra)
+- [ ] Pulling agents / queue ownership over the ring ([ADR 0007](docs/adr/0007-stream-pulling-agents.md)).
+      Partition streams over a fixed set of physical Redis-Stream queues; each silo runs an agent per
+      queue the ring assigns it; delivery routes to subscribers via a `StreamConsumer` system
+      extension; the queue cursor commits after delivery (at-least-once) so a new owner resumes
+      losslessly. Slices:
+  - [ ] Slice 1 — queue model + durable per-queue cursor + `QueuePullingAgent` (pull a queue, deliver
+        to a sink, commit the cursor). Integration-tested against real Redis, single process.
+  - [ ] Slice 2 — durable pub-sub subscription registry (`streamId → subscribers`) in Redis.
+  - [ ] Slice 3 — `StreamConsumer` system extension + runtime handler registry + `deliverStreamEvent`
+        via the dispatcher; single-silo end-to-end (produce → agent → consumer turn).
+  - [ ] Slice 4 — ring-based queue ownership + rebalance (`PullingAgentManager`, wired in hosting like
+        reminders); multi-silo end-to-end: owner leaves the view, a survivor resumes from the cursor.
 
 ## On approach to v1 completion
 
