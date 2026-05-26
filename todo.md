@@ -249,8 +249,20 @@ order, starting with transactions.
         in the bag, target skips the storage read). Unit (participant guard/bag, directed target
         choice, dehydrate/reject-after) + multi-silo e2e (directed + strategy-chosen, single-silo
         fallback) + hosting e2e (unflushed persistent state preserved across the move).
-  - [ ] Activation rebalancer (`IActivationRebalancer`) — proactively rebalance activations across
-        silos (Orleans 10 `Orleans.Runtime/Placement/Rebalancing/*`).
+  - [~] Activation rebalancer (`IActivationRebalancer`) — proactively rebalance activations across
+        silos (Orleans 10 `Orleans.Runtime/Placement/Rebalancing/*`). [ADR 0016](docs/adr/0016-activation-rebalancer.md).
+    - [x] Slice 1 — the decision model: a pure, faithful port of Orleans' adaptive entropy-minimizing
+          algorithm (`rebalancer-model.ts`): `shannonEntropy` / `clusterImbalance` of the per-silo load
+          distribution, `adaptiveScaling` (cycle/silo weights), `formSiloPairs` (low↔high), and
+          `planCycle(snapshot, options, state)` → `{ moves, imbalance, nextState, stop? }` (skip <2
+          silos, complete when balanced, stagnate when entropy barely changes, else scaled per-pair
+          migrations). Load is a single scalar = activation count (uniform-memory case; we don't gossip
+          per-silo memory yet — documented divergence). Pure/deterministic, 16 unit tests incl. a
+          full-session convergence simulation.
+    - [ ] Slice 2 — wiring: elected singleton worker (timer-driven sessions/cycles over the model),
+          cross-silo activation-count reporting, a `migrateRandomActivations(target, count)` system RPC
+          reusing live migration, builder `useActivationRebalancing(options?)`, and a multi-silo e2e
+          (a skewed cluster converges toward balance).
 - [x] Grain-interface versioning — multiple interface versions live at once for heterogeneous rolling
       upgrades, with version-aware placement (Orleans' versioning). [ADR 0014](docs/adr/0014-grain-interface-versioning.md).
   - [x] `GrainInterface.version` (default 1; id stays name-derived) via `defineGrainInterface(name, { version })`;

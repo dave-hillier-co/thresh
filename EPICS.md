@@ -44,8 +44,10 @@ decisions.
 
 - [x] **Grain migration** — live-migrate an activation to another silo with state preserved
       (`IGrainMigrationParticipant`, `MigrateOnIdle`, directed placement).
-- [ ] **Activation rebalancer** — proactively move activations across silos to balance load
-      (`IActivationRebalancer`).
+- [~] **Activation rebalancer** — proactively move activations across silos to balance load
+      (`IActivationRebalancer`), [ADR 0016](docs/adr/0016-activation-rebalancer.md). Slice 1 (the
+      adaptive entropy-minimizing decision model) shipped; slice 2 (elected worker + cross-silo load
+      reporting + migrate-random RPC + e2e) remains.
 - [x] **Grain-interface versioning** — multiple interface versions coexist for heterogeneous rolling
       upgrades, with version-aware placement ([ADR 0014](docs/adr/0014-grain-interface-versioning.md)).
 - [x] **Implicit stream subscriptions** — bind a grain type to a namespace and auto-subscribe by key.

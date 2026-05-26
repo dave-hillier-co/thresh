@@ -17,3 +17,4 @@ Each ADR captures one significant decision, its context, the rationale, and its 
 - [0013 — Observability (request context + OpenTelemetry tracing)](0013-observability.md)
 - [0014 — Grain-interface versioning (version-aware placement)](0014-grain-interface-versioning.md)
 - [0015 — Broadcast channels (lightweight in-cluster pub/sub)](0015-broadcast-channels.md)
+- [0016 — Activation rebalancer (adaptive, entropy-minimizing)](0016-activation-rebalancer.md)
