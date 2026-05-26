@@ -58,6 +58,38 @@ export interface StreamProvider {
 }
 
 /**
+ * A grain implicitly subscribed to one or more stream namespaces (declared with
+ * `@implicitStreamSubscription` / `defineGrain`'s `implicitSubscriptions`)
+ * exposes, under this symbol, the handler that receives a matching stream's
+ * events. The runtime calls it lazily the first time an event for a given stream
+ * arrives — mirroring Orleans' `IStreamSubscriptionObserver.OnSubscribed`, the
+ * grain never calls `subscribe()`. The symbol key keeps it from colliding with
+ * the grain's own (string-named) methods. Orleans' `StreamId` is namespace+key
+ * (the provider is implied by context), so that is what the observer is given.
+ */
+export const STREAM_SUBSCRIPTION_OBSERVER = Symbol.for("tsva.streamSubscriptionObserver");
+
+/** A grain that observes its implicitly-subscribed streams. */
+export interface ImplicitStreamSubscriber {
+  [STREAM_SUBSCRIPTION_OBSERVER](namespace: string, key: string): StreamHandler<unknown>;
+}
+
+/** The grain's implicit-stream observer, bound to it, or `undefined` if it declares none. */
+export function implicitStreamObserver(
+  instance: object,
+): ((namespace: string, key: string) => StreamHandler<unknown>) | undefined {
+  const fn = (instance as Record<symbol, unknown>)[STREAM_SUBSCRIPTION_OBSERVER];
+  return typeof fn === "function"
+    ? (namespace, key) =>
+        (fn as ImplicitStreamSubscriber[typeof STREAM_SUBSCRIPTION_OBSERVER]).call(
+          instance,
+          namespace,
+          key,
+        )
+    : undefined;
+}
+
+/**
  * System extension a pulling agent invokes (through the dispatcher) to hand an
  * event to a subscriber grain's single activation. The runtime intercepts it and
  * runs the activation's registered handler as a turn — the grain never declares

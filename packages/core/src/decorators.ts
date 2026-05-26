@@ -1,5 +1,6 @@
 import {
   defaultGrainType,
+  markImplicitSubscription,
   markReentrant,
   setGrainOptions,
   type GrainConstructor,
@@ -30,6 +31,21 @@ export function grain(options: GrainOptions = {}) {
 export function reentrant() {
   return function <T extends GrainConstructor>(value: T, _context: ClassDecoratorContext): T {
     markReentrant(value);
+    return value;
+  };
+}
+
+/**
+ * Implicitly subscribes this grain type to a stream namespace (Orleans'
+ * `[ImplicitStreamSubscription]`). A grain of this type with key `K` is
+ * auto-subscribed to the stream `(namespace, K)` — events delivered to that
+ * stream reactivate the grain and reach the handler it exposes under
+ * `STREAM_SUBSCRIPTION_OBSERVER`, with no explicit `subscribe` call. Repeatable
+ * to subscribe to several namespaces.
+ */
+export function implicitStreamSubscription(namespace: string) {
+  return function <T extends GrainConstructor>(value: T, _context: ClassDecoratorContext): T {
+    markImplicitSubscription(value, namespace);
     return value;
   };
 }

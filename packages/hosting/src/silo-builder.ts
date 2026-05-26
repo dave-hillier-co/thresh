@@ -392,6 +392,7 @@ export class SiloBuilder {
       provider.setDeliver((grainId, streamKey, event, token) =>
         node.deliverStreamEvent(grainId, streamKey, event, token),
       );
+      provider.setImplicitSubscribers((namespace) => node.implicitGrainTypes(namespace));
       onOwnershipChange.push(async (ranges) => provider.refreshOwnership(ranges));
     }
 

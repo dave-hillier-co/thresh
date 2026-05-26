@@ -14,6 +14,7 @@ const meta = (options: Partial<GrainMetadata["options"]> = {}): GrainMetadata =>
   grainType: "Counter",
   options,
   reentrant: false,
+  implicitSubscriptions: [],
 });
 
 describe("RandomPlacement", () => {

@@ -101,6 +101,8 @@ export class ClusterNode {
 
   private readonly grainTypes = new Map<GrainType, RegisteredGrain>();
   private readonly interfaceToGrainType = new Map<number, GrainType>();
+  /** Stream namespace → grain types implicitly subscribed to it (auto-subscribe by key). */
+  private readonly implicitSubscriptions = new Map<string, GrainType[]>();
   private readonly cache = new LocationCache();
   private readonly correlation = new CorrelationTable();
   private readonly connections: ConnectionManager;
@@ -191,7 +193,17 @@ export class ClusterNode {
     for (const iface of registration.interfaces) {
       this.interfaceToGrainType.set(iface.id, metadata.grainType);
     }
+    for (const namespace of metadata.implicitSubscriptions) {
+      const types = this.implicitSubscriptions.get(namespace) ?? [];
+      if (!types.includes(metadata.grainType)) types.push(metadata.grainType);
+      this.implicitSubscriptions.set(namespace, types);
+    }
     return this;
+  }
+
+  /** Grain types implicitly subscribed to a stream namespace (drives stream fan-out). */
+  implicitGrainTypes(namespace: string): readonly GrainType[] {
+    return this.implicitSubscriptions.get(namespace) ?? [];
   }
 
   getGrain<T>(def: GrainInterface<T>, key: GrainKeyFor<T>): T {

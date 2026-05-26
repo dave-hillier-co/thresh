@@ -29,8 +29,8 @@ cross-silo participants, and in-doubt recovery. Authoring is **functional by def
 — over the retained class substrate.
 
 **Remaining for parity (Orleans 10):** grain migration and the activation rebalancer (the v10
-core-runtime block), grain-interface versioning, implicit stream subscriptions, lossless directory
-range handoff, grain call filters, and placement filters. The Orleans-10 additions of durable
+core-runtime block), grain-interface versioning, lossless directory
+range handoff, and placement filters. The Orleans-10 additions of durable
 journaling (`DurableGrain`) and durable jobs need an ADR each (journaling overlaps the existing
 reducer/persistent-state model). Cross-cutting observability (OpenTelemetry traces/metrics, structured
 logs) remains to be wired throughout, on the grain-call-filter seam.
@@ -151,7 +151,10 @@ verified.
 - **Grain-interface versioning** — multiple interface versions live at once for heterogeneous rolling
   upgrades, with version-aware placement (Orleans' versioning).
 - **Implicit stream subscriptions** — bind a grain type to a namespace and auto-subscribe by key,
-  with no explicit `subscribe` call (Orleans' `[ImplicitStreamSubscription]`).
+  with no explicit `subscribe` call (Orleans' `[ImplicitStreamSubscription]`). **Shipped** —
+  `@implicitStreamSubscription(namespace)` / `defineGrain`'s `implicitSubscriptions`; the grain
+  exposes a handler under `STREAM_SUBSCRIPTION_OBSERVER` and the pulling agent fans each event out to
+  implicit subscribers (by key) alongside explicit ones (see [09](09-event-streams.md)).
 - **Directory range handoff** — replace the phase-2 drop-and-rebuild with a versioned, lossless
   handoff on membership change (per [06](06-grain-directory-and-placement.md)).
 - **Grain call filters** — incoming/outgoing interception around grain calls for cross-cutting

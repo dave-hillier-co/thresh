@@ -242,8 +242,16 @@ order, starting with transactions.
 - [ ] Grain migration / activation rebalancer (Orleans 10 core runtime).
 - [ ] Grain-interface versioning — multiple interface versions live at once for heterogeneous rolling
       upgrades, with version-aware placement (Orleans' versioning).
-- [ ] Implicit stream subscriptions — bind a grain type to a namespace and auto-subscribe by key, no
-      explicit `subscribe` call (Orleans' `[ImplicitStreamSubscription]`).
+- [x] Implicit stream subscriptions — bind a grain type to a namespace and auto-subscribe by key, no
+      explicit `subscribe` call (Orleans' `[ImplicitStreamSubscription]`). A grain type declares
+      namespaces via `@implicitStreamSubscription(ns)` (class) or `defineGrain`'s
+      `implicitSubscriptions` (functional); a grain with key `K` is auto-subscribed to `(ns, K)` and
+      exposes its handler under the `STREAM_SUBSCRIPTION_OBSERVER` symbol (lazily resolved on first
+      delivery, mirroring Orleans' `IStreamSubscriptionObserver`). The pulling agent's fan-out adds
+      implicit subscribers (the `ClusterNode`'s namespace→grain-type map, synthesizing `(type, K)`
+      grain ids) alongside the registry's explicit subscribers, deduplicated; in-memory provider
+      stays explicit-only. Tests: metadata/observer unit, pure `implicitSubscriberIds`, dispatcher
+      delivery (class + functional, no-observer drop), and a Redis pulling-agent e2e (skip-if-down).
 - [ ] Directory range handoff — replace the phase-2 drop-and-rebuild with a versioned, lossless
       handoff on membership change (per [docs/06](docs/06-grain-directory-and-placement.md)).
 - [~] Observability (cross-cutting) — OpenTelemetry traces propagated via request context, metrics

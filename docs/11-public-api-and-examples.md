@@ -149,7 +149,11 @@ The snippets above are the target surface. The shipped surface differs in a few 
   `@persistentState(name, { defaultValue })` decorator it wraps — and injected before `onActivate`;
   the `getStorage` accessor on `GrainRuntime` is not implemented (the hook/decorator is the supported
   path). `registerTimer`, `registerReminder` / `unregisterReminder` and `getStreamProvider` (which
-  delivers each `onNext` as a turn) are all wired.
+  delivers each `onNext` as a turn) are all wired. A grain type can also be **implicitly subscribed**
+  to a stream namespace — `@implicitStreamSubscription(ns)` (class) or `defineGrain`'s
+  `implicitSubscriptions` (functional) — so a grain is auto-subscribed by key with no `subscribe`
+  call; it exposes its handler under the `STREAM_SUBSCRIPTION_OBSERVER` symbol (Redis streams only;
+  see [09](09-event-streams.md)).
 - Transport is `useInProcessTransport(network)` or `useWebSocketTransport()`; membership is
   `useStaticMembership([...])`, `useKubernetesMembership(watch)`, or `useMembership(service)` to
   share one view across several in-process silos.
