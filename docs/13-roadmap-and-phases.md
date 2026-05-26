@@ -178,6 +178,29 @@ verified.
   ships in snapshot mode (events transient); the append-only event-log persistence mode is deferred.
   This is an addition beyond Orleans, not a parity item.
 
+## Beyond parity (post-Orleans-10 directions)
+
+Directions to pursue once Orleans 10 parity is achieved. These are **extensions beyond Orleans**, not
+parity items, and each warrants its own ADR before implementation.
+
+- **Browser state replication and browser-hosted grains.** Replicate grain state to the browser as a
+  live read-view, and eventually run a subset of grains in a lightweight browser-side runtime, with a
+  **server-enforced** policy for which grain types are permitted there. Three layers of ambition:
+  1. _State replication / live read-views_ — the server stays the source of truth and the browser
+     holds a derived, live replica, built on the external client ([11](11-public-api-and-examples.md))
+     and event streams ([09](09-event-streams.md)) (the analogue of Orleans grain observers).
+  2. _Browser-hosted grains_ — a partial silo hosting some activations client-side and forwarding the
+     rest; the catalog, scheduler and facet machinery are already host- and transport-agnostic.
+  3. _Permission model (the crux)_ — "permitted to run there" is a **trust/authority classification**,
+     not merely placement, because the browser is untrusted: pair a grain-type marker (a
+     client-placement capability) with a gate **enforced on the silo**, never self-granted by the
+     client. Per-user / view-model / optimistic-UI state may live client-side; **shared, authoritative
+     or secret state must not** — the transactional grains of [ADR 0008](adr/0008-cross-grain-transactions.md)
+     in particular assume a trusted single activation (wait-die locking, durable commit), so a browser
+     replica of authoritative state needs a different consistency model (optimistic / CRDT with
+     server reconciliation). The intended motivation (offline, optimistic-UI latency, or reduced
+     server load) drives the design and should be settled in the ADR first.
+
 ## Cross-cutting, throughout
 
 - OpenTelemetry traces, metrics (activations, turn latency, directory hit rate, reminder/stream lag)
