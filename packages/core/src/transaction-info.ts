@@ -6,6 +6,8 @@
  * and the commit protocol live in the runtime and `@tsva/transactions`.
  */
 
+import type { GrainId } from "./grain-id";
+
 /**
  * How a method relates to the ambient transaction, mirroring Orleans'
  * `TransactionOption`. `create`/`createOrJoin` start one if needed; `join`
@@ -27,6 +29,21 @@ export interface AccessCounter {
 }
 
 /**
+ * Serializable identity of a transactional resource: the grain that hosts it and
+ * the named state on that grain (Orleans `ParticipantId`). Lets the agent route
+ * prepare/commit/abort to a participant on any silo via the dispatcher.
+ */
+export interface ParticipantId {
+  grainId: GrainId;
+  stateName: string;
+}
+
+/** Stable map key for a participant within a transaction. */
+export function participantKey(id: ParticipantId): string {
+  return `${id.grainId.toString()}/${id.stateName}`;
+}
+
+/**
  * A transactional resource enlisted in a transaction, driven by the agent at the
  * boundary through the two-phase protocol (Orleans `ITransactionalResource`):
  *
@@ -45,9 +62,15 @@ export interface TransactionParticipant {
   abort(transactionId: string): void | Promise<void>;
 }
 
-/** A participant enlisted in a transaction, with the access it has accrued. */
+/**
+ * A participant enlisted in a transaction, with the access it has accrued. A
+ * participant enlisted on the local silo carries its live `participant` object
+ * (the agent drives it directly); one merged back from another silo via a reply
+ * carries only `id`, and the agent routes to it over the dispatcher.
+ */
 export interface EnlistedParticipant {
-  readonly participant: TransactionParticipant;
+  readonly id: ParticipantId;
+  readonly participant?: TransactionParticipant | undefined;
   readonly access: AccessCounter;
 }
 

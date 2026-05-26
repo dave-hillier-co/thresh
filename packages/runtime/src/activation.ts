@@ -9,6 +9,9 @@ import type { GrainTimer } from "@tsva/core/grain-timer";
 import type { ActivationReason, DeactivationReason } from "@tsva/core/reasons";
 import type { InvocationRequest } from "@tsva/core/request";
 import { SequenceToken, StreamConsumerInterface, type StreamHandler } from "@tsva/core/stream";
+import type { TransactionParticipant } from "@tsva/core/transaction-info";
+import { TransactionResourceInterface } from "@tsva/core/transaction-resource";
+import { getTransactionalFields } from "@tsva/core/transactional-state-metadata";
 import { GrainTimerImpl } from "@tsva/runtime/grain-timer-impl";
 import { invocationContext } from "@tsva/runtime/invocation-context";
 import type { TimeProvider } from "@tsva/runtime/time-provider";
@@ -164,10 +167,39 @@ export class ActivationData implements GrainContext {
       if (handler !== undefined) await handler.onNext(event, new SequenceToken(token));
       return undefined;
     }
+    // Transaction-resource extension: drive a named transactional state's
+    // prepare/commit/abort for the agent on another silo, found by state name.
+    if (req.interfaceId === TransactionResourceInterface.id) {
+      return await this.invokeTransactionResource(req);
+    }
     const fn = (this.instance as unknown as Record<string, unknown>)[req.method];
     if (typeof fn !== "function") {
       throw new GrainCallError(`grain ${this.id.toString()} has no method ${req.method}`);
     }
     return await (fn as (...args: unknown[]) => unknown).apply(this.instance, req.args);
+  }
+
+  /** Route a `TransactionResource` system call to the named transactional state. */
+  private async invokeTransactionResource(req: InvocationRequest): Promise<unknown> {
+    const [stateName, ...rest] = req.args as [string, ...unknown[]];
+    const field = getTransactionalFields(this.instance).find((f) => f.stateName === stateName);
+    const resource =
+      field === undefined
+        ? undefined
+        : ((this.instance as unknown as Record<string, unknown>)[field.fieldName] as
+            | TransactionParticipant
+            | undefined);
+    if (resource === undefined) {
+      throw new GrainCallError(
+        `grain ${this.id.toString()} has no transactional state "${stateName}"`,
+      );
+    }
+    const fn = (resource as unknown as Record<string, unknown>)[req.method] as
+      | ((...a: unknown[]) => unknown)
+      | undefined;
+    if (typeof fn !== "function") {
+      throw new GrainCallError(`transaction resource has no method ${req.method}`);
+    }
+    return await fn.apply(resource, rest);
   }
 }

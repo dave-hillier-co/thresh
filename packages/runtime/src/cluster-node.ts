@@ -14,6 +14,7 @@ import { RemindableInterface, type ReminderRegistry, type TickStatus } from "@ts
 import { StreamConsumerInterface, type StreamProvider } from "@tsva/core/stream";
 import type { InvocationRequest } from "@tsva/core/request";
 import type { SiloAddress } from "@tsva/core/silo-address";
+import { participantKey, type TransactionInfo } from "@tsva/core/transaction-info";
 import { ConsistentHashRing } from "@tsva/directory/consistent-hash-ring";
 import type { DirectoryPeer } from "@tsva/directory/directory-peer";
 import { DistributedGrainDirectory } from "@tsva/directory/distributed-grain-directory";
@@ -151,7 +152,9 @@ export class ClusterNode {
       }),
     });
     this.factory.setDispatcher(this.dispatcher);
-    this.factory.setTransactionAgent(new TransactionAgent(time));
+    const transactionAgent = new TransactionAgent(time);
+    transactionAgent.setDispatcher(this.dispatcher);
+    this.factory.setTransactionAgent(transactionAgent);
     this.collector = new ActivationCollector(
       this.catalog,
       time,
@@ -299,7 +302,18 @@ export class ClusterNode {
       sendingGrain: req.sender,
       interfaceId: req.interfaceId,
       method: req.method,
-      requestContext: { reentrancyId: req.reentrancyId },
+      requestContext: {
+        reentrancyId: req.reentrancyId,
+        ...(req.transaction !== undefined
+          ? {
+              transaction: {
+                id: req.transaction.id,
+                timeStamp: req.transaction.timeStamp,
+                readOnly: req.transaction.readOnly,
+              },
+            }
+          : {}),
+      },
       body: this.serializer.serialize(req.args),
     };
     if (req.options.oneWay) {
@@ -308,7 +322,28 @@ export class ClusterNode {
     }
     const pending = this.correlation.register(correlationId, this.callTimeoutMs);
     conn.send(message);
-    return this.interpretResponse(await pending);
+    const response = await pending;
+    // Merge the participants the callee (and its sub-calls) enlisted back into
+    // the ambient transaction, so the root agent commits/aborts them too. Done
+    // even on an error reply, so an aborting transaction releases remote locks.
+    this.mergeParticipants(req.transaction, response);
+    return this.interpretResponse(response);
+  }
+
+  /** Fold a reply's enlisted participants into the caller's transaction. */
+  private mergeParticipants(tx: TransactionInfo | undefined, response: Message): void {
+    if (tx === undefined || response.transactionParticipants === undefined) return;
+    for (const p of response.transactionParticipants) {
+      const key = participantKey(p.id);
+      const existing = tx.participants.get(key);
+      if (existing === undefined) {
+        // No live object here: the agent reaches it over the dispatcher.
+        tx.participants.set(key, { id: p.id, access: p.access });
+      } else {
+        existing.access.reads += p.access.reads;
+        existing.access.writes += p.access.writes;
+      }
+    }
   }
 
   private interpretResponse(response: Message): unknown {
@@ -392,13 +427,29 @@ export class ClusterNode {
 
   private async receiveRequest(message: Message): Promise<void> {
     const replyTo = message.sendingSilo;
+    // Reconstruct the transaction context (fresh participant set: resources on
+    // this silo enlist into it, and we send those back on the reply).
+    const header = message.requestContext?.transaction;
+    const transaction: TransactionInfo | undefined =
+      header !== undefined
+        ? {
+            id: header.id,
+            timeStamp: header.timeStamp,
+            readOnly: header.readOnly,
+            participants: new Map(),
+          }
+        : undefined;
     try {
-      const result = await this.dispatcher.deliverLocal(this.toRequest(message));
+      const result = await this.dispatcher.deliverLocal(this.toRequest(message, transaction));
       if (message.direction === "oneWay" || replyTo === undefined) return;
-      await this.reply(
-        replyTo,
-        responseTo(message, "success", this.serializer.serialize(result), this.options.local),
+      const response = responseTo(
+        message,
+        "success",
+        this.serializer.serialize(result),
+        this.options.local,
       );
+      this.attachParticipants(response, transaction);
+      await this.reply(replyTo, response);
     } catch (err) {
       if (message.direction === "oneWay" || replyTo === undefined) return;
       const body =
@@ -408,11 +459,22 @@ export class ClusterNode {
               message: err instanceof Error ? err.message : String(err),
             });
       const kind = err instanceof RejectionError ? "rejection" : "error";
-      await this.reply(replyTo, responseTo(message, kind, body, this.options.local));
+      const response = responseTo(message, kind, body, this.options.local);
+      this.attachParticipants(response, transaction);
+      await this.reply(replyTo, response);
     }
   }
 
-  private toRequest(message: Message): InvocationRequest {
+  /** Carry the participants enlisted during this call back on the reply. */
+  private attachParticipants(response: Message, transaction: TransactionInfo | undefined): void {
+    if (transaction === undefined || transaction.participants.size === 0) return;
+    response.transactionParticipants = [...transaction.participants.values()].map((e) => ({
+      id: e.id,
+      access: e.access,
+    }));
+  }
+
+  private toRequest(message: Message, transaction?: TransactionInfo): InvocationRequest {
     // Method dispatch is by name; the interface (if registered) only supplies the
     // per-method invocation options the receiving scheduler needs.
     const iface = getGrainInterface(message.interfaceId);
@@ -424,6 +486,7 @@ export class ClusterNode {
       options: iface?.options[message.method] ?? {},
       reentrancyId: message.requestContext?.reentrancyId ?? newChainId(),
       ...(message.sendingGrain !== undefined ? { sender: message.sendingGrain } : {}),
+      ...(transaction !== undefined ? { transaction } : {}),
     };
   }
 

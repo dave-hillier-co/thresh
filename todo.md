@@ -196,9 +196,17 @@ order, starting with transactions.
         `transactional-storage-apply.ts` so both share semantics). Builder
         `addRedisTransactionalStorage`. Integration test (skip-if-down): prepare/commit/load, stale
         etag rejected, committed state survives a silo restart via Redis.
-  - [ ] 4c — remote participants over the dispatcher: route resource `prepare`/`commit`/`abort` and
-        the elected TM's `prepareAndCommit` as system extensions (StreamConsumer precedent), so a
-        transaction spans grains on different silos. Multi-silo cross-grain transfer e2e.
+  - [x] 4c — remote participants over the dispatcher: the participant set is now a serializable
+        `ParticipantId` (grainId + state name) + `AccessCounter`, with an optional live reference for
+        local participants. The transaction context (id/timestamp/readOnly) rides the request
+        `RequestContext`; the callee's enlisted participants ride back on the reply
+        (`transactionParticipants`) and merge into the caller's transaction — even on an error reply,
+        so an abort releases remote locks. The agent drives a local participant directly and a
+        merged-in remote one over the dispatcher via the `TransactionResource` system extension
+        (`activation.invokeTransactionResource` routes it to the named state). Retired the vestigial
+        `TransactionalValue` seed (superseded by the facet). Multi-silo e2e
+        (`transactions-cluster.test.ts`): a transfer spanning accounts on two silos commits
+        atomically; an overdraft aborts both and frees the remote lock.
   - [ ] 4d — in-doubt recovery: persist commit records; on restart resolve pending (prepared) states
         from the recorded TM `ParticipantId`. Multi-silo e2e: a silo dies mid-commit, outcome stays
         consistent (commit or abort, never torn).

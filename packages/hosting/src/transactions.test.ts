@@ -140,6 +140,16 @@ describe("transactional-state facet end-to-end (Slice 2)", () => {
     }
   });
 
+  it("rejects a join method called outside a transaction", async () => {
+    const silo = buildSilo();
+    await silo.start();
+    try {
+      await expect(silo.getGrain(Account, "Z").deposit(10)).rejects.toThrow(/transaction/i);
+    } finally {
+      await silo.stop();
+    }
+  });
+
   it("binds the facet through the functional useTransactionalState hook", async () => {
     const silo = buildSilo();
     await silo.start();

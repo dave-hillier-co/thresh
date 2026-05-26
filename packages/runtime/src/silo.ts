@@ -39,8 +39,11 @@ export class Silo {
       time,
       defaultCollectionAgeSeconds: options.defaultCollectionAgeSeconds ?? 900,
     });
-    this.factory.setDispatcher(new LocalDispatcher(this.catalog));
-    this.factory.setTransactionAgent(new TransactionAgent(time));
+    const dispatcher = new LocalDispatcher(this.catalog);
+    this.factory.setDispatcher(dispatcher);
+    const agent = new TransactionAgent(time);
+    agent.setDispatcher(dispatcher);
+    this.factory.setTransactionAgent(agent);
     this.collector = new ActivationCollector(
       this.catalog,
       time,

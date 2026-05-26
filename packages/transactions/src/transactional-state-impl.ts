@@ -153,7 +153,11 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
   private enlist(tx: TransactionInfo, reads: number, writes: number): void {
     const existing = tx.participants.get(this.key);
     if (existing === undefined) {
-      tx.participants.set(this.key, { participant: this, access: { reads, writes } });
+      tx.participants.set(this.key, {
+        id: { grainId: this.grainId, stateName: this.stateName },
+        participant: this,
+        access: { reads, writes },
+      });
     } else {
       existing.access.reads += reads;
       existing.access.writes += writes;

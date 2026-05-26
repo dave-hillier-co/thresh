@@ -1,12 +1,28 @@
 import type { GrainId } from "@tsva/core/grain-id";
 import type { SiloAddress } from "@tsva/core/silo-address";
+import type { AccessCounter, ParticipantId } from "@tsva/core/transaction-info";
 
 export type Direction = "request" | "response" | "oneWay";
 export type ResponseKind = "success" | "error" | "rejection";
 
+/** The serializable transaction context carried on a request (no participant set). */
+export interface TransactionContextHeader {
+  id: string;
+  timeStamp: number;
+  readOnly: boolean;
+}
+
+/** A participant a callee enlisted, sent back on the reply so the root can merge it. */
+export interface SerializedParticipant {
+  id: ParticipantId;
+  access: AccessCounter;
+}
+
 /** Ambient headers propagated along a call chain (trace ids, deadlines, etc.). */
 export interface RequestContext {
   reentrancyId?: string | undefined;
+  /** The ambient transaction this call participates in (Phase 7, ADR 0008). */
+  transaction?: TransactionContextHeader | undefined;
   [key: string]: unknown;
 }
 
@@ -28,6 +44,9 @@ export interface Message {
 
   responseKind?: ResponseKind | undefined;
   requestContext?: RequestContext | undefined;
+
+  /** On a reply: participants the callee enlisted, for the caller to merge (ADR 0008). */
+  transactionParticipants?: SerializedParticipant[] | undefined;
 
   /** Serialized arguments (request) or result/error (response). */
   body: Uint8Array;
