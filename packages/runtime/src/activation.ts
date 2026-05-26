@@ -1,12 +1,15 @@
 import { newActivationId, type ActivationId } from "@tsva/core/activation-id";
 import type { Duration } from "@tsva/core/duration";
-import { GrainCallError } from "@tsva/core/errors";
+import { GrainCallError, RejectionError } from "@tsva/core/errors";
 import type { Grain } from "@tsva/core/grain";
 import type { GrainContext } from "@tsva/core/grain-context";
 import type { GrainId } from "@tsva/core/grain-id";
+import { MigrationBag } from "@tsva/core/grain-migration-participant";
 import type { GrainRuntime } from "@tsva/core/grain-runtime";
 import type { GrainTimer } from "@tsva/core/grain-timer";
 import type { ActivationReason, DeactivationReason } from "@tsva/core/reasons";
+import type { SiloAddress } from "@tsva/core/silo-address";
+import { migrationParticipantsOf } from "@tsva/runtime/migration-participants";
 import { getGrainInterface } from "@tsva/core/grain-interface";
 import {
   grainIncomingFilter,
@@ -45,9 +48,16 @@ export class ActivationData implements GrainContext {
   /** Incoming grain-call filters wrapping each grain-method dispatch; set by the catalog. */
   incomingCallFilters: readonly IncomingGrainCallFilter[] = [];
 
+  /** When migrating: the directed target silo (undefined lets placement choose). */
+  migrationTarget: SiloAddress | undefined;
+  /** State captured on the source silo to restore on the target; set by the catalog. */
+  rehydrationBag: Record<string, unknown> | undefined;
+
   private lastActiveMs: number;
   private keepAliveUntilMs = 0;
   private deactivateRequested = false;
+  private migrationRequested = false;
+  private dehydrated = false;
   private readonly timers = new Set<GrainTimerImpl>();
   /** Handlers for pulling-agent stream delivery, keyed by `namespace/key`. */
   private readonly streamHandlers = new Map<string, StreamHandler<unknown>>();
@@ -92,6 +102,11 @@ export class ActivationData implements GrainContext {
         run: () => {
           if (this.state === "invalid" || this.state === "deactivating") {
             throw new GrainCallError(`activation unavailable: ${this.id.toString()}`);
+          }
+          // Dehydrated for migration: the directory now points at the new host, so
+          // reject as stale and let the caller re-resolve there.
+          if (this.dehydrated) {
+            throw new RejectionError(`activation migrated: ${this.id.toString()}`, "noActivation");
           }
           return invocationContext.run(
             {
@@ -156,6 +171,46 @@ export class ActivationData implements GrainContext {
 
   delayDeactivation(byMs: number): void {
     this.keepAliveUntilMs = Math.max(this.keepAliveUntilMs, this.time.now() + byMs);
+  }
+
+  /** Mark this activation to migrate (rather than deactivate) when next idle. */
+  requestMigration(target?: SiloAddress): void {
+    this.migrationRequested = true;
+    this.migrationTarget = target;
+  }
+
+  get wantsMigration(): boolean {
+    return this.migrationRequested;
+  }
+
+  /**
+   * Gather the activation's in-memory state into a transport-safe bag by running
+   * each migration participant's `onDehydrate` on a turn. Marks the activation
+   * dehydrated so no further calls run here — they re-resolve to the new host.
+   */
+  async dehydrate(): Promise<Record<string, unknown>> {
+    const bag = new MigrationBag();
+    await this.scheduler.schedule({
+      options: {},
+      reentrancyId: this.activationId,
+      run: () => {
+        for (const participant of migrationParticipantsOf(this.instance)) {
+          participant.onDehydrate(bag);
+        }
+        this.dehydrated = true;
+        return Promise.resolve();
+      },
+    });
+    return bag.data;
+  }
+
+  /** Restore migrated state into the (freshly bound) participants on the target. */
+  applyRehydration(): void {
+    if (this.rehydrationBag === undefined) return;
+    const ctx = new MigrationBag(this.rehydrationBag);
+    for (const participant of migrationParticipantsOf(this.instance)) {
+      participant.onRehydrate(ctx);
+    }
   }
 
   isStale(): boolean {
