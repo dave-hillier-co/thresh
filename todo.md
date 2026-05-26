@@ -410,8 +410,20 @@ order, starting with transactions.
       over a connection back to the client. Registers grains for interface→type resolution. In-process
       acceptance test (routing to a single activation, application-error propagation, unregistered
       interface rejected).
-- [ ] Higher-level gateway discovery (`gateway: { url }`) + a WebSocket client e2e (needs the gateway
-      Service shape from docs/10)
+- [x] Gateway discovery + failover — the client no longer pins one `gateway`; a `GatewayListProvider`
+      (`staticGatewayProvider` / `membershipGatewayProvider` = active silos / `urlGatewayProvider`
+      = `gateway: { url }`) feeds a `GatewayManager` (round-robin selection; `markAsDead` drops an
+      unreachable gateway until the next `refresh` re-learns it — Orleans' `IGatewayListProvider` +
+      `GatewayManager`). `ClientNode.invoke` fails over on a transport failure (connect/send throws or
+      the reply times out): it drops that gateway and retries the next, refreshing the list once when
+      exhausted; an error carried in a *response* (grain throw / gateway rejection) propagates without
+      failover. `gateway` kept as one-entry shorthand. Tests: manager/provider units + two in-process
+      e2e (skips an unreachable gateway and routes through a live one; discovers gateways from
+      membership).
+- [ ] WebSocket client e2e — exercise the client over the real WebSocket transport. Deferred: there is
+      no WS-client precedent yet (client tests are all in-process), and a raw `ClusterNode` + WS client
+      hangs on the reply path; this belongs in the hosting/examples layer with the `SiloHost` harness
+      (mirror `examples/cluster`'s `buildWebSocketCluster`), not the bare client package.
 
 ## Examples as acceptance tests
 
