@@ -1,6 +1,6 @@
 # ADR 0013 — Observability (request context + OpenTelemetry tracing)
 
-- Status: Accepted — request context + tracing implemented; metrics and structured logs to follow
+- Status: Accepted — request context, tracing, and metrics implemented; structured logs to follow
 - Context docs: [04 — Messaging and serialization](../04-messaging-and-serialization.md),
   [13 — Roadmap](../13-roadmap-and-phases.md), [ADR 0012 — Grain call filters](0012-grain-call-filters.md)
 
@@ -33,8 +33,12 @@ and request-context propagation. This ADR records how observability builds on th
    SDK** — zero overhead by default, full traces when wired. `createSilo().useTracing()` registers the
    filters and sets W3C propagation.
 
-3. **Metrics and structured logs (to follow)** plug into the same call-filter seam and request
-   context (turn latency, activation counts, directory hit rate, reminder/stream lag).
+3. **Metrics via OpenTelemetry, as a call filter.** `metricsFilters()` returns an incoming filter
+   recording a `tsva.grain.calls` counter (by interface, method, ok/error status) and a
+   `tsva.grain.call.duration` histogram, through the global OpenTelemetry meter (no-op without an
+   SDK). `createSilo().useMetrics()` registers it. Runtime gauges (activation count, directory hit
+   rate, reminder/stream lag) and **structured logs** follow, on the same seam and instrumentation
+   points.
 
 ## Consequences
 

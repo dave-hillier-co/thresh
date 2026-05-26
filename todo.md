@@ -260,7 +260,11 @@ order, starting with transactions.
         ([ADR 0013](docs/adr/0013-observability.md)). Test with `sdk-trace-base` +
         `context-async-hooks` + `InMemorySpanExporter`: grain→grain call yields CLIENT+SERVER spans on
         one trace (SERVER child of CLIENT), and error status/exception recorded on throw.
-  - [ ] Slice 3 — metrics (activations, turn latency, directory hit rate, reminder/stream lag) and
+  - [x] Slice 3 — metrics: `metricsFilters()` (incoming call filter) records a `tsva.grain.calls`
+        counter (interface/method/status) + `tsva.grain.call.duration` histogram via
+        `@opentelemetry/api` metrics; builder `useMetrics()`. Test with `@opentelemetry/sdk-metrics`
+        `InMemoryMetricExporter`: a call records the counter + histogram with rpc attributes.
+  - [ ] Slice 4 — runtime gauges (activation count, directory hit rate, reminder/stream lag) and
         structured logs.
 
 ## Reducer grains ([ADR 0006](docs/adr/0006-reducer-grains.md))

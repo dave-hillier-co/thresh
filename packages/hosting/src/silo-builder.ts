@@ -25,6 +25,7 @@ import { bindReducerStates } from "@tsva/persistence/reducer-state-activator";
 import { StorageRegistry } from "@tsva/persistence/storage-registry";
 import { bindTransactionalStates } from "@tsva/transactions/transactional-state-activator";
 import { setupTracePropagation, tracingFilters } from "@tsva/observability/tracing";
+import { metricsFilters } from "@tsva/observability/metrics";
 import { MemoryTransactionalStorage } from "@tsva/transactions/memory-transactional-storage";
 import { RedisTransactionalStorage } from "@tsva/transactions/redis-transactional-storage";
 import { TransactionalStorageRegistry } from "@tsva/transactions/transactional-storage-registry";
@@ -185,6 +186,16 @@ export class SiloBuilder {
     const { incoming, outgoing } = tracingFilters();
     this.incomingCallFilters.push(incoming);
     this.outgoingCallFilters.push(outgoing);
+    return this;
+  }
+
+  /**
+   * Enable OpenTelemetry metrics: register the metrics call filter (a grain-call
+   * counter and call-duration histogram). Emitted through the global OpenTelemetry
+   * meter — register an OTel SDK to export them; without one this is a no-op.
+   */
+  useMetrics(): this {
+    this.incomingCallFilters.push(metricsFilters().incoming);
     return this;
   }
 

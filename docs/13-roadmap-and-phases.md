@@ -207,8 +207,9 @@ parity items, and each warrants its own ADR before implementation.
   the analogue of Orleans' `ActivityPropagationGrainCallFilter` — so spans stitch across grain calls
   and silos. **Shipped** ([ADR 0013](adr/0013-observability.md)): the **grain-call-filter seam**
   ([ADR 0012](adr/0012-grain-call-filters.md)), the **ambient request context** (`requestContext.get/set`,
-  propagated in-process and across silos), and **OpenTelemetry tracing** (`@tsva/observability`,
-  `createSilo().useTracing()` — CLIENT/SERVER spans with W3C propagation, no-op without an SDK).
-  Remaining: metrics and structured logs on the same seam.
+  propagated in-process and across silos), **OpenTelemetry tracing** (`createSilo().useTracing()` —
+  CLIENT/SERVER spans with W3C propagation), and **metrics** (`useMetrics()` — a grain-call counter +
+  duration histogram), all in `@tsva/observability` and no-op without an SDK. Remaining: runtime
+  gauges (activation count, directory hit rate, reminder/stream lag) and structured logs.
 - The injectable clock and deterministic placement test aids from
   [12](12-project-structure-and-tooling.md) land in phase 1 and are maintained as features are added.
