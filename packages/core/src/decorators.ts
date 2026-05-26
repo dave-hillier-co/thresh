@@ -1,5 +1,6 @@
 import {
   defaultGrainType,
+  markBroadcastSubscription,
   markImplicitSubscription,
   markReentrant,
   setGrainOptions,
@@ -46,6 +47,21 @@ export function reentrant() {
 export function implicitStreamSubscription(namespace: string) {
   return function <T extends GrainConstructor>(value: T, _context: ClassDecoratorContext): T {
     markImplicitSubscription(value, namespace);
+    return value;
+  };
+}
+
+/**
+ * Implicitly subscribes this grain type to a broadcast-channel namespace
+ * (Orleans' `[ImplicitChannelSubscription]`). A grain of this type with key `K`
+ * receives every item published to the channel `(namespace, K)` — the publish
+ * reactivates the grain and reaches the handler it exposes under
+ * `BROADCAST_CHANNEL_OBSERVER`, with no explicit subscribe. Repeatable to
+ * subscribe to several namespaces.
+ */
+export function implicitChannelSubscription(namespace: string) {
+  return function <T extends GrainConstructor>(value: T, _context: ClassDecoratorContext): T {
+    markBroadcastSubscription(value, namespace);
     return value;
   };
 }

@@ -5,6 +5,7 @@ import type { GrainRuntime } from "@tsva/core/grain-runtime";
 import type { GrainTimer } from "@tsva/core/grain-timer";
 import type { ReminderRegistry } from "@tsva/core/reminder";
 import type { SiloAddress } from "@tsva/core/silo-address";
+import type { BroadcastChannelProvider } from "@tsva/core/broadcast-channel";
 import { isActivationBound, type StreamProvider } from "@tsva/core/stream";
 import type { ActivationData } from "@tsva/runtime/activation";
 import { ActivationStreamProvider } from "@tsva/runtime/activation-stream-provider";
@@ -13,6 +14,7 @@ import type { GrainFactory } from "@tsva/runtime/grain-factory";
 export interface GrainRuntimeServices {
   reminders?: () => ReminderRegistry | undefined;
   streams?: (name?: string) => StreamProvider | undefined;
+  broadcastChannels?: (name?: string) => BroadcastChannelProvider | undefined;
 }
 
 /** Per-activation `GrainRuntime`, reached by a grain through `this.runtime`. */
@@ -56,6 +58,12 @@ export class GrainRuntimeImpl implements GrainRuntime {
       (cb) => this.activation.runStreamTurn(cb),
       this.activation.id.toString(),
     );
+  }
+
+  getBroadcastChannelProvider(name?: string): BroadcastChannelProvider {
+    const provider = this.services.broadcastChannels?.(name);
+    if (provider === undefined) throw new Error("broadcast channels are not configured on this silo");
+    return provider;
   }
 
   deactivateOnIdle(): void {

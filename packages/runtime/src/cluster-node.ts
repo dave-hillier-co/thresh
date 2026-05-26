@@ -27,6 +27,12 @@ import type {
 import { Guid } from "@tsva/core/guid";
 import type { GrainReferenceIdentity } from "@tsva/core/grain-reference";
 import { RemindableInterface, type ReminderRegistry, type TickStatus } from "@tsva/core/reminder";
+import {
+  BroadcastConsumerInterface,
+  channelKey,
+  type BroadcastChannelProvider,
+  type ChannelId,
+} from "@tsva/core/broadcast-channel";
 import { StreamConsumerInterface, type StreamProvider } from "@tsva/core/stream";
 import type { InvocationRequest } from "@tsva/core/request";
 import type { SiloAddress } from "@tsva/core/silo-address";
@@ -51,6 +57,7 @@ import { ActivationCollector } from "@tsva/runtime/activation-collector";
 import { Catalog, type RegisteredGrain } from "@tsva/runtime/catalog";
 import type { ActivationData } from "@tsva/runtime/activation";
 import { DistributedDispatcher } from "@tsva/runtime/distributed-dispatcher";
+import { BroadcastChannelProviderImpl } from "@tsva/runtime/broadcast-channel-provider";
 import { GrainFactory } from "@tsva/runtime/grain-factory";
 import { chooseMigrationTarget } from "@tsva/runtime/placement/choose-migration-target";
 import {
@@ -93,6 +100,12 @@ export interface ClusterNodeOptions {
   reminderRegistry?: () => ReminderRegistry | undefined;
   /** Resolves the stream provider a grain's `getStreamProvider` returns. */
   streamProvider?: (name?: string) => StreamProvider | undefined;
+  /**
+   * Names of broadcast-channel providers configured on this silo (ADR 0015). Each
+   * becomes a `getBroadcastChannelProvider(name)` whose writers fan out to the
+   * channel's implicit subscribers. The first registered name is the default.
+   */
+  broadcastProviders?: readonly string[];
   /** Incoming grain-call filters wrapping each grain-method dispatch (silo-wide). */
   incomingCallFilters?: readonly IncomingGrainCallFilter[];
   /** Outgoing grain-call filters wrapping each outbound call at the proxy (silo-wide). */
@@ -159,6 +172,10 @@ export class ClusterNode {
   private readonly interfaceToGrainType = new Map<number, GrainType>();
   /** Stream namespace → grain types implicitly subscribed to it (auto-subscribe by key). */
   private readonly implicitSubscriptions = new Map<string, GrainType[]>();
+  /** Broadcast-channel namespace → grain types implicitly subscribed to it (ADR 0015). */
+  private readonly broadcastSubscriptions = new Map<string, GrainType[]>();
+  /** Configured broadcast-channel provider names; the first is the default. */
+  private readonly broadcastProviderNames: readonly string[];
   /** Interface versions this silo implements (ADR 0014): interfaceId -> hosted version. */
   private readonly localVersions = new Map<number, { version: number; grainType: GrainType }>();
   private maxLocalVersion = 1;
@@ -214,6 +231,7 @@ export class ClusterNode {
 
   constructor(private readonly options: ClusterNodeOptions) {
     const time = options.time ?? systemTimeProvider;
+    this.broadcastProviderNames = options.broadcastProviders ?? [];
     this.callTimeoutMs = options.callTimeoutMs ?? 30_000;
     this.versionPolicyConfigured =
       options.versionCompatibility !== undefined || options.versionSelector !== undefined;
@@ -246,6 +264,9 @@ export class ClusterNode {
         ? { reminderRegistry: options.reminderRegistry }
         : {}),
       ...(options.streamProvider !== undefined ? { streamProvider: options.streamProvider } : {}),
+      ...(this.broadcastProviderNames.length > 0
+        ? { broadcastProvider: (name?: string) => this.broadcastChannelProvider(name) }
+        : {}),
       ...(options.incomingCallFilters !== undefined
         ? { incomingCallFilters: options.incomingCallFilters }
         : {}),
@@ -296,12 +317,58 @@ export class ClusterNode {
       if (!types.includes(metadata.grainType)) types.push(metadata.grainType);
       this.implicitSubscriptions.set(namespace, types);
     }
+    for (const namespace of metadata.broadcastSubscriptions) {
+      const types = this.broadcastSubscriptions.get(namespace) ?? [];
+      if (!types.includes(metadata.grainType)) types.push(metadata.grainType);
+      this.broadcastSubscriptions.set(namespace, types);
+    }
     return this;
   }
 
   /** Grain types implicitly subscribed to a stream namespace (drives stream fan-out). */
   implicitGrainTypes(namespace: string): readonly GrainType[] {
     return this.implicitSubscriptions.get(namespace) ?? [];
+  }
+
+  /** Grain types implicitly subscribed to a broadcast-channel namespace (ADR 0015). */
+  broadcastGrainTypes(namespace: string): readonly GrainType[] {
+    return this.broadcastSubscriptions.get(namespace) ?? [];
+  }
+
+  /** The named broadcast-channel provider, or `undefined` if none is configured under that name. */
+  broadcastChannelProvider(name?: string): BroadcastChannelProvider | undefined {
+    const resolved = name ?? this.broadcastProviderNames[0];
+    if (resolved === undefined || !this.broadcastProviderNames.includes(resolved)) return undefined;
+    return new BroadcastChannelProviderImpl(resolved, (provider, channel, item) =>
+      this.publishToBroadcastChannel(provider, channel, item),
+    );
+  }
+
+  /**
+   * Publish an item to every grain implicitly subscribed to the channel's
+   * namespace, each addressed by the channel key — routed through the dispatcher
+   * as a `BroadcastConsumer` system call (directory → placement), reactivating an
+   * idle subscriber, exactly like stream delivery. Deliveries are awaited so a
+   * failing subscriber surfaces to the publisher; this diverges from Orleans'
+   * fire-and-forget default in favour of error visibility (ADR 0015).
+   */
+  async publishToBroadcastChannel(
+    _provider: string,
+    channel: ChannelId,
+    item: unknown,
+  ): Promise<void> {
+    const key = channelKey(channel);
+    const deliveries = this.broadcastGrainTypes(channel.namespace).map((type) =>
+      this.dispatcher.invoke({
+        target: new GrainId(type, channel.key),
+        interfaceId: BroadcastConsumerInterface.id,
+        method: "onPublished",
+        args: [key, item],
+        options: {},
+        reentrancyId: newChainId(),
+      }),
+    );
+    await Promise.all(deliveries);
   }
 
   getGrain<T>(def: GrainInterface<T>, key: GrainKeyFor<T>): T {

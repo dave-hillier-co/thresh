@@ -3,6 +3,7 @@ import type { GrainContext } from "./grain-context";
 import type { SelfFilteringGrain } from "./grain-call-filter";
 import type { GrainInterface } from "./grain-interface";
 import {
+  markBroadcastSubscription,
   markImplicitSubscription,
   markReentrant,
   setGrainOptions,
@@ -51,6 +52,13 @@ export interface DefineGrainOptions extends Omit<GrainOptions, "name"> {
    * from the factory to receive its events.
    */
   implicitSubscriptions?: readonly string[];
+  /**
+   * Broadcast-channel namespaces to implicitly subscribe to (the functional
+   * equivalent of `@implicitChannelSubscription`). A grain with key `K` receives
+   * every item published to the channel `(namespace, K)`; return a
+   * `BROADCAST_CHANNEL_OBSERVER` member from the factory to receive them.
+   */
+  implicitChannelSubscriptions?: readonly string[];
 }
 
 // The grain instance is carried on the setup behind a private symbol so the
@@ -119,11 +127,15 @@ export function defineGrain<T extends object>(
     }
   }
 
-  const { reentrant, implicitSubscriptions, ...grainOptions } = options;
+  const { reentrant, implicitSubscriptions, implicitChannelSubscriptions, ...grainOptions } =
+    options;
   setGrainOptions(FunctionalGrain as GrainConstructor, name, { ...grainOptions, name });
   if (reentrant === true) markReentrant(FunctionalGrain as GrainConstructor);
   for (const namespace of implicitSubscriptions ?? []) {
     markImplicitSubscription(FunctionalGrain as GrainConstructor, namespace);
+  }
+  for (const namespace of implicitChannelSubscriptions ?? []) {
+    markBroadcastSubscription(FunctionalGrain as GrainConstructor, namespace);
   }
   return FunctionalGrain;
 }

@@ -289,6 +289,19 @@ order, starting with transactions.
       merged register-if-absent); directory ops carry the membership view version so a behind owner
       self-advances and a stale caller is redirected (`staleView` rejection → refresh + re-resolve),
       and owned reads wait on in-flight recovery so a join no longer reactivates the moved grains.
+- [x] Broadcast channels — lightweight in-cluster pub/sub without the pulling-agent / cursor machinery
+      (Orleans 10 `Orleans.BroadcastChannel/*`). [ADR 0015](docs/adr/0015-broadcast-channels.md).
+      `ChannelId` (namespace+key) + `BroadcastChannelProvider`/`Writer` contracts in core; a grain type
+      declares implicit subscriptions via `@implicitChannelSubscription(ns)` (class) or `defineGrain`'s
+      `implicitChannelSubscriptions` (functional), tracked in a `broadcastSubscriptions` metadata field
+      kept separate from streams'. `publish` resolves the namespace's implicit subscribers (the
+      `ClusterNode` namespace→grain-type map, synthesizing `(type, key)` ids) and fans out over the
+      dispatcher as a `BroadcastConsumer` system extension; the activation runs the grain's
+      `BROADCAST_CHANNEL_OBSERVER` handler as a turn (lazily resolved, mirroring streams). Host surface
+      `createSilo().useBroadcastChannels(name)`; grains reach it via `runtime.getBroadcastChannelProvider`.
+      Delivery awaits subscribers (one deliberate divergence from Orleans' fire-and-forget default).
+      Tests: `channelKey` unit, namespace→types registration, dispatcher fan-out (class + functional +
+      producer-grain publish, no-observer drop).
 - [~] Observability (cross-cutting) — OpenTelemetry traces propagated via request context, metrics
       (activations, turn latency, directory hit rate, reminder/stream lag), and structured logs.
   - [x] Slice 1 — ambient request context (Orleans `RequestContext`): `requestContext.get/set/getAll`

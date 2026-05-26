@@ -21,6 +21,7 @@ const meta = (options: Partial<GrainMetadata["options"]> = {}): GrainMetadata =>
   options,
   reentrant: false,
   implicitSubscriptions: [],
+  broadcastSubscriptions: [],
 });
 
 /** A `siloMetadata` accessor backed by a `ringKey -> metadata` map. */

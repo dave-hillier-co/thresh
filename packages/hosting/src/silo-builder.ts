@@ -88,6 +88,7 @@ export class SiloBuilder {
   private readonly starters: Array<() => Promise<void>> = [];
   private readonly closers: Array<() => Promise<void>> = [];
   private readonly pullingStreams: RedisPullingStreamProvider[] = [];
+  private readonly broadcastProviders = new Set<string>();
 
   constructor(private readonly config: SiloConfig) {}
 
@@ -126,6 +127,17 @@ export class SiloBuilder {
 
   addStreamProvider(name: string, provider: StreamProvider): this {
     this.streamProviders.set(name, provider);
+    return this;
+  }
+
+  /**
+   * Register a broadcast-channel provider (ADR 0015), named "default" unless
+   * given. Broadcast channels are direct in-cluster pub/sub with no backing store
+   * — a publish fans the item out to the channel's implicit subscribers — so
+   * there is nothing to connect or tear down; only the name is registered.
+   */
+  useBroadcastChannels(name = "default"): this {
+    this.broadcastProviders.add(name);
     return this;
   }
 
@@ -404,6 +416,9 @@ export class SiloBuilder {
           }
         : {}),
       ...(this.config.metadata !== undefined ? { metadata: this.config.metadata } : {}),
+      ...(this.broadcastProviders.size > 0
+        ? { broadcastProviders: [...this.broadcastProviders] }
+        : {}),
       ...(this.incomingCallFilters.length > 0
         ? { incomingCallFilters: this.incomingCallFilters }
         : {}),

@@ -32,6 +32,14 @@ export interface GrainMetadata {
    * auto-subscribed to the stream `(namespace, K)`, with no explicit `subscribe`.
    */
   implicitSubscriptions: readonly string[];
+  /**
+   * Broadcast-channel namespaces this grain type is implicitly subscribed to
+   * (Orleans' `[ImplicitChannelSubscription]`). A grain of this type with key `K`
+   * receives every item published to the channel `(namespace, K)`. Tracked
+   * separately from `implicitSubscriptions` — broadcast channels and streams are
+   * distinct subsystems in Orleans.
+   */
+  broadcastSubscriptions: readonly string[];
 }
 
 export type GrainConstructor = abstract new (...args: never[]) => object;
@@ -44,6 +52,7 @@ const optionsRegistry = new WeakMap<
 >();
 const reentrantRegistry = new WeakSet<GrainConstructor>();
 const implicitSubscriptionRegistry = new WeakMap<GrainConstructor, Set<string>>();
+const broadcastSubscriptionRegistry = new WeakMap<GrainConstructor, Set<string>>();
 
 export function setGrainOptions(
   ctor: GrainConstructor,
@@ -67,15 +76,27 @@ export function markImplicitSubscription(ctor: GrainConstructor, namespace: stri
   namespaces.add(namespace);
 }
 
+/** Record that this grain type is implicitly subscribed to a broadcast-channel namespace. */
+export function markBroadcastSubscription(ctor: GrainConstructor, namespace: string): void {
+  let namespaces = broadcastSubscriptionRegistry.get(ctor);
+  if (namespaces === undefined) {
+    namespaces = new Set();
+    broadcastSubscriptionRegistry.set(ctor, namespaces);
+  }
+  namespaces.add(namespace);
+}
+
 export function getGrainMetadata(ctor: GrainConstructor): GrainMetadata | undefined {
   const entry = optionsRegistry.get(ctor);
   if (entry === undefined) return undefined;
   const implicit = implicitSubscriptionRegistry.get(ctor);
+  const broadcast = broadcastSubscriptionRegistry.get(ctor);
   return {
     grainType: entry.grainType,
     options: entry.options,
     reentrant: reentrantRegistry.has(ctor),
     implicitSubscriptions: implicit === undefined ? [] : [...implicit],
+    broadcastSubscriptions: broadcast === undefined ? [] : [...broadcast],
   };
 }
 

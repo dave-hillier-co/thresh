@@ -42,18 +42,19 @@ decisions.
 
 ## 📋 TODO — remaining for Orleans 10 parity
 
-- [ ] **Grain migration** — live-migrate an activation to another silo with state preserved
+- [x] **Grain migration** — live-migrate an activation to another silo with state preserved
       (`IGrainMigrationParticipant`, `MigrateOnIdle`, directed placement).
 - [ ] **Activation rebalancer** — proactively move activations across silos to balance load
       (`IActivationRebalancer`).
 - [x] **Grain-interface versioning** — multiple interface versions coexist for heterogeneous rolling
       upgrades, with version-aware placement ([ADR 0014](docs/adr/0014-grain-interface-versioning.md)).
-- [ ] **Implicit stream subscriptions** — bind a grain type to a namespace and auto-subscribe by key.
-- [ ] **Directory range handoff** — versioned, lossless directory handoff on membership change
+- [x] **Implicit stream subscriptions** — bind a grain type to a namespace and auto-subscribe by key.
+- [x] **Directory range handoff** — versioned, lossless directory handoff on membership change
       (replacing the phase-2 drop-and-rebuild).
-- [ ] **Placement filters** — prune candidate silos by metadata before placement; additional
+- [x] **Placement filters** — prune candidate silos by metadata before placement; additional
       placement strategies.
-- [ ] **Broadcast channels** — lightweight in-cluster pub/sub without the pulling-agent machinery.
+- [x] **Broadcast channels** — lightweight in-cluster pub/sub without the pulling-agent machinery
+      ([ADR 0015](docs/adr/0015-broadcast-channels.md)).
 - [ ] **Durable journaling (`DurableGrain`)** — Orleans 10 `Orleans.Journaling`; needs an ADR
       (overlaps reducer/persistent state).
 - [ ] **Durable jobs** — Orleans 10 `Orleans.DurableJobs` (durable workflows); needs an ADR.

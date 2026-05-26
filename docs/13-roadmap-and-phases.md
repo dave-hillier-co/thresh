@@ -178,8 +178,12 @@ verified.
   rides the membership snapshot (see [06](06-grain-directory-and-placement.md)). Follow-ups: derive
   silo metadata from Kubernetes pod labels, and report remote silo load via membership gossip (today
   a peer's resource stats are zero/metadata-only).
-- **Broadcast channels** — lightweight in-cluster pub/sub without the pulling-agent machinery
-  (`Orleans.BroadcastChannel/*`, `IBroadcastChannelProvider`; Orleans 10).
+- **Broadcast channels** — **Shipped** ([ADR 0015](adr/0015-broadcast-channels.md)). Direct in-cluster
+  pub/sub without the pulling-agent / cursor machinery (`Orleans.BroadcastChannel/*`,
+  `IBroadcastChannelProvider`): a publish fans the item out over the dispatcher to the channel's
+  implicit subscribers (`@implicitChannelSubscription`), each receiving it through a
+  `BROADCAST_CHANNEL_OBSERVER` handler. Configured with `createSilo(...).useBroadcastChannels(name)`;
+  delivery awaits subscribers (one deliberate divergence from Orleans' fire-and-forget default).
 - **Durable journaling (`DurableGrain`)** — needs an ADR: Orleans 10's `Orleans.Journaling`
   (`DurableValue`/`DurableDictionary`/`DurableList`/… that journal mutations automatically) overlaps
   the existing reducer/persistent-state model; decide whether to adopt it or map it onto what ships.

@@ -1,4 +1,9 @@
 import { newActivationId, type ActivationId } from "@tsva/core/activation-id";
+import {
+  broadcastChannelObserver,
+  BroadcastConsumerInterface,
+  type BroadcastChannelHandler,
+} from "@tsva/core/broadcast-channel";
 import type { Duration } from "@tsva/core/duration";
 import { GrainCallError, RejectionError } from "@tsva/core/errors";
 import type { Grain } from "@tsva/core/grain";
@@ -66,6 +71,7 @@ export class ActivationData implements GrainContext {
   private readonly timers = new Set<GrainTimerImpl>();
   /** Handlers for pulling-agent stream delivery, keyed by `namespace/key`. */
   private readonly streamHandlers = new Map<string, StreamHandler<unknown>>();
+  private readonly broadcastHandlers = new Map<string, BroadcastChannelHandler<unknown>>();
 
   constructor(
     id: GrainId,
@@ -147,6 +153,25 @@ export class ActivationData implements GrainContext {
     const key = slash < 0 ? "" : streamKey.slice(slash + 1);
     const handler = observe(namespace, key);
     this.streamHandlers.set(streamKey, handler);
+    return handler;
+  }
+
+  /**
+   * The handler for a delivered broadcast-channel item, keyed by `namespace/key`,
+   * resolved (and cached) from the grain's `BROADCAST_CHANNEL_OBSERVER` member.
+   * An absent observer means the grain declared the implicit subscription but
+   * exposes no handler, so the item is dropped — mirroring `streamHandlerFor`.
+   */
+  private broadcastHandlerFor(channelKey: string): BroadcastChannelHandler<unknown> | undefined {
+    const existing = this.broadcastHandlers.get(channelKey);
+    if (existing !== undefined) return existing;
+    const observe = broadcastChannelObserver(this.instance);
+    if (observe === undefined) return undefined;
+    const slash = channelKey.indexOf("/");
+    const namespace = slash < 0 ? channelKey : channelKey.slice(0, slash);
+    const key = slash < 0 ? "" : channelKey.slice(slash + 1);
+    const handler = observe(namespace, key);
+    this.broadcastHandlers.set(channelKey, handler);
     return handler;
   }
 
@@ -259,6 +284,14 @@ export class ActivationData implements GrainContext {
       const [streamKey, event, token] = req.args as [string, unknown, number];
       const handler = this.streamHandlerFor(streamKey);
       if (handler !== undefined) await handler.onNext(event, new SequenceToken(token));
+      return undefined;
+    }
+    // Broadcast-channel delivery is likewise a system extension: route the
+    // published item to the grain's broadcast observer (ADR 0015).
+    if (req.interfaceId === BroadcastConsumerInterface.id) {
+      const [channelKey, item] = req.args as [string, unknown];
+      const handler = this.broadcastHandlerFor(channelKey);
+      if (handler !== undefined) await handler.onPublished(item);
       return undefined;
     }
     // Transaction-resource extension: drive a named transactional state's

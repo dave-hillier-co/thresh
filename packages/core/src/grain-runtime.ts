@@ -3,6 +3,7 @@ import type { GrainInterface } from "./grain-interface";
 import type { GrainTimer } from "./grain-timer";
 import type { GrainKeyFor } from "./key-kinds";
 import type { SiloAddress } from "./silo-address";
+import type { BroadcastChannelProvider } from "./broadcast-channel";
 import type { StreamProvider } from "./stream";
 
 /**
@@ -15,6 +16,8 @@ export interface GrainRuntime {
   registerReminder(name: string, due: Duration, period: Duration): Promise<void>;
   unregisterReminder(name: string): Promise<void>;
   getStreamProvider(name?: string): StreamProvider;
+  /** The named broadcast-channel provider (Orleans `IBroadcastChannelProvider`). */
+  getBroadcastChannelProvider(name?: string): BroadcastChannelProvider;
   deactivateOnIdle(): void;
   delayDeactivation(by: Duration): void;
   /**

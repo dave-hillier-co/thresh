@@ -1,6 +1,7 @@
 import { GrainCallError } from "@tsva/core/errors";
 import type { Grain } from "@tsva/core/grain";
 import type { IncomingGrainCallFilter } from "@tsva/core/grain-call-filter";
+import type { BroadcastChannelProvider } from "@tsva/core/broadcast-channel";
 import type { GrainId } from "@tsva/core/grain-id";
 import type { GrainMetadata } from "@tsva/core/grain-metadata";
 import type { GrainType } from "@tsva/core/grain-type";
@@ -40,6 +41,8 @@ export interface CatalogOptions {
   reminderRegistry?: () => ReminderRegistry | undefined;
   /** Resolves the stream provider a grain's `getStreamProvider` returns. */
   streamProvider?: (name?: string) => StreamProvider | undefined;
+  /** Resolves the broadcast-channel provider a grain's `getBroadcastChannelProvider` returns. */
+  broadcastProvider?: (name?: string) => BroadcastChannelProvider | undefined;
   /** Incoming call filters wrapping each grain-method dispatch (silo-wide). */
   incomingCallFilters?: readonly IncomingGrainCallFilter[];
 }
@@ -125,6 +128,9 @@ export class Catalog {
         : {}),
       ...(this.options.streamProvider !== undefined
         ? { streams: this.options.streamProvider }
+        : {}),
+      ...(this.options.broadcastProvider !== undefined
+        ? { broadcastChannels: this.options.broadcastProvider }
         : {}),
     });
     const instance = new reg.ctor();

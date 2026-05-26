@@ -15,3 +15,5 @@ Each ADR captures one significant decision, its context, the rationale, and its 
 - [0011 — Message dispatch as the substrate (typed interfaces are a compile-time view)](0011-message-dispatch-substrate.md)
 - [0012 — Grain call filters](0012-grain-call-filters.md)
 - [0013 — Observability (request context + OpenTelemetry tracing)](0013-observability.md)
+- [0014 — Grain-interface versioning (version-aware placement)](0014-grain-interface-versioning.md)
+- [0015 — Broadcast channels (lightweight in-cluster pub/sub)](0015-broadcast-channels.md)
