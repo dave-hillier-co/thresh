@@ -1,5 +1,8 @@
 import type { Grain } from "@tsva/core/grain";
-import type { IncomingGrainCallFilter } from "@tsva/core/grain-call-filter";
+import type {
+  IncomingGrainCallFilter,
+  OutgoingGrainCallFilter,
+} from "@tsva/core/grain-call-filter";
 import type { GrainInterface } from "@tsva/core/grain-interface";
 import type { MembershipService } from "@tsva/core/membership";
 import type { SiloAddress } from "@tsva/core/silo-address";
@@ -21,6 +24,7 @@ import { bindPersistentStates } from "@tsva/persistence/state-activator";
 import { bindReducerStates } from "@tsva/persistence/reducer-state-activator";
 import { StorageRegistry } from "@tsva/persistence/storage-registry";
 import { bindTransactionalStates } from "@tsva/transactions/transactional-state-activator";
+import { setupTracePropagation, tracingFilters } from "@tsva/observability/tracing";
 import { MemoryTransactionalStorage } from "@tsva/transactions/memory-transactional-storage";
 import { RedisTransactionalStorage } from "@tsva/transactions/redis-transactional-storage";
 import { TransactionalStorageRegistry } from "@tsva/transactions/transactional-storage-registry";
@@ -67,6 +71,7 @@ export class SiloBuilder {
   private reminderTable: ReminderTable | undefined;
   private readonly streamProviders = new Map<string, StreamProvider>();
   private readonly incomingCallFilters: IncomingGrainCallFilter[] = [];
+  private readonly outgoingCallFilters: OutgoingGrainCallFilter[] = [];
   private readonly registrations: Registration[] = [];
   private readonly starters: Array<() => Promise<void>> = [];
   private readonly closers: Array<() => Promise<void>> = [];
@@ -155,6 +160,31 @@ export class SiloBuilder {
    */
   addIncomingCallFilter(filter: IncomingGrainCallFilter): this {
     this.incomingCallFilters.push(filter);
+    return this;
+  }
+
+  /**
+   * Register an outgoing grain-call filter (Orleans `IOutgoingGrainCallFilter`).
+   * Filters wrap every outbound call made from this silo's grain references, in
+   * registration order (first registered is outermost); each proceeds via
+   * `context.invoke()`.
+   */
+  addOutgoingCallFilter(filter: OutgoingGrainCallFilter): this {
+    this.outgoingCallFilters.push(filter);
+    return this;
+  }
+
+  /**
+   * Enable OpenTelemetry tracing: register the tracing call filters (CLIENT span
+   * outgoing, SERVER span incoming) and set W3C trace-context propagation. Spans
+   * are emitted through the global OpenTelemetry tracer, so register an OTel SDK
+   * to export them; without one this is a no-op.
+   */
+  useTracing(): this {
+    setupTracePropagation();
+    const { incoming, outgoing } = tracingFilters();
+    this.incomingCallFilters.push(incoming);
+    this.outgoingCallFilters.push(outgoing);
     return this;
   }
 
@@ -315,6 +345,9 @@ export class SiloBuilder {
       ...(this.config.random !== undefined ? { random: this.config.random } : {}),
       ...(this.incomingCallFilters.length > 0
         ? { incomingCallFilters: this.incomingCallFilters }
+        : {}),
+      ...(this.outgoingCallFilters.length > 0
+        ? { outgoingCallFilters: this.outgoingCallFilters }
         : {}),
       // Transactional facets need no storage provider in this slice, so the
       // binder always runs; persistent/reducer facets bind only when storage is

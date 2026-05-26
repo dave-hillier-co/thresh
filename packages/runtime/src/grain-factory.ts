@@ -1,3 +1,8 @@
+import {
+  runCallFilters,
+  type GrainCallContext,
+  type OutgoingGrainCallFilter,
+} from "@tsva/core/grain-call-filter";
 import { GrainId } from "@tsva/core/grain-id";
 import type { GrainInterface } from "@tsva/core/grain-interface";
 import type { GrainKey } from "@tsva/core/grain-key";
@@ -21,6 +26,7 @@ const newChainId = () => Guid.newGuid().toString();
 export class GrainFactory {
   private dispatcher: Dispatcher | undefined;
   private transactionAgent: TransactionAgent | undefined;
+  private outgoingCallFilters: readonly OutgoingGrainCallFilter[] = [];
 
   constructor(private readonly resolveGrainType: (interfaceId: number) => GrainType) {}
 
@@ -30,6 +36,10 @@ export class GrainFactory {
 
   setTransactionAgent(agent: TransactionAgent): void {
     this.transactionAgent = agent;
+  }
+
+  setOutgoingCallFilters(filters: readonly OutgoingGrainCallFilter[]): void {
+    this.outgoingCallFilters = filters;
   }
 
   getGrain<T>(def: GrainInterface<T>, key: GrainKey): T {
@@ -59,18 +69,45 @@ export class GrainFactory {
               options,
               ambient?.transaction,
             );
-            const req: InvocationRequest = {
-              target,
-              interfaceId: def.id,
-              method: prop,
-              args,
-              options,
-              reentrancyId: ambient?.reentrancyId ?? newChainId(),
-              ...(ambient?.senderId !== undefined ? { sender: ambient.senderId } : {}),
-              ...(transaction !== undefined ? { transaction } : {}),
+            // The dispatch (with the transaction boundary) is the terminal step;
+            // it reads `callArgs`/`callHeaders` so an outgoing filter's rewrites
+            // (arguments, injected trace context) take effect on the request.
+            const dispatch = (
+              callArgs: unknown[],
+              callHeaders: Record<string, string>,
+            ): Promise<unknown> => {
+              const req: InvocationRequest = {
+                target,
+                interfaceId: def.id,
+                method: prop,
+                args: callArgs,
+                options,
+                reentrancyId: ambient?.reentrancyId ?? newChainId(),
+                ...(ambient?.senderId !== undefined ? { sender: ambient.senderId } : {}),
+                ...(transaction !== undefined ? { transaction } : {}),
+                ...(Object.keys(callHeaders).length > 0 ? { headers: callHeaders } : {}),
+              };
+              return beginsHere
+                ? this.runRootTransaction(transaction!, req)
+                : this.dispatcher!.invoke(req);
             };
-            if (beginsHere) return await this.runRootTransaction(transaction!, req);
-            return await this.dispatcher.invoke(req);
+            const baseHeaders = ambient?.headers !== undefined ? { ...ambient.headers } : {};
+            if (this.outgoingCallFilters.length === 0) return await dispatch(args, baseHeaders);
+            // Run the outgoing call-filter pipeline (caller side, Orleans parity).
+            const context: GrainCallContext = {
+              target,
+              source: ambient?.senderId,
+              interfaceId: def.id,
+              interfaceName: def.name,
+              methodName: prop,
+              args: [...args],
+              result: undefined,
+              headers: baseHeaders,
+              invoke: () => Promise.resolve(),
+            };
+            return await runCallFilters(this.outgoingCallFilters, context, () =>
+              dispatch(context.args, context.headers),
+            );
           };
         },
       },

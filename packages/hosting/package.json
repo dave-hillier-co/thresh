@@ -11,6 +11,7 @@
     "@tsva/core": "workspace:*",
     "@tsva/directory": "workspace:*",
     "@tsva/messaging": "workspace:*",
+    "@tsva/observability": "workspace:*",
     "@tsva/persistence": "workspace:*",
     "@tsva/reminders": "workspace:*",
     "@tsva/runtime": "workspace:*",

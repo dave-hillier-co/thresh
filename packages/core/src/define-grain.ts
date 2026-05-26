@@ -1,5 +1,6 @@
 import { Grain } from "./grain";
 import type { GrainContext } from "./grain-context";
+import type { SelfFilteringGrain } from "./grain-call-filter";
 import type { GrainInterface } from "./grain-interface";
 import {
   markReentrant,
@@ -32,8 +33,12 @@ export interface GrainLifecycle {
   onDeactivate(reason: DeactivationReason): void | Promise<void>;
 }
 
-/** What a grain factory returns: the interface implementation plus optional lifecycle hooks. */
-export type GrainBehaviour<T> = T & Partial<GrainLifecycle>;
+/**
+ * What a grain factory returns: the interface implementation plus optional
+ * lifecycle hooks and an optional self incoming-call filter (under
+ * `INCOMING_CALL_FILTER`).
+ */
+export type GrainBehaviour<T> = T & Partial<GrainLifecycle> & Partial<SelfFilteringGrain>;
 
 export interface DefineGrainOptions extends Omit<GrainOptions, "name"> {
   /** Mark every method reentrant (the functional equivalent of `@reentrant()`). */
@@ -90,8 +95,11 @@ export function defineGrain<T extends object>(
     override setContext(context: GrainContext): void {
       super.setContext(context);
       const behaviour = factory(createSetup(this, context));
-      for (const key of Object.keys(behaviour)) {
-        const value = (behaviour as Record<string, unknown>)[key];
+      // String keys are the interface methods; symbol keys carry system hooks
+      // (e.g. a self incoming-call filter under `INCOMING_CALL_FILTER`).
+      const keys = [...Object.keys(behaviour), ...Object.getOwnPropertySymbols(behaviour)];
+      for (const key of keys) {
+        const value = (behaviour as Record<PropertyKey, unknown>)[key];
         if (typeof value !== "function") continue;
         Object.defineProperty(this, key, {
           value,

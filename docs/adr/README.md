@@ -14,3 +14,4 @@ Each ADR captures one significant decision, its context, the rationale, and its 
 - [0010 — Message-dispatch reducer grains (no per-grain interface, no codegen)](0010-message-dispatch-reducer-grains.md)
 - [0011 — Message dispatch as the substrate (typed interfaces are a compile-time view)](0011-message-dispatch-substrate.md)
 - [0012 — Grain call filters](0012-grain-call-filters.md)
+- [0013 — Observability (request context + OpenTelemetry tracing)](0013-observability.md)

@@ -24,4 +24,6 @@ export interface InvocationRequest {
    * propagation rides the request context (later slice).
    */
   transaction?: TransactionInfo;
+  /** Ambient request-context headers propagated along the call chain (Orleans `RequestContext`). */
+  headers?: Record<string, string>;
 }

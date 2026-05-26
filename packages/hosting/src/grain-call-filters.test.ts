@@ -1,7 +1,13 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { grain } from "@tsva/core/decorators";
+import { defineGrain } from "@tsva/core/define-grain";
 import { Grain } from "@tsva/core/grain";
-import type { IncomingGrainCallFilter } from "@tsva/core/grain-call-filter";
+import {
+  INCOMING_CALL_FILTER,
+  type IncomingGrainCallContext,
+  type IncomingGrainCallFilter,
+  type OutgoingGrainCallFilter,
+} from "@tsva/core/grain-call-filter";
 import { defineGrainInterface } from "@tsva/core/grain-interface";
 import type { GrainWithStringKey } from "@tsva/core/key-kinds";
 import { SiloAddress } from "@tsva/core/silo-address";
@@ -23,6 +29,38 @@ class GreeterGrain extends Grain implements Greeter {
   }
 }
 
+// A grain that filters its own incoming calls (Orleans IIncomingGrainCallFilter).
+interface Echoer extends GrainWithStringKey {
+  echo(s: string): Promise<string>;
+}
+const Echoer = defineGrainInterface<Echoer>("FilterEchoer");
+const FnEchoer = defineGrainInterface<Echoer>("FilterFnEchoer");
+
+let order: string[] = [];
+
+@grain({ name: "FilterEchoer" })
+class EchoerGrain extends Grain implements Echoer {
+  async echo(s: string): Promise<string> {
+    order.push("method");
+    return s;
+  }
+  async [INCOMING_CALL_FILTER](ctx: IncomingGrainCallContext): Promise<void> {
+    order.push("grain:before");
+    await ctx.invoke();
+    order.push("grain:after");
+    ctx.result = `[${ctx.result as string}]`;
+  }
+}
+
+// Functional counterpart declaring the self-filter under the same symbol.
+const FnEchoerGrain = defineGrain<Echoer>("FilterFnEchoer", () => ({
+  echo: async (s: string) => s,
+  [INCOMING_CALL_FILTER]: async (ctx: IncomingGrainCallContext) => {
+    await ctx.invoke();
+    ctx.result = `fn(${ctx.result as string})`;
+  },
+}));
+
 const local = new SiloAddress("silo-0", "uid-0", "silo-0:11111");
 
 function buildSilo(...filters: IncomingGrainCallFilter[]) {
@@ -30,6 +68,14 @@ function buildSilo(...filters: IncomingGrainCallFilter[]) {
     .useStaticMembership([local])
     .useInProcessTransport(new InProcessNetwork());
   for (const f of filters) builder = builder.addIncomingCallFilter(f);
+  return builder.registerGrain(GreeterGrain, { interfaces: [Greeter] }).build();
+}
+
+function buildSiloOut(...filters: OutgoingGrainCallFilter[]) {
+  let builder = createSilo({ clusterId: "filters-out", local })
+    .useStaticMembership([local])
+    .useInProcessTransport(new InProcessNetwork());
+  for (const f of filters) builder = builder.addOutgoingCallFilter(f);
   return builder.registerGrain(GreeterGrain, { interfaces: [Greeter] }).build();
 }
 
@@ -87,6 +133,100 @@ describe("incoming grain call filters", () => {
       expect(calls).toBe(0); // the method never ran
       expect(await silo.getGrain(Greeter, "g").greet("ok")).toBe("hello ok");
       expect(calls).toBe(1);
+    } finally {
+      await silo.stop();
+    }
+  });
+});
+
+describe("outgoing grain call filters", () => {
+  afterEach(() => {
+    calls = 0;
+  });
+
+  it("wraps an outbound call at the caller, observing target and method", async () => {
+    const seen: string[] = [];
+    const trace: OutgoingGrainCallFilter = async (ctx) => {
+      seen.push(`${ctx.interfaceName}.${ctx.methodName}->${ctx.target.toString()}`);
+      await ctx.invoke();
+      ctx.result = `(${ctx.result as string})`;
+    };
+    const silo = buildSiloOut(trace);
+    await silo.start();
+    try {
+      expect(await silo.getGrain(Greeter, "g").greet("x")).toBe("(hello x)");
+      expect(seen).toEqual(["FilterGreeter.greet->FilterGreeter/g"]);
+    } finally {
+      await silo.stop();
+    }
+  });
+
+  it("short-circuits an outbound call without dispatching (client-side cache)", async () => {
+    const cache: OutgoingGrainCallFilter = async (ctx) => {
+      ctx.result = "cached"; // serve without reaching the grain
+    };
+    const silo = buildSiloOut(cache);
+    await silo.start();
+    try {
+      expect(await silo.getGrain(Greeter, "g").greet("x")).toBe("cached");
+      expect(calls).toBe(0); // the call never left the caller
+    } finally {
+      await silo.stop();
+    }
+  });
+});
+
+describe("per-grain incoming filters", () => {
+  afterEach(() => {
+    order = [];
+  });
+
+  it("runs a grain's own filter around its methods", async () => {
+    const silo = createSilo({ clusterId: "self-filter", local })
+      .useStaticMembership([local])
+      .useInProcessTransport(new InProcessNetwork())
+      .registerGrain(EchoerGrain, { interfaces: [Echoer] })
+      .build();
+    await silo.start();
+    try {
+      expect(await silo.getGrain(Echoer, "e").echo("x")).toBe("[x]");
+      expect(order).toEqual(["grain:before", "method", "grain:after"]);
+    } finally {
+      await silo.stop();
+    }
+  });
+
+  it("nests the grain's own filter inside the silo-wide filters", async () => {
+    const outer: IncomingGrainCallFilter = async (ctx) => {
+      order.push("silo:before");
+      await ctx.invoke();
+      order.push("silo:after");
+    };
+    const silo = createSilo({ clusterId: "self-filter-2", local })
+      .useStaticMembership([local])
+      .useInProcessTransport(new InProcessNetwork())
+      .addIncomingCallFilter(outer)
+      .registerGrain(EchoerGrain, { interfaces: [Echoer] })
+      .build();
+    await silo.start();
+    try {
+      await silo.getGrain(Echoer, "e").echo("x");
+      // silo filter outermost, grain's own filter innermost, then the method.
+      expect(order).toEqual(["silo:before", "grain:before", "method", "grain:after", "silo:after"]);
+    } finally {
+      await silo.stop();
+    }
+  });
+
+  it("supports a self-filter declared by a functional grain", async () => {
+    const silo = createSilo({ clusterId: "self-filter-fn", local })
+      .useStaticMembership([local])
+      .useInProcessTransport(new InProcessNetwork())
+      .registerGrain(FnEchoerGrain, { interfaces: [FnEchoer] })
+      .build();
+    await silo.start();
+    try {
+      expect(await silo.getGrain(FnEchoer, "e").echo("y")).toBe("fn(y)");
     } finally {
       await silo.stop();
     }

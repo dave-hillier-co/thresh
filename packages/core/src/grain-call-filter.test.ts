@@ -14,6 +14,7 @@ function context(args: unknown[]): GrainCallContext {
     methodName: "m",
     args,
     result: undefined,
+    headers: {},
     invoke: async () => {},
   };
 }

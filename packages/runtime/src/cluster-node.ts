@@ -8,7 +8,10 @@ import { getGrainMetadata } from "@tsva/core/grain-metadata";
 import type { GrainType } from "@tsva/core/grain-type";
 import type { GrainKeyFor } from "@tsva/core/key-kinds";
 import { activeSilos, type MembershipService } from "@tsva/core/membership";
-import type { IncomingGrainCallFilter } from "@tsva/core/grain-call-filter";
+import type {
+  IncomingGrainCallFilter,
+  OutgoingGrainCallFilter,
+} from "@tsva/core/grain-call-filter";
 import { Guid } from "@tsva/core/guid";
 import type { GrainReferenceIdentity } from "@tsva/core/grain-reference";
 import { RemindableInterface, type ReminderRegistry, type TickStatus } from "@tsva/core/reminder";
@@ -64,6 +67,8 @@ export interface ClusterNodeOptions {
   streamProvider?: (name?: string) => StreamProvider | undefined;
   /** Incoming grain-call filters wrapping each grain-method dispatch (silo-wide). */
   incomingCallFilters?: readonly IncomingGrainCallFilter[];
+  /** Outgoing grain-call filters wrapping each outbound call at the proxy (silo-wide). */
+  outgoingCallFilters?: readonly OutgoingGrainCallFilter[];
   /** Injectable RNG for deterministic placement in tests. */
   random?: () => number;
 }
@@ -166,6 +171,9 @@ export class ClusterNode {
     const transactionAgent = new TransactionAgent(time);
     transactionAgent.setDispatcher(this.dispatcher);
     this.factory.setTransactionAgent(transactionAgent);
+    if (options.outgoingCallFilters !== undefined) {
+      this.factory.setOutgoingCallFilters(options.outgoingCallFilters);
+    }
     this.collector = new ActivationCollector(
       this.catalog,
       time,
@@ -340,6 +348,7 @@ export class ClusterNode {
               },
             }
           : {}),
+        ...(req.headers !== undefined ? { headers: req.headers } : {}),
       },
       body: this.serializer.serialize(req.args),
     };
@@ -514,6 +523,9 @@ export class ClusterNode {
       reentrancyId: message.requestContext?.reentrancyId ?? newChainId(),
       ...(message.sendingGrain !== undefined ? { sender: message.sendingGrain } : {}),
       ...(transaction !== undefined ? { transaction } : {}),
+      ...(message.requestContext?.headers !== undefined
+        ? { headers: message.requestContext.headers }
+        : {}),
     };
   }
 

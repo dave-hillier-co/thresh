@@ -19,6 +19,12 @@ export interface GrainCallContext {
   args: unknown[];
   /** Mutable: the call's result, available after `invoke()` and replaceable. */
   result: unknown;
+  /**
+   * Request-context headers for this call (Orleans `RequestContext`). On an
+   * outgoing call a filter may inject into it (e.g. W3C trace context) and it is
+   * sent with the request; on an incoming call it holds the headers that arrived.
+   */
+  headers: Record<string, string>;
   /** Proceed to the next filter, or — at the end of the chain — the method itself. */
   invoke(): Promise<void>;
 }
@@ -33,6 +39,27 @@ export type IncomingGrainCallFilter = (context: IncomingGrainCallContext) => Pro
 
 /** Intercepts an outgoing call on the caller side (Orleans `IOutgoingGrainCallFilter`). */
 export type OutgoingGrainCallFilter = (context: GrainCallContext) => Promise<void>;
+
+/**
+ * A grain may filter its own incoming calls (Orleans' `IIncomingGrainCallFilter`
+ * implemented by the grain) by exposing a method under this symbol; it runs as
+ * the innermost filter — after the silo-wide ones, just before the method. The
+ * symbol key keeps it from colliding with the grain's own (string-named) methods.
+ */
+export const INCOMING_CALL_FILTER = Symbol.for("tsva.incomingCallFilter");
+
+/** A grain that filters its own incoming calls. */
+export interface SelfFilteringGrain {
+  [INCOMING_CALL_FILTER](context: IncomingGrainCallContext): Promise<void>;
+}
+
+/** The grain's own incoming filter, bound to it, or `undefined` if it declares none. */
+export function grainIncomingFilter(instance: object): IncomingGrainCallFilter | undefined {
+  const fn = (instance as Record<symbol, unknown>)[INCOMING_CALL_FILTER];
+  return typeof fn === "function"
+    ? (context) => (fn as IncomingGrainCallFilter).call(instance, context)
+    : undefined;
+}
 
 /**
  * Run a call through the filter chain, then the terminal step (the method, or the

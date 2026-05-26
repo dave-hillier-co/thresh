@@ -1,6 +1,6 @@
 # ADR 0012 — Grain call filters
 
-- Status: Accepted — incoming filters implemented; outgoing filters + per-grain filters to follow
+- Status: Accepted — implemented (incoming, outgoing, and per-grain filters)
 - Context docs: [02 — The actor model](../02-actor-model.md),
   [04 — Messaging and serialization](../04-messaging-and-serialization.md),
   [13 — Roadmap](../13-roadmap-and-phases.md)
@@ -36,8 +36,14 @@ Mirror the Orleans model with a small functional surface.
   (`addIncomingCallFilter`), threaded through the catalog to each activation, and wrap the
   grain-method dispatch in `callMethod`. System extensions (stream delivery, transaction-resource,
   reminders) bypass the pipeline — they are infrastructure, not application grain calls.
-- **Outgoing filters** (caller side, at the proxy) and **per-grain incoming filters** (a grain that
-  filters its own calls, as in Orleans) are follow-on slices.
+- **Outgoing filters** run caller-side at the proxy (`addOutgoingCallFilter`), wrapping the dispatch
+  (including the transaction boundary) so a filter can observe/rewrite the call or short-circuit it
+  (e.g. a client-side cache).
+- **Per-grain incoming filters** — a grain filters its own calls (Orleans' grain-implements-
+  `IIncomingGrainCallFilter`) by exposing a method under the `INCOMING_CALL_FILTER` symbol; it runs as
+  the innermost incoming filter (after the silo-wide ones, before the method). The symbol key avoids
+  colliding with the grain's string-named interface methods; both class and functional grains may
+  declare it.
 
 ## Consequences
 

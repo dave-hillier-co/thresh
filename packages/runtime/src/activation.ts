@@ -9,6 +9,7 @@ import type { GrainTimer } from "@tsva/core/grain-timer";
 import type { ActivationReason, DeactivationReason } from "@tsva/core/reasons";
 import { getGrainInterface } from "@tsva/core/grain-interface";
 import {
+  grainIncomingFilter,
   runCallFilters,
   type IncomingGrainCallContext,
   type IncomingGrainCallFilter,
@@ -97,6 +98,9 @@ export class ActivationData implements GrainContext {
               senderId: req.sender,
               reentrancyId: req.reentrancyId,
               transaction: req.transaction,
+              // A fresh, mutable copy so `requestContext.set` during the turn does
+              // not mutate the caller's bag but does flow to downstream calls.
+              headers: req.headers !== undefined ? { ...req.headers } : {},
             },
             () => this.callMethod(req),
           );
@@ -186,7 +190,12 @@ export class ActivationData implements GrainContext {
       throw new GrainCallError(`grain ${this.id.toString()} has no method ${req.method}`);
     }
     const method = fn as (...args: unknown[]) => unknown;
-    if (this.incomingCallFilters.length === 0) {
+    // The grain's own filter (if it declares one) runs innermost — after the
+    // silo-wide filters, just before the method (Orleans parity).
+    const own = grainIncomingFilter(this.instance);
+    const filters =
+      own === undefined ? this.incomingCallFilters : [...this.incomingCallFilters, own];
+    if (filters.length === 0) {
       return await method.apply(this.instance, req.args);
     }
     // Run the grain-method dispatch through the incoming call-filter pipeline;
@@ -199,10 +208,11 @@ export class ActivationData implements GrainContext {
       methodName: req.method,
       args: [...req.args],
       result: undefined,
+      headers: req.headers !== undefined ? { ...req.headers } : {},
       grain: this.instance,
       invoke: () => Promise.resolve(),
     };
-    return await runCallFilters(this.incomingCallFilters, context, () =>
+    return await runCallFilters(filters, context, () =>
       Promise.resolve(method.apply(this.instance, context.args)),
     );
   }

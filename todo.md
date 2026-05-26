@@ -222,16 +222,23 @@ order, starting with transactions.
 
 ## Remaining for parity (after transactions)
 
-- [~] Grain call filters ([ADR 0012](docs/adr/0012-grain-call-filters.md)) — incoming/outgoing
-      interception (auth, retries, trace propagation); the observability seam.
+- [x] Grain call filters ([ADR 0012](docs/adr/0012-grain-call-filters.md)) — incoming/outgoing
+      interception (auth, retries, trace propagation); the observability seam. **Shipped** (incoming,
+      outgoing, per-grain).
   - [x] Slice 1 — incoming filters: `GrainCallContext` (target/source/interface/method, mutable
         `args`/`result`, `invoke()`) + `runCallFilters` pipeline in core; the activation runs the
         pipeline around grain-method dispatch (system extensions bypass it); builder
         `addIncomingCallFilter` threaded through `ClusterNode`→catalog→activation. Unit (pipeline:
         order, arg rewrite, short-circuit, result wrap, error) + hosting e2e (wrap/observe/order, arg
         rewrite, auth short-circuit).
-  - [ ] Slice 2 — outgoing filters at the proxy (`addOutgoingCallFilter`).
-  - [ ] Slice 3 — per-grain incoming filters (a grain filters its own calls, Orleans-style).
+  - [x] Slice 2 — outgoing filters at the proxy: `GrainFactory.setOutgoingCallFilters`; `buildProxy`
+        wraps the dispatch (incl. the transaction boundary) in `runCallFilters`; builder
+        `addOutgoingCallFilter` threaded through `ClusterNode`. Hosting e2e (wrap/observe target+method,
+        client-side-cache short-circuit).
+  - [x] Slice 3 — per-grain incoming filters: a grain exposes `[INCOMING_CALL_FILTER]` (symbol) and it
+        runs innermost (after silo-wide filters, before the method); `defineGrain` installs
+        symbol-keyed behaviour members so functional grains can declare it too. Hosting e2e: class +
+        functional self-filter, ordering relative to a silo filter.
 - [ ] Grain migration / activation rebalancer (Orleans 10 core runtime).
 - [ ] Grain-interface versioning — multiple interface versions live at once for heterogeneous rolling
       upgrades, with version-aware placement (Orleans' versioning).
@@ -239,8 +246,22 @@ order, starting with transactions.
       explicit `subscribe` call (Orleans' `[ImplicitStreamSubscription]`).
 - [ ] Directory range handoff — replace the phase-2 drop-and-rebuild with a versioned, lossless
       handoff on membership change (per [docs/06](docs/06-grain-directory-and-placement.md)).
-- [ ] Observability (cross-cutting) — OpenTelemetry traces propagated via request context, metrics
+- [~] Observability (cross-cutting) — OpenTelemetry traces propagated via request context, metrics
       (activations, turn latency, directory hit rate, reminder/stream lag), and structured logs.
+  - [x] Slice 1 — ambient request context (Orleans `RequestContext`): `requestContext.get/set/getAll`
+        over a string→string header bag that flows along the call chain in-process
+        (`InvocationContext.headers`) and across silos (`Message.requestContext.headers`); the proxy
+        copies ambient headers onto outgoing requests, the activation seeds them per turn. The carrier
+        for W3C trace context + app baggage. Test: header propagates grain→grain, in-process + cross-silo.
+  - [x] Slice 2 — tracing call filters: new `@tsva/observability` package (dep `@opentelemetry/api` +
+        `@opentelemetry/core`); `tracingFilters()` opens CLIENT (outgoing) / SERVER (incoming) spans
+        with rpc attributes, records exceptions/status; W3C trace context injected/extracted via the
+        `GrainCallContext.headers` carrier (threaded proxy↔req↔message). Builder `useTracing()`
+        ([ADR 0013](docs/adr/0013-observability.md)). Test with `sdk-trace-base` +
+        `context-async-hooks` + `InMemorySpanExporter`: grain→grain call yields CLIENT+SERVER spans on
+        one trace (SERVER child of CLIENT), and error status/exception recorded on throw.
+  - [ ] Slice 3 — metrics (activations, turn latency, directory hit rate, reminder/stream lag) and
+        structured logs.
 
 ## Reducer grains ([ADR 0006](docs/adr/0006-reducer-grains.md))
 

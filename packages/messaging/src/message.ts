@@ -23,6 +23,8 @@ export interface RequestContext {
   reentrancyId?: string | undefined;
   /** The ambient transaction this call participates in (Phase 7, ADR 0008). */
   transaction?: TransactionContextHeader | undefined;
+  /** Request-context headers (Orleans `RequestContext`): trace context + app baggage. */
+  headers?: Record<string, string> | undefined;
   [key: string]: unknown;
 }
 
