@@ -1,4 +1,5 @@
 import type { Grain } from "@tsva/core/grain";
+import type { IncomingGrainCallFilter } from "@tsva/core/grain-call-filter";
 import type { GrainInterface } from "@tsva/core/grain-interface";
 import type { MembershipService } from "@tsva/core/membership";
 import type { SiloAddress } from "@tsva/core/silo-address";
@@ -65,6 +66,7 @@ export class SiloBuilder {
   private transactionalStorage: TransactionalStorageRegistry | undefined;
   private reminderTable: ReminderTable | undefined;
   private readonly streamProviders = new Map<string, StreamProvider>();
+  private readonly incomingCallFilters: IncomingGrainCallFilter[] = [];
   private readonly registrations: Registration[] = [];
   private readonly starters: Array<() => Promise<void>> = [];
   private readonly closers: Array<() => Promise<void>> = [];
@@ -144,6 +146,16 @@ export class SiloBuilder {
   /** Convenience: register an in-memory "default" provider (dev/tests). */
   useMemoryStorage(provider: GrainStorage = new MemoryGrainStorage()): this {
     return this.addStorage("default", provider);
+  }
+
+  /**
+   * Register an incoming grain-call filter (Orleans `IIncomingGrainCallFilter`).
+   * Filters wrap every grain-method dispatch on this silo, in registration order
+   * (the first registered is the outermost); each proceeds via `context.invoke()`.
+   */
+  addIncomingCallFilter(filter: IncomingGrainCallFilter): this {
+    this.incomingCallFilters.push(filter);
+    return this;
   }
 
   /** Register a transactional-storage provider for `@transactionalState` facets. */
@@ -301,6 +313,9 @@ export class SiloBuilder {
         ? { collectionIntervalSeconds: this.config.collectionIntervalSeconds }
         : {}),
       ...(this.config.random !== undefined ? { random: this.config.random } : {}),
+      ...(this.incomingCallFilters.length > 0
+        ? { incomingCallFilters: this.incomingCallFilters }
+        : {}),
       // Transactional facets need no storage provider in this slice, so the
       // binder always runs; persistent/reducer facets bind only when storage is
       // configured.

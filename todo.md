@@ -222,6 +222,17 @@ order, starting with transactions.
 
 ## Remaining for parity (after transactions)
 
+- [~] Grain call filters ([ADR 0012](docs/adr/0012-grain-call-filters.md)) — incoming/outgoing
+      interception (auth, retries, trace propagation); the observability seam.
+  - [x] Slice 1 — incoming filters: `GrainCallContext` (target/source/interface/method, mutable
+        `args`/`result`, `invoke()`) + `runCallFilters` pipeline in core; the activation runs the
+        pipeline around grain-method dispatch (system extensions bypass it); builder
+        `addIncomingCallFilter` threaded through `ClusterNode`→catalog→activation. Unit (pipeline:
+        order, arg rewrite, short-circuit, result wrap, error) + hosting e2e (wrap/observe/order, arg
+        rewrite, auth short-circuit).
+  - [ ] Slice 2 — outgoing filters at the proxy (`addOutgoingCallFilter`).
+  - [ ] Slice 3 — per-grain incoming filters (a grain filters its own calls, Orleans-style).
+- [ ] Grain migration / activation rebalancer (Orleans 10 core runtime).
 - [ ] Grain-interface versioning — multiple interface versions live at once for heterogeneous rolling
       upgrades, with version-aware placement (Orleans' versioning).
 - [ ] Implicit stream subscriptions — bind a grain type to a namespace and auto-subscribe by key, no

@@ -1,5 +1,6 @@
 import { GrainCallError } from "@tsva/core/errors";
 import type { Grain } from "@tsva/core/grain";
+import type { IncomingGrainCallFilter } from "@tsva/core/grain-call-filter";
 import type { GrainId } from "@tsva/core/grain-id";
 import type { GrainMetadata } from "@tsva/core/grain-metadata";
 import type { GrainType } from "@tsva/core/grain-type";
@@ -29,6 +30,8 @@ export interface CatalogOptions {
   reminderRegistry?: () => ReminderRegistry | undefined;
   /** Resolves the stream provider a grain's `getStreamProvider` returns. */
   streamProvider?: (name?: string) => StreamProvider | undefined;
+  /** Incoming call filters wrapping each grain-method dispatch (silo-wide). */
+  incomingCallFilters?: readonly IncomingGrainCallFilter[];
 }
 
 /** Registry of live activations on this silo, keyed by grain id. */
@@ -96,6 +99,9 @@ export class Catalog {
     const instance = new reg.ctor();
     instance.setContext(activation);
     activation.instance = instance;
+    if (this.options.incomingCallFilters !== undefined) {
+      activation.incomingCallFilters = this.options.incomingCallFilters;
+    }
     const activateState = this.options.activateState;
     if (activateState !== undefined) {
       activation.preActivate = () => activateState(instance, id);

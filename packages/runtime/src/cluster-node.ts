@@ -8,6 +8,7 @@ import { getGrainMetadata } from "@tsva/core/grain-metadata";
 import type { GrainType } from "@tsva/core/grain-type";
 import type { GrainKeyFor } from "@tsva/core/key-kinds";
 import { activeSilos, type MembershipService } from "@tsva/core/membership";
+import type { IncomingGrainCallFilter } from "@tsva/core/grain-call-filter";
 import { Guid } from "@tsva/core/guid";
 import type { GrainReferenceIdentity } from "@tsva/core/grain-reference";
 import { RemindableInterface, type ReminderRegistry, type TickStatus } from "@tsva/core/reminder";
@@ -61,6 +62,8 @@ export interface ClusterNodeOptions {
   reminderRegistry?: () => ReminderRegistry | undefined;
   /** Resolves the stream provider a grain's `getStreamProvider` returns. */
   streamProvider?: (name?: string) => StreamProvider | undefined;
+  /** Incoming grain-call filters wrapping each grain-method dispatch (silo-wide). */
+  incomingCallFilters?: readonly IncomingGrainCallFilter[];
   /** Injectable RNG for deterministic placement in tests. */
   random?: () => number;
 }
@@ -142,6 +145,9 @@ export class ClusterNode {
         ? { reminderRegistry: options.reminderRegistry }
         : {}),
       ...(options.streamProvider !== undefined ? { streamProvider: options.streamProvider } : {}),
+      ...(options.incomingCallFilters !== undefined
+        ? { incomingCallFilters: options.incomingCallFilters }
+        : {}),
     });
     this.dispatcher = new DistributedDispatcher({
       local: options.local,

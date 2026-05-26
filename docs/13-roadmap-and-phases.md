@@ -156,7 +156,9 @@ verified.
   handoff on membership change (per [06](06-grain-directory-and-placement.md)).
 - **Grain call filters** — incoming/outgoing interception around grain calls for cross-cutting
   concerns (auth, retries, trace propagation), mirroring Orleans' `IIncomingGrainCallFilter` /
-  `IOutgoingGrainCallFilter`. This is also the seam the observability work below plugs into.
+  `IOutgoingGrainCallFilter` ([ADR 0012](adr/0012-grain-call-filters.md)). This is also the seam the
+  observability work below plugs into. **Incoming filters ship** (silo-wide, via
+  `addIncomingCallFilter`); outgoing filters and per-grain filters are the remaining slices.
 - **Placement filters** — prune the candidate silo set by metadata before a placement strategy runs
   (Orleans' `PlacementFilterStrategy`); pairs with the additional placement strategies
   (`SiloRoleBasedPlacement`, `ResourceOptimizedPlacement`) noted in

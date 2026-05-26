@@ -7,6 +7,12 @@ import type { GrainId } from "@tsva/core/grain-id";
 import type { GrainRuntime } from "@tsva/core/grain-runtime";
 import type { GrainTimer } from "@tsva/core/grain-timer";
 import type { ActivationReason, DeactivationReason } from "@tsva/core/reasons";
+import { getGrainInterface } from "@tsva/core/grain-interface";
+import {
+  runCallFilters,
+  type IncomingGrainCallContext,
+  type IncomingGrainCallFilter,
+} from "@tsva/core/grain-call-filter";
 import type { InvocationRequest } from "@tsva/core/request";
 import { SequenceToken, StreamConsumerInterface, type StreamHandler } from "@tsva/core/stream";
 import type { TransactionParticipant } from "@tsva/core/transaction-info";
@@ -34,6 +40,9 @@ export class ActivationData implements GrainContext {
 
   /** Runs once before `onActivate` (e.g. read persistent state); set by the catalog. */
   preActivate: (() => Promise<void>) | undefined;
+
+  /** Incoming grain-call filters wrapping each grain-method dispatch; set by the catalog. */
+  incomingCallFilters: readonly IncomingGrainCallFilter[] = [];
 
   private lastActiveMs: number;
   private keepAliveUntilMs = 0;
@@ -176,7 +185,26 @@ export class ActivationData implements GrainContext {
     if (typeof fn !== "function") {
       throw new GrainCallError(`grain ${this.id.toString()} has no method ${req.method}`);
     }
-    return await (fn as (...args: unknown[]) => unknown).apply(this.instance, req.args);
+    const method = fn as (...args: unknown[]) => unknown;
+    if (this.incomingCallFilters.length === 0) {
+      return await method.apply(this.instance, req.args);
+    }
+    // Run the grain-method dispatch through the incoming call-filter pipeline;
+    // filters see the context and proceed via `invoke()` (Orleans parity).
+    const context: IncomingGrainCallContext = {
+      target: this.id,
+      source: req.sender,
+      interfaceId: req.interfaceId,
+      interfaceName: getGrainInterface(req.interfaceId)?.name ?? "",
+      methodName: req.method,
+      args: [...req.args],
+      result: undefined,
+      grain: this.instance,
+      invoke: () => Promise.resolve(),
+    };
+    return await runCallFilters(this.incomingCallFilters, context, () =>
+      Promise.resolve(method.apply(this.instance, context.args)),
+    );
   }
 
   /** Route a `TransactionResource` system call to the named transactional state. */
