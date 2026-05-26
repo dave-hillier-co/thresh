@@ -46,8 +46,8 @@ decisions.
       (`IGrainMigrationParticipant`, `MigrateOnIdle`, directed placement).
 - [ ] **Activation rebalancer** — proactively move activations across silos to balance load
       (`IActivationRebalancer`).
-- [ ] **Grain-interface versioning** — multiple interface versions coexist for heterogeneous rolling
-      upgrades, with version-aware placement.
+- [x] **Grain-interface versioning** — multiple interface versions coexist for heterogeneous rolling
+      upgrades, with version-aware placement ([ADR 0014](docs/adr/0014-grain-interface-versioning.md)).
 - [ ] **Implicit stream subscriptions** — bind a grain type to a namespace and auto-subscribe by key.
 - [ ] **Directory range handoff** — versioned, lossless directory handoff on membership change
       (replacing the phase-2 drop-and-rebuild).

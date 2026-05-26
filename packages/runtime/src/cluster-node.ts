@@ -2,11 +2,22 @@ import { newActivationId } from "@tsva/core/activation-id";
 import { GrainCallError, RejectionError } from "@tsva/core/errors";
 import type { Grain } from "@tsva/core/grain";
 import { grainAddressEquals, type GrainAddress } from "@tsva/core/grain-address";
-import type { GrainId } from "@tsva/core/grain-id";
+import { GrainId } from "@tsva/core/grain-id";
 import type { GrainInterface } from "@tsva/core/grain-interface";
 import { getGrainInterface } from "@tsva/core/grain-interface";
+import type { InterfaceVersionEntry, SiloManifest } from "@tsva/core/grain-manifest";
 import { getGrainMetadata } from "@tsva/core/grain-metadata";
 import type { GrainType } from "@tsva/core/grain-type";
+import {
+  compatibilityDirector,
+  type CompatibilityDirector,
+  type CompatibilityKind,
+} from "@tsva/core/version-compatibility";
+import {
+  versionSelector,
+  type VersionSelectorKind,
+  type VersionSelectorStrategy,
+} from "@tsva/core/version-selector";
 import type { GrainKeyFor } from "@tsva/core/key-kinds";
 import { activeSilos, type MembershipService } from "@tsva/core/membership";
 import type {
@@ -48,6 +59,7 @@ import type {
   PlacementContext,
   PlacementStrategy,
 } from "@tsva/runtime/placement/placement-strategy";
+import { filterByVersion } from "@tsva/runtime/placement/version-placement-filter";
 import { systemTimeProvider, type TimeProvider } from "@tsva/runtime/time-provider";
 import { TransactionAgent } from "@tsva/runtime/transaction-agent";
 
@@ -83,6 +95,14 @@ export interface ClusterNodeOptions {
   outgoingCallFilters?: readonly OutgoingGrainCallFilter[];
   /** Injectable RNG for deterministic placement in tests. */
   random?: () => number;
+  /**
+   * Grain-interface versioning policy (ADR 0014). Setting either field enables
+   * version-aware placement on this silo; otherwise versioning activates only
+   * when a registered interface declares a version > 1. Defaults:
+   * backward-compatible director + latest-version selector.
+   */
+  versionCompatibility?: CompatibilityKind;
+  versionSelector?: VersionSelectorKind;
 }
 
 interface RejectionPayload {
@@ -122,6 +142,15 @@ export class ClusterNode {
   private readonly interfaceToGrainType = new Map<number, GrainType>();
   /** Stream namespace → grain types implicitly subscribed to it (auto-subscribe by key). */
   private readonly implicitSubscriptions = new Map<string, GrainType[]>();
+  /** Interface versions this silo implements (ADR 0014): interfaceId -> hosted version. */
+  private readonly localVersions = new Map<number, { version: number; grainType: GrainType }>();
+  private maxLocalVersion = 1;
+  /** Peer manifests, fetched lazily and cleared on any membership change. */
+  private readonly manifestCache = new Map<string, SiloManifest>();
+  private readonly manifestInflight = new Map<string, Promise<SiloManifest>>();
+  private readonly versionPolicyConfigured: boolean;
+  private readonly director: CompatibilityDirector;
+  private readonly selector: VersionSelectorStrategy;
   private readonly cache = new LocationCache();
   private readonly correlation = new CorrelationTable();
   private readonly connections: ConnectionManager;
@@ -148,6 +177,10 @@ export class ClusterNode {
   constructor(private readonly options: ClusterNodeOptions) {
     const time = options.time ?? systemTimeProvider;
     this.callTimeoutMs = options.callTimeoutMs ?? 30_000;
+    this.versionPolicyConfigured =
+      options.versionCompatibility !== undefined || options.versionSelector !== undefined;
+    this.director = compatibilityDirector(options.versionCompatibility ?? "backwardCompatible");
+    this.selector = versionSelector(options.versionSelector ?? "latest");
     this.ring = this.buildRing();
     this.connections = new ConnectionManager(options.transport, options.local, options.clusterId);
     this.factory = new GrainFactory((interfaceId) => this.resolveGrainType(interfaceId));
@@ -188,6 +221,7 @@ export class ClusterNode {
         activationCount: (silo) => (silo.equals(this.options.local) ? this.catalog.count() : 0),
         random: this.options.random ?? Math.random,
       }),
+      versionFilter: (req, candidates) => this.applyVersionFilter(req, candidates),
     });
     this.factory.setDispatcher(this.dispatcher);
     const transactionAgent = new TransactionAgent(time);
@@ -212,6 +246,11 @@ export class ClusterNode {
     this.grainTypes.set(metadata.grainType, { ctor, metadata });
     for (const iface of registration.interfaces) {
       this.interfaceToGrainType.set(iface.id, metadata.grainType);
+      const existing = this.localVersions.get(iface.id);
+      if (existing === undefined || iface.version > existing.version) {
+        this.localVersions.set(iface.id, { version: iface.version, grainType: metadata.grainType });
+      }
+      if (iface.version > this.maxLocalVersion) this.maxLocalVersion = iface.version;
     }
     for (const namespace of metadata.implicitSubscriptions) {
       const types = this.implicitSubscriptions.get(namespace) ?? [];
@@ -232,6 +271,16 @@ export class ClusterNode {
 
   isActive(id: GrainId): boolean {
     return this.catalog.isActive(id);
+  }
+
+  /** This silo's grain manifest: the interface versions it implements (ADR 0014). */
+  manifest(): SiloManifest {
+    return { silo: this.options.local, entries: this.localManifestEntries() };
+  }
+
+  /** The version this silo implements for an interface, or `undefined` if none. */
+  localImplementedVersion(interfaceId: number): number | undefined {
+    return this.localVersions.get(interfaceId)?.version;
   }
 
   /** The hash ranges this silo owns on the current ring (drives reminder ownership). */
@@ -331,6 +380,10 @@ export class ClusterNode {
         void this.connections.drop(member);
       }
     }
+    // Peer manifests may have shifted with the view (a silo upgraded/left);
+    // drop them all and re-fetch lazily on the next version-aware placement.
+    this.manifestCache.clear();
+    this.manifestInflight.clear();
     this.ring = this.buildRing();
   }
 
@@ -341,6 +394,58 @@ export class ClusterNode {
   private placementFor(grainType: GrainType): PlacementStrategy {
     const reg = this.grainTypes.get(grainType);
     return reg ? placementStrategyFor(reg.metadata) : randomPlacement;
+  }
+
+  /** True once this silo declares a version > 1 or a versioning policy is set. */
+  private versioningActive(): boolean {
+    return this.versionPolicyConfigured || this.maxLocalVersion > 1;
+  }
+
+  /**
+   * Version-aware placement pre-filter (ADR 0014). Inert (returns the candidates
+   * unchanged, with no manifest round-trips) unless versioning is active.
+   */
+  private applyVersionFilter(
+    req: InvocationRequest,
+    candidates: readonly SiloAddress[],
+  ): Promise<readonly SiloAddress[]> {
+    if (!this.versioningActive()) return Promise.resolve(candidates);
+    return filterByVersion(req.interfaceId, req.interfaceVersion ?? 1, candidates, {
+      director: this.director,
+      selector: this.selector,
+      getManifest: (silo) => this.getManifest(silo),
+    });
+  }
+
+  private localManifestEntries(): InterfaceVersionEntry[] {
+    return [...this.localVersions.entries()].map(([interfaceId, v]) => ({
+      interfaceId,
+      version: v.version,
+      grainType: v.grainType,
+    }));
+  }
+
+  /** A peer's manifest: served locally, else fetched once over the transport and cached. */
+  private getManifest(silo: SiloAddress): Promise<SiloManifest> {
+    if (silo.equals(this.options.local)) return Promise.resolve(this.manifest());
+    const key = silo.toString();
+    const cached = this.manifestCache.get(key);
+    if (cached !== undefined) return Promise.resolve(cached);
+    const inflight = this.manifestInflight.get(key);
+    if (inflight !== undefined) return inflight;
+    const pending = this.sendManifest(silo).then(
+      (manifest) => {
+        this.manifestCache.set(key, manifest);
+        this.manifestInflight.delete(key);
+        return manifest;
+      },
+      (err: unknown) => {
+        this.manifestInflight.delete(key);
+        throw err;
+      },
+    );
+    this.manifestInflight.set(key, pending);
+    return pending;
   }
 
   private resolveGrainType(interfaceId: number): GrainType {
@@ -480,6 +585,7 @@ export class ClusterNode {
       sendingSilo: this.options.local,
       sendingGrain: req.sender,
       interfaceId: req.interfaceId,
+      ...(req.interfaceVersion !== undefined ? { interfaceVersion: req.interfaceVersion } : {}),
       method: req.method,
       requestContext: {
         reentrancyId: req.reentrancyId,
@@ -549,6 +655,10 @@ export class ClusterNode {
       void this.handleMigration(message);
       return;
     }
+    if (message.system === "manifest") {
+      void this.handleManifestRequest(message);
+      return;
+    }
     void this.receiveRequest(message);
   }
 
@@ -595,6 +705,40 @@ export class ClusterNode {
             });
       await this.reply(replyTo, responseTo(message, kind, body, this.options.local));
     }
+  }
+
+  /** Fetch a peer's manifest as a `system: "manifest"` request (mirrors directory RPC). */
+  private async sendManifest(owner: SiloAddress): Promise<SiloManifest> {
+    const conn = await this.connections.get(owner);
+    const correlationId = nextCorrelationId();
+    const message: Message = {
+      correlationId,
+      direction: "request",
+      system: "manifest",
+      targetGrain: new GrainId("manifest", owner.ringKey),
+      sendingSilo: this.options.local,
+      interfaceId: 0,
+      method: "",
+      body: this.serializer.serialize(null),
+    };
+    const pending = this.correlation.register(correlationId, this.callTimeoutMs);
+    conn.send(message);
+    const entries = this.interpretResponse(await pending) as InterfaceVersionEntry[];
+    return { silo: owner, entries };
+  }
+
+  private async handleManifestRequest(message: Message): Promise<void> {
+    const replyTo = message.sendingSilo;
+    if (replyTo === undefined) return;
+    await this.reply(
+      replyTo,
+      responseTo(
+        message,
+        "success",
+        this.serializer.serialize(this.localManifestEntries()),
+        this.options.local,
+      ),
+    );
   }
 
   private applyDirectoryOp(op: DirectoryOp): GrainAddress | undefined {
@@ -665,6 +809,9 @@ export class ClusterNode {
     return {
       target: message.targetGrain,
       interfaceId: message.interfaceId,
+      ...(message.interfaceVersion !== undefined
+        ? { interfaceVersion: message.interfaceVersion }
+        : {}),
       method: message.method,
       args: this.serializer.deserialize<unknown[]>(message.body),
       options: iface?.options[message.method] ?? {},

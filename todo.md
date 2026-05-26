@@ -251,8 +251,19 @@ order, starting with transactions.
         fallback) + hosting e2e (unflushed persistent state preserved across the move).
   - [ ] Activation rebalancer (`IActivationRebalancer`) — proactively rebalance activations across
         silos (Orleans 10 `Orleans.Runtime/Placement/Rebalancing/*`).
-- [ ] Grain-interface versioning — multiple interface versions live at once for heterogeneous rolling
-      upgrades, with version-aware placement (Orleans' versioning).
+- [x] Grain-interface versioning — multiple interface versions live at once for heterogeneous rolling
+      upgrades, with version-aware placement (Orleans' versioning). [ADR 0014](docs/adr/0014-grain-interface-versioning.md).
+  - [x] `GrainInterface.version` (default 1; id stays name-derived) via `defineGrainInterface(name, { version })`;
+        `interfaceVersion` threaded `InvocationRequest`→`Message`→back (absent ⇒ 1).
+  - [x] Policy abstractions in core: `CompatibilityDirector` (`backwardCompatible`/`strict`),
+        `VersionSelectorStrategy` (`latest`/`all`/`minimum`), `SiloManifest`/`InterfaceVersionEntry`.
+  - [x] Per-silo manifest from registered interfaces; lazy cross-silo `system: "manifest"` RPC
+        (mirrors directory RPC), cached, cleared on membership change.
+  - [x] Version-aware placement pre-filter in `DistributedDispatcher.placeAndInvoke` (best-effort
+        fallback to all candidates when none compatible); inert unless versioning is active.
+  - [x] Host surface `createSilo().useVersioning({ compatibility, selector })`.
+  - [x] Tests: director/selector units, `filterByVersion` unit, multi-silo `versioning.cluster.test.ts`
+        (v2→v2 silo, v1→v2 silo, strict + best-effort fallback, selectors, inert v1-only cluster).
 - [x] Implicit stream subscriptions — bind a grain type to a namespace and auto-subscribe by key, no
       explicit `subscribe` call (Orleans' `[ImplicitStreamSubscription]`). A grain type declares
       namespaces via `@implicitStreamSubscription(ns)` (class) or `defineGrain`'s

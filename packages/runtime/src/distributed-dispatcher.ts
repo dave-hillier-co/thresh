@@ -28,6 +28,16 @@ export interface DistributedDispatcherDeps {
   placementFor: (grainType: GrainType) => PlacementStrategy;
   /** Extra placement context (activation counts, RNG); `localSilo` is filled in. */
   placementContext: () => Omit<PlacementContext, "localSilo">;
+  /**
+   * Optional version-aware pre-filter (grain-interface versioning). Wired only
+   * when versioning is active; returns the compatible subset of `candidates`
+   * (possibly empty). When absent, placement uses the full candidate set as
+   * before.
+   */
+  versionFilter?: (
+    req: InvocationRequest,
+    candidates: readonly SiloAddress[],
+  ) => Promise<readonly SiloAddress[]>;
 }
 
 /**
@@ -88,8 +98,15 @@ export class DistributedDispatcher implements Dispatcher {
     return act.invoke(req);
   }
 
-  private placeAndInvoke(req: InvocationRequest): Promise<unknown> {
-    const candidates = this.deps.activeSilos();
+  private async placeAndInvoke(req: InvocationRequest): Promise<unknown> {
+    const active = this.deps.activeSilos();
+    // Version-aware placement: prefer compatible silos, but fall back to the full
+    // set when none qualify (best-effort — placement never fails on version).
+    let candidates: readonly SiloAddress[] = active;
+    if (this.deps.versionFilter !== undefined) {
+      const compatible = await this.deps.versionFilter(req, active);
+      if (compatible.length > 0) candidates = compatible;
+    }
     const strategy = this.deps.placementFor(req.target.type);
     const targetSilo = strategy.choose(req.target.type, candidates, {
       localSilo: this.deps.local,

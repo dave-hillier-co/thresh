@@ -39,10 +39,12 @@ export interface Message {
   sendingSilo?: SiloAddress | undefined;
 
   interfaceId: number;
+  /** Caller's interface version for version-aware placement (absent ⇒ 1). */
+  interfaceVersion?: number | undefined;
   method: string;
 
-  /** Marks a system request (e.g. a directory partition operation) vs a grain call. */
-  system?: "directory" | "migration" | undefined;
+  /** Marks a system request (directory, migration, or manifest operation) vs a grain call. */
+  system?: "directory" | "migration" | "manifest" | undefined;
 
   responseKind?: ResponseKind | undefined;
   requestContext?: RequestContext | undefined;
@@ -74,6 +76,9 @@ export function responseTo(
     targetGrain: request.targetGrain,
     sendingSilo,
     interfaceId: request.interfaceId,
+    ...(request.interfaceVersion !== undefined
+      ? { interfaceVersion: request.interfaceVersion }
+      : {}),
     method: request.method,
     responseKind,
     body,

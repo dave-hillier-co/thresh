@@ -11,6 +11,8 @@ export interface InvocationRequest {
   target: GrainId;
   /** Interface id — routes `getGrain` to the hosting type and rehydrates refs. */
   interfaceId: number;
+  /** Caller's compiled interface version for version-aware placement (absent ⇒ 1). */
+  interfaceVersion?: number;
   /** The method name; the receiving activation dispatches the message by name. */
   method: string;
   args: unknown[];

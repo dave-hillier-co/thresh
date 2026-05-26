@@ -6,6 +6,8 @@ import type {
 import type { GrainInterface } from "@tsva/core/grain-interface";
 import type { MembershipService } from "@tsva/core/membership";
 import type { SiloAddress } from "@tsva/core/silo-address";
+import type { CompatibilityKind } from "@tsva/core/version-compatibility";
+import type { VersionSelectorKind } from "@tsva/core/version-selector";
 import {
   KubernetesMembership,
   type EndpointWatch,
@@ -78,6 +80,9 @@ export class SiloBuilder {
   private readonly outgoingCallFilters: OutgoingGrainCallFilter[] = [];
   private metricsEnabled = false;
   private readonly registrations: Registration[] = [];
+  private versioning:
+    | { compatibility?: CompatibilityKind; selector?: VersionSelectorKind }
+    | undefined;
   private readonly starters: Array<() => Promise<void>> = [];
   private readonly closers: Array<() => Promise<void>> = [];
   private readonly pullingStreams: RedisPullingStreamProvider[] = [];
@@ -210,6 +215,20 @@ export class SiloBuilder {
    */
   useLogging(logger: Logger): this {
     this.incomingCallFilters.push(loggingFilter(logger));
+    return this;
+  }
+
+  /**
+   * Enable grain-interface versioning (ADR 0014): version-aware placement steers
+   * a new activation onto a silo whose implemented interface version is
+   * compatible with the caller's. `compatibility` defaults to `"backwardCompatible"`
+   * (a newer silo can serve an older caller); `selector` defaults to `"latest"`.
+   * When no silo is compatible, placement falls back to the full candidate set.
+   */
+  useVersioning(
+    options: { compatibility?: CompatibilityKind; selector?: VersionSelectorKind } = {},
+  ): this {
+    this.versioning = options;
     return this;
   }
 
@@ -368,6 +387,14 @@ export class SiloBuilder {
         ? { collectionIntervalSeconds: this.config.collectionIntervalSeconds }
         : {}),
       ...(this.config.random !== undefined ? { random: this.config.random } : {}),
+      // Calling useVersioning() enables versioning with resolved defaults, so the
+      // node activates version-aware placement even when no policy is overridden.
+      ...(this.versioning !== undefined
+        ? {
+            versionCompatibility: this.versioning.compatibility ?? "backwardCompatible",
+            versionSelector: this.versioning.selector ?? "latest",
+          }
+        : {}),
       ...(this.incomingCallFilters.length > 0
         ? { incomingCallFilters: this.incomingCallFilters }
         : {}),

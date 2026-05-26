@@ -14,6 +14,13 @@ import type { InvokeMethodOptions } from "./invoke-options";
 export interface GrainInterface<T> {
   readonly id: number;
   readonly name: string;
+  /**
+   * Interface version (defaults to 1). The `id` is name-derived and stable
+   * across versions — two versions of one interface share an id — so a caller's
+   * version travels separately on the wire for version-aware placement
+   * ([ADR 0014](../../docs/adr/0014-grain-interface-versioning.md)).
+   */
+  readonly version: number;
   readonly options: Readonly<Record<string, InvokeMethodOptions>>;
   /** Phantom marker so a `GrainInterface<T>` carries its interface type. */
   readonly __t?: T;
@@ -22,6 +29,8 @@ export interface GrainInterface<T> {
 export interface GrainInterfaceDefinition<T> {
   /** Per-method invocation flags; only the non-default methods need an entry. */
   options?: Partial<Record<keyof T & string, InvokeMethodOptions>>;
+  /** Interface version for rolling upgrades (defaults to 1). */
+  version?: number;
 }
 
 // Process-wide registry so a receiving silo can resolve an interfaceId back to
@@ -35,6 +44,7 @@ export function defineGrainInterface<T>(
   const result: GrainInterface<T> = {
     id: stableHash32(name),
     name,
+    version: def.version ?? 1,
     options: { ...(def.options ?? {}) } as Record<string, InvokeMethodOptions>,
   };
   registry.set(result.id, result as GrainInterface<unknown>);
