@@ -13,21 +13,15 @@ with *the current value*, and state transitions are scattered across imperative 
 
 The **reducer** shape — which the authors prefer — separates the two: a command produces past-tense
 **events**, and an immutable state value is folded from them by a **pure reducer**
-`reduce(state, event) => state`. It is worth being precise that this is a *state-management* pattern
-in its own right, **not** event sourcing. React/Redux uses exactly this shape with `useReducer`:
-actions are routed through a pure reducer to produce new immutable state, and the actions are
-**transient** — they are not stored; what you keep is a snapshot of the reduced state.
+`reduce(state, event) => state`. React/Redux uses exactly this shape with `useReducer`: actions are
+routed through a pure reducer to produce new immutable state, and the actions are **transient** —
+they are not stored; what you keep is a snapshot of the reduced state.
 
 Orleans is direct prior art for the model: `JournaledGrain<TState, TEvent>` raises events that drive
 state. This ADR takes that **programming model** but differs in two deliberate ways. First, `reduce`
 is a **pure function returning new immutable state** — the React discipline — rather than a mutating
 `Apply` / `TransitionState`, which keeps transitions side-effect-free and trivially testable. Second,
-it persists a **snapshot** of the reduced state. Durable event-sourcing / journaling — keeping the
-event log itself — is a *distinct persistence capability* (Orleans' log-consistency providers, and
-Orleans 10's `Orleans.Journaling` / `DurableGrain`); this project addresses that separately as the
-`DurableGrain` parity item on the [roadmap](../13-roadmap-and-phases.md), **not** as a persistence
-mode of reducer grains. Reducer grains are the state-management model; durable journaling is its own
-feature.
+it persists a **snapshot** of the reduced state.
 
 The model fits the virtual-actor runtime particularly well, because the actor removes the hardest
 part — serializing state evolution against concurrent writers:
@@ -58,14 +52,11 @@ replacement for the mutable facet.
 
 **Persistence: snapshot.** Persist the folded `S` through the existing `GrainStorage` + etag; the
 raised events are transient per-turn values, exactly as a React app keeps reduced state and discards
-dispatched actions. This adds no new store. Where a durable record of *what happened* is wanted, the
-raised events are published to a stream (below) — and a richer durable-journaling model, if ever
-needed, is the separate `DurableGrain` path, not a reducer-specific event log.
+dispatched actions. This adds no new store.
 
 Stream publication is opt-in and independent: raised events may also be published to the grain's
 event stream (`getStreamProvider().getStream("events", this.id.key)`) so projections and sagas reuse
-the stream layer ([09](../09-event-streams.md)) — and serve as the durable event history when one is
-wanted.
+the stream layer ([09](../09-event-streams.md)).
 
 The proxy/interface plumbing (`defineGrainInterface`, `Proxy` references — [ADR 0001](0001-runtime-proxy-grain-references.md))
 is **orthogonal** to the reducer: unchanged, and a future declarative/generated grain layer would sit
@@ -102,11 +93,6 @@ is **orthogonal** to the reducer: unchanged, and a future declarative/generated 
 
 1. **Mutable state facet only (status quo).** Simple and shipped, but mixes events with current value
    and scatters transitions across mutations; does not serve the reducer authoring model.
-2. **Reducer bundled with a durable event log.** Conflating the programming model with event-sourcing
-   persistence would force an event store on every reducer grain and pay full replay cost per
-   activation. Scoping the reducer to snapshot persistence — and treating durable journaling as a
-   separate capability (the `DurableGrain` path), with streams covering event history meanwhile —
-   keeps reducer grains low-cost and avoids duplicating the journaling/streams stack.
-3. **An external reducer/event-sourcing framework beside the runtime.** Would duplicate identity,
+2. **An external reducer/event-sourcing framework beside the runtime.** Would duplicate identity,
    single-writer and turn semantics the runtime already provides, and fight the actor model rather
    than build on it.

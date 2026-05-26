@@ -63,8 +63,7 @@ decisions.
       run permitted grains client-side, gated by a server-enforced trust model
       ([docs/13 "Beyond parity"](docs/13-roadmap-and-phases.md)); needs an ADR.
 
-## ⛔ Out of scope (not parity gaps)
+## ⏸ Deferred
 
-- Multi-cluster / geo-distribution — Orleans removed it in 3.0.
-- Postgres storage/reminder providers — alternatives to the shipped Redis defaults.
-- Reducer event-log mode — superseded by streams (event history) and the `DurableGrain` path.
+- [ ] **Additional durable providers** — Postgres grain storage / reminder table and other stream
+      backings, behind the same interfaces. Redis is the shipped default.

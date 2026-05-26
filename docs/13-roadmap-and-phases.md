@@ -35,9 +35,8 @@ journaling (`DurableGrain`) and durable jobs need an ADR each (journaling overla
 reducer/persistent-state model). Cross-cutting observability (OpenTelemetry traces/metrics, structured
 logs) remains to be wired throughout, on the grain-call-filter seam.
 
-**Out of scope / deferred:** multi-cluster/geo (Orleans removed it in 3.0) and additional providers
-(Postgres storage/reminders, other stream backings) — alternatives to the shipped Redis defaults, not
-parity gaps.
+**Deferred:** additional providers (Postgres storage/reminders, other stream backings) — alternatives
+to the shipped Redis defaults, not parity gaps.
 
 ## Phase 1 — Single-silo core actor model
 
@@ -174,7 +173,6 @@ verified.
 
 ## Deferred (not parity gaps)
 
-- **Multi-cluster / geo-distribution** — out of scope: Orleans removed it in 3.0.
 - **Additional providers** — Postgres grain storage and reminder table, plus other databases and
   stream backings/queue adapters. Redis is the shipped default; these are alternatives.
 

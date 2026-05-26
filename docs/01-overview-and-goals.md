@@ -43,17 +43,6 @@ reminders, streams, transactions, and Kubernetes hosting. "Done" is defined exte
 Orleans 10 offers — rather than by an internal version label. The [roadmap](13-roadmap-and-phases.md)
 tracks what is shipped versus what remains for parity.
 
-## Non-goals
-
-- **Multi-cluster / geo-distribution** (clustering across regions). Orleans itself **removed** its
-  multi-cluster support in 3.0, so this is out of scope for parity, not merely deferred.
-- **A bespoke high-performance binary wire protocol.** We use WebSocket framing and a pluggable
-  serializer rather than reimplementing Orleans' networking stack.
-
-Cross-grain ACID transactions ([ADR 0008](adr/0008-cross-grain-transactions.md)), grain-interface
-versioning and implicit stream subscriptions are Orleans features and so are **parity work on the
-roadmap**, not non-goals.
-
 ## What Kubernetes replaces
 
 | Orleans mechanism | Replaced by | Notes |

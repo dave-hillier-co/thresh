@@ -55,5 +55,5 @@ name + UID, removing the need for generation counters.
   Probe periods/thresholds become the knobs ([10](../10-kubernetes-hosting.md)).
 - **RBAC is required.** Each silo needs a ServiceAccount with namespace-scoped watch on
   pods/endpoints/endpointslices.
-- **Non-Kubernetes hosting is out of scope** for production. Acceptable per project goals; a
-  different `MembershipService` implementation could be added later if needed.
+- **Production hosting targets Kubernetes.** A different `MembershipService` implementation could be
+  added later if needed.
