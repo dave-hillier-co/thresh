@@ -4,6 +4,7 @@ export type ActivationReason = "incoming-call" | "reactivation";
 export type DeactivationReasonCode =
   | "shutting-down"
   | "idle"
+  | "migrating"
   | "application-requested"
   | "runtime-requested";
 

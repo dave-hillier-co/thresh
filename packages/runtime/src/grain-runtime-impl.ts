@@ -4,6 +4,7 @@ import type { GrainKey } from "@tsva/core/grain-key";
 import type { GrainRuntime } from "@tsva/core/grain-runtime";
 import type { GrainTimer } from "@tsva/core/grain-timer";
 import type { ReminderRegistry } from "@tsva/core/reminder";
+import type { SiloAddress } from "@tsva/core/silo-address";
 import { isActivationBound, type StreamProvider } from "@tsva/core/stream";
 import type { ActivationData } from "@tsva/runtime/activation";
 import { ActivationStreamProvider } from "@tsva/runtime/activation-stream-provider";
@@ -59,6 +60,10 @@ export class GrainRuntimeImpl implements GrainRuntime {
 
   deactivateOnIdle(): void {
     this.activation.requestDeactivation();
+  }
+
+  migrateOnIdle(targetSilo?: SiloAddress): void {
+    this.activation.requestMigration(targetSilo);
   }
 
   delayDeactivation(by: Duration): void {

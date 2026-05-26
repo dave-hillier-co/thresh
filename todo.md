@@ -239,7 +239,18 @@ order, starting with transactions.
         runs innermost (after silo-wide filters, before the method); `defineGrain` installs
         symbol-keyed behaviour members so functional grains can declare it too. Hosting e2e: class +
         functional self-filter, ordering relative to a silo filter.
-- [ ] Grain migration / activation rebalancer (Orleans 10 core runtime).
+- [~] Grain migration / activation rebalancer (Orleans 10 core runtime).
+  - [x] Slice 1 — live migration on idle: `IGrainMigrationParticipant` (`onDehydrate`/`onRehydrate`)
+        in core; `runtime.migrateOnIdle(targetSilo?)`; the idle-collection sweep moves a migrating
+        activation to another silo (directed via `chooseMigrationTarget`, else placement strategy over
+        other silos) instead of deactivating it. The source dehydrates on a turn and rejects further
+        calls as stale; the target rehydrates and claims the directory entry via CAS
+        (`register(newAddr, sourceAddr)`); `@persistentState` facets auto-participate (value+etag move
+        in the bag, target skips the storage read). Unit (participant guard/bag, directed target
+        choice, dehydrate/reject-after) + multi-silo e2e (directed + strategy-chosen, single-silo
+        fallback) + hosting e2e (unflushed persistent state preserved across the move).
+  - [ ] Activation rebalancer (`IActivationRebalancer`) — proactively rebalance activations across
+        silos (Orleans 10 `Orleans.Runtime/Placement/Rebalancing/*`).
 - [ ] Grain-interface versioning — multiple interface versions live at once for heterogeneous rolling
       upgrades, with version-aware placement (Orleans' versioning).
 - [x] Implicit stream subscriptions — bind a grain type to a namespace and auto-subscribe by key, no

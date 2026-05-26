@@ -24,8 +24,18 @@ export interface CatalogOptions {
   defaultCollectionAgeSeconds: number;
   /** Called after an activation has been deactivated (idle collection or shutdown). */
   onDeactivated?: (activation: ActivationData) => void;
-  /** Bind/read persistent state before `onActivate` (provided by the hosting layer). */
-  activateState?: (instance: Grain, grainId: GrainId) => Promise<void>;
+  /**
+   * Bind state before `onActivate` (provided by the hosting layer). In `"activate"`
+   * mode it reads from storage; in `"rehydrate"` mode it binds the facets without
+   * reading, so migrated state restored from the bag is not clobbered.
+   */
+  activateState?: (
+    instance: Grain,
+    grainId: GrainId,
+    mode?: "activate" | "rehydrate",
+  ) => Promise<void>;
+  /** Migrate an idle activation to another silo; resolves to whether it moved. */
+  migrate?: (activation: ActivationData) => Promise<boolean>;
   /** Resolves the reminder registry a grain's `registerReminder` delegates to. */
   reminderRegistry?: () => ReminderRegistry | undefined;
   /** Resolves the stream provider a grain's `getStreamProvider` returns. */
@@ -61,6 +71,23 @@ export class Catalog {
     return created;
   }
 
+  /**
+   * Migration path: create an activation that restores its state from `bag` (via
+   * each participant's `onRehydrate`) instead of reading storage, with the
+   * activation id the source silo chose for the move.
+   */
+  activateMigrated(
+    id: GrainId,
+    activationId: string,
+    bag: Record<string, unknown>,
+  ): ActivationData {
+    const existing = this.activations.get(id.toString());
+    if (existing !== undefined && existing.state !== "invalid") return existing;
+    const created = this.create(id, activationId, bag);
+    this.activations.set(id.toString(), created);
+    return created;
+  }
+
   get(id: GrainId): ActivationData | undefined {
     return this.activations.get(id.toString());
   }
@@ -76,7 +103,11 @@ export class Catalog {
     return n;
   }
 
-  private create(id: GrainId, activationId?: string): ActivationData {
+  private create(
+    id: GrainId,
+    activationId?: string,
+    rehydrationBag?: Record<string, unknown>,
+  ): ActivationData {
     const reg = this.options.grainTypes.get(id.type);
     if (reg === undefined) throw new GrainCallError(`no grain type registered: ${id.type}`);
     const ageSeconds =
@@ -103,17 +134,37 @@ export class Catalog {
       activation.incomingCallFilters = this.options.incomingCallFilters;
     }
     const activateState = this.options.activateState;
-    if (activateState !== undefined) {
-      activation.preActivate = () => activateState(instance, id);
+    if (rehydrationBag !== undefined) {
+      activation.rehydrationBag = rehydrationBag;
+      activation.preActivate = async () => {
+        if (activateState !== undefined) await activateState(instance, id, "rehydrate");
+        activation.applyRehydration();
+      };
+      activation.beginActivate("reactivation");
+    } else {
+      if (activateState !== undefined) {
+        activation.preActivate = () => activateState(instance, id);
+      }
+      activation.beginActivate("incoming-call");
     }
-    activation.beginActivate("incoming-call");
     return activation;
   }
 
   async collectIdle(): Promise<void> {
     for (const [key, activation] of this.activations) {
       if (activation.isStale()) {
-        await activation.deactivate({ code: "idle", description: "idle collection" });
+        // A grain that asked to migrate moves to another silo first (flipping the
+        // directory); then the local activation is deactivated either way — its
+        // address-matched directory unregister is a no-op once the entry moved.
+        const moved =
+          activation.wantsMigration && this.options.migrate !== undefined
+            ? await this.options.migrate(activation)
+            : false;
+        await activation.deactivate(
+          moved
+            ? { code: "migrating", description: "migrated to another silo" }
+            : { code: "idle", description: "idle collection" },
+        );
       }
       if (activation.state === "invalid") {
         this.activations.delete(key);

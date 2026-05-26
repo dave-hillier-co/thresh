@@ -42,7 +42,7 @@ export interface Message {
   method: string;
 
   /** Marks a system request (e.g. a directory partition operation) vs a grain call. */
-  system?: "directory" | undefined;
+  system?: "directory" | "migration" | undefined;
 
   responseKind?: ResponseKind | undefined;
   requestContext?: RequestContext | undefined;

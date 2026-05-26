@@ -366,9 +366,11 @@ export class SiloBuilder {
       // Transactional facets need no storage provider in this slice, so the
       // binder always runs; persistent/reducer facets bind only when storage is
       // configured.
-      stateBinder: async (instance, grainId) => {
+      stateBinder: async (instance, grainId, mode) => {
         if (storage !== undefined) {
-          await bindPersistentStates(instance, grainId, storage);
+          // On rehydration the migrated value is restored from the bag, so bind the
+          // persistent facet without reading storage (which would clobber it).
+          await bindPersistentStates(instance, grainId, storage, { read: mode !== "rehydrate" });
           await bindReducerStates(instance, grainId, storage);
         }
         await bindTransactionalStates(instance, grainId, transactionalStorage, (manager, txId) =>

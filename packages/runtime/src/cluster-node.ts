@@ -1,6 +1,7 @@
+import { newActivationId } from "@tsva/core/activation-id";
 import { GrainCallError, RejectionError } from "@tsva/core/errors";
 import type { Grain } from "@tsva/core/grain";
-import type { GrainAddress } from "@tsva/core/grain-address";
+import { grainAddressEquals, type GrainAddress } from "@tsva/core/grain-address";
 import type { GrainId } from "@tsva/core/grain-id";
 import type { GrainInterface } from "@tsva/core/grain-interface";
 import { getGrainInterface } from "@tsva/core/grain-interface";
@@ -40,9 +41,13 @@ import { Catalog, type RegisteredGrain } from "@tsva/runtime/catalog";
 import type { ActivationData } from "@tsva/runtime/activation";
 import { DistributedDispatcher } from "@tsva/runtime/distributed-dispatcher";
 import { GrainFactory } from "@tsva/runtime/grain-factory";
+import { chooseMigrationTarget } from "@tsva/runtime/placement/choose-migration-target";
 import { placementStrategyFor } from "@tsva/runtime/placement/placement-director";
 import { RandomPlacement } from "@tsva/runtime/placement/random-placement";
-import type { PlacementStrategy } from "@tsva/runtime/placement/placement-strategy";
+import type {
+  PlacementContext,
+  PlacementStrategy,
+} from "@tsva/runtime/placement/placement-strategy";
 import { systemTimeProvider, type TimeProvider } from "@tsva/runtime/time-provider";
 import { TransactionAgent } from "@tsva/runtime/transaction-agent";
 
@@ -59,8 +64,15 @@ export interface ClusterNodeOptions {
   defaultCollectionAgeSeconds?: number;
   /** How often the idle-collection sweep runs (defaults to 60s). */
   collectionIntervalSeconds?: number;
-  /** Bind/read persistent state before `onActivate` (provided by the hosting layer). */
-  stateBinder?: (instance: Grain, grainId: GrainId) => Promise<void>;
+  /**
+   * Bind state before `onActivate` (provided by the hosting layer). `"rehydrate"`
+   * mode binds facets without reading storage so migrated state is preserved.
+   */
+  stateBinder?: (
+    instance: Grain,
+    grainId: GrainId,
+    mode?: "activate" | "rehydrate",
+  ) => Promise<void>;
   /** Resolves the reminder registry a grain's `registerReminder` delegates to. */
   reminderRegistry?: () => ReminderRegistry | undefined;
   /** Resolves the stream provider a grain's `getStreamProvider` returns. */
@@ -86,6 +98,13 @@ type DirectoryOp =
 
 function directoryOpGrainId(op: DirectoryOp): GrainId {
   return op.kind === "lookup" ? op.grainId : op.addr.grainId;
+}
+
+/** Carries a migrating activation's identity and dehydrated state to its new host. */
+interface MigrationPayload {
+  grainId: GrainId;
+  sourceAddr: GrainAddress;
+  bag: Record<string, unknown>;
 }
 
 const newChainId = () => Guid.newGuid().toString();
@@ -147,6 +166,7 @@ export class ClusterNode {
       time,
       defaultCollectionAgeSeconds: options.defaultCollectionAgeSeconds ?? 900,
       onDeactivated: (a) => this.onDeactivated(a),
+      migrate: (a) => this.migrateActivation(a),
       ...(options.stateBinder !== undefined ? { activateState: options.stateBinder } : {}),
       ...(options.reminderRegistry !== undefined
         ? { reminderRegistry: options.reminderRegistry }
@@ -341,6 +361,107 @@ export class ClusterNode {
     this.cache.invalidate(activation.id);
   }
 
+  // --- migration ---
+
+  /**
+   * Move an idle activation to another silo with its state preserved: pick the
+   * target (directed or via placement), dehydrate, and ask the target to take it
+   * over (which flips the directory by CAS). Returns whether the move succeeded;
+   * on any failure the caller falls back to plain deactivation.
+   */
+  private async migrateActivation(activation: ActivationData): Promise<boolean> {
+    try {
+      const candidates = activeSilos(this.options.membership.current());
+      const context: PlacementContext = {
+        localSilo: this.options.local,
+        activationCount: (silo) => (silo.equals(this.options.local) ? this.catalog.count() : 0),
+        random: this.options.random ?? Math.random,
+      };
+      const target = chooseMigrationTarget(
+        activation.id.type,
+        activation.migrationTarget,
+        candidates,
+        this.placementFor(activation.id.type),
+        context,
+      );
+      if (target === undefined) return false;
+      const bag = await activation.dehydrate();
+      const sourceAddr: GrainAddress = {
+        grainId: activation.id,
+        silo: this.options.local,
+        activationId: activation.activationId,
+      };
+      const accepted = await this.sendMigration(target, {
+        grainId: activation.id,
+        sourceAddr,
+        bag,
+      });
+      // The directory now points at the new host; drop our stale cache entry.
+      if (accepted) this.cache.invalidate(activation.id);
+      return accepted;
+    } catch {
+      return false;
+    }
+  }
+
+  private async sendMigration(target: SiloAddress, payload: MigrationPayload): Promise<boolean> {
+    const conn = await this.connections.get(target);
+    const correlationId = nextCorrelationId();
+    const message: Message = {
+      correlationId,
+      direction: "request",
+      system: "migration",
+      targetGrain: payload.grainId,
+      sendingSilo: this.options.local,
+      interfaceId: 0,
+      method: "",
+      body: this.serializer.serialize(payload),
+    };
+    const pending = this.correlation.register(correlationId, this.callTimeoutMs);
+    conn.send(message);
+    return this.interpretResponse(await pending) as boolean;
+  }
+
+  private async handleMigration(message: Message): Promise<void> {
+    const replyTo = message.sendingSilo;
+    if (replyTo === undefined) return;
+    try {
+      const payload = this.serializer.deserialize<MigrationPayload>(message.body);
+      const accepted = await this.acceptMigration(payload);
+      await this.reply(
+        replyTo,
+        responseTo(message, "success", this.serializer.serialize(accepted), this.options.local),
+      );
+    } catch (err) {
+      const body = this.serializer.serialize({
+        message: err instanceof Error ? err.message : String(err),
+      });
+      await this.reply(replyTo, responseTo(message, "error", body, this.options.local));
+    }
+  }
+
+  /** Take over a migrating activation here, rehydrating its state and claiming the directory entry. */
+  private async acceptMigration(payload: MigrationPayload): Promise<boolean> {
+    const activation = this.catalog.activateMigrated(
+      payload.grainId,
+      newActivationId(),
+      payload.bag,
+    );
+    const newAddr: GrainAddress = {
+      grainId: payload.grainId,
+      silo: this.options.local,
+      activationId: activation.activationId,
+    };
+    const winner = await this.directory.register(newAddr, payload.sourceAddr);
+    this.cache.put(winner);
+    if (!grainAddressEquals(winner, newAddr)) {
+      // Another silo moved or activated the grain first: discard our activation.
+      await activation.deactivate({ code: "runtime-requested", description: "migration lost CAS" });
+      return false;
+    }
+    return true;
+  }
+
   // --- transport ---
 
   private async sendRemote(silo: SiloAddress, req: InvocationRequest): Promise<unknown> {
@@ -416,6 +537,10 @@ export class ClusterNode {
     }
     if (message.system === "directory") {
       void this.handleDirectoryRequest(message);
+      return;
+    }
+    if (message.system === "migration") {
+      void this.handleMigration(message);
       return;
     }
     void this.receiveRequest(message);
