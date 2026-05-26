@@ -112,17 +112,22 @@ sequenceDiagram
 - **On leave/crash:** entries the dead silo *owned* are lost (acceptable — they were ephemeral), and
   entries *pointing at* the dead silo are removed everywhere. Affected grains reactivate on next
   call.
-- **On join:** the newcomer takes over ranges from its ring neighbours. The previous owners hand off
-  the live entries in those ranges (Orleans does a versioned handoff with range "wedges"). A simpler
-  acceptable variant for early phases is to **drop and lazily rebuild** entries in moved ranges,
-  trading a few redundant reactivations for much less handoff machinery; the roadmap
-  ([13](13-roadmap-and-phases.md)) starts there and adds handoff later.
+- **On join:** the newcomer takes over ranges from its ring neighbours. The previous owners **hand
+  off** the live entries in those ranges rather than dropping them. On a view change each silo sets
+  aside the entries whose range it has lost to a still-live successor, and the newcomer **recovers**
+  the ranges it now owns by pulling those entries from the previous owners (a versioned handoff with
+  range "wedges", as Orleans does). Reads for a range still being recovered **wait** for the pull to
+  finish, so a moved grain is found at its existing activation instead of being needlessly
+  reactivated. If a pull is lost the directory falls back to **drop-and-lazily-rebuild** for those
+  ranges — a few redundant reactivations rather than a corrupt entry.
 
 The implementation reaches the owning partition through a pluggable **directory peer**. By default it
-routes `lookup` / `register` / `unregister` to the owning silo as **system messages** over the same
-transport and correlation path that grain calls use (an in-process peer remains for single-process
-tests). On a view change each silo recomputes the ring and drops entries pointing at, or owned by,
-silos that have left.
+routes `lookup` / `register` / `unregister` / `recover` to the owning silo as **system messages** over
+the same transport and correlation path that grain calls use (an in-process peer remains for
+single-process tests). Every directory message carries the sender's applied view *version*: a silo
+that is behind catches up before serving, and one that is ahead and no longer owns the grain redirects
+the caller (a `staleView` rejection) so it refreshes its view and re-resolves the owner. On a view
+change each silo recomputes the ring and drops entries pointing at silos that have left.
 
 All of this is keyed off the membership view *version*, so concurrent view changes are linearised by
 version and a silo never mixes entries from two different ring topologies.

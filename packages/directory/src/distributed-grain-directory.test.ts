@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { newActivationId } from "@tsva/core/activation-id";
+import { RejectionError } from "@tsva/core/errors";
 import type { GrainAddress } from "@tsva/core/grain-address";
 import { GrainId } from "@tsva/core/grain-id";
 import { SiloAddress } from "@tsva/core/silo-address";
@@ -57,6 +58,39 @@ describe("DistributedGrainDirectory", () => {
     // Whoever the owning partition accepted first wins for both callers.
     expect(winnerA.activationId).toBe(winnerB.activationId);
     expect(winnerA.activationId).toBe(fromA.activationId);
+  });
+
+  it("refreshes its view and re-resolves the owner when a peer reports a stale view", async () => {
+    const partition = new LocalDirectoryPartition();
+    const a = addr("k", siloA);
+    partition.register(a);
+
+    // Our (stale) ring routes the grain to siloB; the peer rejects as stale.
+    // refresh() corrects the ring to point at the local owner, where it resolves.
+    let owner: SiloAddress = siloB;
+    const peer: DirectoryPeer = {
+      lookup: async () => {
+        throw new RejectionError("stale directory view", "staleView");
+      },
+      register: async () => a,
+      unregister: async () => undefined,
+    };
+    const stub = { ownerOf: () => owner } as unknown as ConsistentHashRing;
+
+    let refreshed = 0;
+    const dir = new DistributedGrainDirectory(
+      siloA,
+      partition,
+      () => stub,
+      peer,
+      () => {
+        refreshed++;
+        owner = siloA;
+      },
+    );
+
+    expect(await dir.lookup(a.grainId)).toEqual(a);
+    expect(refreshed).toBe(1);
   });
 
   it("drops local entries pointing at a departed silo", async () => {

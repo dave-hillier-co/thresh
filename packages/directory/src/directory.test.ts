@@ -69,6 +69,60 @@ describe("LocalDirectoryPartition", () => {
     expect(dir.size).toBe(1);
     expect(dir.lookup(new GrainId("Counter", "y"))).toBeDefined();
   });
+
+  it("drain classifies every entry in one pass, removing drops and handoffs", () => {
+    const dir = new LocalDirectoryPartition();
+    const x = addr("x", siloA);
+    const y = addr("y", siloB);
+    const z = addr("z", siloA);
+    dir.register(x);
+    dir.register(y);
+    dir.register(z);
+
+    // Drop the siloB host, hand off x, keep z.
+    const handed = dir.drain((e) =>
+      e.silo.equals(siloB) ? "drop" : e.grainId.equals(x.grainId) ? "handoff" : "keep",
+    );
+
+    expect(handed).toEqual([x]);
+    expect(dir.size).toBe(1);
+    expect(dir.lookup(z.grainId)).toEqual(z);
+    expect(dir.lookup(x.grainId)).toBeUndefined();
+    expect(dir.lookup(y.grainId)).toBeUndefined();
+  });
+
+  it("acceptHandoff registers entries it still owns", () => {
+    const dir = new LocalDirectoryPartition();
+    const a = addr("x", siloA);
+    dir.acceptHandoff([a], () => true);
+    expect(dir.lookup(a.grainId)).toEqual(a);
+  });
+
+  it("acceptHandoff never overwrites a fresher entry (a concurrent reactivation wins)", () => {
+    const dir = new LocalDirectoryPartition();
+    const fresh = addr("x", siloB);
+    const stale = addr("x", siloA, "stale-activation");
+    dir.register(fresh);
+    dir.acceptHandoff([stale], () => true);
+    expect(dir.lookup(fresh.grainId)).toEqual(fresh);
+  });
+
+  it("acceptHandoff ignores entries whose range has moved away (the versioned guard)", () => {
+    const dir = new LocalDirectoryPartition();
+    const a = addr("x", siloA);
+    dir.acceptHandoff([a], () => false); // no longer owned here
+    expect(dir.lookup(a.grainId)).toBeUndefined();
+    expect(dir.size).toBe(0);
+  });
+
+  it("entriesIn returns the live entries matching a predicate", () => {
+    const dir = new LocalDirectoryPartition();
+    const x = addr("x", siloA);
+    const y = addr("y", siloB);
+    dir.register(x);
+    dir.register(y);
+    expect(dir.entriesIn((e) => e.silo.equals(siloA))).toEqual([x]);
+  });
 });
 
 describe("LocationCache", () => {

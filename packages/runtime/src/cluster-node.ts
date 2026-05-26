@@ -116,14 +116,25 @@ interface RejectionPayload {
   kind: RejectionError["kind"];
 }
 
-/** A directory partition operation routed to the owning silo over the transport. */
+/**
+ * A directory partition operation routed to the owning silo over the transport.
+ * Every op carries the sender's applied membership view `version` so the owner
+ * can linearise it against its own view (catch up if behind, redirect a stale
+ * caller). `recover` pulls a previous owner's handed-off entries on a join.
+ */
 type DirectoryOp =
-  | { kind: "lookup"; grainId: GrainId }
-  | { kind: "register"; addr: GrainAddress; previous?: GrainAddress | undefined }
-  | { kind: "unregister"; addr: GrainAddress };
+  | { kind: "lookup"; grainId: GrainId; version: number }
+  | { kind: "register"; addr: GrainAddress; previous?: GrainAddress | undefined; version: number }
+  | { kind: "unregister"; addr: GrainAddress; version: number }
+  | { kind: "recover"; version: number };
+
+/** Stand-in target grain for batch ops with no single grain (fills the envelope only). */
+const DIRECTORY_OP_TARGET = new GrainId("$directory", "op");
 
 function directoryOpGrainId(op: DirectoryOp): GrainId {
-  return op.kind === "lookup" ? op.grainId : op.addr.grainId;
+  if (op.kind === "lookup") return op.grainId;
+  if (op.kind === "recover") return DIRECTORY_OP_TARGET;
+  return op.addr.grainId;
 }
 
 /** Carries a migrating activation's identity and dehydrated state to its new host. */
@@ -170,13 +181,34 @@ export class ClusterNode {
   private ring: ConsistentHashRing;
   private listener: Listener | undefined;
 
+  /** The membership view version `this.ring` was built from. */
+  private appliedVersion: number;
+  /** Entries this silo handed off at the last view change, retained for a successor to pull. */
+  private handoffSnapshot: GrainAddress[] = [];
+  /** In-flight range recovery after a join; owned reads wait on it so none miss. */
+  private recovery: Promise<void> | undefined;
+  /** Callers awaiting `this.appliedVersion` to reach a given version. */
+  private viewWaiters: Array<{ version: number; resolve: () => void }> = [];
+
   /** Routes directory operations to the owning silo's partition over the transport. */
   private readonly transportPeer: DirectoryPeer = {
-    lookup: (owner, grainId) => this.sendDirectory(owner, { kind: "lookup", grainId }),
-    register: (owner, addr, previous) =>
-      this.sendDirectory(owner, { kind: "register", addr, previous }) as Promise<GrainAddress>,
+    lookup: async (owner, grainId) => {
+      const r = await this.sendDirectory(owner, {
+        kind: "lookup",
+        grainId,
+        version: this.appliedVersion,
+      });
+      return r == null ? undefined : (r as GrainAddress);
+    },
+    register: async (owner, addr, previous) =>
+      (await this.sendDirectory(owner, {
+        kind: "register",
+        addr,
+        previous,
+        version: this.appliedVersion,
+      })) as GrainAddress,
     unregister: async (owner, addr) => {
-      await this.sendDirectory(owner, { kind: "unregister", addr });
+      await this.sendDirectory(owner, { kind: "unregister", addr, version: this.appliedVersion });
     },
   };
 
@@ -188,6 +220,7 @@ export class ClusterNode {
     this.director = compatibilityDirector(options.versionCompatibility ?? "backwardCompatible");
     this.selector = versionSelector(options.versionSelector ?? "latest");
     this.ring = this.buildRing();
+    this.appliedVersion = options.membership.current().version;
     this.connections = new ConnectionManager(options.transport, options.local, options.clusterId);
     this.factory = new GrainFactory((interfaceId) => this.resolveGrainType(interfaceId));
     this.serializer =
@@ -198,6 +231,8 @@ export class ClusterNode {
       this.partition,
       () => this.ring,
       options.directoryPeer ?? this.transportPeer,
+      () => this.updateView(), // refresh on a stale-view rejection, then re-resolve
+      (grainId) => this.awaitRecovered(grainId), // gate owned reads on range recovery
     );
     this.catalog = new Catalog({
       grainTypes: this.grainTypes,
@@ -363,6 +398,15 @@ export class ClusterNode {
       this.onMessage(message),
     );
     this.collector.start();
+    // Join recovery: when joining an already-running cluster, pull the live entries
+    // for the ranges we now own from the incumbents instead of letting their grains
+    // lazily reactivate. Only past the initial formation (version 1): at cold start
+    // the peers in the view may still be coming up, there is nothing to recover yet,
+    // and connecting to a not-yet-listening peer would just churn the connection pool.
+    const others = this.otherActiveSilos();
+    if (others.length > 0 && this.isLocalActive() && this.appliedVersion > 1) {
+      this.beginRecovery(others, this.appliedVersion);
+    }
   }
 
   async stop(): Promise<void> {
@@ -372,14 +416,23 @@ export class ClusterNode {
     await this.catalog.deactivateAll({ code: "shutting-down", description: "node stopping" });
   }
 
-  /** Recompute the ring and drop entries for silos that have left the view. */
+  /**
+   * Reconcile the directory with a membership view change (versioned, lossless).
+   * Drop cache/connections for departed silos; in one partition pass drop entries
+   * whose host silo has left (the grain is gone) and set aside entries whose range
+   * the new ring assigns to another live silo (retained for that successor to pull).
+   * If this silo has just joined the active set, recover the ranges it now owns
+   * from the incumbents so their grains are not needlessly reactivated.
+   */
   updateView(): void {
-    const stillActive = new Set(
-      activeSilos(this.options.membership.current()).map((s) => s.ringKey),
-    );
-    for (const member of this.ring.silos()) {
-      if (!stillActive.has(member.ringKey)) {
-        this.partition.unregisterSilo(member);
+    const snapshot = this.options.membership.current();
+    const local = this.options.local;
+    const oldRing = this.ring;
+    const newRing = this.buildRing();
+    const live = new Set(activeSilos(snapshot).map((s) => s.ringKey));
+
+    for (const member of oldRing.silos()) {
+      if (!live.has(member.ringKey)) {
         this.cache.invalidateSilo(member);
         void this.connections.drop(member);
       }
@@ -388,11 +441,104 @@ export class ClusterNode {
     // drop them all and re-fetch lazily on the next version-aware placement.
     this.manifestCache.clear();
     this.manifestInflight.clear();
-    this.ring = this.buildRing();
+
+    this.handoffSnapshot = this.partition.drain((entry) => {
+      if (!live.has(entry.silo.ringKey)) return "drop"; // host gone — grain reactivates
+      return newRing.ownerOf(entry.grainId).equals(local) ? "keep" : "handoff";
+    });
+
+    const wasActive = oldRing.silos().some((s) => s.equals(local));
+    this.ring = newRing;
+    this.appliedVersion = snapshot.version;
+    this.resolveViewWaiters();
+
+    if (!wasActive && live.has(local.ringKey)) {
+      this.beginRecovery(this.otherActiveSilos(), snapshot.version);
+    }
   }
 
   private buildRing(): ConsistentHashRing {
     return new ConsistentHashRing(activeSilos(this.options.membership.current()));
+  }
+
+  private ownsNow(grainId: GrainId): boolean {
+    return this.ring.ownerOf(grainId).equals(this.options.local);
+  }
+
+  private isLocalActive(): boolean {
+    return activeSilos(this.options.membership.current()).some((s) => s.equals(this.options.local));
+  }
+
+  private otherActiveSilos(): SiloAddress[] {
+    return activeSilos(this.options.membership.current()).filter(
+      (s) => !s.equals(this.options.local),
+    );
+  }
+
+  /** Resolve `appliedVersion` reaching `version`; self-advance if our view already shows it. */
+  private async awaitView(version: number): Promise<void> {
+    if (this.appliedVersion >= version) return;
+    if (this.options.membership.current().version >= version) {
+      this.updateView();
+      if (this.appliedVersion >= version) return;
+    }
+    await new Promise<void>((resolve, reject) => {
+      const onResolve = (): void => {
+        clearTimeout(timer);
+        resolve();
+      };
+      const timer = setTimeout(() => {
+        this.viewWaiters = this.viewWaiters.filter((w) => w.resolve !== onResolve);
+        reject(new RejectionError(`membership view ${version} not reached`, "staleView"));
+      }, this.callTimeoutMs);
+      this.viewWaiters.push({ version, resolve: onResolve });
+    });
+  }
+
+  private resolveViewWaiters(): void {
+    const remaining: typeof this.viewWaiters = [];
+    for (const w of this.viewWaiters) {
+      if (this.appliedVersion >= w.version) w.resolve();
+      else remaining.push(w);
+    }
+    this.viewWaiters = remaining;
+  }
+
+  /** Owned reads wait on an in-flight join recovery so they never see a transient miss. */
+  private async awaitRecovered(_grainId: GrainId): Promise<void> {
+    if (this.recovery !== undefined) await this.recovery;
+  }
+
+  /** Pull the ranges we now own from the given previous owners and merge them in. */
+  private beginRecovery(sources: readonly SiloAddress[], version: number): void {
+    if (sources.length === 0) return;
+    const newRing = this.ring;
+    const done = Promise.all(
+      sources.map(async (owner) => {
+        try {
+          const entries = (await this.sendDirectory(owner, { kind: "recover", version })) as
+            | GrainAddress[]
+            | undefined;
+          if (entries !== undefined) {
+            this.partition.acceptHandoff(entries, (e) =>
+              newRing.ownerOf(e.grainId).equals(this.options.local),
+            );
+          }
+        } catch {
+          // best-effort: a failed pull degrades to lazy rebuild for that source's ranges
+        }
+      }),
+    ).then(() => undefined);
+    this.recovery = done;
+    void done.finally(() => {
+      if (this.recovery === done) this.recovery = undefined;
+    });
+  }
+
+  /** Serve a successor's recovery pull: the entries we handed off whose host is still live. */
+  private serveRecover(): GrainAddress[] {
+    const live = new Set(activeSilos(this.options.membership.current()).map((s) => s.ringKey));
+    return this.handoffSnapshot.filter((e) => live.has(e.silo.ringKey));
   }
 
   private placementFor(grainType: GrainType): PlacementStrategy {
@@ -691,10 +837,7 @@ export class ClusterNode {
     void this.receiveRequest(message);
   }
 
-  private async sendDirectory(
-    owner: SiloAddress,
-    op: DirectoryOp,
-  ): Promise<GrainAddress | undefined> {
+  private async sendDirectory(owner: SiloAddress, op: DirectoryOp): Promise<unknown> {
     const conn = await this.connections.get(owner);
     const correlationId = nextCorrelationId();
     const message: Message = {
@@ -709,9 +852,7 @@ export class ClusterNode {
     };
     const pending = this.correlation.register(correlationId, this.callTimeoutMs);
     conn.send(message);
-    const result = this.interpretResponse(await pending);
-    // A "not found" lookup serializes back as null; normalise to undefined.
-    return result == null ? undefined : (result as GrainAddress);
+    return this.interpretResponse(await pending);
   }
 
   private async handleDirectoryRequest(message: Message): Promise<void> {
@@ -719,7 +860,7 @@ export class ClusterNode {
     if (replyTo === undefined) return;
     try {
       const op = this.serializer.deserialize<DirectoryOp>(message.body);
-      const result = this.applyDirectoryOp(op);
+      const result = await this.applyDirectoryOp(op);
       await this.reply(
         replyTo,
         responseTo(message, "success", this.serializer.serialize(result), this.options.local),
@@ -770,15 +911,30 @@ export class ClusterNode {
     );
   }
 
-  private applyDirectoryOp(op: DirectoryOp): GrainAddress | undefined {
+  private async applyDirectoryOp(
+    op: DirectoryOp,
+  ): Promise<GrainAddress | GrainAddress[] | undefined> {
+    // Linearise against our view: catch up if the caller is ahead of us; redirect
+    // the caller if it is behind and we no longer own the target (a `staleView`
+    // rejection it re-resolves), so we never serve under two ring topologies.
+    if (op.version > this.appliedVersion) await this.awaitView(op.version);
+    if (op.kind !== "recover" && op.version < this.appliedVersion) {
+      const grainId = op.kind === "lookup" ? op.grainId : op.addr.grainId;
+      if (!this.ownsNow(grainId)) throw new RejectionError("stale directory view", "staleView");
+    }
     switch (op.kind) {
       case "lookup":
+        await this.awaitRecovered(op.grainId);
         return this.partition.lookup(op.grainId);
       case "register":
+        await this.awaitRecovered(op.addr.grainId);
         return this.partition.register(op.addr, op.previous);
       case "unregister":
+        await this.awaitRecovered(op.addr.grainId);
         this.partition.unregister(op.addr);
         return undefined;
+      case "recover":
+        return this.serveRecover();
     }
   }
 

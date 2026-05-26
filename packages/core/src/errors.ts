@@ -12,7 +12,8 @@ export type RejectionKind =
   | "overloaded"
   | "deserialization"
   | "noActivation"
-  | "noCandidates";
+  | "noCandidates"
+  | "staleView";
 
 /** A runtime-level refusal the caller can inspect to decide whether to retry. */
 export class RejectionError extends Error {
