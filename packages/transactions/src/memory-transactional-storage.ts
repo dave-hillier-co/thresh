@@ -6,16 +6,16 @@ import type {
   TransactionalStateStorage,
   TransactionalStorageLoadResponse,
 } from "@tsva/core/transactional-storage";
+import { decodeValue, encodeValue } from "@tsva/core/value-codec";
 import {
   applyStore,
   emptyRecord,
   type StoredRecord,
 } from "@tsva/transactions/transactional-storage-apply";
 
-const clone = <T>(value: T): T =>
-  typeof structuredClone === "function"
-    ? structuredClone(value)
-    : (JSON.parse(JSON.stringify(value)) as T);
+// Clone through the value-codec so a record's runtime types (GrainId, Date)
+// survive load/store — matching the Redis provider's serialization fidelity.
+const clone = <T>(value: T): T => decodeValue(encodeValue(value)) as T;
 
 interface Entry {
   etag: string;

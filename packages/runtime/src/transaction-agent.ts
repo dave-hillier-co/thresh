@@ -52,12 +52,13 @@ export class TransactionAgent {
 
     // Elect the transaction manager from the writers (Orleans: the first write
     // participant). In-process the agent coordinates the rounds directly.
-    this.electManager(enlisted);
+    const manager = this.electManager(enlisted);
+    const writeParticipants = enlisted.filter((e) => e.access.writes > 0).map((e) => e.id);
 
     const prepared = await Promise.all(
       enlisted.map(async (e) => {
         try {
-          return await this.prepare(e, info);
+          return await this.prepare(e, info, manager?.id ?? e.id);
         } catch {
           return false;
         }
@@ -65,6 +66,10 @@ export class TransactionAgent {
     );
 
     if (prepared.every((ok) => ok)) {
+      // The TM durably records the commit before any participant commits — the
+      // atomic commit point. A crash after this leaves participants in-doubt,
+      // and recovery resolves them to commit by querying the TM.
+      if (manager !== undefined) await this.recordCommit(manager, info, writeParticipants);
       await Promise.all(enlisted.map((e) => this.commit(e, info)));
       return;
     }
@@ -77,15 +82,38 @@ export class TransactionAgent {
     await Promise.all([...info.participants.values()].map((e) => this.abortOne(e, info)));
   }
 
-  private prepare(e: EnlistedParticipant, info: TransactionInfo): Promise<boolean> {
+  private prepare(
+    e: EnlistedParticipant,
+    info: TransactionInfo,
+    manager: ParticipantId,
+  ): Promise<boolean> {
     if (e.participant !== undefined) {
-      return Promise.resolve(e.participant.prepare(info.id, info.timeStamp));
+      return Promise.resolve(e.participant.prepare(info.id, info.timeStamp, manager));
     }
     return this.route(e.id, "prepare", [
       e.id.stateName,
       info.id,
       info.timeStamp,
+      manager,
     ]) as Promise<boolean>;
+  }
+
+  /** Have the elected TM durably record the commit (locally or over the dispatcher). */
+  private async recordCommit(
+    manager: EnlistedParticipant,
+    info: TransactionInfo,
+    writeParticipants: ParticipantId[],
+  ): Promise<void> {
+    if (manager.participant !== undefined) {
+      await manager.participant.recordCommit(info.id, info.timeStamp, writeParticipants);
+      return;
+    }
+    await this.route(manager.id, "recordCommit", [
+      manager.id.stateName,
+      info.id,
+      info.timeStamp,
+      writeParticipants,
+    ]);
   }
 
   private async commit(e: EnlistedParticipant, info: TransactionInfo): Promise<void> {

@@ -38,9 +38,9 @@ primitives so the runtime can be smaller and the operational model more familiar
 
 ## Scope: Orleans parity
 
-The target is **feature parity with current Orleans** for the actor model, persistence, timers and
+The target is **feature parity with Orleans 10** for the actor model, persistence, timers and
 reminders, streams, transactions, and Kubernetes hosting. "Done" is defined externally — by what
-Orleans offers — rather than by an internal version label. The [roadmap](13-roadmap-and-phases.md)
+Orleans 10 offers — rather than by an internal version label. The [roadmap](13-roadmap-and-phases.md)
 tracks what is shipped versus what remains for parity.
 
 ## Non-goals

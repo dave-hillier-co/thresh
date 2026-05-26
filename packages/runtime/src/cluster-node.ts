@@ -14,7 +14,12 @@ import { RemindableInterface, type ReminderRegistry, type TickStatus } from "@ts
 import { StreamConsumerInterface, type StreamProvider } from "@tsva/core/stream";
 import type { InvocationRequest } from "@tsva/core/request";
 import type { SiloAddress } from "@tsva/core/silo-address";
-import { participantKey, type TransactionInfo } from "@tsva/core/transaction-info";
+import {
+  participantKey,
+  type ParticipantId,
+  type TransactionInfo,
+} from "@tsva/core/transaction-info";
+import { TransactionResourceInterface } from "@tsva/core/transaction-resource";
 import { ConsistentHashRing } from "@tsva/directory/consistent-hash-ring";
 import type { DirectoryPeer } from "@tsva/directory/directory-peer";
 import { DistributedGrainDirectory } from "@tsva/directory/distributed-grain-directory";
@@ -225,6 +230,22 @@ export class ClusterNode {
       options: {},
       reentrancyId: newChainId(),
     });
+  }
+
+  /**
+   * Ask the elected TM whether a transaction committed, routed to its grain over
+   * the dispatcher. Used by a recovering transactional resource to resolve an
+   * in-doubt pending record left by a mid-commit failure.
+   */
+  async resolveTransactionStatus(manager: ParticipantId, transactionId: string): Promise<boolean> {
+    return (await this.dispatcher.invoke({
+      target: manager.grainId,
+      interfaceId: TransactionResourceInterface.id,
+      method: "status",
+      args: [manager.stateName, transactionId],
+      options: {},
+      reentrancyId: newChainId(),
+    })) as boolean;
   }
 
   async start(): Promise<void> {

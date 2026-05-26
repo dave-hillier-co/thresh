@@ -1,28 +1,39 @@
 # 13 — Roadmap and phases
 
 Implementation order, with explicit scope and testable exit criteria per phase. Each phase builds on
-the previous and ends in something demonstrable. The target is **Orleans parity** (see
+the previous and ends in something demonstrable. The target is **parity with Orleans 10** (see
 [01](01-overview-and-goals.md)); this is a rolling roadmap, not a single versioned release.
 
-> Orleans references (parity targets for remaining work): `Orleans.Transactions/*` (transactions),
+> Orleans references (parity targets for remaining work):
 > `Orleans.Core.Abstractions/Core/IGrainCallFilter.cs` (grain call filters),
 > `Orleans.Core.Abstractions/Placement/PlacementFilterStrategy.cs` (placement filters),
 > `Orleans.Serialization/Versioning/*` (interface versioning),
-> `Orleans.Runtime/Diagnostics/ActivityPropagationGrainCallFilter.cs` (trace propagation).
+> `Orleans.Runtime/Diagnostics/ActivityPropagationGrainCallFilter.cs` (trace propagation);
+> and the Orleans-10 subsystems this roadmap predated: grain migration
+> (`IGrainMigrationParticipant`, `MigrateOnIdle`), the activation rebalancer
+> (`Orleans.Runtime/Placement/Rebalancing/*`, `IActivationRebalancer`), durable journaling
+> (`Orleans.Journaling/*`, `DurableGrain`), durable jobs (`Orleans.DurableJobs/*`), and broadcast
+> channels (`Orleans.BroadcastChannel/*`).
 
 ## Status
 
-**Shipped and verified (phases 1–6):** the core actor model, persistence, timers and reminders, and
+**Shipped and verified (phases 1–7):** the core actor model, persistence, timers and reminders, and
 event streams — all on **Redis** (the default durable backend) — plus Kubernetes hosting (membership
 from EndpointSlices, health, drain, and a cluster e2e). Reducer grains (snapshot mode) and the
-external client also ship. Authoring is **functional by default** — `defineGrain` + hooks and the
-`defineReducerGrain` dispatch grain ([ADR 0009](adr/0009-functional-grains.md),
-[ADR 0010](adr/0010-message-dispatch-reducer-grains.md)) — over the retained class substrate.
+external client also ship. **Cross-grain ACID transactions** ([ADR 0008](adr/0008-cross-grain-transactions.md))
+ship too: declarative boundaries, a `TransactionalState<T>` facet with wait-die locking, an
+optimistic two-phase commit (TM elected from the writers), durable storage on memory + Redis,
+cross-silo participants, and in-doubt recovery. Authoring is **functional by default** —
+`defineGrain` + hooks and the `defineReducerGrain` dispatch grain
+([ADR 0009](adr/0009-functional-grains.md), [ADR 0010](adr/0010-message-dispatch-reducer-grains.md))
+— over the retained class substrate.
 
-**Remaining for parity:** cross-grain ACID transactions
-([ADR 0008](adr/0008-cross-grain-transactions.md)) — the next priority — then grain-interface
-versioning, implicit stream subscriptions, and lossless directory range handoff. Cross-cutting
-observability (OpenTelemetry traces/metrics, structured logs) remains to be wired throughout.
+**Remaining for parity (Orleans 10):** grain migration and the activation rebalancer (the v10
+core-runtime block), grain-interface versioning, implicit stream subscriptions, lossless directory
+range handoff, grain call filters, and placement filters. The Orleans-10 additions of durable
+journaling (`DurableGrain`) and durable jobs need an ADR each (journaling overlaps the existing
+reducer/persistent-state model). Cross-cutting observability (OpenTelemetry traces/metrics, structured
+logs) remains to be wired throughout, on the grain-call-filter seam.
 
 **Out of scope / deferred:** multi-cluster/geo (Orleans removed it in 3.0), the reducer event-log
 mode, and additional providers (Postgres storage/reminders, other stream backings) — alternatives to
@@ -113,22 +124,30 @@ in-memory providers.
     with at-least-once delivery (no gaps, possible idempotent redelivery).
   - The worked thermostat example ([11](11-public-api-and-examples.md)) runs end-to-end on kind.
 
-## Phase 7 — Cross-grain transactions
+## Phase 7 — Cross-grain transactions (shipped)
 
-ACID transactions spanning any number of grains: `[transaction]` method options, an
-`ITransactionalState`-style facet, a transaction manager/agent, and an optimistic, serializable
-commit protocol with recovery. The next priority; designed in
-[ADR 0008](adr/0008-cross-grain-transactions.md).
+ACID transactions spanning any number of grains: `transaction:` method options, a
+`TransactionalState<T>` facet, a transaction manager/agent, and an optimistic, serializable commit
+protocol with recovery. Designed in [ADR 0008](adr/0008-cross-grain-transactions.md); shipped and
+verified.
 
-- **Exit criteria:**
+- **Exit criteria (all met):**
   - A multi-grain transaction commits atomically; a failure in any participant aborts all of them
     (a transfer between two account grains never half-applies).
-  - Isolation is serializable: concurrent transactions do not observe each other's uncommitted state.
-  - Committed state is durable and survives a participant's deactivation or silo restart.
-  - A silo failure mid-commit recovers to a consistent outcome (commit or abort, not torn).
+  - Isolation is serializable: concurrent transactions do not observe each other's uncommitted state
+    (timestamp-ordered wait-die locking; the younger of two contenders aborts).
+  - Committed state is durable and survives a participant's deactivation or silo restart (memory +
+    Redis transactional storage).
+  - A silo failure mid-commit recovers to a consistent outcome (commit or abort, not torn): the TM
+    records the commit before participants commit, and in-doubt resources resolve against it on
+    activation.
 
-## Remaining for parity (after transactions)
+## Remaining for parity (Orleans 10)
 
+- **Grain migration** — live migration of an activation to another silo with its state preserved,
+  via `IGrainMigrationParticipant` / `MigrateOnIdle` and directed placement (Orleans 10).
+- **Activation rebalancer** — proactively moves activations across silos to balance load
+  (`IActivationRebalancer`, `Orleans.Runtime/Placement/Rebalancing/*`; Orleans 10).
 - **Grain-interface versioning** — multiple interface versions live at once for heterogeneous rolling
   upgrades, with version-aware placement (Orleans' versioning).
 - **Implicit stream subscriptions** — bind a grain type to a namespace and auto-subscribe by key,
@@ -142,6 +161,13 @@ commit protocol with recovery. The next priority; designed in
   (Orleans' `PlacementFilterStrategy`); pairs with the additional placement strategies
   (`SiloRoleBasedPlacement`, `ResourceOptimizedPlacement`) noted in
   [06](06-grain-directory-and-placement.md).
+- **Broadcast channels** — lightweight in-cluster pub/sub without the pulling-agent machinery
+  (`Orleans.BroadcastChannel/*`, `IBroadcastChannelProvider`; Orleans 10).
+- **Durable journaling (`DurableGrain`)** — needs an ADR: Orleans 10's `Orleans.Journaling`
+  (`DurableValue`/`DurableDictionary`/`DurableList`/… that journal mutations automatically) overlaps
+  the existing reducer/persistent-state model; decide whether to adopt it or map it onto what ships.
+- **Durable jobs** — needs an ADR: Orleans 10's `Orleans.DurableJobs` (durable execution / workflow
+  engine) is a large, optional addition.
 
 ## Deferred (not parity gaps)
 

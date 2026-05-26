@@ -207,9 +207,18 @@ order, starting with transactions.
         `TransactionalValue` seed (superseded by the facet). Multi-silo e2e
         (`transactions-cluster.test.ts`): a transfer spanning accounts on two silos commits
         atomically; an overdraft aborts both and frees the remote lock.
-  - [ ] 4d — in-doubt recovery: persist commit records; on restart resolve pending (prepared) states
-        from the recorded TM `ParticipantId`. Multi-silo e2e: a silo dies mid-commit, outcome stays
-        consistent (commit or abort, never torn).
+  - [x] 4d — in-doubt recovery: `prepare` records the elected TM (`ParticipantId`) in each durable
+        pending record; the TM durably writes a commit record *before* participants commit (the atomic
+        commit point); on activation a resource with an in-doubt pending record asks the TM
+        (`status`, over the dispatcher, or directly if it is its own TM) and commits or aborts
+        accordingly. The stored record round-trips through the value-codec so a pending record's TM
+        `GrainId` and state survive (both providers). Test (`transaction-recovery.test.ts`, seeds a
+        post-crash in-doubt state): a record whose TM recorded the commit recovers to committed; one
+        with no commit record recovers to aborted.
+
+  **Phase 7 (cross-grain ACID transactions) complete:** boundaries, the `TransactionalState<T>` facet
+  with wait-die locking, optimistic two-phase commit, durable storage (memory + Redis), cross-silo
+  participants, and in-doubt recovery — all shipped and green.
 
 ## Remaining for parity (after transactions)
 

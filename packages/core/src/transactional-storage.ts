@@ -1,4 +1,5 @@
 import type { GrainId } from "./grain-id";
+import type { ParticipantId } from "./transaction-info";
 
 /**
  * Durable storage for transactional state, ported from Orleans
@@ -16,8 +17,8 @@ export interface PendingTransactionState<T> {
   transactionId: string;
   /** Logical commit timestamp. */
   timeStamp: number;
-  /** Participant key of the TM that knows this transaction's fate, or undefined if this resource is the TM. */
-  transactionManager?: string | undefined;
+  /** The TM that knows this transaction's fate; recovery asks it whether to commit. */
+  transactionManager?: ParticipantId | undefined;
   /** Snapshot of the state after this transaction executed. */
   state: T;
 }

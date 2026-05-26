@@ -309,7 +309,9 @@ export class SiloBuilder {
           await bindPersistentStates(instance, grainId, storage);
           await bindReducerStates(instance, grainId, storage);
         }
-        await bindTransactionalStates(instance, grainId, transactionalStorage);
+        await bindTransactionalStates(instance, grainId, transactionalStorage, (manager, txId) =>
+          node.resolveTransactionStatus(manager, txId),
+        );
       },
       ...(this.reminderTable !== undefined ? { reminderRegistry: () => reminderService } : {}),
       ...(this.streamProviders.size > 0

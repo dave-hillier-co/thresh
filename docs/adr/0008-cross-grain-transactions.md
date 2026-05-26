@@ -1,6 +1,6 @@
 # ADR 0008 — Cross-grain ACID transactions
 
-- Status: Accepted (design; implementation in progress — Phase 7)
+- Status: Accepted — implemented and shipped (Phase 7)
 - Context docs: [07 — Persistence](../07-persistence.md),
   [02 — Actor model](../02-actor-model.md), [13 — Roadmap](../13-roadmap-and-phases.md),
   [ADR 0005 — Redis defaults](0005-redis-default-providers.md)

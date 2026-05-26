@@ -2,6 +2,7 @@ import type {
   PendingTransactionState,
   TransactionalStateMetadata,
 } from "@tsva/core/transactional-storage";
+import { decodeValue, encodeValue } from "@tsva/core/value-codec";
 
 /** The durable record a transactional-storage provider keeps per (grain, state). */
 export interface StoredRecord<T> {
@@ -11,10 +12,10 @@ export interface StoredRecord<T> {
   pendingStates: PendingTransactionState<T>[];
 }
 
-const clone = <T>(value: T): T =>
-  typeof structuredClone === "function"
-    ? structuredClone(value)
-    : (JSON.parse(JSON.stringify(value)) as T);
+// Clone through the value-codec so runtime types (a pending record's
+// `transactionManager` GrainId, or a GrainId/Date in the state) survive the
+// round-trip — `structuredClone`/JSON would strip their class identity.
+const clone = <T>(value: T): T => decodeValue(encodeValue(value)) as T;
 
 export function emptyRecord<T>(): StoredRecord<T> {
   return {

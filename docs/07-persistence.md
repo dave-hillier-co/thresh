@@ -158,8 +158,7 @@ for the reducer model, rationale and the snapshot-vs-event-log split, and
 
 - It does not give cross-grain ACID transactions. The etag write here is atomic for a **single
   grain**; spanning a change across grains is a separate facet — the versioned `TransactionalState`
-  of [ADR 0008](adr/0008-cross-grain-transactions.md), Phase 7 parity work on the
-  [roadmap](13-roadmap-and-phases.md) (mirroring Orleans' `Orleans.Transactions`). The two facets
-  coexist on a grain.
+  of [ADR 0008](adr/0008-cross-grain-transactions.md), shipped in Phase 7 (mirroring Orleans'
+  `Orleans.Transactions`). The two facets coexist on a grain.
 - It does not automatically write on every field mutation; durability is explicit via `write()`.
 - It does not replace the directory; a grain's *location* is ephemeral and never persisted here.

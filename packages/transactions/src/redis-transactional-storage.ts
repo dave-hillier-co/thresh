@@ -7,6 +7,7 @@ import type {
   TransactionalStateStorage,
   TransactionalStorageLoadResponse,
 } from "@tsva/core/transactional-storage";
+import { deserializeValue, serializeValue } from "@tsva/core/value-codec";
 import {
   applyStore,
   emptyRecord,
@@ -73,7 +74,7 @@ export class RedisTransactionalStorage implements TransactionalStateStorage {
         pendingStates: [],
       };
     }
-    const record = JSON.parse(hash.data ?? "{}") as StoredRecord<unknown>;
+    const record = deserializeValue<StoredRecord<unknown>>(hash.data ?? "{}");
     return {
       etag: hash.etag,
       committedState: record.committedState,
@@ -95,14 +96,14 @@ export class RedisTransactionalStorage implements TransactionalStateStorage {
     const key = this.key(stateName, grainId);
     const hash = await this.client.hGetAll(key);
     const record =
-      hash.data !== undefined ? (JSON.parse(hash.data) as StoredRecord<unknown>) : emptyRecord();
+      hash.data !== undefined ? deserializeValue<StoredRecord<unknown>>(hash.data) : emptyRecord();
     applyStore(record, metadata, statesToPrepare, commitUpTo, abortAfter);
 
     const etag = randomUUID();
     try {
       await this.client.eval(WRITE, {
         keys: [key],
-        arguments: [expectedETag ?? "", JSON.stringify(record), etag],
+        arguments: [expectedETag ?? "", serializeValue(record), etag],
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

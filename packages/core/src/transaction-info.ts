@@ -57,9 +57,19 @@ export function participantKey(id: ParticipantId): string {
  * application must be idempotent: recovery may re-apply a prepared record.
  */
 export interface TransactionParticipant {
-  prepare(transactionId: string, timeStamp: number): boolean | Promise<boolean>;
+  prepare(
+    transactionId: string,
+    timeStamp: number,
+    manager: ParticipantId,
+  ): boolean | Promise<boolean>;
   commit(transactionId: string): void | Promise<void>;
   abort(transactionId: string): void | Promise<void>;
+  /** TM only: durably record the transaction's commit before participants commit. */
+  recordCommit(
+    transactionId: string,
+    timeStamp: number,
+    writeParticipants: ParticipantId[],
+  ): void | Promise<void>;
 }
 
 /**
