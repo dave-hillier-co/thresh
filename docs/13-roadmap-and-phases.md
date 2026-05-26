@@ -32,9 +32,9 @@ Grain call filters and cross-cutting observability (request context, OpenTelemet
 structured logs) ship too, on the grain-call-filter seam, as does implicit stream subscription.
 
 **Remaining for parity (Orleans 10):** grain migration and the activation rebalancer (the v10
-core-runtime block), lossless directory range handoff, and placement
-filters. The Orleans-10 additions of durable journaling (`DurableGrain`) and durable jobs need an
-ADR each (journaling overlaps the existing reducer/persistent-state model).
+core-runtime block) and placement filters. The Orleans-10 additions of durable journaling
+(`DurableGrain`) and durable jobs need an ADR each (journaling overlaps the existing
+reducer/persistent-state model).
 
 **Deferred:** additional providers (Postgres storage/reminders, other stream backings) — alternatives
 to the shipped Redis defaults, not parity gaps.
@@ -161,7 +161,11 @@ verified.
   exposes a handler under `STREAM_SUBSCRIPTION_OBSERVER` and the pulling agent fans each event out to
   implicit subscribers (by key) alongside explicit ones (see [09](09-event-streams.md)).
 - **Directory range handoff** — replace the phase-2 drop-and-rebuild with a versioned, lossless
-  handoff on membership change (per [06](06-grain-directory-and-placement.md)).
+  handoff on membership change (per [06](06-grain-directory-and-placement.md)). **Shipped** — on a
+  view change the silo losing a range sets its live entries aside and the new owner recovers them by
+  pulling from the previous owner; directory ops carry the membership view version (a behind owner
+  catches up, a stale caller is redirected via a `staleView` rejection), and reads for a
+  still-recovering range wait, so a join no longer reactivates the moved grains.
 - **Grain call filters** — incoming/outgoing interception around grain calls for cross-cutting
   concerns (auth, retries, trace propagation), mirroring Orleans' `IIncomingGrainCallFilter` /
   `IOutgoingGrainCallFilter` ([ADR 0012](adr/0012-grain-call-filters.md)). This is also the seam the

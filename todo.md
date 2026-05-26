@@ -282,8 +282,13 @@ order, starting with transactions.
       gained `siloMetadata`/`resourceStats` accessors. Unit + dispatcher + multi-silo integration
       tests. Follow-ups: populate `SiloMember.metadata` from Kubernetes pod labels; report remote
       `resourceStats` via membership gossip (today a peer's load is zero/metadata-only).
-- [ ] Directory range handoff — replace the phase-2 drop-and-rebuild with a versioned, lossless
-      handoff on membership change (per [docs/06](docs/06-grain-directory-and-placement.md)).
+- [x] Directory range handoff — replaced the phase-2 drop-and-rebuild with a versioned, lossless
+      handoff on membership change (per [docs/06](docs/06-grain-directory-and-placement.md)): on a
+      view change the silo losing a range sets its live entries aside (`LocalDirectoryPartition.drain`)
+      and the new owner recovers them by pulling from the previous owner (a `recover` directory op,
+      merged register-if-absent); directory ops carry the membership view version so a behind owner
+      self-advances and a stale caller is redirected (`staleView` rejection → refresh + re-resolve),
+      and owned reads wait on in-flight recovery so a join no longer reactivates the moved grains.
 - [~] Observability (cross-cutting) — OpenTelemetry traces propagated via request context, metrics
       (activations, turn latency, directory hit rate, reminder/stream lag), and structured logs.
   - [x] Slice 1 — ambient request context (Orleans `RequestContext`): `requestContext.get/set/getAll`

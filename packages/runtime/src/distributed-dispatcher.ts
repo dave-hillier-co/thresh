@@ -131,6 +131,7 @@ export class DistributedDispatcher implements Dispatcher {
 
 function isStaleRejection(err: unknown): boolean {
   return (
-    err instanceof RejectionError && (err.kind === "noActivation" || err.kind === "unknownTarget")
+    err instanceof RejectionError &&
+    (err.kind === "noActivation" || err.kind === "unknownTarget" || err.kind === "staleView")
   );
 }

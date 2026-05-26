@@ -6,6 +6,7 @@ import { defineGrainInterface } from "@tsva/core/grain-interface";
 import type { GrainWithStringKey } from "@tsva/core/key-kinds";
 import type { MembershipService } from "@tsva/core/membership";
 import { SiloAddress } from "@tsva/core/silo-address";
+import { ConsistentHashRing } from "@tsva/directory/consistent-hash-ring";
 import { InProcessNetwork, InProcessTransport } from "@tsva/messaging/in-process-transport";
 import { ClusterNode } from "@tsva/runtime/cluster-node";
 import { StaticMembershipService } from "@tsva/runtime/static-membership";
@@ -57,29 +58,41 @@ class MembershipView implements MembershipService {
   }
 }
 
-function buildCluster(count: number) {
+function buildCluster(count: number, opts: { random?: () => number } = {}) {
+  // Default deterministic placement -> first candidate (silo-0).
+  const random = opts.random ?? (() => 0);
   const network = new InProcessNetwork();
   const addresses = Array.from({ length: count }, (_, i) => silo(i));
   const membership = new StaticMembershipService(addresses[0]!, addresses);
 
   // No directoryPeer: each node routes directory operations over the transport.
-  const nodes = addresses.map((local) => {
+  const makeNode = (local: SiloAddress) => {
     const node = new ClusterNode({
       local,
       clusterId: CLUSTER,
       membership: new MembershipView(membership, local),
       transport: new InProcessTransport(network, CLUSTER),
-      random: () => 0, // deterministic placement -> first candidate (silo-0)
+      random,
     });
     node.registerGrain(CounterGrain, { interfaces: [ICounter] });
     node.registerGrain(LocalGrain, { interfaces: [ILocal] });
     return node;
-  });
+  };
+
+  const nodes = addresses.map(makeNode);
 
   return {
     nodes,
     membership,
     hostsOf: (grainId: GrainId) => nodes.filter((n) => n.isActive(grainId)),
+    /** Add a silo to the view and start a node for it (mirrors a pod joining). */
+    addNode: async (local: SiloAddress) => {
+      membership.addSilo(local);
+      const node = makeNode(local);
+      nodes.push(node);
+      await node.start();
+      return node;
+    },
     start: async () => {
       for (const n of nodes) await n.start();
     },
@@ -87,6 +100,14 @@ function buildCluster(count: number) {
       for (const n of nodes) await n.stop();
     },
   };
+}
+
+/** First `Counter/*` key the ring assigns to `owner` — to arrange a deterministic move. */
+function counterKeyOwnedBy(ring: ConsistentHashRing, owner: SiloAddress): string {
+  for (let i = 0; ; i++) {
+    const key = `k-${i}`;
+    if (ring.ownerOf(new GrainId("Counter", key)).equals(owner)) return key;
+  }
 }
 
 describe("multi-silo cluster", () => {
@@ -154,6 +175,40 @@ describe("multi-silo cluster", () => {
       expect(cluster.hostsOf(grainId)).toEqual([cluster.nodes[1]]);
     } finally {
       await cluster.nodes[1]!.stop();
+    }
+  });
+
+  it("hands off a moved range on join so the grain is not reactivated", async () => {
+    // random -> 0.99 picks the LAST candidate: silo-1 of two, silo-2 of three.
+    // So on a directory miss the grain would reactivate on the newcomer (silo-2),
+    // not its existing host (silo-1) — making a lost handoff observable.
+    const cluster = buildCluster(2, { random: () => 0.99 });
+    await cluster.start();
+
+    // A key the post-join ring assigns to the newcomer, so silo-2 becomes its
+    // directory owner and must recover the entry to keep the grain in place.
+    const ring3 = new ConsistentHashRing([silo(0), silo(1), silo(2)]);
+    const key = counterKeyOwnedBy(ring3, silo(2));
+    const grainId = new GrainId("Counter", key);
+
+    try {
+      // Activate on silo-1 (the last of two candidates) and build up state.
+      expect(await cluster.nodes[0]!.getGrain(ICounter, key).increment(5)).toBe(5);
+      expect(cluster.hostsOf(grainId)).toEqual([cluster.nodes[1]]);
+
+      // silo-2 joins; it owns the key's range now and recovers it on start. The
+      // incumbents adopt the new view (as the host loop would).
+      const node2 = await cluster.addNode(silo(2));
+      cluster.nodes[0]!.updateView();
+      cluster.nodes[1]!.updateView();
+
+      // Calling from the new owner immediately after the join: the lookup waits
+      // for recovery rather than missing, so the call reaches the original host
+      // with its state intact (7), and no second activation is created.
+      expect(await node2.getGrain(ICounter, key).increment(2)).toBe(7);
+      expect(cluster.hostsOf(grainId)).toEqual([cluster.nodes[1]]);
+    } finally {
+      await cluster.stop();
     }
   });
 });
