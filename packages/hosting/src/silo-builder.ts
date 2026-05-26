@@ -60,6 +60,8 @@ export interface SiloConfig {
   random?: () => number;
   /** How often each silo re-reads its reminder ranges from the table (defaults to 60s). */
   reminderRefreshSeconds?: number;
+  /** Static metadata this silo advertises (e.g. `{ role: "worker" }`), for metadata-aware placement. */
+  metadata?: Readonly<Record<string, string>>;
 }
 
 interface Registration {
@@ -294,8 +296,11 @@ export class SiloBuilder {
     );
   }
 
-  useStaticMembership(silos: readonly SiloAddress[]): this {
-    this.membership = new StaticMembershipService(this.config.local, silos);
+  useStaticMembership(
+    silos: readonly SiloAddress[],
+    metadata?: (silo: SiloAddress) => Readonly<Record<string, string>> | undefined,
+  ): this {
+    this.membership = new StaticMembershipService(this.config.local, silos, metadata);
     return this;
   }
 
@@ -317,6 +322,9 @@ export class SiloBuilder {
    * drain.
    */
   useKubernetesMembership(watch: EndpointWatch, options?: KubernetesMembershipOptions): this {
+    // TODO: populate SiloMember.metadata from pod labels so role/metadata-aware
+    // placement works under Kubernetes membership (deferred; static membership
+    // carries metadata today).
     this.membership = new KubernetesMembership(this.config.local, watch, options);
     const lifecycle = watch as Partial<{ start(): Promise<void>; stop(): void }>;
     if (typeof lifecycle.start === "function") {
@@ -395,6 +403,7 @@ export class SiloBuilder {
             versionSelector: this.versioning.selector ?? "latest",
           }
         : {}),
+      ...(this.config.metadata !== undefined ? { metadata: this.config.metadata } : {}),
       ...(this.incomingCallFilters.length > 0
         ? { incomingCallFilters: this.incomingCallFilters }
         : {}),

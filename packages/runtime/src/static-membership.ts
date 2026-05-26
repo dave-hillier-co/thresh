@@ -19,11 +19,18 @@ export class StaticMembershipService implements MembershipService {
   constructor(
     private readonly local: SiloAddress,
     initial: readonly SiloAddress[],
+    private readonly metadata?: (silo: SiloAddress) => Readonly<Record<string, string>> | undefined,
   ) {
     this.snapshot = {
       version: 1,
-      silos: initial.map((address) => ({ address, status: "active" })),
+      silos: initial.map((address) => this.member(address, "active")),
     };
+  }
+
+  /** Build a member, attaching the resolver's metadata for the silo when present. */
+  private member(address: SiloAddress, status: SiloStatus): SiloMember {
+    const meta = this.metadata?.(address);
+    return { address, status, ...(meta !== undefined ? { metadata: meta } : {}) };
   }
 
   current(): MembershipSnapshot {
@@ -42,12 +49,18 @@ export class StaticMembershipService implements MembershipService {
 
   /** Replace the whole view (all `active`), bumping the version. */
   setSilos(addresses: readonly SiloAddress[]): void {
-    this.publish(addresses.map((address) => ({ address, status: "active" as SiloStatus })));
+    this.publish(addresses.map((address) => this.member(address, "active")));
   }
 
-  addSilo(address: SiloAddress, status: SiloStatus = "active"): void {
+  addSilo(
+    address: SiloAddress,
+    status: SiloStatus = "active",
+    metadata?: Readonly<Record<string, string>>,
+  ): void {
     if (this.snapshot.silos.some((m) => m.address.equals(address))) return;
-    this.publish([...this.snapshot.silos, { address, status }]);
+    const member =
+      metadata !== undefined ? { address, status, metadata } : this.member(address, status);
+    this.publish([...this.snapshot.silos, member]);
   }
 
   removeSilo(address: SiloAddress): void {

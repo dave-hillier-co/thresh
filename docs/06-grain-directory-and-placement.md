@@ -150,12 +150,40 @@ Built-in strategies, each mapping onto an Orleans strategy class:
 - **Stateless-worker** — Orleans `StatelessWorkerPlacement`. Not directory-registered; each silo
   keeps its own local pool of interchangeable activations for a stateless grain type, scaling out
   CPU-bound work. Calls always resolve locally.
+- **Silo-role** — Orleans `SiloRoleBasedPlacement`. Place only on silos advertising a given role
+  (`@grain({ placement: "siloRole", role: "worker" })`); random among the matches. Roles come from
+  the silo's advertised metadata (below).
+- **Resource-optimized** — Orleans `ResourceOptimizedPlacement`. Place on the least-loaded silo by
+  activation count. The local silo's load is read from its catalog; a peer's comes from membership
+  (there is no cross-silo load gossip yet, so a peer's reported load is its membership metadata or
+  zero). Ties prefer the local silo.
 
 The directory owner itself is chosen by hashing the `GrainId` onto the ring — Orleans' equivalent is
-`HashBasedPlacement`. Orleans ships further strategies we have not ported (`SiloRoleBasedPlacement`,
-`ResourceOptimizedPlacement`) and a **placement-filter** layer (`PlacementFilterStrategy`) that
-prunes candidate silos by metadata before the strategy runs; both are parity items on the
-[roadmap](13-roadmap-and-phases.md), not yet implemented.
+`HashBasedPlacement`.
+
+### Placement filters
+
+A **placement-filter** layer (Orleans `PlacementFilterStrategy`) prunes the candidate silos *before*
+the strategy chooses among them. Filters are metadata-driven and compose — the output of one is the
+input to the next:
+
+```ts
+interface PlacementFilter {
+  filter(grainType: GrainType, candidates: SiloAddress[], context: PlacementContext): SiloAddress[];
+}
+```
+
+The shipped filter is `MetadataMatchFilter` (Orleans `PreferredMatchSiloMetadataPlacementFilter`),
+which keeps only silos whose advertised metadata defines every required key/value pair. A grain
+declares filters as serializable descriptors:
+`@grain({ placementFilters: [{ kind: "metadataMatch", match: { role: "worker" } }] })`. If filtering
+leaves no candidate, placement fails with a `noCandidates` rejection. Filters are inert for stateless
+workers (which always resolve locally and are never directory-registered).
+
+**Silo metadata** rides the membership snapshot (`SiloMember.metadata`, a string→string bag). A silo
+advertises its own via config (`metadata` on the silo builder / `ClusterNode`); under static
+membership a resolver supplies each silo's. Deriving silo metadata from Kubernetes pod labels is a
+follow-up ([roadmap](13-roadmap-and-phases.md)).
 
 A grain type selects its strategy via a decorator option, e.g. `@grain({ placement: "preferLocal" })`
 or `@grain({ stateless: true })`. A per-call **placement hint** in the request context can pin an

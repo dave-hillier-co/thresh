@@ -11,7 +11,8 @@ export type RejectionKind =
   | "unknownTarget"
   | "overloaded"
   | "deserialization"
-  | "noActivation";
+  | "noActivation"
+  | "noCandidates";
 
 /** A runtime-level refusal the caller can inspect to decide whether to retry. */
 export class RejectionError extends Error {

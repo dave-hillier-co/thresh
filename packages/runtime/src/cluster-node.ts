@@ -53,7 +53,11 @@ import type { ActivationData } from "@tsva/runtime/activation";
 import { DistributedDispatcher } from "@tsva/runtime/distributed-dispatcher";
 import { GrainFactory } from "@tsva/runtime/grain-factory";
 import { chooseMigrationTarget } from "@tsva/runtime/placement/choose-migration-target";
-import { placementStrategyFor } from "@tsva/runtime/placement/placement-director";
+import {
+  placementFiltersFor,
+  placementStrategyFor,
+} from "@tsva/runtime/placement/placement-director";
+import type { PlacementFilter } from "@tsva/runtime/placement/placement-filter";
 import { RandomPlacement } from "@tsva/runtime/placement/random-placement";
 import type {
   PlacementContext,
@@ -103,6 +107,8 @@ export interface ClusterNodeOptions {
    */
   versionCompatibility?: CompatibilityKind;
   versionSelector?: VersionSelectorKind;
+  /** Static metadata the local silo advertises (e.g. `{ role: "worker" }`), for metadata-aware placement. */
+  metadata?: Readonly<Record<string, string>>;
 }
 
 interface RejectionPayload {
@@ -217,10 +223,8 @@ export class ClusterNode {
       remote: { send: (silo, req) => this.sendRemote(silo, req) },
       activeSilos: () => activeSilos(this.options.membership.current()),
       placementFor: (grainType) => this.placementFor(grainType),
-      placementContext: () => ({
-        activationCount: (silo) => (silo.equals(this.options.local) ? this.catalog.count() : 0),
-        random: this.options.random ?? Math.random,
-      }),
+      filtersFor: (grainType) => this.filtersFor(grainType),
+      placementContext: () => this.placementContext(),
       versionFilter: (req, candidates) => this.applyVersionFilter(req, candidates),
     });
     this.factory.setDispatcher(this.dispatcher);
@@ -446,6 +450,31 @@ export class ClusterNode {
     );
     this.manifestInflight.set(key, pending);
     return pending;
+  }
+
+  private filtersFor(grainType: GrainType): readonly PlacementFilter[] {
+    const reg = this.grainTypes.get(grainType);
+    return reg ? placementFiltersFor(reg.metadata) : [];
+  }
+
+  /**
+   * Placement context for the current view: activation counts, advertised silo
+   * metadata, and resource stats. The local silo's metadata and load are known
+   * directly; a peer's come from its membership entry (`resourceStats` is left
+   * undefined unless membership carries it — there is no cross-silo load gossip yet).
+   */
+  private placementContext(): Omit<PlacementContext, "localSilo"> {
+    const snapshot = this.options.membership.current();
+    const byKey = new Map(snapshot.silos.map((m) => [m.address.ringKey, m]));
+    const localMeta = this.options.metadata;
+    const isLocal = (silo: SiloAddress) => silo.equals(this.options.local);
+    return {
+      activationCount: (silo) => (isLocal(silo) ? this.catalog.count() : 0),
+      siloMetadata: (silo) => (isLocal(silo) ? localMeta : byKey.get(silo.ringKey)?.metadata),
+      resourceStats: (silo) =>
+        isLocal(silo) ? { activationCount: this.catalog.count() } : undefined,
+      random: this.options.random ?? Math.random,
+    };
   }
 
   private resolveGrainType(interfaceId: number): GrainType {

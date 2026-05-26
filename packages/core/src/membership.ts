@@ -5,6 +5,8 @@ export type SiloStatus = "joining" | "active" | "draining" | "dead";
 export interface SiloMember {
   address: SiloAddress;
   status: SiloStatus;
+  /** Static metadata the silo advertises (e.g. `{ role: "worker" }`), for metadata-aware placement. */
+  metadata?: Readonly<Record<string, string>>;
 }
 
 /** A versioned snapshot of the live silo set; `version` is the view number. */
