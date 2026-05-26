@@ -79,6 +79,7 @@ export class GrainFactory {
               const req: InvocationRequest = {
                 target,
                 interfaceId: def.id,
+                interfaceVersion: def.version,
                 method: prop,
                 args: callArgs,
                 options,

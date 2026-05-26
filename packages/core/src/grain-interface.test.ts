@@ -26,4 +26,16 @@ describe("defineGrainInterface", () => {
     expect(ICounter.options.get?.readOnly).toBe(true);
     expect(ICounter.options.increment).toBeUndefined();
   });
+
+  it("defaults to version 1 and carries an explicit version", () => {
+    expect(defineGrainInterface("IVersioned.default").version).toBe(1);
+    expect(defineGrainInterface("IVersioned.explicit", { version: 3 }).version).toBe(3);
+  });
+
+  it("keeps the id stable across versions of one interface (id is name-derived)", () => {
+    const v1 = defineGrainInterface("IVersioned.same", { version: 1 });
+    const v2 = defineGrainInterface("IVersioned.same", { version: 2 });
+    expect(v1.id).toBe(v2.id);
+    expect(v1.version).not.toBe(v2.version);
+  });
 });

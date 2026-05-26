@@ -32,7 +32,7 @@ Grain call filters and cross-cutting observability (request context, OpenTelemet
 structured logs) ship too, on the grain-call-filter seam, as does implicit stream subscription.
 
 **Remaining for parity (Orleans 10):** grain migration and the activation rebalancer (the v10
-core-runtime block), grain-interface versioning, lossless directory range handoff, and placement
+core-runtime block), lossless directory range handoff, and placement
 filters. The Orleans-10 additions of durable journaling (`DurableGrain`) and durable jobs need an
 ADR each (journaling overlaps the existing reducer/persistent-state model).
 
@@ -149,7 +149,12 @@ verified.
 - **Activation rebalancer** — proactively moves activations across silos to balance load
   (`IActivationRebalancer`, `Orleans.Runtime/Placement/Rebalancing/*`; Orleans 10).
 - **Grain-interface versioning** — multiple interface versions live at once for heterogeneous rolling
-  upgrades, with version-aware placement (Orleans' versioning).
+  upgrades, with version-aware placement (Orleans' versioning). **Shipped**
+  ([ADR 0014](adr/0014-grain-interface-versioning.md)): an interface carries a `version`; each silo
+  advertises a grain manifest exchanged lazily across the cluster; placement pre-filters candidates by
+  a compatibility director (`backwardCompatible` / `strict`) and version selector (`latest` / `all` /
+  `minimum`), configured via `createSilo().useVersioning(...)`, with best-effort fallback when no silo
+  is compatible. Inert in a v1-only cluster.
 - **Implicit stream subscriptions** — bind a grain type to a namespace and auto-subscribe by key,
   with no explicit `subscribe` call (Orleans' `[ImplicitStreamSubscription]`). **Shipped** —
   `@implicitStreamSubscription(namespace)` / `defineGrain`'s `implicitSubscriptions`; the grain

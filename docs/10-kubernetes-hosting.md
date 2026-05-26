@@ -196,10 +196,11 @@ reminder/stream ownership can rebalance without losing availability.
 - **Scale in.** Removing pods triggers graceful drain per pod; their grains reactivate elsewhere and
   their owned ranges reassign.
 - **Rolling update.** The StatefulSet replaces pods one at a time (`OrderedReady`). Each replaced
-  pod drains gracefully first. Until grain-interface versioning ships (planned parity work, see the
-  [roadmap](13-roadmap-and-phases.md)), a uniform image is assumed — no incompatible interface
-  versions — so a rolling update is just a sequence of drain-and-rejoin events the cluster already
-  handles.
+  pod drains gracefully first. With a uniform image a rolling update is just a sequence of
+  drain-and-rejoin events the cluster already handles. For a **heterogeneous** update, where new pods
+  declare a higher interface version, **grain-interface versioning** ([ADR 0014](adr/0014-grain-interface-versioning.md))
+  makes placement version-aware: a new activation is steered onto a silo whose implemented version is
+  compatible with the caller's, so v1 and v2 pods can coexist during the roll.
 
 ## Local development
 
