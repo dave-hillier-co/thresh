@@ -8,6 +8,7 @@ import type { GrainDirectory } from "@tsva/directory/grain-directory";
 import type { LocationCache } from "@tsva/directory/location-cache";
 import type { Catalog } from "@tsva/runtime/catalog";
 import type { Dispatcher } from "@tsva/runtime/dispatcher";
+import type { PlacementFilter } from "@tsva/runtime/placement/placement-filter";
 import type {
   PlacementContext,
   PlacementStrategy,
@@ -26,7 +27,9 @@ export interface DistributedDispatcherDeps {
   remote: RemoteInvoker;
   activeSilos: () => SiloAddress[];
   placementFor: (grainType: GrainType) => PlacementStrategy;
-  /** Extra placement context (activation counts, RNG); `localSilo` is filled in. */
+  /** Filters that prune candidate silos by metadata before the strategy chooses. */
+  filtersFor: (grainType: GrainType) => readonly PlacementFilter[];
+  /** Extra placement context (activation counts, metadata, RNG); `localSilo` is filled in. */
   placementContext: () => Omit<PlacementContext, "localSilo">;
   /**
    * Optional version-aware pre-filter (grain-interface versioning). Wired only
@@ -99,19 +102,27 @@ export class DistributedDispatcher implements Dispatcher {
   }
 
   private async placeAndInvoke(req: InvocationRequest): Promise<unknown> {
-    const active = this.deps.activeSilos();
-    // Version-aware placement: prefer compatible silos, but fall back to the full
-    // set when none qualify (best-effort — placement never fails on version).
-    let candidates: readonly SiloAddress[] = active;
+    const ctx: PlacementContext = { localSilo: this.deps.local, ...this.deps.placementContext() };
+    // Hard metadata filters first: prune the candidate set by silo metadata; if
+    // none qualify, placement fails (the grain has a constraint nothing satisfies).
+    let candidates: readonly SiloAddress[] = this.deps.activeSilos();
+    for (const filter of this.deps.filtersFor(req.target.type)) {
+      candidates = filter.filter(req.target.type, candidates, ctx);
+    }
+    if (candidates.length === 0) {
+      throw new RejectionError(
+        `no placement candidates for ${req.target.type} after filtering`,
+        "noCandidates",
+      );
+    }
+    // Version-aware placement: prefer compatible silos within the eligible set,
+    // but fall back to it when none qualify (best-effort — never fails on version).
     if (this.deps.versionFilter !== undefined) {
-      const compatible = await this.deps.versionFilter(req, active);
+      const compatible = await this.deps.versionFilter(req, candidates);
       if (compatible.length > 0) candidates = compatible;
     }
     const strategy = this.deps.placementFor(req.target.type);
-    const targetSilo = strategy.choose(req.target.type, candidates, {
-      localSilo: this.deps.local,
-      ...this.deps.placementContext(),
-    });
+    const targetSilo = strategy.choose(req.target.type, candidates, ctx);
     return targetSilo.equals(this.deps.local)
       ? this.deliverLocal(req)
       : this.deps.remote.send(targetSilo, req);

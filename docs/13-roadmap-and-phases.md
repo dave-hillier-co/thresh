@@ -168,10 +168,12 @@ verified.
   observability work below plugs into. **Shipped** — incoming and outgoing filters (silo-wide, via
   `addIncomingCallFilter` / `addOutgoingCallFilter`) and per-grain filters (a grain filters its own
   calls via the `INCOMING_CALL_FILTER` symbol).
-- **Placement filters** — prune the candidate silo set by metadata before a placement strategy runs
-  (Orleans' `PlacementFilterStrategy`); pairs with the additional placement strategies
-  (`SiloRoleBasedPlacement`, `ResourceOptimizedPlacement`) noted in
-  [06](06-grain-directory-and-placement.md).
+- **Placement filters** — **Shipped**. A `PlacementFilter` layer (Orleans' `PlacementFilterStrategy`)
+  prunes the candidate silo set by metadata before a placement strategy runs (`MetadataMatchFilter`),
+  alongside the `SiloRoleBasedPlacement` and `ResourceOptimizedPlacement` strategies; silo metadata
+  rides the membership snapshot (see [06](06-grain-directory-and-placement.md)). Follow-ups: derive
+  silo metadata from Kubernetes pod labels, and report remote silo load via membership gossip (today
+  a peer's resource stats are zero/metadata-only).
 - **Broadcast channels** — lightweight in-cluster pub/sub without the pulling-agent machinery
   (`Orleans.BroadcastChannel/*`, `IBroadcastChannelProvider`; Orleans 10).
 - **Durable journaling (`DurableGrain`)** — needs an ADR: Orleans 10's `Orleans.Journaling`

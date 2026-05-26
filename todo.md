@@ -274,6 +274,14 @@ order, starting with transactions.
       grain ids) alongside the registry's explicit subscribers, deduplicated; in-memory provider
       stays explicit-only. Tests: metadata/observer unit, pure `implicitSubscriberIds`, dispatcher
       delivery (class + functional, no-observer drop), and a Redis pulling-agent e2e (skip-if-down).
+- [x] Placement filters + metadata-aware strategies — `PlacementFilterStrategy` layer
+      (`PlacementFilter` + `MetadataMatchFilter`, Orleans `PreferredMatchSiloMetadataPlacementFilter`)
+      prunes candidate silos by metadata before the strategy runs, applied in the dispatcher before
+      `choose`; `SiloRoleBasedPlacement` and `ResourceOptimizedPlacement` strategies. Silo metadata
+      rides `SiloMember.metadata` (config + `StaticMembershipService` resolver); `PlacementContext`
+      gained `siloMetadata`/`resourceStats` accessors. Unit + dispatcher + multi-silo integration
+      tests. Follow-ups: populate `SiloMember.metadata` from Kubernetes pod labels; report remote
+      `resourceStats` via membership gossip (today a peer's load is zero/metadata-only).
 - [ ] Directory range handoff — replace the phase-2 drop-and-rebuild with a versioned, lossless
       handoff on membership change (per [docs/06](docs/06-grain-directory-and-placement.md)).
 - [~] Observability (cross-cutting) — OpenTelemetry traces propagated via request context, metrics

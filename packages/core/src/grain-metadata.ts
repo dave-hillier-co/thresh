@@ -1,9 +1,23 @@
 import type { GrainType } from "./grain-type";
 
+/**
+ * A serializable description of a placement filter declared on a grain. Kept inert
+ * here so `@tsva/core` need not depend on runtime placement classes; the runtime
+ * resolves it to a `PlacementFilter` instance.
+ */
+export type PlacementFilterDescriptor = {
+  kind: "metadataMatch";
+  match: Readonly<Record<string, string>>;
+};
+
 export interface GrainOptions {
   /** Override the grain type name (defaults to the class name without "Grain"). */
   name?: string;
-  placement?: "random" | "preferLocal" | "activationCount";
+  placement?: "random" | "preferLocal" | "activationCount" | "siloRole" | "resourceOptimized";
+  /** The silo role required by `placement: "siloRole"`. */
+  role?: string;
+  /** Filters that prune candidate silos by metadata before the placement strategy runs. */
+  placementFilters?: readonly PlacementFilterDescriptor[];
   stateless?: boolean;
   collectionAgeSeconds?: number;
 }
