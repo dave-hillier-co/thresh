@@ -262,6 +262,11 @@ export class ClusterNode {
     })) as boolean;
   }
 
+  /** Number of live grain activations hosted on this silo (for runtime metrics). */
+  activationCount(): number {
+    return this.catalog.count();
+  }
+
   async start(): Promise<void> {
     this.listener = await this.options.transport.listen(this.options.local, (message) =>
       this.onMessage(message),

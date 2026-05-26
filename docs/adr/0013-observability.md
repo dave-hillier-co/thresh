@@ -36,9 +36,9 @@ and request-context propagation. This ADR records how observability builds on th
 3. **Metrics via OpenTelemetry, as a call filter.** `metricsFilters()` returns an incoming filter
    recording a `tsva.grain.calls` counter (by interface, method, ok/error status) and a
    `tsva.grain.call.duration` histogram, through the global OpenTelemetry meter (no-op without an
-   SDK). `createSilo().useMetrics()` registers it. Runtime gauges (activation count, directory hit
-   rate, reminder/stream lag) and **structured logs** follow, on the same seam and instrumentation
-   points.
+   SDK). `createSilo().useMetrics()` registers it plus a `tsva.activations` observable gauge
+   sampling the live activation count from the catalog. The directory-hit-rate / reminder-stream-lag
+   gauges and **structured logs** follow, on the same seam and instrumentation points.
 
 ## Consequences
 

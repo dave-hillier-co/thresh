@@ -264,8 +264,12 @@ order, starting with transactions.
         counter (interface/method/status) + `tsva.grain.call.duration` histogram via
         `@opentelemetry/api` metrics; builder `useMetrics()`. Test with `@opentelemetry/sdk-metrics`
         `InMemoryMetricExporter`: a call records the counter + histogram with rpc attributes.
-  - [ ] Slice 4 — runtime gauges (activation count, directory hit rate, reminder/stream lag) and
-        structured logs.
+  - [~] Slice 4 — runtime gauges: `registerRuntimeMetrics` adds the `tsva.activations` observable
+        gauge over `node.activationCount()` (catalog count), registered by `useMetrics()` at build and
+        unregistered on stop. Test (sdk-metrics): the gauge reports the live activation count.
+        Remaining: directory hit-rate + reminder/stream-lag gauges (need cache/service instrumentation).
+  - [ ] Slice 5 — structured logs: a pluggable logger seam with log points at activation lifecycle,
+        call errors, transaction abort, rebalance.
 
 ## Reducer grains ([ADR 0006](docs/adr/0006-reducer-grains.md))
 

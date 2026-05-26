@@ -32,8 +32,9 @@ decisions.
 ## 🚧 In progress
 
 - [~] **Observability** ([ADR 0013](docs/adr/0013-observability.md)) — ambient **request context**,
-      **OpenTelemetry tracing**, and **call metrics** (counter + duration histogram) ship; runtime
-      gauges (activation count, directory hit rate, reminder/stream lag) and **structured logs** remain.
+      **OpenTelemetry tracing**, **call metrics** (counter + duration histogram), and the
+      **activation-count gauge** ship; directory-hit-rate / reminder-stream-lag gauges and
+      **structured logs** remain.
 - [~] **External client** — in-process gateway-routed client ships; higher-level gateway discovery +
       a WebSocket client e2e remain.
 - [~] **Functional-first examples** — docs lead functional; a few examples are still `@grain()`

@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { metrics } from "@opentelemetry/api";
 import {
   AggregationTemporality,
@@ -36,6 +36,7 @@ class GreeterGrain extends Grain implements Greeter {
 const local = new SiloAddress("silo-0", "uid-0", "silo-0:11111");
 
 describe("OpenTelemetry metrics filter", () => {
+  beforeEach(() => exporter.reset());
   afterAll(async () => {
     await meterProvider.shutdown();
   });
@@ -67,6 +68,31 @@ describe("OpenTelemetry metrics filter", () => {
       expect(totalCalls).toBeGreaterThanOrEqual(2);
       expect(duration!.dataPoints.length).toBeGreaterThanOrEqual(1);
       expect(calls!.dataPoints[0]!.attributes["rpc.method"]).toBe("greet");
+    } finally {
+      await silo.stop();
+    }
+  });
+
+  it("reports the live activation count as a gauge", async () => {
+    const silo = createSilo({ clusterId: "metrics-gauge", local })
+      .useStaticMembership([local])
+      .useInProcessTransport(new InProcessNetwork())
+      .useMetrics()
+      .registerGrain(GreeterGrain, { interfaces: [Greeter] })
+      .build();
+    await silo.start();
+    try {
+      await silo.getGrain(Greeter, "g1").greet("a");
+      await silo.getGrain(Greeter, "g2").greet("b");
+
+      await meterProvider.forceFlush();
+      const gauge = exporter
+        .getMetrics()
+        .flatMap((rm) => rm.scopeMetrics)
+        .flatMap((sm) => sm.metrics)
+        .find((m) => m.descriptor.name === "tsva.activations");
+      expect(gauge).toBeDefined();
+      expect(gauge!.dataPoints.at(-1)!.value as number).toBeGreaterThanOrEqual(2);
     } finally {
       await silo.stop();
     }
