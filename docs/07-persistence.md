@@ -141,16 +141,15 @@ A grain then names a non-default provider with
 
 The `usePersistentState` facet above is the **mutable** model: read, mutate `value`, `write()`. An
 alternative is the **reducer** facet `useReducerState(ctx, name, { initial, reduce })`, where command
-handlers `raise` past-tense events that a pure reducer folds into *immutable* state. In **snapshot
-mode** it persists the folded state through the same `GrainStorage` + etag machinery described here
-(the events are transient); an append-only event log is a future mode. The two facets coexist — a
-grain opts into whichever it wants.
+handlers `raise` past-tense events that a pure reducer folds into *immutable* state. It persists the
+folded state (a snapshot) through the same `GrainStorage` + etag machinery described here (the events
+are transient). The two facets coexist — a grain opts into whichever it wants.
 
 Going one step further, `defineReducerGrain(name, { initial, reduce })` makes the *whole* grain a
 single `dispatch(action)` + `query()` message loop with no per-grain method table at all, and
 cross-grain work returned as Elm-style effects — the `useReducer`-shaped end state (see
 [ADR 0010](adr/0010-message-dispatch-reducer-grains.md)). See [ADR 0006](adr/0006-reducer-grains.md)
-for the reducer model, rationale and the snapshot-vs-event-log split, and
+for the reducer model and rationale, and
 [`examples/bank`](../examples/bank) for both worked forms. The class field decorator
 `@reducerState(name, { initial, reduce })` that `useReducerState` wraps remains available for interop.
 

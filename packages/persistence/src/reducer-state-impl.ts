@@ -3,10 +3,9 @@ import type { GrainStorage, StateHolder } from "@tsva/core/grain-storage";
 import type { Reducer, ReducerState } from "@tsva/core/reducer-state";
 
 /**
- * Snapshot-mode reducer state: keeps the folded state in memory and persists it
- * (the snapshot) through a `GrainStorage` with etag optimistic concurrency. The
- * raised events are transient — only the reduced `value` is durable. An event log
- * (true event sourcing) is a separate provider, future work per ADR 0006.
+ * Reducer state: keeps the folded state in memory and persists it (a snapshot)
+ * through a `GrainStorage` with etag optimistic concurrency. The raised events are
+ * transient — only the reduced `value` is durable (see ADR 0006).
  */
 export class ReducerStateImpl<TState, TEvent> implements ReducerState<TState, TEvent> {
   private readonly holder: StateHolder<TState>;

@@ -241,9 +241,6 @@ order, starting with transactions.
 - [x] Worked example `examples/bank` — accounts as reducer grains (deposit/withdraw/transfer);
       runnable demo + smoke test; events fold to immutable state, snapshot survives a silo restart
 - [x] Reflect `@reducerState` in `docs/07` (persistence), `docs/11` (public API + examples), `README`
-- [ ] Event-log mode — append-only `EventLog` provider + replay-from-snapshot on activation; opt-in
-      publication of raised events to the grain's stream; event upcasting. **Deferred** — an addition
-      beyond Orleans, not a parity item.
 
 ## Functional grains ([ADR 0009](docs/adr/0009-functional-grains.md))
 

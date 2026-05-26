@@ -19,7 +19,7 @@ the previous and ends in something demonstrable. The target is **parity with Orl
 
 **Shipped and verified (phases 1–7):** the core actor model, persistence, timers and reminders, and
 event streams — all on **Redis** (the default durable backend) — plus Kubernetes hosting (membership
-from EndpointSlices, health, drain, and a cluster e2e). Reducer grains (snapshot mode) and the
+from EndpointSlices, health, drain, and a cluster e2e). Reducer grains and the
 external client also ship. **Cross-grain ACID transactions** ([ADR 0008](adr/0008-cross-grain-transactions.md))
 ship too: declarative boundaries, a `TransactionalState<T>` facet with wait-die locking, an
 optimistic two-phase commit (TM elected from the writers), durable storage on memory + Redis,
@@ -35,9 +35,9 @@ journaling (`DurableGrain`) and durable jobs need an ADR each (journaling overla
 reducer/persistent-state model). Cross-cutting observability (OpenTelemetry traces/metrics, structured
 logs) remains to be wired throughout, on the grain-call-filter seam.
 
-**Out of scope / deferred:** multi-cluster/geo (Orleans removed it in 3.0), the reducer event-log
-mode, and additional providers (Postgres storage/reminders, other stream backings) — alternatives to
-the shipped Redis defaults, not parity gaps.
+**Out of scope / deferred:** multi-cluster/geo (Orleans removed it in 3.0) and additional providers
+(Postgres storage/reminders, other stream backings) — alternatives to the shipped Redis defaults, not
+parity gaps.
 
 ## Phase 1 — Single-silo core actor model
 
@@ -174,9 +174,6 @@ verified.
 - **Multi-cluster / geo-distribution** — out of scope: Orleans removed it in 3.0.
 - **Additional providers** — Postgres grain storage and reminder table, plus other databases and
   stream backings/queue adapters. Redis is the shipped default; these are alternatives.
-- **Reducer event-log mode** — the reducer programming model ([ADR 0006](adr/0006-reducer-grains.md))
-  ships in snapshot mode (events transient); the append-only event-log persistence mode is deferred.
-  This is an addition beyond Orleans, not a parity item.
 
 ## Beyond parity (post-Orleans-10 directions)
 

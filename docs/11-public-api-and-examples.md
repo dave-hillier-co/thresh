@@ -156,11 +156,11 @@ The snippets above are the target surface. The shipped surface differs in a few 
 - `createSilo` also accepts `collectionAgeSeconds` / `collectionIntervalSeconds` (idle collection runs
   in the hosted path), `reminderRefreshSeconds` (how often a silo re-reads its reminder ranges), and
   `random` (deterministic placement for tests).
-- Reducer grains ship in **snapshot mode**: `useReducerState(ctx, name, { initial, reduce })` (the
+- Reducer grains fold events into a snapshot: `useReducerState(ctx, name, { initial, reduce })` (the
   hook over the `@reducerState` decorator) folds events into a `ReducerState<S, E>` persisted via
   `GrainStorage`; `defineReducerGrain(name, { initial, reduce })` ([ADR 0010](adr/0010-message-dispatch-reducer-grains.md))
   wraps that as a `dispatch`/`query` grain with `send` effects. See
-  [ADR 0006](adr/0006-reducer-grains.md). The append-only event-log mode is future work.
+  [ADR 0006](adr/0006-reducer-grains.md).
 - The external client (`@tsva/client`) is implemented for in-process and WebSocket transports
   (`createClient({ clusterId, local, transport, gateway })`), routing `getGrain` calls through a
   gateway silo; see "External client" below.
@@ -218,7 +218,7 @@ instead (see [10](10-kubernetes-hosting.md)).
   `defineGrain` closure using `useReducerState`, and a `defineReducerGrain` whose whole surface is
   `dispatch(action)` + `query()` with the transfer's credit leg returned as an Elm-style effect
   ([ADR 0010](adr/0010-message-dispatch-reducer-grains.md)). Both fold a pure reducer into immutable
-  state; snapshot mode persists it via `GrainStorage`, surviving a silo restart; the events are
+  state; the folded snapshot persists via `GrainStorage`, surviving a silo restart; the events are
   transient.
 - **`@tsva/example-thermostat`** — the full Orleans README example, below.
 - **`@tsva/example-k8s-silo`** — a silo on **Kubernetes**: membership from the headless Service's
