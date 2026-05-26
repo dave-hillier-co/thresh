@@ -12,6 +12,8 @@ import type { PersistentState } from "./persistent-state";
 import { registerPersistentField } from "./persistent-state-metadata";
 import type { Reducer, ReducerState } from "./reducer-state";
 import { registerReducerField } from "./reducer-state-metadata";
+import type { TransactionalState } from "./transactional-state";
+import { registerTransactionalField } from "./transactional-state-metadata";
 import type { ActivationReason, DeactivationReason } from "./reasons";
 
 /**
@@ -205,5 +207,41 @@ export function usePersistentState<TState>(
     read: () => bound().read(),
     write: () => bound().write(),
     clear: () => bound().clear(),
+  };
+}
+
+export interface UseTransactionalStateOptions<TState> {
+  /** The state before any committed write. */
+  initial: () => TState;
+}
+
+/**
+ * The functional counterpart of `@transactionalState`. Registers a transactional
+ * facet on the activation and returns a handle; the runtime binds it before
+ * `onActivate`. State is reached only through `performRead` / `performUpdate`
+ * inside a transaction (the handle throws if used before binding).
+ */
+export function useTransactionalState<TState>(
+  ctx: GrainSetup,
+  stateName: string,
+  options: UseTransactionalStateOptions<TState>,
+): TransactionalState<TState> {
+  const instance = instanceOf(ctx);
+  const fieldName = `__tsva_tx$${stateName}`;
+  registerTransactionalField(instance, {
+    fieldName,
+    stateName,
+    initial: options.initial as () => unknown,
+  });
+  const bound = (): TransactionalState<TState> => {
+    const facet = (instance as Record<string, unknown>)[fieldName] as
+      | TransactionalState<TState>
+      | undefined;
+    if (facet === undefined) throw new Error(`transactional state "${stateName}" not yet bound`);
+    return facet;
+  };
+  return {
+    performRead: (read) => bound().performRead(read),
+    performUpdate: (update) => bound().performUpdate(update),
   };
 }

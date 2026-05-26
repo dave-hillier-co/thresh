@@ -1,5 +1,6 @@
 import type { GrainId } from "./grain-id";
 import type { InvokeMethodOptions } from "./invoke-options";
+import type { TransactionInfo } from "./transaction-info";
 
 /**
  * The request a grain reference builds for one method call. The dispatcher
@@ -17,4 +18,10 @@ export interface InvocationRequest {
   /** Call-chain reentrancy id, generated at the root and propagated. */
   reentrancyId: string;
   sender?: GrainId;
+  /**
+   * Ambient transaction this call participates in, if any. In-process the same
+   * `TransactionInfo` flows by reference so resources enlist into it; cross-silo
+   * propagation rides the request context (later slice).
+   */
+  transaction?: TransactionInfo;
 }

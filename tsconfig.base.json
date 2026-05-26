@@ -29,6 +29,7 @@
       "@tsva/clustering-k8s/*": ["./packages/clustering-k8s/src/*"],
       "@tsva/hosting/*": ["./packages/hosting/src/*"],
       "@tsva/persistence/*": ["./packages/persistence/src/*"],
+      "@tsva/transactions/*": ["./packages/transactions/src/*"],
       "@tsva/reminders/*": ["./packages/reminders/src/*"],
       "@tsva/streams/*": ["./packages/streams/src/*"],
       "@tsva/client/*": ["./packages/client/src/*"],

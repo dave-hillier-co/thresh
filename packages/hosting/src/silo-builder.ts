@@ -19,6 +19,11 @@ import { RedisGrainStorage } from "@tsva/persistence/redis-grain-storage";
 import { bindPersistentStates } from "@tsva/persistence/state-activator";
 import { bindReducerStates } from "@tsva/persistence/reducer-state-activator";
 import { StorageRegistry } from "@tsva/persistence/storage-registry";
+import { bindTransactionalStates } from "@tsva/transactions/transactional-state-activator";
+import { MemoryTransactionalStorage } from "@tsva/transactions/memory-transactional-storage";
+import { RedisTransactionalStorage } from "@tsva/transactions/redis-transactional-storage";
+import { TransactionalStorageRegistry } from "@tsva/transactions/transactional-storage-registry";
+import type { TransactionalStateStorage } from "@tsva/core/transactional-storage";
 import type { StreamProvider } from "@tsva/core/stream";
 import { LocalReminderService } from "@tsva/reminders/local-reminder-service";
 import { MemoryReminderTable } from "@tsva/reminders/memory-reminder-table";
@@ -57,6 +62,7 @@ export class SiloBuilder {
   private transport: Transport | undefined;
   private healthPort: number | undefined;
   private storage: StorageRegistry | undefined;
+  private transactionalStorage: TransactionalStorageRegistry | undefined;
   private reminderTable: ReminderTable | undefined;
   private readonly streamProviders = new Map<string, StreamProvider>();
   private readonly registrations: Registration[] = [];
@@ -140,6 +146,22 @@ export class SiloBuilder {
     return this.addStorage("default", provider);
   }
 
+  /** Register a transactional-storage provider for `@transactionalState` facets. */
+  addTransactionalStorage(name: string, provider: TransactionalStateStorage): this {
+    (this.transactionalStorage ??= new TransactionalStorageRegistry()).add(name, provider);
+    return this;
+  }
+
+  /**
+   * Convenience: register an in-memory "default" transactional-storage provider.
+   * Sharing one instance across silo restarts stands in for a durable backend.
+   */
+  useMemoryTransactionalStorage(
+    provider: TransactionalStateStorage = new MemoryTransactionalStorage(),
+  ): this {
+    return this.addTransactionalStorage("default", provider);
+  }
+
   /**
    * Register a Redis-backed storage provider. The client connects when the silo
    * starts and disconnects when it stops; `keyPrefix` namespaces keys in a Redis
@@ -157,6 +179,29 @@ export class SiloBuilder {
     return this.addStorage(
       name,
       new RedisGrainStorage(
+        client,
+        options.keyPrefix !== undefined ? { keyPrefix: options.keyPrefix } : {},
+      ),
+    );
+  }
+
+  /**
+   * Register a Redis-backed transactional-storage provider for
+   * `@transactionalState` facets. Connects on start, disconnects on stop;
+   * `keyPrefix` namespaces keys (defaults to `"tsva"`).
+   */
+  addRedisTransactionalStorage(name: string, options: { url: string; keyPrefix?: string }): this {
+    const client = createClient({ url: options.url });
+    client.on("error", () => {});
+    this.starters.push(async () => {
+      await client.connect();
+    });
+    this.closers.push(async () => {
+      await client.close();
+    });
+    return this.addTransactionalStorage(
+      name,
+      new RedisTransactionalStorage(
         client,
         options.keyPrefix !== undefined ? { keyPrefix: options.keyPrefix } : {},
       ),
@@ -235,6 +280,11 @@ export class SiloBuilder {
     if (this.transport === undefined) throw new Error("silo: no transport configured");
     const health = new HealthCheck();
     const storage = this.storage;
+    // Transactional facets always have a provider; default to a per-silo
+    // in-memory one when none is configured (non-durable across restarts).
+    const transactionalStorage =
+      this.transactionalStorage ??
+      new TransactionalStorageRegistry().add("default", new MemoryTransactionalStorage());
     const time = this.config.time;
     let reminderService: LocalReminderService | undefined;
 
@@ -251,14 +301,16 @@ export class SiloBuilder {
         ? { collectionIntervalSeconds: this.config.collectionIntervalSeconds }
         : {}),
       ...(this.config.random !== undefined ? { random: this.config.random } : {}),
-      ...(storage !== undefined
-        ? {
-            stateBinder: async (instance, grainId) => {
-              await bindPersistentStates(instance, grainId, storage);
-              await bindReducerStates(instance, grainId, storage);
-            },
-          }
-        : {}),
+      // Transactional facets need no storage provider in this slice, so the
+      // binder always runs; persistent/reducer facets bind only when storage is
+      // configured.
+      stateBinder: async (instance, grainId) => {
+        if (storage !== undefined) {
+          await bindPersistentStates(instance, grainId, storage);
+          await bindReducerStates(instance, grainId, storage);
+        }
+        await bindTransactionalStates(instance, grainId, transactionalStorage);
+      },
       ...(this.reminderTable !== undefined ? { reminderRegistry: () => reminderService } : {}),
       ...(this.streamProviders.size > 0
         ? {

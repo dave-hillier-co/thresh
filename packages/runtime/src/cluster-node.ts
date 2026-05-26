@@ -34,6 +34,7 @@ import { placementStrategyFor } from "@tsva/runtime/placement/placement-director
 import { RandomPlacement } from "@tsva/runtime/placement/random-placement";
 import type { PlacementStrategy } from "@tsva/runtime/placement/placement-strategy";
 import { systemTimeProvider, type TimeProvider } from "@tsva/runtime/time-provider";
+import { TransactionAgent } from "@tsva/runtime/transaction-agent";
 
 export interface ClusterNodeOptions {
   local: SiloAddress;
@@ -150,6 +151,7 @@ export class ClusterNode {
       }),
     });
     this.factory.setDispatcher(this.dispatcher);
+    this.factory.setTransactionAgent(new TransactionAgent(time));
     this.collector = new ActivationCollector(
       this.catalog,
       time,

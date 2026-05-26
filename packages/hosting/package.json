@@ -15,6 +15,7 @@
     "@tsva/reminders": "workspace:*",
     "@tsva/runtime": "workspace:*",
     "@tsva/streams": "workspace:*",
+    "@tsva/transactions": "workspace:*",
     "redis": "^5.12.1"
   }
 }

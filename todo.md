@@ -150,19 +150,58 @@ order, starting with transactions.
 
 ## Phase 7 — Cross-grain transactions ([ADR 0008](docs/adr/0008-cross-grain-transactions.md))
 
-- [ ] Slice 1 — transaction context + boundaries: `TransactionOption` on method options; the
-      proxy/dispatcher begins/joins a transaction and propagates the context through the request
-      context across silos. In-memory TM, single silo, no durability. Failing test first: two grains
-      updated in one transaction, an induced failure aborts both (no half-apply).
-- [ ] Slice 2 — `TransactionalState<T>` facet: versioned state, per-transaction tentative writes,
-      read/write version tracking; `performUpdate` / `performRead`. Sociable tests over the in-memory
-      path.
-- [ ] Slice 3 — optimistic serializable commit: TM prepare/commit/abort across participants;
-      serializable conflict detection; cascading abort. End-to-end: a transfer across two account
-      grains is atomic, concurrent transfers serialize, a conflicting transaction aborts.
-- [ ] Slice 4 — durability + recovery: persist committed transactional state and commit records
-      (Redis); resolve in-doubt transactions on restart; remote participants over the dispatcher.
-      Multi-silo end-to-end: a silo dies mid-commit and the outcome stays consistent.
+- [x] ADR 0008 revised to the faithful Orleans protocol (timestamp-ordered optimistic + wait-die,
+      TM elected from the write participants, `PrepareAndCommit`/`Prepared`/`Cancel` message set,
+      `CausalClock`); added `Orleans.Transactions/*` source citations. Status: Accepted.
+- [x] Slice 1 — transaction context + boundaries: `transaction: TransactionOption` on
+      `InvokeMethodOptions`; `TransactionInfo` + `AccessCounter` + `TransactionParticipant` in core;
+      `req.transaction` propagated via `InvocationContext` (seeded in `activation.invoke`); the proxy
+      (`grain-factory.buildProxy`) begins/joins per option and commits/aborts at the root boundary;
+      per-silo `TransactionAgent` + `CausalClock` in `@tsva/runtime` wired into `Silo`/`ClusterNode`;
+      minimal `TransactionalValue` seed + `currentTransaction`/`requireTransaction` in new
+      `@tsva/transactions`. Test (`transaction-boundary.test.ts`): two-grain transfer commits
+      atomically, an overdraft aborts both (no half-apply), a `join` method outside a transaction is
+      rejected. Cross-silo `RequestContext` propagation + participant merging deferred to Slice 3.
+- [x] Slice 2 — `TransactionalState<T>` facet: `performRead`/`performUpdate`, committed version with a
+      dense sequence id + a single per-transaction tentative copy, `AccessCounter` read/write tracking,
+      enlists as a participant on first access (`TransactionalStateImpl`). Wait-die reader-writer lock
+      (`reader-writer-lock.ts`, ported from Orleans `State/ReaderWriterLock.cs`): timestamp-ordered,
+      reads share, writes exclusive, older waits / younger dies (`TransactionAbortedError`).
+      `@transactionalState` decorator + `useTransactionalState` hook + `bindTransactionalStates`
+      activator wired into the `silo-builder` `stateBinder` (runs even without a storage provider).
+      Tests: wait-die lock unit (6), facet sociable (tentative invisibility/commit/abort/own-write/
+      younger-dies), and hosting end-to-end through `createSilo` (class + functional, commit + abort).
+- [x] Slice 3 — optimistic serializable commit (single-silo): `TransactionParticipant` grew a
+      `prepare` phase; `TransactionAgent.resolve` runs faithful two-phase commit — collate
+      participants, elect the TM from the writers, prepare all, then commit all, or cascade-abort and
+      raise `TransactionAbortedError`. `TransactionalStateImpl.prepare` validates/stages.
+      `TransactionAbortedError` moved to `@tsva/core/errors`. End-to-end: atomic transfer (hosting +
+      `examples/bank` transactional account/teller), wait-die concurrency (older commits, younger
+      aborts — `transaction-concurrency.test.ts`), overdraft rolls back both. **Note:** routing
+      TM/resource calls over the dispatcher for *remote* participants folds into Slice 4 (where
+      durability + multi-silo recovery live); single-silo participants are in-process objects.
+- [~] Slice 4 — durability + recovery (in progress):
+  - [x] 4a — durable transactional storage: `TransactionalStateStorage` contract
+        (`load`/`store` with pending states, `commitUpTo`/`abortAfter`, commit-records metadata;
+        ported from Orleans `ITransactionalStateStorage`) + `MemoryTransactionalStorage`.
+        `TransactionalStateImpl` is now storage-backed: `load` on activation, `prepare` stages a
+        pending record, `commit` promotes it (`commitUpTo`), `abort` drops it. Builder
+        `addTransactionalStorage` / `useMemoryTransactionalStorage` (+ a per-silo in-memory default);
+        `bindTransactionalStates` is async and loads. Test: committed state survives a silo restart
+        via a shared store; an aborted write persists nothing (`transaction-durability.test.ts`).
+  - [x] 4b — Redis transactional storage provider: `RedisTransactionalStorage` keeps the record
+        (committed + pending list + commit-records metadata) as a Redis hash (`data` JSON + `etag`);
+        `store` reads, applies the shared `applyStore` deltas, and writes back under a conditional
+        Lua CAS — same etag contract as the memory provider (extracted to
+        `transactional-storage-apply.ts` so both share semantics). Builder
+        `addRedisTransactionalStorage`. Integration test (skip-if-down): prepare/commit/load, stale
+        etag rejected, committed state survives a silo restart via Redis.
+  - [ ] 4c — remote participants over the dispatcher: route resource `prepare`/`commit`/`abort` and
+        the elected TM's `prepareAndCommit` as system extensions (StreamConsumer precedent), so a
+        transaction spans grains on different silos. Multi-silo cross-grain transfer e2e.
+  - [ ] 4d — in-doubt recovery: persist commit records; on restart resolve pending (prepared) states
+        from the recorded TM `ParticipantId`. Multi-silo e2e: a silo dies mid-commit, outcome stays
+        consistent (commit or abort, never torn).
 
 ## Remaining for parity (after transactions)
 

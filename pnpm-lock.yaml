@@ -175,6 +175,9 @@ importers:
       '@tsva/streams':
         specifier: workspace:*
         version: link:../streams
+      '@tsva/transactions':
+        specifier: workspace:*
+        version: link:../transactions
       redis:
         specifier: ^5.12.1
         version: 5.12.1
@@ -233,6 +236,15 @@ importers:
       redis:
         specifier: ^5.12.1
         version: 5.12.1
+
+  packages/transactions:
+    dependencies:
+      '@tsva/core':
+        specifier: workspace:*
+        version: link:../core
+      '@tsva/runtime':
+        specifier: workspace:*
+        version: link:../runtime
 
 packages:
 

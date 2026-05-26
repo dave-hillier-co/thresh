@@ -81,7 +81,11 @@ export class ActivationData implements GrainContext {
             throw new GrainCallError(`activation unavailable: ${this.id.toString()}`);
           }
           return invocationContext.run(
-            { senderId: req.sender, reentrancyId: req.reentrancyId },
+            {
+              senderId: req.sender,
+              reentrancyId: req.reentrancyId,
+              transaction: req.transaction,
+            },
             () => this.callMethod(req),
           );
         },

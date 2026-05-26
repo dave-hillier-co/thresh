@@ -47,3 +47,20 @@ export class InconsistentStateError extends Error {
     this.name = "InconsistentStateError";
   }
 }
+
+/**
+ * Raised when a transaction is aborted by the concurrency-control or commit
+ * protocol — for example a younger transaction "dies" under wait-die when it
+ * conflicts with an older holder, or a participant fails to prepare
+ * ([ADR 0008](../../docs/adr/0008-cross-grain-transactions.md)). Propagates to
+ * the originating call so the caller may retry.
+ */
+export class TransactionAbortedError extends Error {
+  constructor(
+    readonly transactionId: string,
+    reason: string,
+  ) {
+    super(`transaction ${transactionId} aborted: ${reason}`);
+    this.name = "TransactionAbortedError";
+  }
+}

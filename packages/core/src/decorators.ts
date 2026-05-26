@@ -8,6 +8,7 @@ import {
 import { registerPersistentField } from "./persistent-state-metadata";
 import { registerReducerField } from "./reducer-state-metadata";
 import type { Reducer } from "./reducer-state";
+import { registerTransactionalField } from "./transactional-state-metadata";
 
 export interface PersistentStateOptions {
   /** Storage provider name; defaults to the silo's default provider. */
@@ -81,6 +82,35 @@ export function reducerState<TState, TEvent>(
         initial: options.initial as () => unknown,
         reduce: options.reduce as (state: unknown, event: unknown) => unknown,
         ...(options.provider !== undefined ? { provider: options.provider } : {}),
+      });
+    });
+  };
+}
+
+export interface TransactionalStateOptions<TState> {
+  /** The state before any committed write. */
+  initial: () => TState;
+}
+
+/**
+ * Injects a `TransactionalState<T>` facet into a grain field (Phase 7,
+ * [ADR 0008](../../docs/adr/0008-cross-grain-transactions.md)). The runtime binds
+ * it before `onActivate`; the grain reaches state only through `performRead` /
+ * `performUpdate` inside a transaction, and the facet participates in the
+ * cross-grain commit. The class-substrate counterpart of `useTransactionalState`.
+ */
+export function transactionalState<TState>(
+  stateName: string,
+  options: TransactionalStateOptions<TState>,
+) {
+  return function (_value: undefined, context: ClassFieldDecoratorContext): void {
+    if (context.kind !== "field") throw new Error("@transactionalState must decorate a field");
+    const fieldName = String(context.name);
+    context.addInitializer(function (this: unknown) {
+      registerTransactionalField(this as object, {
+        fieldName,
+        stateName,
+        initial: options.initial as () => unknown,
       });
     });
   };

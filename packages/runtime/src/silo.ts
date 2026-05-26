@@ -9,6 +9,7 @@ import { Catalog, type RegisteredGrain } from "@tsva/runtime/catalog";
 import { GrainFactory } from "@tsva/runtime/grain-factory";
 import { LocalDispatcher } from "@tsva/runtime/local-dispatcher";
 import { systemTimeProvider, type TimeProvider } from "@tsva/runtime/time-provider";
+import { TransactionAgent } from "@tsva/runtime/transaction-agent";
 
 export interface SiloOptions {
   time?: TimeProvider;
@@ -39,6 +40,7 @@ export class Silo {
       defaultCollectionAgeSeconds: options.defaultCollectionAgeSeconds ?? 900,
     });
     this.factory.setDispatcher(new LocalDispatcher(this.catalog));
+    this.factory.setTransactionAgent(new TransactionAgent(time));
     this.collector = new ActivationCollector(
       this.catalog,
       time,

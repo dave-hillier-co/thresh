@@ -1,0 +1,65 @@
+import type { GrainId } from "./grain-id";
+
+/**
+ * Durable storage for transactional state, ported from Orleans
+ * `ITransactionalStateStorage<TState>` ([ADR 0008](../../docs/adr/0008-cross-grain-transactions.md)).
+ * Distinct from `GrainStorage`: it keeps a committed version with a dense local
+ * sequence id, a list of prepared-but-uncommitted pending states, and a
+ * commit-records log, so a commit is a single atomic `store` and recovery can
+ * resolve in-doubt transactions.
+ */
+
+/** A prepared, not-yet-committed transaction's state, kept until commit or abort. */
+export interface PendingTransactionState<T> {
+  /** Dense local sequence number (1,2,3…); a re-prepare with the same id replaces it. */
+  sequenceId: number;
+  transactionId: string;
+  /** Logical commit timestamp. */
+  timeStamp: number;
+  /** Participant key of the TM that knows this transaction's fate, or undefined if this resource is the TM. */
+  transactionManager?: string | undefined;
+  /** Snapshot of the state after this transaction executed. */
+  state: T;
+}
+
+/** A durable record of a committed transaction's manager view, used in recovery. */
+export interface CommitRecord {
+  timeStamp: number;
+  writeParticipants: string[];
+}
+
+/** Algorithm metadata stored alongside the state (the TM's commit log). */
+export interface TransactionalStateMetadata {
+  timeStamp: number;
+  commitRecords: Record<string, CommitRecord>;
+}
+
+export interface TransactionalStorageLoadResponse<T> {
+  etag: string | undefined;
+  committedState: T;
+  /** Local sequence id of the last committed transaction, or 0 if none. */
+  committedSequenceId: number;
+  metadata: TransactionalStateMetadata;
+  /** Prepared pending states, ordered by sequence id. */
+  pendingStates: PendingTransactionState<T>[];
+}
+
+export interface TransactionalStateStorage<T = unknown> {
+  load(stateName: string, grainId: GrainId): Promise<TransactionalStorageLoadResponse<T>>;
+
+  /**
+   * Atomically: prepare the given pending states; if `commitUpTo` is set, commit
+   * all pending up to and including that sequence id; if `abortAfter` is set,
+   * drop all pending with a strictly larger sequence id. Returns the new etag;
+   * throws on an etag mismatch.
+   */
+  store(
+    stateName: string,
+    grainId: GrainId,
+    expectedETag: string | undefined,
+    metadata: TransactionalStateMetadata,
+    statesToPrepare: ReadonlyArray<PendingTransactionState<T>>,
+    commitUpTo: number | undefined,
+    abortAfter: number | undefined,
+  ): Promise<string>;
+}
