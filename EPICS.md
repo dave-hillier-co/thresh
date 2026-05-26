@@ -28,13 +28,13 @@ decisions.
       [0006](docs/adr/0006-reducer-grains.md)/[0009](docs/adr/0009-functional-grains.md)/[0010](docs/adr/0010-message-dispatch-reducer-grains.md)/[0011](docs/adr/0011-message-dispatch-substrate.md)).
 - [x] **Grain call filters** — incoming, outgoing, and per-grain interception (auth, retries, the
       observability seam) ([ADR 0012](docs/adr/0012-grain-call-filters.md)).
+- [x] **Observability** ([ADR 0013](docs/adr/0013-observability.md)) — ambient **request context**,
+      **OpenTelemetry tracing**, **metrics** (call counter + duration histogram, activation gauge,
+      directory-cache hit/miss), and **structured logging**, all on the call-filter seam and no-op
+      without an SDK/logger. (Reminder/stream-lag gauges deferred as optional polish.)
 
 ## 🚧 In progress
 
-- [~] **Observability** ([ADR 0013](docs/adr/0013-observability.md)) — ambient **request context**,
-      **OpenTelemetry tracing**, **call metrics** (counter + duration histogram), and the
-      **activation-count gauge** ship; directory-hit-rate / reminder-stream-lag gauges and
-      **structured logs** remain.
 - [~] **External client** — in-process gateway-routed client ships; higher-level gateway discovery +
       a WebSocket client e2e remain.
 - [~] **Functional-first examples** — docs lead functional; a few examples are still `@grain()`

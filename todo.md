@@ -287,8 +287,14 @@ order, starting with transactions.
         gauge over `node.activationCount()` (catalog count), registered by `useMetrics()` at build and
         unregistered on stop. Test (sdk-metrics): the gauge reports the live activation count.
         Remaining: directory hit-rate + reminder/stream-lag gauges (need cache/service instrumentation).
-  - [ ] Slice 5 — structured logs: a pluggable logger seam with log points at activation lifecycle,
-        call errors, transaction abort, rebalance.
+  - [x] Slice 5 — structured logging: `Logger` contract in core (`debug`/`info`/`warn`/`error(msg,
+        fields)`, `noopLogger`); `loggingFilter(logger)` logs each call with structured fields
+        (grain/interface/method/durationMs/status) at info, failures at error; `consoleLogger()` (JSON
+        lines); builder `useLogging(logger)`. Test: a capturing logger records success + error.
+  - [x] Slice 6 — directory hit-rate gauge: `LocationCache` counts hits/misses (`.stats`); node
+        exposes `directoryCacheStats()`; `registerRuntimeMetrics` adds `tsva.directory.cache.hits`/
+        `.misses` observable counters. Test (sdk-metrics): counters report after directory lookups.
+  - [ ] (deferred polish) reminder/stream-lag gauges — fuzzy timing semantics, low value.
 
 ## Reducer grains ([ADR 0006](docs/adr/0006-reducer-grains.md))
 

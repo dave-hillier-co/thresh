@@ -1,6 +1,8 @@
 # ADR 0013 — Observability (request context + OpenTelemetry tracing)
 
-- Status: Accepted — request context, tracing, and metrics implemented; structured logs to follow
+- Status: Accepted — implemented: request context, tracing, metrics (call counter/histogram +
+  activation gauge + directory-cache hit/miss), and structured logging. Reminder/stream-lag gauges
+  deferred as optional polish.
 - Context docs: [04 — Messaging and serialization](../04-messaging-and-serialization.md),
   [13 — Roadmap](../13-roadmap-and-phases.md), [ADR 0012 — Grain call filters](0012-grain-call-filters.md)
 
@@ -37,8 +39,16 @@ and request-context propagation. This ADR records how observability builds on th
    recording a `tsva.grain.calls` counter (by interface, method, ok/error status) and a
    `tsva.grain.call.duration` histogram, through the global OpenTelemetry meter (no-op without an
    SDK). `createSilo().useMetrics()` registers it plus a `tsva.activations` observable gauge
-   sampling the live activation count from the catalog. The directory-hit-rate / reminder-stream-lag
-   gauges and **structured logs** follow, on the same seam and instrumentation points.
+   sampling the live activation count from the catalog, and `tsva.directory.cache.hits`/`.misses`
+   observable counters from the location cache. Reminder/stream-lag gauges are deferred as optional
+   polish.
+
+4. **Structured logging.** A `Logger` contract in core (`debug`/`info`/`warn`/`error(message, fields)`,
+   the analogue of Orleans' `ILogger`; default `noopLogger`). `loggingFilter(logger)` logs each
+   incoming call with structured fields (grain, interface, method, duration, status) — successes at
+   `info`, failures at `error` — on the call-filter seam, so each line sits inside the request
+   context. `createSilo().useLogging(logger)` registers it; a `consoleLogger()` (JSON lines) ships for
+   convenience. Hosts plug in pino/winston/an OTel-logs bridge.
 
 ## Consequences
 

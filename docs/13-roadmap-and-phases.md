@@ -28,12 +28,13 @@ cross-silo participants, and in-doubt recovery. Authoring is **functional by def
 ([ADR 0009](adr/0009-functional-grains.md), [ADR 0010](adr/0010-message-dispatch-reducer-grains.md))
 — over the retained class substrate.
 
+Grain call filters and cross-cutting observability (request context, OpenTelemetry traces/metrics,
+structured logs) ship too, on the grain-call-filter seam, as does implicit stream subscription.
+
 **Remaining for parity (Orleans 10):** grain migration and the activation rebalancer (the v10
-core-runtime block), grain-interface versioning, lossless directory
-range handoff, and placement filters. The Orleans-10 additions of durable
-journaling (`DurableGrain`) and durable jobs need an ADR each (journaling overlaps the existing
-reducer/persistent-state model). Cross-cutting observability (OpenTelemetry traces/metrics, structured
-logs) remains to be wired throughout, on the grain-call-filter seam.
+core-runtime block), grain-interface versioning, lossless directory range handoff, and placement
+filters. The Orleans-10 additions of durable journaling (`DurableGrain`) and durable jobs need an
+ADR each (journaling overlaps the existing reducer/persistent-state model).
 
 **Deferred:** additional providers (Postgres storage/reminders, other stream backings) — alternatives
 to the shipped Redis defaults, not parity gaps.
@@ -211,8 +212,10 @@ parity items, and each warrants its own ADR before implementation.
   and silos. **Shipped** ([ADR 0013](adr/0013-observability.md)): the **grain-call-filter seam**
   ([ADR 0012](adr/0012-grain-call-filters.md)), the **ambient request context** (`requestContext.get/set`,
   propagated in-process and across silos), **OpenTelemetry tracing** (`createSilo().useTracing()` —
-  CLIENT/SERVER spans with W3C propagation), and **metrics** (`useMetrics()` — a grain-call counter +
-  duration histogram), all in `@tsva/observability` and no-op without an SDK. Remaining: runtime
-  gauges (activation count, directory hit rate, reminder/stream lag) and structured logs.
+  CLIENT/SERVER spans with W3C propagation), **metrics** (`useMetrics()` — a grain-call counter +
+  duration histogram, an activation-count gauge, and directory-cache hit/miss counters), and
+  **structured logging** (`useLogging()` — a `Logger` seam + a call-logging filter), in
+  `@tsva/observability` and no-op without an SDK/logger. Reminder/stream-lag gauges are deferred as
+  optional polish.
 - The injectable clock and deterministic placement test aids from
   [12](12-project-structure-and-tooling.md) land in phase 1 and are maintained as features are added.

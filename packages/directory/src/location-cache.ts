@@ -9,13 +9,23 @@ import type { SiloAddress } from "@tsva/core/silo-address";
  */
 export class LocationCache {
   private readonly cache = new Map<string, GrainAddress>();
+  private hits = 0;
+  private misses = 0;
 
   get size(): number {
     return this.cache.size;
   }
 
+  /** Cumulative cache hits/misses, for the directory hit-rate metric. */
+  get stats(): { hits: number; misses: number; size: number } {
+    return { hits: this.hits, misses: this.misses, size: this.cache.size };
+  }
+
   get(grainId: GrainId): GrainAddress | undefined {
-    return this.cache.get(grainId.toString());
+    const entry = this.cache.get(grainId.toString());
+    if (entry === undefined) this.misses += 1;
+    else this.hits += 1;
+    return entry;
   }
 
   put(addr: GrainAddress): void {

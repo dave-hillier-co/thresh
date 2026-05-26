@@ -299,6 +299,12 @@ export class ClusterNode {
     return this.catalog.count();
   }
 
+  /** Cumulative location-cache hits/misses (for the directory hit-rate metric). */
+  directoryCacheStats(): { hits: number; misses: number } {
+    const { hits, misses } = this.cache.stats;
+    return { hits, misses };
+  }
+
   async start(): Promise<void> {
     this.listener = await this.options.transport.listen(this.options.local, (message) =>
       this.onMessage(message),

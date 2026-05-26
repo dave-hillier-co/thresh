@@ -97,4 +97,35 @@ describe("OpenTelemetry metrics filter", () => {
       await silo.stop();
     }
   });
+
+  it("reports directory location-cache hit/miss counters", async () => {
+    const silo = createSilo({ clusterId: "metrics-cache", local })
+      .useStaticMembership([local])
+      .useInProcessTransport(new InProcessNetwork())
+      .useMetrics()
+      .registerGrain(GreeterGrain, { interfaces: [Greeter] })
+      .build();
+    await silo.start();
+    try {
+      // Repeated calls to one key drive directory lookups (a miss then hits).
+      await silo.getGrain(Greeter, "g").greet("a");
+      await silo.getGrain(Greeter, "g").greet("b");
+      await silo.getGrain(Greeter, "g").greet("c");
+
+      await meterProvider.forceFlush();
+      const recorded = exporter
+        .getMetrics()
+        .flatMap((rm) => rm.scopeMetrics)
+        .flatMap((sm) => sm.metrics);
+      const hits = recorded.find((m) => m.descriptor.name === "tsva.directory.cache.hits");
+      const misses = recorded.find((m) => m.descriptor.name === "tsva.directory.cache.misses");
+      expect(hits).toBeDefined();
+      expect(misses).toBeDefined();
+      const total =
+        (hits!.dataPoints.at(-1)!.value as number) + (misses!.dataPoints.at(-1)!.value as number);
+      expect(total).toBeGreaterThanOrEqual(1);
+    } finally {
+      await silo.stop();
+    }
+  });
 });

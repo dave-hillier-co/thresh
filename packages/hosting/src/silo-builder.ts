@@ -24,9 +24,11 @@ import { bindPersistentStates } from "@tsva/persistence/state-activator";
 import { bindReducerStates } from "@tsva/persistence/reducer-state-activator";
 import { StorageRegistry } from "@tsva/persistence/storage-registry";
 import { bindTransactionalStates } from "@tsva/transactions/transactional-state-activator";
+import type { Logger } from "@tsva/core/logger";
 import { setupTracePropagation, tracingFilters } from "@tsva/observability/tracing";
 import { metricsFilters } from "@tsva/observability/metrics";
 import { registerRuntimeMetrics } from "@tsva/observability/runtime-metrics";
+import { loggingFilter } from "@tsva/observability/logging";
 import { MemoryTransactionalStorage } from "@tsva/transactions/memory-transactional-storage";
 import { RedisTransactionalStorage } from "@tsva/transactions/redis-transactional-storage";
 import { TransactionalStorageRegistry } from "@tsva/transactions/transactional-storage-registry";
@@ -199,6 +201,15 @@ export class SiloBuilder {
   useMetrics(): this {
     this.incomingCallFilters.push(metricsFilters().incoming);
     this.metricsEnabled = true;
+    return this;
+  }
+
+  /**
+   * Log each incoming grain call (and its failures) with structured fields via
+   * the given {@link Logger}, on the call-filter seam.
+   */
+  useLogging(logger: Logger): this {
+    this.incomingCallFilters.push(loggingFilter(logger));
     return this;
   }
 
@@ -388,7 +399,10 @@ export class SiloBuilder {
     for (const r of this.registrations) node.registerGrain(r.ctor, { interfaces: r.interfaces });
 
     if (this.metricsEnabled) {
-      const unregister = registerRuntimeMetrics({ activationCount: () => node.activationCount() });
+      const unregister = registerRuntimeMetrics({
+        activationCount: () => node.activationCount(),
+        directoryCache: () => node.directoryCacheStats(),
+      });
       this.closers.push(async () => unregister());
     }
 
