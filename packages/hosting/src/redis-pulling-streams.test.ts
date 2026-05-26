@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import { createClient } from "redis";
-import { grain } from "@tsva/core/decorators";
+import { grain, implicitStreamSubscription } from "@tsva/core/decorators";
 import { Grain } from "@tsva/core/grain";
 import { defineGrainInterface } from "@tsva/core/grain-interface";
 import type { GrainWithStringKey } from "@tsva/core/key-kinds";
 import { SiloAddress } from "@tsva/core/silo-address";
-import type { StreamHandler } from "@tsva/core/stream";
+import { STREAM_SUBSCRIPTION_OBSERVER, type StreamHandler } from "@tsva/core/stream";
 import { InProcessNetwork } from "@tsva/messaging/in-process-transport";
 import { createSilo } from "@tsva/hosting/silo-builder";
 import type { SiloHost } from "@tsva/hosting/silo-host";
@@ -90,6 +90,29 @@ class ChatUserGrain extends Grain implements IChatUser {
   }
 }
 
+// An implicitly-subscribed grain: no `subscribe`/`join` call. A `Watcher` with
+// key K is auto-subscribed to the stream ("chat", K) and records what it sees in
+// a module sink (the grain may be collected between deliveries).
+const watched: Record<string, string[]> = {};
+
+interface IWatcher extends GrainWithStringKey {
+  seen(): Promise<string[]>;
+}
+const IWatcher = defineGrainInterface<IWatcher>("IWatcher.pull", {
+  options: { seen: { readOnly: true } },
+});
+
+@grain()
+@implicitStreamSubscription("chat")
+class WatcherGrain extends Grain implements IWatcher {
+  async seen(): Promise<string[]> {
+    return [...(watched[String(this.id.key)] ?? [])];
+  }
+  [STREAM_SUBSCRIPTION_OBSERVER](_namespace: string, key: string): StreamHandler<string> {
+    return { onNext: async (text) => void (watched[key] ??= []).push(text) };
+  }
+}
+
 const local = new SiloAddress("silo-0", "uid-0", "silo-0:11111");
 
 function buildSilo(): SiloHost {
@@ -99,6 +122,7 @@ function buildSilo(): SiloHost {
     .addRedisStreams("default", { url: REDIS_URL, keyPrefix })
     .registerGrain(ChatRoomGrain, { interfaces: [IChatRoom] })
     .registerGrain(ChatUserGrain, { interfaces: [IChatUser] })
+    .registerGrain(WatcherGrain, { interfaces: [IWatcher] })
     .build();
 }
 
@@ -122,6 +146,24 @@ describe.skipIf(admin === undefined)("Redis pulling-agent streams end-to-end", (
       expect(await silo.getGrain(IChatUser, "alice").history()).toEqual(["hello", "world"]);
       expect(await silo.getGrain(IChatUser, "bob").history()).toEqual(["hello", "world"]);
       expect(await silo.getGrain(IChatUser, "carol").history()).toEqual([]);
+    } finally {
+      await silo.stop();
+    }
+  });
+
+  it("auto-delivers to an implicitly-subscribed grain by key, with no subscribe call", async () => {
+    const silo = buildSilo();
+    await silo.start();
+    try {
+      // No join/subscribe: the Watcher's key matches the room's stream key, so it
+      // is implicitly subscribed to ("chat", "watched"). A Watcher on a different
+      // key sees nothing (subscription is by key).
+      await silo.getGrain(IChatRoom, "watched").say("ping");
+      await silo.getGrain(IChatRoom, "watched").say("pong");
+
+      await waitFor(async () => (await silo.getGrain(IWatcher, "watched").seen()).length === 2);
+      expect(await silo.getGrain(IWatcher, "watched").seen()).toEqual(["ping", "pong"]);
+      expect(await silo.getGrain(IWatcher, "other").seen()).toEqual([]);
     } finally {
       await silo.stop();
     }

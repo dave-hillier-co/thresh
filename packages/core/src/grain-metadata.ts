@@ -12,17 +12,24 @@ export interface GrainMetadata {
   grainType: GrainType;
   options: GrainOptions;
   reentrant: boolean;
+  /**
+   * Stream namespaces this grain type is implicitly subscribed to (Orleans'
+   * `[ImplicitStreamSubscription]`). A grain of this type with key `K` is
+   * auto-subscribed to the stream `(namespace, K)`, with no explicit `subscribe`.
+   */
+  implicitSubscriptions: readonly string[];
 }
 
 export type GrainConstructor = abstract new (...args: never[]) => object;
 
-// Decorator order is irrelevant: options and the reentrant flag are tracked
-// separately and composed on read.
+// Decorator order is irrelevant: options, the reentrant flag and implicit
+// stream subscriptions are tracked separately and composed on read.
 const optionsRegistry = new WeakMap<
   GrainConstructor,
   { grainType: GrainType; options: GrainOptions }
 >();
 const reentrantRegistry = new WeakSet<GrainConstructor>();
+const implicitSubscriptionRegistry = new WeakMap<GrainConstructor, Set<string>>();
 
 export function setGrainOptions(
   ctor: GrainConstructor,
@@ -36,13 +43,25 @@ export function markReentrant(ctor: GrainConstructor): void {
   reentrantRegistry.add(ctor);
 }
 
+/** Record that this grain type is implicitly subscribed to a stream namespace. */
+export function markImplicitSubscription(ctor: GrainConstructor, namespace: string): void {
+  let namespaces = implicitSubscriptionRegistry.get(ctor);
+  if (namespaces === undefined) {
+    namespaces = new Set();
+    implicitSubscriptionRegistry.set(ctor, namespaces);
+  }
+  namespaces.add(namespace);
+}
+
 export function getGrainMetadata(ctor: GrainConstructor): GrainMetadata | undefined {
   const entry = optionsRegistry.get(ctor);
   if (entry === undefined) return undefined;
+  const implicit = implicitSubscriptionRegistry.get(ctor);
   return {
     grainType: entry.grainType,
     options: entry.options,
     reentrant: reentrantRegistry.has(ctor),
+    implicitSubscriptions: implicit === undefined ? [] : [...implicit],
   };
 }
 

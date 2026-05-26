@@ -153,10 +153,45 @@ flowchart TB
   because that stream maps to a single physical queue.
 - **Rewind.** A consumer can subscribe from an earlier `SequenceToken` if the backing store still
   retains those entries (Redis Stream trimming policy governs retention).
-- **Implicit subscriptions (later phase).** Orleans' `[ImplicitStreamSubscription(namespace)]` binds
-  a grain type to a stream namespace so the grain is auto-subscribed by key, with no explicit
-  `subscribe` call. This is noted in the [roadmap](13-roadmap-and-phases.md) as a parity follow-on to
-  explicit subscriptions.
+
+## Implicit subscriptions
+
+A grain type can be **implicitly subscribed** to a stream namespace, so a grain is auto-subscribed by
+key with no explicit `subscribe` call — Orleans' `[ImplicitStreamSubscription(namespace)]`. A grain
+of that type with key `K` receives every event published to the stream `(namespace, K)`; the pulling
+agent reactivates it on demand to deliver, exactly as for an explicit subscription.
+
+```ts
+// Class form:
+@grain()
+@implicitStreamSubscription("chat")
+class ArchiveGrain extends Grain implements IArchive {
+  // The runtime calls this the first time an event for one of this grain's
+  // implicit streams arrives (mirroring Orleans' IStreamSubscriptionObserver);
+  // return the handler that should receive that stream's events.
+  [STREAM_SUBSCRIPTION_OBSERVER](namespace: string, key: string): StreamHandler<Message> {
+    return { onNext: async (msg) => { /* archive msg for room `key` */ } };
+  }
+}
+
+// Functional form:
+const ArchiveGrain = defineGrain<IArchive>(
+  "Archive",
+  () => ({
+    [STREAM_SUBSCRIPTION_OBSERVER]: (namespace, key): StreamHandler<Message> => ({
+      onNext: async (msg) => { /* ... */ },
+    }),
+  }),
+  { implicitSubscriptions: ["chat"] },
+);
+```
+
+The grain never calls `subscribe`/`getSubscriptions`: the runtime knows the subscriber from the
+declaration. When an agent pulls an event for stream `(ns, K)`, it fans out to the registry's
+explicit subscribers **and** to every grain type implicitly subscribed to `ns`, addressing each at
+key `K` (deduplicated, so a grain that is both gets one delivery). Implicit subscriptions are a
+pulling-agent feature (the Redis provider); the in-memory provider is for explicit-subscription
+dev/tests only. Subscribers are addressed by string key, matching how a producer names the stream.
 
 ## Providers
 

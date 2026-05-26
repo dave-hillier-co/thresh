@@ -3,6 +3,7 @@ import type { GrainContext } from "./grain-context";
 import type { SelfFilteringGrain } from "./grain-call-filter";
 import type { GrainInterface } from "./grain-interface";
 import {
+  markImplicitSubscription,
   markReentrant,
   setGrainOptions,
   type GrainConstructor,
@@ -43,6 +44,13 @@ export type GrainBehaviour<T> = T & Partial<GrainLifecycle> & Partial<SelfFilter
 export interface DefineGrainOptions extends Omit<GrainOptions, "name"> {
   /** Mark every method reentrant (the functional equivalent of `@reentrant()`). */
   reentrant?: boolean;
+  /**
+   * Stream namespaces to implicitly subscribe to (the functional equivalent of
+   * `@implicitStreamSubscription`). A grain with key `K` is auto-subscribed to
+   * the stream `(namespace, K)`; return a `STREAM_SUBSCRIPTION_OBSERVER` member
+   * from the factory to receive its events.
+   */
+  implicitSubscriptions?: readonly string[];
 }
 
 // The grain instance is carried on the setup behind a private symbol so the
@@ -111,9 +119,12 @@ export function defineGrain<T extends object>(
     }
   }
 
-  const { reentrant, ...grainOptions } = options;
+  const { reentrant, implicitSubscriptions, ...grainOptions } = options;
   setGrainOptions(FunctionalGrain as GrainConstructor, name, { ...grainOptions, name });
   if (reentrant === true) markReentrant(FunctionalGrain as GrainConstructor);
+  for (const namespace of implicitSubscriptions ?? []) {
+    markImplicitSubscription(FunctionalGrain as GrainConstructor, namespace);
+  }
   return FunctionalGrain;
 }
 

@@ -1,6 +1,7 @@
 import type { createClient } from "redis";
 import type { GrainId } from "@tsva/core/grain-id";
 import { keyToString, type GrainKey } from "@tsva/core/grain-key";
+import type { GrainType } from "@tsva/core/grain-type";
 import { stableHash32 } from "@tsva/core/hash";
 import type {
   ActivationBoundStreamProvider,
@@ -12,6 +13,7 @@ import type {
   StreamSubscriptionHandle,
   SubscribeOptions,
 } from "@tsva/core/stream";
+import { implicitSubscriberIds } from "@tsva/streams/implicit-subscriptions";
 import { QueuePullingAgent } from "@tsva/streams/queue-pulling-agent";
 import { ownedQueueIndices, type HashRange } from "@tsva/streams/queue-ownership";
 import { RedisStreamQueue } from "@tsva/streams/redis-stream-queue";
@@ -52,6 +54,7 @@ export class RedisPullingStreamProvider implements ActivationBoundStreamProvider
   private readonly queues: RedisStreamQueue[];
   private readonly agents = new Map<number, QueuePullingAgent>();
   private deliver: StreamDeliver = async () => undefined;
+  private implicitTypesFor: (namespace: string) => Iterable<GrainType> = () => [];
 
   constructor(
     client: RedisClient,
@@ -76,6 +79,15 @@ export class RedisPullingStreamProvider implements ActivationBoundStreamProvider
   /** Wire how a pulled event reaches a subscriber's activation (the cluster node). */
   setDeliver(deliver: StreamDeliver): void {
     this.deliver = deliver;
+  }
+
+  /**
+   * Wire the implicit-subscription table (`namespace → grain types`). An agent
+   * fans each event out to these grain types' matching-key activations as well as
+   * to the registry's explicit subscribers (Orleans' `[ImplicitStreamSubscription]`).
+   */
+  setImplicitSubscribers(typesFor: (namespace: string) => Iterable<GrainType>): void {
+    this.implicitTypesFor = typesFor;
   }
 
   /**
@@ -124,7 +136,16 @@ export class RedisPullingStreamProvider implements ActivationBoundStreamProvider
   }
 
   private async fanOut(streamKey: string, event: unknown, token: number): Promise<void> {
-    for (const subscriber of await this.registry.subscribers(streamKey)) {
+    // Explicit subscribers (from the durable registry) plus implicit ones (grain
+    // types bound to the stream's namespace), deduplicated so a grain that is both
+    // gets the event once.
+    const explicit = await this.registry.subscribers(streamKey);
+    const implicit = implicitSubscriberIds(streamKey, this.implicitTypesFor);
+    const seen = new Set<string>();
+    for (const subscriber of [...explicit, ...implicit]) {
+      const id = subscriber.toString();
+      if (seen.has(id)) continue;
+      seen.add(id);
       await this.deliver(subscriber, streamKey, event, token);
     }
   }

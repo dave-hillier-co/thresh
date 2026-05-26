@@ -15,7 +15,12 @@ import {
   type IncomingGrainCallFilter,
 } from "@tsva/core/grain-call-filter";
 import type { InvocationRequest } from "@tsva/core/request";
-import { SequenceToken, StreamConsumerInterface, type StreamHandler } from "@tsva/core/stream";
+import {
+  implicitStreamObserver,
+  SequenceToken,
+  StreamConsumerInterface,
+  type StreamHandler,
+} from "@tsva/core/stream";
 import type { TransactionParticipant } from "@tsva/core/transaction-info";
 import { TransactionResourceInterface } from "@tsva/core/transaction-resource";
 import { getTransactionalFields } from "@tsva/core/transactional-state-metadata";
@@ -109,6 +114,27 @@ export class ActivationData implements GrainContext {
       .finally(() => this.touch());
   }
 
+  /**
+   * The handler for a delivered stream event, keyed by `namespace/key`. Falls
+   * back to the grain's implicit-subscription observer (and caches its result)
+   * when no handler was registered via `subscribe` — so an implicitly subscribed
+   * grain (Orleans' `[ImplicitStreamSubscription]`) receives events without ever
+   * calling `subscribe`. The fan-out only routes a stream to a grain that is an
+   * explicit or declared-implicit subscriber, so an absent observer means drop.
+   */
+  private streamHandlerFor(streamKey: string): StreamHandler<unknown> | undefined {
+    const existing = this.streamHandlers.get(streamKey);
+    if (existing !== undefined) return existing;
+    const observe = implicitStreamObserver(this.instance);
+    if (observe === undefined) return undefined;
+    const slash = streamKey.indexOf("/");
+    const namespace = slash < 0 ? streamKey : streamKey.slice(0, slash);
+    const key = slash < 0 ? "" : streamKey.slice(slash + 1);
+    const handler = observe(namespace, key);
+    this.streamHandlers.set(streamKey, handler);
+    return handler;
+  }
+
   /** Bind a pulling-agent stream handler so a delivered `StreamConsumer` turn reaches it. */
   setStreamHandler(streamKey: string, handler: StreamHandler<unknown>): void {
     this.streamHandlers.set(streamKey, handler);
@@ -176,7 +202,7 @@ export class ActivationData implements GrainContext {
     // handler the grain registered when it subscribed. Already on a turn here.
     if (req.interfaceId === StreamConsumerInterface.id) {
       const [streamKey, event, token] = req.args as [string, unknown, number];
-      const handler = this.streamHandlers.get(streamKey);
+      const handler = this.streamHandlerFor(streamKey);
       if (handler !== undefined) await handler.onNext(event, new SequenceToken(token));
       return undefined;
     }
