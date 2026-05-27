@@ -1,14 +1,11 @@
 # 10 — Kubernetes hosting
 
-This document describes how a silo cluster is deployed and operated on Kubernetes, and the manifests
-that wire up membership, failure detection and discovery (see
-[05 — Clustering](05-clustering-membership-k8s.md)).
+How a silo cluster is deployed and operated on Kubernetes (see
+[05 — Clustering](05-clustering-membership-k8s.md)). Working, deployable manifests ship in
+[`examples/k8s-silo/deploy/`](../examples/k8s-silo/deploy); this doc covers the shape and rationale.
 
-> Orleans references: `Orleans.Hosting.Kubernetes/KubernetesClusterAgent.cs`,
-> `Orleans.Hosting.Kubernetes/KubernetesHostingOptions.cs`,
-> `Orleans.Hosting.Kubernetes/KubernetesHostingExtensions.cs`,
-> `Orleans.Runtime/Lifecycle/ISiloLifecycle.cs` (the staged silo start/stop the graceful-drain
-> sequence below mirrors).
+> Orleans references: `Orleans.Hosting.Kubernetes/{KubernetesClusterAgent,KubernetesHostingOptions,KubernetesHostingExtensions}.cs`,
+> `Orleans.Runtime/Lifecycle/ISiloLifecycle.cs` (the staged start/stop the graceful drain mirrors).
 
 ## Topology
 
@@ -28,214 +25,77 @@ flowchart TB
     SS -. uses .- SA
 ```
 
-- **StatefulSet** of silos — stable pod names (`silo-0`, `silo-1`, …) and stable identity across
-  restarts, which the directory ring relies on (see [06](06-grain-directory-and-placement.md)).
-- **Headless Service** — `clusterIP: None`, selecting the silos. Its EndpointSlices are the
-  membership source of truth and provide per-pod DNS for silo-to-silo connections.
-- **Gateway Service** — a normal (load-balanced) Service for external clients to reach any silo.
-- **Redis** — the default durable backend for persistence, reminders and streams. Managed
-  (e.g. a cloud Redis) or in-cluster.
-- **ServiceAccount + RBAC** — grants each silo permission to *watch* pods/endpoints in its namespace.
+- **StatefulSet** — stable ordinal pod names (`silo-0`, …) that persist across restarts, so a
+  restarted silo rejoins the directory ring in the same logical position ([06](06-grain-directory-and-placement.md)).
+  A `Deployment`'s random names would reshuffle the ring unnecessarily.
+- **Headless Service** (`clusterIP: None`) — its EndpointSlices are the membership source of truth and
+  provide per-pod DNS for silo-to-silo connections.
+- **Gateway Service** — a normal load-balanced Service for external clients.
+- **Redis** — the default durable backend (managed or in-cluster).
+- **ServiceAccount + RBAC** — minimal, namespace-scoped, read-only *watch* on pods/endpoints/endpointslices.
 
-## Why a StatefulSet (not a Deployment)
+## Probes and failure detection
 
-The directory ring keys ranges off stable silo identity. A `StatefulSet` gives stable ordinal pod
-names that persist across restarts, so a restarted `silo-2` rejoins the ring in the same logical
-position. A `Deployment` assigns random pod names on every restart, which would reshuffle the ring
-more than necessary. Stateless-worker grains (see [06](06-grain-directory-and-placement.md)) can
-still run on any pod; it is the directory's stability that motivates the StatefulSet.
+The silo serves HTTP health endpoints that drive membership:
 
-## Probes and the failure detector
+- **Readiness** (`/ready`) — healthy only when fully joined (transport accepting, membership watch
+  established, not draining). Controls Service endpoint membership — i.e. whether the silo is a live
+  member and placement candidate.
+- **Liveness** (`/live`) — process/event-loop responsive; a failure restarts the container (new
+  `podUid` = new incarnation).
+- **Startup** (`/startup`) — guards slow cold starts so liveness doesn't kill a still-initialising silo.
 
-The silo exposes an HTTP health endpoint. Kubernetes probes drive membership:
+On `SIGTERM` the silo flips `/ready` to not-ready first, so Kubernetes removes it from endpoints (and
+every peer's view) before it deactivates grains; the drain then tears services down in reverse start
+order (the `ISiloLifecycle` ordered-stop guarantee), keeping transport serving in-flight turns until
+state is flushed ([03](03-runtime-and-silo.md)).
 
-- **Readiness** (`/ready`) — returns healthy only when the silo is fully joined: transport
-  accepting connections, membership watch established, and not draining. Controls whether the pod is
-  in the Service's endpoints — i.e. whether it is a live cluster member and a placement candidate.
-- **Liveness** (`/live`) — returns healthy when the process and event loop are responsive. A failed
-  liveness probe restarts the container (producing a new `podUid`, recognised as a new incarnation).
-- **Startup** (`/startup`) — guards slow cold starts so liveness does not kill a still-initialising
-  silo.
+## Manifests
 
-When a silo starts draining on `SIGTERM`, `/ready` flips to not-ready first, so Kubernetes removes it
-from endpoints (and thus from every peer's membership view) before it finishes deactivating grains.
-The drain then tears services down in reverse start order — the same ordered-stop guarantee Orleans
-gets from `ISiloLifecycle` — so transport keeps serving in-flight turns until activations have been
-deactivated and state flushed. See the shutdown sequence in [03](03-runtime-and-silo.md).
+The deployable set — ServiceAccount + Role + RoleBinding (watch endpoints), the headless Service
+(`publishNotReadyAddresses: false`), the StatefulSet, and a PodDisruptionBudget — is in
+[`examples/k8s-silo/deploy/`](../examples/k8s-silo/deploy). The key wiring on the StatefulSet pod:
 
-## Reference manifests
-
-> `<cluster>` is the application/cluster name; image and resources are placeholders. A working,
-> deployable set of these manifests ships in [`examples/k8s-silo/deploy/`](../examples/k8s-silo/deploy)
-> (see [Running the example](#running-the-example)).
-
-### ServiceAccount and RBAC (watch endpoints)
-
-```yaml
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: silo
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: silo-membership
-rules:
-  - apiGroups: [""]
-    resources: ["pods", "endpoints"]
-    verbs: ["get", "list", "watch"]
-  - apiGroups: ["discovery.k8s.io"]
-    resources: ["endpointslices"]
-    verbs: ["get", "list", "watch"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: silo-membership
-subjects:
-  - kind: ServiceAccount
-    name: silo
-roleRef:
-  kind: Role
-  name: silo-membership
-  apiGroup: rbac.authorization.k8s.io
-```
-
-The RBAC is deliberately minimal: read-only watch on membership-relevant resources, namespace-scoped.
-
-### Headless Service (membership + silo-to-silo)
-
-```yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: silo-headless
-  labels: { app: <cluster> }
-spec:
-  clusterIP: None
-  publishNotReadyAddresses: false   # only ready pods are members
-  selector: { app: <cluster> }
-  ports:
-    - name: silo
-      port: 11111
-```
-
-### StatefulSet
-
-```yaml
-apiVersion: apps/v1
-kind: StatefulSet
-metadata:
-  name: silo
-spec:
-  serviceName: silo-headless
-  replicas: 3
-  selector:
-    matchLabels: { app: <cluster> }
-  template:
-    metadata:
-      labels: { app: <cluster> }
-    spec:
-      serviceAccountName: silo
-      terminationGracePeriodSeconds: 60   # time to drain in-flight turns + flush state
-      containers:
-        - name: silo
-          image: <registry>/<cluster>-silo:latest
-          ports:
-            - { name: silo, containerPort: 11111 }
-            - { name: health, containerPort: 8080 }
-          env:
-            - name: POD_NAME
-              valueFrom: { fieldRef: { fieldPath: metadata.name } }
-            - name: POD_UID
-              valueFrom: { fieldRef: { fieldPath: metadata.uid } }
-            - name: POD_NAMESPACE
-              valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
-            - name: CLUSTER_ID
-              value: <cluster>
-            - name: REDIS_URL
-              valueFrom: { secretKeyRef: { name: redis, key: url } }
-          readinessProbe:
-            httpGet: { path: /ready, port: health }
-            periodSeconds: 5
-          livenessProbe:
-            httpGet: { path: /live, port: health }
-            periodSeconds: 10
-          startupProbe:
-            httpGet: { path: /startup, port: health }
-            failureThreshold: 30
-            periodSeconds: 2
-```
-
-The pod injects `POD_NAME` / `POD_UID` / `POD_NAMESPACE` via the downward API; these populate the
-`SiloAddress` (see [05](05-clustering-membership-k8s.md)).
-
-### PodDisruptionBudget
-
-```yaml
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: silo
-spec:
-  minAvailable: 2
-  selector:
-    matchLabels: { app: <cluster> }
-```
-
-Keeps enough silos up during voluntary disruptions (node drains, rollouts) that the directory and
-reminder/stream ownership can rebalance without losing availability.
+- inject `POD_NAME` / `POD_UID` / `POD_NAMESPACE` via the downward API (these populate the
+  `SiloAddress`, [05](05-clustering-membership-k8s.md)), plus `CLUSTER_ID` and `REDIS_URL`;
+- expose the silo port (11111) and health port (8080) with the three probes above;
+- `serviceAccountName: silo` and a `terminationGracePeriodSeconds` long enough to drain and flush.
 
 ## Scaling and rolling updates
 
-- **Scale out.** Increasing `replicas` adds pods; each joins the membership view and takes over ring
-  ranges from neighbours (directory, reminders, stream queues rebalance — see
-  [06](06-grain-directory-and-placement.md), [08](08-timers-and-reminders.md),
-  [09](09-event-streams.md)). Grains gradually rebalance as they reactivate.
-- **Scale in.** Removing pods triggers graceful drain per pod; their grains reactivate elsewhere and
-  their owned ranges reassign.
-- **Rolling update.** The StatefulSet replaces pods one at a time (`OrderedReady`). Each replaced
-  pod drains gracefully first. With a uniform image a rolling update is just a sequence of
-  drain-and-rejoin events the cluster already handles. For a **heterogeneous** update, where new pods
-  declare a higher interface version, **grain-interface versioning** ([ADR 0014](adr/0014-grain-interface-versioning.md))
-  makes placement version-aware: a new activation is steered onto a silo whose implemented version is
-  compatible with the caller's, so v1 and v2 pods can coexist during the roll.
+- **Scale out/in** — adding/removing pods joins/leaves the membership view; directory, reminder, and
+  stream-queue ownership rebalance off the ring, and grains rebalance as they reactivate.
+- **Rolling update** — the StatefulSet replaces pods one at a time (`OrderedReady`), each draining
+  first. With a uniform image this is just drain-and-rejoin. For a **heterogeneous** update where new
+  pods declare a higher interface version, **grain-interface versioning**
+  ([ADR 0014](adr/0014-grain-interface-versioning.md)) makes placement version-aware so v1 and v2 pods
+  coexist during the roll.
 
 ## Local development
 
-- **kind / minikube.** A single-node cluster runs the StatefulSet with `replicas: 1..3` and an
-  in-cluster Redis for an end-to-end environment.
-- **Out-of-cluster mode.** For fast iteration, silos can run as local processes using the in-memory
-  providers and a static membership list instead of the Kubernetes watch (selected by configuration
-  on the hosting builder — see [11](11-public-api-and-examples.md)). This is how unit and
-  integration tests run without a cluster (see [12](12-project-structure-and-tooling.md)).
+- **kind / minikube** — a single-node cluster runs the StatefulSet with an in-cluster Redis for an
+  end-to-end environment.
+- **Out-of-cluster** — silos run as local processes with in-memory providers and static membership
+  (configured on the builder; [11](11-public-api-and-examples.md)). This is how tests run without a
+  cluster ([12](12-project-structure-and-tooling.md)).
 
 ## Running the example
 
-[`examples/k8s-silo`](../examples/k8s-silo) is a runnable silo wired for Kubernetes: membership from
-the headless Service's EndpointSlices (`createKubernetesClientSource` → `KubernetesEndpointWatch` →
-`useKubernetesMembership`), WebSocket transport over per-pod IPs, durable state in an in-cluster
-Redis, the health probes above, and a small HTTP API in front of a counter grain so calls can be
-driven through the cluster. The `SiloAddress` comes from the downward-API variables via
-`siloAddressFromPodEnv` (see [05](05-clustering-membership-k8s.md)). A silo always counts itself a
-member of its own view, so a first or only pod can pass its readiness probe and bootstrap the
-cluster.
-
-The image needs no build step — the silo runs under `vite-node`. Build it into the local daemon and
-deploy:
+[`examples/k8s-silo`](../examples/k8s-silo) is a runnable silo wired for Kubernetes (membership from
+EndpointSlices via `useKubernetesMembership`, WebSocket transport over per-pod IPs, durable Redis
+state, the health probes, and a small HTTP API over a counter grain). The image needs no build step
+(it runs under `vite-node`):
 
 ```sh
 docker build -t tsva-k8s-silo:dev -f examples/k8s-silo/Dockerfile .   # kind: then `kind load docker-image tsva-k8s-silo:dev`
 kubectl create namespace tsva
-kubectl -n tsva apply -f examples/k8s-silo/deploy/   # rbac, redis, headless Service + StatefulSet
+kubectl -n tsva apply -f examples/k8s-silo/deploy/
 kubectl -n tsva rollout status statefulset/silo
 ```
 
-An opt-in end-to-end test (`examples/k8s-silo/src/k8s-e2e.test.ts`) builds the image, deploys it, and
-asserts the Phase-6/Phase-3 exit criteria — the cluster forms, calls route to one activation across
-pods, killing the host pod reactivates the grain on a survivor with state intact, and a rolling
-update preserves state. It is gated on a reachable cluster:
+Its opt-in e2e (gated on a reachable cluster) asserts the cluster forms, calls route to one activation
+across pods, a killed pod's grain reactivates on a survivor with state intact, and a rolling update
+preserves state:
 
 ```sh
 K8S_E2E=1 pnpm exec vitest run examples/k8s-silo/src/k8s-e2e.test.ts

@@ -1,109 +1,65 @@
 # 04 — Messaging and serialization
 
-This document describes how a grain call becomes bytes on a connection and back, how silos
-communicate, and how payloads are serialized.
+How a grain call becomes bytes on a connection and back, how silos communicate, and how payloads are
+serialized.
 
 > Orleans references: `Orleans.Core/Messaging/Message.cs`,
-> `Orleans.Core/Networking/Connection.cs`,
-> `Orleans.Core/Networking/ConnectionPreamble.cs`,
-> `Orleans.Core.Abstractions/Runtime/RequestContext.cs`,
-> `Orleans.Runtime/Messaging/MessageCenter.cs`,
-> `Orleans.Serialization/Serializer.cs`.
+> `Orleans.Core/Networking/{Connection,ConnectionPreamble}.cs`,
+> `Orleans.Core.Abstractions/Runtime/RequestContext.cs`, `Orleans.Serialization/Serializer.cs`.
 
 ## The message envelope
 
-Every grain call and result is carried in a `Message`. The shape follows Orleans' `Message` closely.
+Every call and result is carried in a `Message`, following Orleans' `Message` closely:
 
 ```ts
-type Direction = "request" | "response" | "oneWay";
-type ResponseKind = "success" | "error" | "rejection";
-
 interface Message {
   correlationId: bigint;          // matches a response to its awaiting request
-  direction: Direction;
-
+  direction: "request" | "response" | "oneWay";
   targetGrain: GrainId;
   targetSilo?: SiloAddress;       // resolved via the directory before sending
-  sendingGrain?: GrainId;         // absent for external-client calls
+  sendingGrain?: GrainId;
   sendingSilo?: SiloAddress;
-
   interfaceId: number;            // routes to the hosting type; rehydrates refs
-  method: string;                 // which method — dispatched by name on the receiver
-
-  responseKind?: ResponseKind;    // responses only
+  method: string;                 // dispatched by name on the receiver
+  system?: "directory" | "migration" | "manifest" | "load" | "rebalance"; // system ops reuse the envelope
+  responseKind?: "success" | "error" | "rejection";
   requestContext?: RequestContext;// ambient headers/trace, propagated across calls
-
   body: Uint8Array;               // serialized args (request) or result/error (response)
 }
 ```
 
-Key points:
-
-- **Methods dispatch by name.** The wire carries the `method` name and the receiving activation
-  invokes it directly; `interfaceId` remains only to route to the hosting grain type and rehydrate
-  references (see [ADR 0011](adr/0011-message-dispatch-substrate.md)).
-- **`targetSilo` is resolved before sending.** The dispatcher consults the grain directory/cache to
-  find the owning silo; if unknown, placement decides. See [06](06-grain-directory-and-placement.md).
-- **`requestContext` propagates ambient data** (trace ids, deadlines, custom headers) along the
-  entire call chain, mirroring Orleans `RequestContext`. It also carries the call-chain reentrancy
-  id used by the turn scheduler, and is where the transaction context of
-  [ADR 0008](adr/0008-cross-grain-transactions.md) rides. Faithful to Orleans, the context is
-  **ambient**: it is not a parameter a grain passes, but an async-scoped value (Node's
-  `AsyncLocalStorage`, the analogue of Orleans' `AsyncLocal`-backed static `RequestContext`) that the
-  runtime establishes for the duration of a turn. The grain proxy reads it when building an outbound
-  request, the dispatcher serializes it onto `Message.requestContext`, and the receiving silo
-  re-establishes it before invoking the target — so it flows across silos transparently.
-- **System operations reuse the envelope.** Directory partition operations are marked with a
-  `system` flag and travel over the same connections and correlation table as grain calls, so the
-  distributed directory needs no separate channel (see [06](06-grain-directory-and-placement.md)).
+- **Methods dispatch by name** — the wire carries `method`; `interfaceId` only routes to the hosting
+  type and rehydrates references ([ADR 0011](adr/0011-message-dispatch-substrate.md)).
+- **`targetSilo` is resolved before sending** via the directory/cache, else placement
+  ([06](06-grain-directory-and-placement.md)).
+- **`requestContext` is ambient** — an async-scoped value (Node's `AsyncLocalStorage`, the analogue of
+  Orleans' `AsyncLocal`-backed `RequestContext`), not a parameter. The proxy reads it when building an
+  outbound request, the dispatcher serializes it, and the receiver re-establishes it before invoking —
+  so trace ids, deadlines, the call-chain reentrancy id, and the transaction context of
+  [ADR 0008](adr/0008-cross-grain-transactions.md) flow across silos transparently.
+- **System operations reuse the envelope** — directory, migration, manifest, load and rebalance ops
+  travel over the same connections and correlation table as grain calls, so no separate channel is
+  needed.
 
 ## Transport
 
-Silo-to-silo and client-to-silo traffic uses **WebSocket over HTTP** (see
-[ADR 0002](adr/0002-websocket-transport.md)). The transport is abstracted so gRPC or raw TCP could
-be substituted later.
+Silo-to-silo and client-to-silo traffic uses **WebSocket over HTTP** ([ADR 0002](adr/0002-websocket-transport.md)),
+behind an abstraction so gRPC or raw TCP could be substituted.
 
 ```ts
 interface Transport {
   listen(address: SiloAddress, onMessage: (m: Message) => void): Promise<Listener>;
-  connect(to: SiloAddress): Promise<Connection>;
+  connect(to: SiloAddress, preamble: ConnectionPreamble): Promise<Connection>;
 }
-
-interface Connection {
-  send(message: Message): void;     // fire-and-forget; responses arrive as inbound messages
-  close(reason?: string): Promise<void>;
-}
+interface Connection { send(message: Message): void; close(reason?: string): Promise<void>; }
 ```
 
-### Connection model
-
-- **One duplex WebSocket per silo pair**, reused for all traffic between them, multiplexed by
-  `correlationId`. This avoids per-call connection setup and head-of-line blocking across grains.
-  The current implementation opens one client→server socket per direction (responses travel back
-  over the reverse connection) and pools them in a `ConnectionManager`; collapsing each pair onto a
-  single reused duplex socket is a later optimization. The preamble is exchanged on connect and the
-  server acks it, so a cross-`clusterId` peer is rejected before any message flows.
-- **Lazy and pooled.** Connections open on first use and are kept alive; a `ConnectionManager`
-  tracks outbound/inbound connections per peer and reconnects on transient failure.
-- **Preamble handshake.** On connect, each side sends a preamble identifying itself, mirroring
-  Orleans `ConnectionPreamble`:
-
-  ```ts
-  interface ConnectionPreamble {
-    protocolVersion: number;
-    siloAddress: SiloAddress;   // or a client identity for external clients
-    clusterId: string;          // rejects cross-cluster connections
-  }
-  ```
-
-  A mismatched `clusterId` or incompatible `protocolVersion` causes the connection to be rejected.
-
-### Framing
-
-WebSocket already provides message framing, so we do not reimplement Orleans' 8-byte length-prefix
-header. Each WebSocket binary message carries exactly one serialized `Message`: a short header
-segment (envelope metadata) followed by the `body` bytes. The serializer decides the internal
-layout; the transport treats it as opaque.
+Connections are lazy and pooled per peer in a `ConnectionManager` (reconnecting on transient failure);
+responses travel back over a reverse connection and are multiplexed by `correlationId`. On connect each
+side sends a preamble (`{ protocolVersion, siloAddress, clusterId }`, Orleans' `ConnectionPreamble`)
+which the server acks; a mismatched `clusterId` or `protocolVersion` is rejected before any message
+flows. WebSocket provides framing, so each binary message carries exactly one serialized `Message`
+(a header segment plus the `body`), opaque to the transport.
 
 ## Routing
 
@@ -113,52 +69,34 @@ flowchart LR
     R --> L{target local?}
     L -- yes --> A[deliver to local activation]
     L -- no --> C[directory / cache lookup]
-    C --> S[send via Connection to owning silo]
-    S --> RA[remote dispatcher delivers to activation]
-    RA --> RESP[response message]
-    RESP --> CT[correlation table on caller silo]
-    CT --> R
+    C --> S[send to owning silo]
+    S --> RA[remote dispatcher delivers]
+    RA --> RESP[response] --> CT[correlation table on caller] --> R
 ```
 
-The caller's runtime registers a pending promise in a **correlation table** keyed by
-`correlationId`, sends the request, and resolves the promise when the matching response arrives.
-Timeouts, cancellation (via request-context deadlines) and rejections (e.g. silo overloaded or
-unknown target) reject the pending promise with a typed error.
+The caller registers a pending promise in a **correlation table** keyed by `correlationId`, sends the
+request, and resolves it when the matching response arrives. Timeouts, deadline cancellation, and
+rejections reject the promise with a typed error.
 
 ## Serialization
 
-Payloads (`body`) are produced by a pluggable `Serializer`.
+Payloads (`body`) are produced by a pluggable `Serializer` (`serialize` / `deserialize<T>`):
 
-```ts
-interface Serializer {
-  serialize(value: unknown): Uint8Array;
-  deserialize<T>(bytes: Uint8Array): T;
-}
-```
+- **Default: MessagePack** — compact and fast; a **JSON** option aids debugging.
+- **Known-type registry** — classes that travel on the wire (grain state, DTOs, custom errors) opt in
+  via `@serializable()` (or explicit registration) that records field order/tags for
+  forward/backward compatibility — the TypeScript analogue of Orleans' `[GenerateSerializer]` /
+  `[Id(n)]`, done by runtime registration rather than build-time generation.
+- **Grain references serialize to identity** (`GrainId` + interface id); the receiver rehydrates a
+  proxy bound to the local runtime.
 
-- **Default: MessagePack.** Compact and fast, with good TypeScript support. Used for grain method
-  arguments, results, and grain state.
-- **JSON option** for debugging and human-readable transports.
-- **Known-type registry.** Classes that travel on the wire (grain state, DTOs, custom errors) are
-  registered with a stable type tag so the deserializer can reconstruct instances rather than plain
-  objects. This is the TypeScript analogue of Orleans' `[GenerateSerializer]` + `[Id(n)]`: instead
-  of source-generated codecs, types opt in via a `@serializable()` decorator (or explicit
-  registration) that records field order/tags for forward/backward compatibility.
-- **Grain references serialize to identity.** A `GrainReference` on the wire is just its `GrainId` +
-  interface id; the receiver rehydrates it as a proxy bound to the local runtime.
-
-Orleans' serializer is a code-generated, versioned codec system. We keep the same *properties*
-(versioning via stable field tags, pluggable backends, special handling for grain references) but
-implement them with runtime registration rather than build-time generation, consistent with the
-proxy approach in [ADR 0001](adr/0001-runtime-proxy-grain-references.md).
+We keep Orleans' serializer *properties* (tag-based versioning, pluggable backends, grain-reference
+handling) without build-time codegen, consistent with [ADR 0001](adr/0001-runtime-proxy-grain-references.md).
 
 ## Errors and rejections
 
-- **Application errors** thrown by a grain method are serialized and re-thrown at the caller as the
-  same error type (when registered) or a generic `GrainCallError` carrying message and stack.
-- **Rejections** are runtime-level refusals (unknown grain type, silo draining, overload,
-  deserialization failure). They reject the caller's promise with a `RejectionError` whose kind the
-  caller can inspect to decide whether to retry.
-- **Transient delivery failures** (connection dropped mid-call) surface as a retriable error;
-  whether the runtime auto-retries depends on the method's idempotency declaration and is documented
-  in [11 — Public API](11-public-api-and-examples.md).
+- **Application errors** thrown by a method are re-thrown at the caller as the same type (when
+  registered) or a generic `GrainCallError`.
+- **Rejections** are runtime refusals (unknown grain type, silo draining, overload, deserialization
+  failure) — a `RejectionError` whose `kind` the caller can inspect to decide whether to retry.
+- **Transient delivery failures** surface as a retriable error.

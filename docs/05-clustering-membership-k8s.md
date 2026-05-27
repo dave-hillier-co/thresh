@@ -1,162 +1,86 @@
 # 05 — Clustering and membership on Kubernetes
 
 A cluster is the set of silos cooperating to host one application's grains. The hard parts of
-clustering — who is alive, how to find each other, how to detect failure — are delegated to
-Kubernetes. This document describes how.
+clustering — who is alive, how to find each other, how to detect failure — are delegated to Kubernetes.
 
 > Orleans references: `Orleans.Runtime/MembershipService/*`,
-> `Orleans.Core/SystemTargetInterfaces/IMembershipTable.cs`,
-> `Orleans.Core/Runtime/SiloStatus.cs`,
-> `Orleans.Hosting.Kubernetes/KubernetesClusterAgent.cs` (Orleans' own K8s integration).
+> `Orleans.Core/SystemTargetInterfaces/IMembershipTable.cs`, `Orleans.Core/Runtime/SiloStatus.cs`,
+> `Orleans.Hosting.Kubernetes/KubernetesClusterAgent.cs`.
 
-## What we delegate to Kubernetes, and why
+## What we delegate, and why
 
-Orleans maintains its own membership: silos write to a pluggable membership table, gossip status
-changes, and probe each other in an expander-graph topology to detect failures. That machinery
-exists because Orleans must run anywhere, including bare metal with no orchestrator.
-
-On Kubernetes, the orchestrator already provides:
-
-- **Stable identity** — each pod in a `StatefulSet` has a stable ordinal name and DNS record.
-- **Health checking** — liveness/readiness probes run continuously.
-- **Discovery** — a headless `Service` exposes the set of ready pods as DNS endpoints.
-- **Reconciliation** — failed pods are restarted or replaced; the endpoint set is updated.
-
-So we let Kubernetes be the membership authority and read the live silo set from it, rather than
-running our own failure detector. This is the same direction Orleans' own
-`Orleans.Hosting.Kubernetes` package takes, where a `KubernetesClusterAgent` reconciles Orleans
-membership against pod state and kills orphaned silos.
+Orleans runs its own membership (a membership table, status gossip, and a probe-graph failure
+detector) because it must run anywhere. On Kubernetes the orchestrator already provides stable
+identity (`StatefulSet` ordinals + DNS), continuous health checking (probes), discovery (a headless
+`Service`'s ready endpoints), and reconciliation (failed pods replaced). So we let Kubernetes be the
+membership authority and read the live silo set from it — the same direction Orleans' own
+`Orleans.Hosting.Kubernetes` package takes. See [ADR 0004](adr/0004-kubernetes-for-membership.md).
 
 ## Silo identity
 
-A silo's identity derives from its pod, so no generation counter is needed (Orleans uses
-`IP:port:generation` to distinguish incarnations; the pod UID already does this):
-
 ```ts
 interface SiloAddress {
-  podName: string;        // stable StatefulSet ordinal name, e.g. "silo-2"
-  podUid: string;         // unique per incarnation; changes when the pod is recreated
-  endpoint: string;       // host:port reachable via the headless Service DNS
+  podName: string;   // stable StatefulSet ordinal, e.g. "silo-2" — used by the directory ring
+  podUid: string;    // unique per incarnation; changes when the pod is recreated
+  endpoint: string;  // host:port via the headless Service DNS
 }
 ```
 
-`podName` is stable across restarts (useful for the directory ring); `podUid` distinguishes a fresh
-incarnation from a previous one at the same name, so stale directory entries from a dead pod are
-recognised and discarded.
+`podName` is stable across restarts; `podUid` distinguishes a fresh incarnation, so stale directory
+entries from a dead pod are recognised and discarded (Orleans uses `IP:port:generation` for the same).
 
 ## The membership service
 
 ```ts
 interface MembershipService {
-  current(): MembershipSnapshot;                 // current live silo set + version
+  current(): MembershipSnapshot;                 // live silo set + version
   updates(): AsyncIterable<MembershipSnapshot>;  // pushed on every change
   localSilo(): SiloAddress;
 }
-
-interface MembershipSnapshot {
-  version: number;                 // monotonically increasing view number
-  silos: ReadonlyArray<SiloMember>;
-}
-
-interface SiloMember {
-  address: SiloAddress;
-  status: "joining" | "active" | "draining" | "dead";
-}
+interface MembershipSnapshot { version: number; silos: ReadonlyArray<SiloMember>; }
+interface SiloMember { address: SiloAddress; status: "joining" | "active" | "draining" | "dead"; metadata?: Record<string, string>; }
 ```
 
-These four statuses are the subset of Orleans' `SiloStatus` enum
-(`Orleans.Core/Runtime/SiloStatus.cs`: `Created`, `Joining`, `Active`, `ShuttingDown`, `Stopping`,
-`Dead`) that a Kubernetes-derived view can distinguish: `joining` ↔ `Joining`, `active` ↔ `Active`,
-`draining` ↔ `ShuttingDown`/`Stopping`, `dead` ↔ `Dead`. We collapse the two shutdown statuses
-because Kubernetes surfaces only "in the ready endpoint set" or "not", and we never observe
-`Created` because a silo appears in the view only once it is reachable. The whole **membership state
-machine** Orleans drives through its `IMembershipTable` (`Orleans.Core/SystemTargetInterfaces`) is
-replaced by reading these transitions off the API-server watch — the one membership divergence
-Kubernetes hosting buys us.
+The four statuses are the subset of Orleans' `SiloStatus` a Kubernetes view can distinguish (`joining`
+/ `active` / `draining` ↔ `ShuttingDown`+`Stopping` / `dead`); the whole `IMembershipTable` state
+machine is replaced by reading these transitions off the API-server watch. The snapshot's `version` is
+the **view number** that the directory and placement key off (Orleans' `MembershipVersion`); `metadata`
+carries silo-advertised labels for metadata-aware placement ([06](06-grain-directory-and-placement.md)).
 
-The snapshot's `version` is the **view number**. Both the grain directory and placement key their
-decisions off it; when the view changes, the directory rebalances its ring and placement updates its
-candidate set. This mirrors the role of Orleans' `ClusterMembershipSnapshot` and
-`MembershipVersion`.
+## How membership is derived
 
-## How membership is derived from Kubernetes
+The silo authenticates with its pod `ServiceAccount` (RBAC scoped to *watch* in its namespace) and
+**watches the EndpointSlices** of the headless Service selecting the silo `StatefulSet`. Ready
+endpoints become `active` silos (pod name + UID from each endpoint's `targetRef`); disappearing
+endpoints are marked `dead`; each reconciliation publishes a new versioned snapshot. Because every silo
+watches the same source, views converge without gossip.
 
-```mermaid
-flowchart LR
-    API[(Kubernetes API server)]
-    subgraph Silo
-      W[K8s watch: EndpointSlices / Pods]
-      MS[MembershipService]
-    end
-    API -- watch ready endpoints --> W
-    W -- reconcile --> MS
-    MS -- snapshot + updates --> DIR[Directory]
-    MS -- snapshot + updates --> PLC[Placement]
-```
+The implementation models this as a `WatchedEndpoints` source (aggregating added/modified/deleted watch
+events) feeding a `KubernetesMembership` service; `createKubernetesClientSource` binds it to the real
+`@kubernetes/client-node` watch (re-listing/re-watching when a watch closes). Parsing, aggregation and
+reconciliation are unit-tested against fixtures; [`examples/k8s-silo`](../examples/k8s-silo) exercises
+the whole path on a real cluster ([10](10-kubernetes-hosting.md)).
 
-1. The silo authenticates to the Kubernetes API with its pod `ServiceAccount` (RBAC scoped to
-   *watch* pods/endpoints in its own namespace — see [10](10-kubernetes-hosting.md)).
-2. It **watches the EndpointSlices** of the headless `Service` selecting the silo `StatefulSet`,
-   filtered by the cluster's label selector (`app=<cluster>`).
-3. Ready endpoints become `active` silos; endpoints that disappear (probe failure, termination,
-   crash) are removed and their silos marked `dead`.
-4. Each reconciliation produces a new `MembershipSnapshot` with an incremented version, pushed to
-   subscribers.
+A silo always includes **itself** in its own view, even before its endpoint shows ready — correct (it
+is a member of its own cluster) and necessary to bootstrap, since readiness gates on membership being
+healthy, so a first/only pod would otherwise deadlock waiting to see a peer.
 
-Because every silo watches the same source of truth (the API server), the views converge without a
-gossip protocol. The API server's watch stream is the push mechanism Orleans gets from gossip.
+## Failure detection, split-brain, join/leave
 
-The implementation models the watch as an `EndpointWatch` source feeding a `KubernetesMembership`
-service: ready endpoints become `active` silos (the pod name and UID come from each endpoint's
-`targetRef`, so a restarted pod is recognised by its new UID), and each reconciliation publishes a
-new versioned snapshot. A `WatchedEndpoints` source aggregates the per-resource watch events
-(added / modified / deleted) into the current slice set the membership reconciles. The parsing,
-aggregation and reconciliation are unit-tested against fixture slices and synthetic events.
-`createKubernetesClientSource` binds this to the real `@kubernetes/client-node` watch — it lists and
-watches the EndpointSlices the well-known `kubernetes.io/service-name` label selects for the headless
-Service, and re-lists/re-watches when the watch closes (a Kubernetes watch is finite). The
-[`examples/k8s-silo`](../examples/k8s-silo) deployment exercises the whole path end-to-end on a real
-cluster (see [10](10-kubernetes-hosting.md)).
+A silo is failed when **Kubernetes removes it from the ready endpoint set** (liveness failure +
+restart, readiness failure, or deletion/eviction). There is no Orleans-style probe graph. When a silo
+leaves the view, every peer drops cached directory entries pointing at it, removes it as a placement
+candidate, and rebuilds the affected directory ranges ([06](06-grain-directory-and-placement.md)).
 
-A silo always includes **itself** in its own membership view, even before its endpoint shows ready.
-This is both correct (a silo is a member of its own cluster) and necessary to bootstrap: readiness
-gates on membership being healthy, so a first or only pod — absent from the EndpointSlices until it
-is ready — would otherwise deadlock waiting to see a peer that is waiting on it. It also keeps a
-silo from concluding the whole cluster vanished during a transient empty watch.
+EndpointSlices are eventually consistent, so two silos may briefly disagree about a third. The
+directory's compare-and-set registration and `podUid` checks make this safe: duplicate activations
+converge to one winner, and messages to a dead `podUid` are rejected so the caller re-resolves — the
+cost of a brief split-brain is one redundant turn, not corruption (durability is the persistence
+layer's job, [07](07-persistence.md)).
 
-## Failure detection
-
-A silo is considered failed when **Kubernetes removes it from the ready endpoint set**, which
-happens when:
-
-- its **liveness probe** fails and the kubelet restarts the container (new `podUid`), or
-- its **readiness probe** fails and it is removed from endpoints, or
-- the pod is deleted/evicted/terminated.
-
-There is no separate Orleans-style probe graph. The liveness/readiness endpoints the silo exposes
-(see [10](10-kubernetes-hosting.md)) report: process up, transport accepting connections, membership
-watch healthy, and not over capacity. When a silo is removed from membership, every other silo:
-
-- drops cached directory entries pointing at it,
-- removes it as a placement candidate,
-- and rebuilds the affected directory ranges (see [06](06-grain-directory-and-placement.md)).
-
-### Split-brain considerations
-
-Kubernetes EndpointSlices are eventually consistent. Two silos may briefly disagree about whether a
-third is alive. The directory's compare-and-set registration and `podUid` checks make this safe:
-duplicate activations converge to one winner, and messages addressed to a dead `podUid` are rejected
-so the caller re-resolves. We do not attempt stronger consensus; the cost of a brief duplicate
-activation is a single redundant turn, not data corruption (state durability is the persistence
-layer's job — see [07](07-persistence.md)).
-
-## Joining and leaving
-
-- **Join.** A new pod starts, opens its transport, begins watching membership, marks itself
-  `joining`, then `active` once it is ready to accept placements. It announces nothing to peers;
-  they learn of it through their own watch.
-- **Leave (graceful).** On `SIGTERM` the silo marks itself `draining` (removed from placement
-  candidates), finishes in-flight turns, deactivates grains (flushing state), unregisters its
-  directory entries, and exits. Readiness flips to not-ready first, so Kubernetes pulls it from
-  endpoints. See the shutdown sequence in [03](03-runtime-and-silo.md).
-- **Leave (crash).** No cleanup runs; peers detect the endpoint removal and rebuild affected ranges.
+- **Join** — a new pod opens its transport, watches membership, marks itself `joining` then `active`;
+  peers learn of it through their own watch.
+- **Leave (graceful)** — on `SIGTERM` it marks itself `draining`, finishes in-flight turns, deactivates
+  grains (flushing state), unregisters directory entries, and exits; readiness flips first so
+  Kubernetes pulls it from endpoints ([03](03-runtime-and-silo.md)).
+- **Leave (crash)** — no cleanup runs; peers detect endpoint removal and rebuild affected ranges.

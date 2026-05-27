@@ -3,126 +3,88 @@
 ## Why this project exists
 
 Microsoft Orleans proved that the **virtual actor model** is an excellent way to build stateful,
-scalable distributed systems without writing distributed-systems code by hand. Its core insight is
-that an actor (a *grain*) is *virtual*: it always exists conceptually, is addressed by a stable
-identity, and is activated/deactivated/placed/located by the runtime on demand. Developers write
-what looks like ordinary single-threaded object-oriented code, and the runtime makes it scale and
-survive failures.
+scalable distributed systems without hand-writing distributed-systems code. A *grain* is virtual: it
+always exists conceptually, is addressed by a stable identity, and is activated / deactivated / placed
+/ located by the runtime on demand. Developers write what looks like ordinary single-threaded code, and
+the runtime makes it scale and survive failures.
 
-Orleans is .NET. This project brings the same programming model to **TypeScript/Node.js**, for
-teams whose services and tooling live in the JavaScript ecosystem.
-
-It also makes a deliberate hosting bet: **run on Kubernetes and delegate cluster mechanics to it**.
-Orleans ships a sophisticated membership protocol (a gossip-based, probe-graph failure detector
-backed by a pluggable membership table). On Kubernetes, the orchestrator already provides stable
-identities, health checking, service discovery, scaling and rolling updates. We lean on those
-primitives so the runtime can be smaller and the operational model more familiar to platform teams.
+Orleans is .NET; this project brings the same model to **TypeScript/Node.js**, and makes a deliberate
+hosting bet: **run on Kubernetes and delegate cluster mechanics to it**. Where Orleans ships a
+gossip-based, probe-graph membership protocol, Kubernetes already provides stable identities, health
+checking, discovery, scaling and rolling updates — so the runtime can be smaller and the operational
+model more familiar.
 
 ## Goals
 
-- **Faithful programming model.** Grains, grain references, single-threaded turn-based execution,
-  reentrancy, on-demand activation, managed lifecycle, persistence, timers, reminders and streams —
-  the concepts a developer touches should map cleanly onto Orleans.
-- **Idiomatic TypeScript.** Strongly-typed grain interfaces via `interface` + runtime `Proxy`
-  references; grains authored as **factory closures with hooks** in a React-inspired functional style
-  (the class + decorator form is retained underneath as the substrate / interop surface);
-  `Promise`-based async throughout. No build-time code generation step.
-- **Kubernetes-native operations.** Membership, failure detection and discovery come from
-  Kubernetes. A `StatefulSet` of silos behind a headless `Service`; liveness/readiness probes as the
-  failure detector.
-- **Pluggable durable backends with sensible defaults.** Persistence, reminders and stream backing
-  are interfaces. **Redis is the default** for all three; Postgres is a documented alternative for
-  persistence and reminders; in-memory providers exist for development and tests.
-- **Operable and observable.** Structured logging, OpenTelemetry traces/metrics, and request-context
-  propagation across grain calls.
+- **Faithful programming model** — grains, references, single-threaded turn-based execution,
+  reentrancy, on-demand activation, managed lifecycle, persistence, timers, reminders, streams, and
+  transactions map cleanly onto Orleans.
+- **Idiomatic TypeScript** — typed `interface` + runtime `Proxy` references; grains authored as factory
+  closures with hooks (the class + decorator form retained as the substrate / interop); `Promise`-based
+  async; no build-time code generation.
+- **Kubernetes-native operations** — membership, failure detection and discovery from Kubernetes; a
+  `StatefulSet` behind a headless `Service` with liveness/readiness probes as the failure detector.
+- **Pluggable durable backends** — persistence, reminders and streams are interfaces; **Redis is the
+  default** for all three, with Postgres an alternative for persistence and reminders, and in-memory
+  providers for dev/tests.
+- **Operable and observable** — structured logging, OpenTelemetry traces/metrics, request-context
+  propagation.
 
-## Scope: Orleans parity
+## Scope: Orleans 10 parity
 
 The target is **feature parity with Orleans 10** for the actor model, persistence, timers and
-reminders, streams, transactions, and Kubernetes hosting. "Done" is defined externally — by what
-Orleans 10 offers — rather than by an internal version label. The [roadmap](13-roadmap-and-phases.md)
-tracks what is shipped versus what remains for parity.
+reminders, streams, transactions, and Kubernetes hosting — "done" defined by what Orleans 10 offers,
+not an internal version. [`EPICS.md`](../EPICS.md) tracks shipped vs. remaining.
 
 ## What Kubernetes replaces
 
-| Orleans mechanism | Replaced by | Notes |
-| --- | --- | --- |
-| Membership table + gossip | Kubernetes API watch on Pod endpoints | The live silo set is derived from the `StatefulSet`'s ready pods. |
-| Probe-graph failure detection | Liveness/readiness probes + endpoint removal | A pod that fails its probe is removed from endpoints and treated as dead. |
-| Silo generation counters | Pod name + UID | Pod identity is already globally unique per incarnation. |
-| Gateway list provider (for clients) | Kubernetes `Service` / DNS | Clients connect through a service that load-balances across silos. |
-| Cluster discovery providers (Consul, ZooKeeper, ADO.NET, …) | The Kubernetes control plane | One discovery mechanism instead of many. |
+| Orleans mechanism | Replaced by |
+| --- | --- |
+| Membership table + gossip | Kubernetes API watch on Pod endpoints |
+| Probe-graph failure detection | Liveness/readiness probes + endpoint removal |
+| Silo generation counters | Pod name + UID |
+| Gateway list provider (for clients) | Kubernetes `Service` / DNS |
+| Cluster discovery providers (Consul, ZooKeeper, …) | The Kubernetes control plane |
 
-What Kubernetes does **not** replace, and we therefore still implement, is the **grain directory**
-(which silo currently hosts a given activation) and **placement** (which silo should host a new
-activation). Those are application-level concerns built *on top of* the membership view Kubernetes
-gives us. See [06 — Grain directory and placement](06-grain-directory-and-placement.md).
+What Kubernetes does **not** replace — and we therefore implement — is the **grain directory** (which
+silo hosts an activation) and **placement** (which silo activates a new grain), application-level
+concerns built on the membership view ([06](06-grain-directory-and-placement.md)).
 
 ## How this differs from Orleans
 
-The default is **faithfulness**: where this project departs from Orleans, the departure falls into
-exactly one of three sanctioned categories, and nowhere else —
+The default is **faithfulness**; departures fall into exactly three sanctioned categories:
 
-1. **TypeScript idioms** — runtime `Proxy` references and runtime-registered serialization in place of
-   compile-time code generation; no build step.
-2. **Kubernetes-native hosting** — membership, failure detection and discovery delegated to the
-   orchestrator instead of Orleans' built-in clustering.
-3. **Functional / reducer (Elm-style) authoring** — grains written as factory closures with hooks,
-   and a message-dispatch reducer grain, layered over the Orleans-faithful class substrate.
+1. **TypeScript idioms** — runtime `Proxy` references and runtime-registered serialization instead of
+   compile-time codegen (no build step; [ADR 0001](adr/0001-runtime-proxy-grain-references.md),
+   [ADR 0011](adr/0011-message-dispatch-substrate.md)); WebSocket/HTTP transport
+   ([ADR 0002](adr/0002-websocket-transport.md)); single-threaded execution enforced by a
+   per-activation turn queue (same *guarantee* as Orleans, different mechanism; [02](02-actor-model.md)).
+2. **Kubernetes-native hosting** — membership/failure-detection/discovery delegated to the orchestrator
+   ([ADR 0004](adr/0004-kubernetes-for-membership.md)).
+3. **Functional / reducer authoring** — grains as factory closures with hooks (`defineGrain` +
+   `usePersistentState`/`useReducerState`) and a message-dispatch reducer grain (`defineReducerGrain`),
+   layered over the Orleans-faithful class substrate ([ADR 0009](adr/0009-functional-grains.md),
+   [ADR 0010](adr/0010-message-dispatch-reducer-grains.md)). All are the *same* virtual actor with
+   identical guarantees.
 
-Each difference below is tagged to one of these; everything not listed is intentionally the *same* as
-Orleans.
-
-- **Grain references are runtime ES `Proxy` objects** *(TypeScript idioms)*, not compile-time
-  generated classes. A typed interface is just a compile-time view; the proxy turns calls into
-  messages dispatched by method name, so there is no generated method table. See
-  [ADR 0001](adr/0001-runtime-proxy-grain-references.md) and
-  [ADR 0011](adr/0011-message-dispatch-substrate.md).
-- **Authoring is functional by default** *(functional/reducer authoring)*. A grain is written as a
-  factory closure with hooks (`defineGrain` + `usePersistentState` / `useReducerState`, à la React),
-  with a `useReducer`-shaped message-dispatch reducer grain (`defineReducerGrain`) as its
-  zero-boilerplate specialization. The Orleans-faithful class + decorator grain is what these are
-  built on and remains supported as an interop surface. All are the *same* virtual actor with
-  identical activation, single-turn and lifecycle guarantees — only how you write a grain differs.
-  See [ADR 0009](adr/0009-functional-grains.md),
-  [ADR 0010](adr/0010-message-dispatch-reducer-grains.md).
-- **Transport is WebSocket/HTTP** *(TypeScript idioms — use the Node ecosystem's native protocols)*,
-  not a custom TCP protocol. See [ADR 0002](adr/0002-websocket-transport.md).
-- **Membership is Kubernetes** *(Kubernetes-native hosting)*, not a pluggable membership table with
-  gossip. See [ADR 0004](adr/0004-kubernetes-for-membership.md).
-- **Single-threaded execution is enforced by a per-activation turn queue** *(TypeScript idioms — the
-  Node runtime is cooperatively concurrent rather than truly single-threaded per object)*. The
-  *guarantee* (one turn at a time per grain) is identical to Orleans; only the mechanism differs. See
-  [02 — The actor model](02-actor-model.md).
-
-What is intentionally the *same*: the grain directory is an **in-silo distributed hash table** over
-a consistent-hash ring, exactly as in Orleans, because grain-location entries are ephemeral and
-rebuilt on membership change, so no external store is needed. See
-[ADR 0003](adr/0003-in-silo-dht-directory.md).
+Everything not in those categories is intentionally the same as Orleans — notably the grain directory,
+an in-silo DHT over a consistent-hash ring ([ADR 0003](adr/0003-in-silo-dht-directory.md)).
 
 ## Glossary
 
-- **Grain** — a virtual actor: stable identity + behaviour + optional state. The unit a developer
-  writes.
-- **Grain identity (`GrainId`)** — grain type + key (string, integer or guid). Globally unique and
-  stable for the life of the application.
-- **Grain reference** — a strongly-typed, serializable proxy used to call a grain. Obtained from
-  the grain factory / client; does not imply the grain is active.
-- **Activation** — a concrete in-memory instance of a grain on a particular silo. A grain has at
-  most one activation at a time (except stateless workers).
-- **Silo** — the runtime host process. One silo per Kubernetes pod. Hosts many activations.
-- **Cluster** — the set of silos cooperating to host one application's grains.
-- **Membership / membership view** — the current set of live silos, derived from Kubernetes.
-- **Grain directory** — the distributed map from `GrainId` to the silo + activation hosting it.
-- **Placement** — the policy that chooses which silo activates a new grain.
-- **Turn** — a single, uninterrupted unit of message processing on an activation. Turns for one
-  activation never overlap unless the method opts into reentrancy.
-- **Reminder** — a durable, persisted timer that survives deactivation and pod restarts.
-- **Timer** — a non-durable, in-memory timer tied to an activation's lifetime.
-- **Stream** — a managed, named channel of events with durable subscriptions and cursors.
+- **Grain** — a virtual actor: stable identity + behaviour + optional state.
+- **GrainId** — grain type + key (string/integer/guid); globally unique and stable.
+- **Grain reference** — a typed, serializable proxy to call a grain (does not imply it is active).
+- **Activation** — a concrete in-memory instance on a silo; at most one per grain (except stateless
+  workers).
+- **Silo** — the runtime host process, one per pod.
+- **Cluster / membership** — the cooperating silos, derived from Kubernetes.
+- **Grain directory** — the distributed map from `GrainId` to its hosting silo + activation.
+- **Placement** — the policy choosing which silo activates a new grain.
+- **Turn** — one uninterrupted unit of message processing on an activation (turns never overlap unless
+  a method opts into reentrancy).
+- **Reminder / Timer** — a durable persisted schedule / a non-durable in-memory one.
+- **Stream** — a managed named channel of events with durable subscriptions and cursors.
 
-## Reference
-
-The design is grounded in the Orleans source at `~/repos/orleans/src`. Each deep-dive document
-cites the specific Orleans files its TypeScript design derives from, so implementers can compare
-against the original.
+The design is grounded in the Orleans source at `~/repos/orleans/src`; each deep-dive doc cites the
+files its design derives from.
