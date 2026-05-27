@@ -36,8 +36,9 @@ ts-virtual-actors/
 Implemented today: `core`, `messaging`, `directory`, `runtime`, `clustering-k8s`, `persistence`,
 `reminders`, `streams`, `hosting`, `client`, and the `examples/*` above. The `persistence` /
 `reminders` / `streams` packages ship both their **in-memory** providers and durable **Redis**
-providers (grain storage, reminder table, and streams) behind the same interfaces; Postgres backings
-and stream partitioning over the ring are future work. The Redis providers reuse the tagged JSON
+providers (grain storage, reminder table, and streams) behind the same interfaces; **Postgres** grain
+storage and reminder table also ship, while a Postgres stream backing and stream partitioning over the
+ring are future work. The Redis and Postgres providers reuse the tagged JSON
 round-trip in `@tsva/core/value-codec` (which the messaging serializers also use), so persisted state
 and stream events preserve runtime value types (`Date`/`bigint`/`Guid`/`GrainId`).
 

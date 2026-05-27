@@ -17,6 +17,7 @@
     "@tsva/runtime": "workspace:*",
     "@tsva/streams": "workspace:*",
     "@tsva/transactions": "workspace:*",
+    "pg": "^8.21.0",
     "redis": "^5.12.1"
   }
 }

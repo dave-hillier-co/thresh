@@ -71,5 +71,7 @@ decisions.
 
 ## ⏸ Deferred
 
-- [ ] **Additional durable providers** — Postgres grain storage / reminder table and other stream
-      backings, behind the same interfaces. Redis is the shipped default.
+- [x] **Additional durable providers (Postgres)** — `PostgresGrainStorage` and
+      `PostgresReminderTable` ship behind the same interfaces (`addPostgresStorage` /
+      `usePostgresReminders`); Redis remains the shipped default. Other stream backings remain
+      deferred.

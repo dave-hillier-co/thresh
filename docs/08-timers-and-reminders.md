@@ -182,7 +182,9 @@ grain's `registerReminder` delegates to the service, and a tick reactivates the 
 membership change across silos. A durable `RedisReminderTable` also ships (`useRedisReminders`):
 reminders are Redis hashes indexed in a sorted set by grain-hash so `readRange` is a server-side
 range query, with atomic Lua upsert/remove and etag CAS — interchangeable with the in-memory table.
-The Postgres table is future work.
+A durable `PostgresReminderTable` also ships (`usePostgresReminders`): each reminder is a row with an
+indexed `hash` column so `readRange` (including wrap-around) is a server-side range query, with an
+etag-CAS remove — likewise interchangeable.
 
 ## Choosing between them
 

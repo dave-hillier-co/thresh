@@ -71,7 +71,13 @@ Work items, grouped by the phase they belong to in
       builder `addRedisStorage(name, { url, keyPrefix? })` connects on `start()` / disconnects on
       `stop()` via host `onStart`/`onStop` hooks. Integration-tested against a real Redis
       (skip-if-down): etag conflicts, value-codec round-trip, and state surviving a silo restart.
-- [ ] Postgres provider — **deferred** (additional provider, not a parity gap; Redis is the shipped default)
+- [x] Postgres provider — `PostgresGrainStorage` (one row per state with an `etag` column; a
+      conditional `INSERT ... ON CONFLICT DO UPDATE ... WHERE etag = $expected` gives the same etag
+      optimistic-concurrency contract as the in-memory/Redis providers, atomic across silos); builder
+      `addPostgresStorage(name, { connectionString, tableName? })` creates the table on `start()` /
+      closes the pool on `stop()` via host `onStart`/`onStop` hooks. Integration-tested against a real
+      Postgres (skip-if-down): etag conflicts, value-codec round-trip, and state surviving a silo
+      restart.
 
 ## Phase 5 — Timers and reminders
 
@@ -94,7 +100,13 @@ Work items, grouped by the phase they belong to in
       Builder `useRedisReminders({ url, keyPrefix? })`. Integration-tested (skip-if-down): CAS,
       range/wrap queries, codec round-trip, firing through `LocalReminderService`, and a successor
       silo resuming a reminder from Redis.
-- [ ] Postgres reminder table — **deferred** (additional provider, not a parity gap; Redis is the shipped default)
+- [x] Postgres reminder table — `PostgresReminderTable` (each reminder a row keyed by
+      `(grain_id, name)` with an indexed `hash` column so `readRange` hash-range ownership is a
+      server-side query, including wrap-around; a `grain_id` lookup backs `readForGrain`;
+      unconditional upsert with a fresh etag and an etag-CAS remove). Builder
+      `usePostgresReminders({ connectionString, tableName? })`. Integration-tested (skip-if-down):
+      CAS, range/wrap queries, codec round-trip, firing through `LocalReminderService`, and a
+      successor silo resuming a reminder from Postgres.
 
 ## Phase 6 — Event streams
 
