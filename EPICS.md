@@ -48,12 +48,11 @@ runtime). See [`todo.md`](todo.md) for outstanding work, [`docs/`](docs/) for th
   (limiter + slow-start + overload backoff), retry policy, `pollAfter` supervision, and
   membership-driven shard ownership with dead-silo adoption, poison protection and a claim ramp-up
   budget. Memory + Redis (Lua-CAS) shard stores; `useDurableJobHandler` + `runtime.scheduleJob`.
-
-## 🚧 In progress
-
-- **Activation rebalancer** ([ADR 0016](docs/adr/0016-activation-rebalancer.md)) — the entropy model
-  (slice 1) and the distributed mechanism (load gathering + `migrateRandomActivations` +
-  `runRebalanceCycle`, slice 2a) ship; the elected worker + builder + convergence e2e (slice 2b) remain.
+- **Activation rebalancer** ([ADR 0016](docs/adr/0016-activation-rebalancer.md)) — the adaptive,
+  entropy-minimizing model (slice 1), the distributed mechanism (load gathering +
+  `migrateRandomActivations` + `runRebalanceCycle`, slice 2a), and the elected singleton worker +
+  `useActivationRebalancing(options?)` builder surface + `RebalancingReport` + convergence e2e
+  (slice 2b) all ship; the cluster self-levels skewed load toward balance.
 
 ## 📐 Designed (not yet implemented)
 

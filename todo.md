@@ -17,19 +17,9 @@ examples double as acceptance tests.
 
 ## Remaining
 
-- [ ] **Activation rebalancer — slice 2b** ([ADR 0016](docs/adr/0016-activation-rebalancer.md)). The
-      model (slice 1) and the distributed mechanism — load gathering, `migrateRandomActivations`,
-      `runRebalanceCycle` (slice 2a) — ship. Remaining: an elected singleton worker driving the cycle on
-      a timer (sessions/cycles, due-time/backoff), the `useActivationRebalancing(options?)` builder
-      surface, a `RebalancingReport` + suspend/resume, and a convergence e2e over a running cluster.
-- [x] **Durable jobs** — [ADR 0018](docs/adr/0018-durable-jobs.md) (`@tsva/durable-jobs`): a sharded,
-      durable, at-least-once scheduled-execution engine. Shipped: the pure model (shard-key bucketing,
-      due-time queue, default retry policy, claim budget), the `ShardExecutor` (concurrency limiter,
-      slow-start, overload backoff, `pollAfter` loop, retry), the `LocalDurableJobManager`
-      (membership-reconciled shard ownership, dead-silo adoption, poison protection, ramp-up budget), the
-      `JobShardStore` contract with memory + Redis backings, the `DURABLE_JOB_HANDLER` receiver +
-      `useDurableJobHandler` hook, `runtime.scheduleJob` / `cancelJob`, and
-      `useMemoryDurableJobs()` / `useRedisDurableJobs()` hosting.
+Nothing outstanding for Orleans-10 parity: the **activation rebalancer**
+([ADR 0016](docs/adr/0016-activation-rebalancer.md)) and **durable jobs**
+([ADR 0018](docs/adr/0018-durable-jobs.md)) both ship — see [`EPICS.md`](EPICS.md) for the board.
 
 ## Beyond parity
 
