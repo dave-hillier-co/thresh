@@ -31,7 +31,8 @@ retained class substrate. Also shipped: grain migration, grain-interface version
 ([ADR 0014](adr/0014-grain-interface-versioning.md)), implicit stream subscriptions, versioned
 directory range handoff, placement filters, broadcast channels ([ADR 0015](adr/0015-broadcast-channels.md)),
 grain call filters ([ADR 0012](adr/0012-grain-call-filters.md)), observability
-([ADR 0013](adr/0013-observability.md)), and the external client with gateway discovery + failover.
+([ADR 0013](adr/0013-observability.md)), durable journaling
+([ADR 0019](adr/0019-durable-journaling.md)), and the external client with gateway discovery + failover.
 
 ## Remaining for parity
 
@@ -39,8 +40,6 @@ grain call filters ([ADR 0012](adr/0012-grain-call-filters.md)), observability
   the distributed mechanism ship; the elected worker + builder + convergence e2e remain.
 - **Durable jobs** ([ADR 0018](adr/0018-durable-jobs.md)) — a sharded, durable, at-least-once
   scheduled-execution engine (`@tsva/durable-jobs`); designed, not yet implemented.
-- **Durable journaling (`DurableGrain`)** — Orleans 10 `Orleans.Journaling`; still needs an ADR (it
-  overlaps the reducer/persistent-state model).
 
 ## Deferred (not parity gaps)
 

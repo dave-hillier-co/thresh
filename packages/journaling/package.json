@@ -1,0 +1,13 @@
+{
+  "name": "@tsva/journaling",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./*": "./src/*.ts"
+  },
+  "dependencies": {
+    "@tsva/core": "workspace:*",
+    "redis": "^5.12.1"
+  }
+}

@@ -37,6 +37,11 @@ import { MemoryTransactionalStorage } from "@tsva/transactions/memory-transactio
 import { RedisTransactionalStorage } from "@tsva/transactions/redis-transactional-storage";
 import { TransactionalStorageRegistry } from "@tsva/transactions/transactional-storage-registry";
 import type { TransactionalStateStorage } from "@tsva/core/transactional-storage";
+import type { JournalStorage } from "@tsva/core/journal-storage";
+import { MemoryJournalStorage } from "@tsva/journaling/memory-journal-storage";
+import { RedisJournalStorage } from "@tsva/journaling/redis-journal-storage";
+import { JournalStorageRegistry } from "@tsva/journaling/journal-storage-registry";
+import { bindDurableStates } from "@tsva/journaling/durable-state-activator";
 import type { StreamProvider } from "@tsva/core/stream";
 import { LocalReminderService } from "@tsva/reminders/local-reminder-service";
 import { MemoryReminderTable } from "@tsva/reminders/memory-reminder-table";
@@ -65,6 +70,8 @@ export interface SiloConfig {
   reminderRefreshSeconds?: number;
   /** Static metadata this silo advertises (e.g. `{ role: "worker" }`), for metadata-aware placement. */
   metadata?: Readonly<Record<string, string>>;
+  /** Durable-journal snapshot threshold: snapshot + truncate past this many log entries (default 100). */
+  snapshotThreshold?: number;
 }
 
 interface Registration {
@@ -79,6 +86,7 @@ export class SiloBuilder {
   private healthPort: number | undefined;
   private storage: StorageRegistry | undefined;
   private transactionalStorage: TransactionalStorageRegistry | undefined;
+  private journalStorage: JournalStorageRegistry | undefined;
   private reminderTable: ReminderTable | undefined;
   private readonly streamProviders = new Map<string, StreamProvider>();
   private readonly incomingCallFilters: IncomingGrainCallFilter[] = [];
@@ -359,6 +367,43 @@ export class SiloBuilder {
     );
   }
 
+  /** Register a named journal-storage provider for durable-journalling facets (ADR 0019). */
+  addJournaling(name: string, provider: JournalStorage): this {
+    (this.journalStorage ??= new JournalStorageRegistry()).add(name, provider);
+    return this;
+  }
+
+  /**
+   * Convenience: register an in-memory "default" journal provider (dev/tests).
+   * Sharing one instance across silo restarts stands in for a durable backend.
+   */
+  useMemoryJournaling(provider: JournalStorage = new MemoryJournalStorage()): this {
+    return this.addJournaling("default", provider);
+  }
+
+  /**
+   * Register a Redis-backed journal provider for durable-journalling facets. The
+   * client connects when the silo starts and disconnects when it stops;
+   * `keyPrefix` namespaces keys (defaults to `"tsva"`).
+   */
+  addRedisJournaling(name: string, options: { url: string; keyPrefix?: string }): this {
+    const client = createClient({ url: options.url });
+    client.on("error", () => {});
+    this.starters.push(async () => {
+      await client.connect();
+    });
+    this.closers.push(async () => {
+      await client.close();
+    });
+    return this.addJournaling(
+      name,
+      new RedisJournalStorage(
+        client,
+        options.keyPrefix !== undefined ? { keyPrefix: options.keyPrefix } : {},
+      ),
+    );
+  }
+
   useStaticMembership(
     silos: readonly SiloAddress[],
     metadata?: (silo: SiloAddress) => Readonly<Record<string, string>> | undefined,
@@ -442,6 +487,8 @@ export class SiloBuilder {
     const transactionalStorage =
       this.transactionalStorage ??
       new TransactionalStorageRegistry().add("default", new MemoryTransactionalStorage());
+    const journalStorage = this.journalStorage;
+    const snapshotThreshold = this.config.snapshotThreshold;
     const time = this.config.time;
     let reminderService: LocalReminderService | undefined;
 
@@ -485,6 +532,14 @@ export class SiloBuilder {
           // persistent facet without reading storage (which would clobber it).
           await bindPersistentStates(instance, grainId, storage, { read: mode !== "rehydrate" });
           await bindReducerStates(instance, grainId, storage);
+        }
+        if (journalStorage !== undefined) {
+          // One manager per grain owns the log; replay rebuilds all durable
+          // structures. On rehydration skip replay (parity with persistent state).
+          await bindDurableStates(instance, grainId, journalStorage, {
+            replay: mode !== "rehydrate",
+            ...(snapshotThreshold !== undefined ? { snapshotThreshold } : {}),
+          });
         }
         await bindTransactionalStates(instance, grainId, transactionalStorage, (manager, txId) =>
           node.resolveTransactionStatus(manager, txId),

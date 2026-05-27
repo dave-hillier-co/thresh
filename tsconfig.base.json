@@ -30,6 +30,7 @@
       "@tsva/hosting/*": ["./packages/hosting/src/*"],
       "@tsva/persistence/*": ["./packages/persistence/src/*"],
       "@tsva/transactions/*": ["./packages/transactions/src/*"],
+      "@tsva/journaling/*": ["./packages/journaling/src/*"],
       "@tsva/observability/*": ["./packages/observability/src/*"],
       "@tsva/reminders/*": ["./packages/reminders/src/*"],
       "@tsva/streams/*": ["./packages/streams/src/*"],

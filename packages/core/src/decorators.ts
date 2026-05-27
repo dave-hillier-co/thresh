@@ -11,6 +11,7 @@ import { registerPersistentField } from "./persistent-state-metadata";
 import { registerReducerField } from "./reducer-state-metadata";
 import type { Reducer } from "./reducer-state";
 import { registerTransactionalField } from "./transactional-state-metadata";
+import { registerDurableField, type DurableKind } from "./durable-state-metadata";
 
 export interface PersistentStateOptions {
   /** Storage provider name; defaults to the silo's default provider. */
@@ -146,4 +147,45 @@ export function transactionalState<TState>(
       });
     });
   };
+}
+
+export interface DurableStateOptions {
+  /** Journal storage provider name; defaults to the silo's default provider. */
+  provider?: string;
+}
+
+/**
+ * Shared field decorator for the durable-journalling facets (see
+ * [ADR 0019](../../docs/adr/0019-durable-journaling.md)). The runtime binds the
+ * grain's single state-machine manager and replays its log before `onActivate`;
+ * each mutation appends to the log.
+ */
+function durableField(kind: DurableKind, stateName: string, options: DurableStateOptions) {
+  return function (_value: undefined, context: ClassFieldDecoratorContext): void {
+    if (context.kind !== "field") throw new Error("durable facets must decorate a field");
+    const fieldName = String(context.name);
+    context.addInitializer(function (this: unknown) {
+      registerDurableField(this as object, {
+        fieldName,
+        stateName,
+        kind,
+        ...(options.provider !== undefined ? { provider: options.provider } : {}),
+      });
+    });
+  };
+}
+
+/** Injects a `DurableValue<T>` journalled facet into a grain field. */
+export function durableState(stateName: string, options: DurableStateOptions = {}) {
+  return durableField("value", stateName, options);
+}
+
+/** Injects a `DurableDictionary<K,V>` journalled facet into a grain field. */
+export function durableDictionary(stateName: string, options: DurableStateOptions = {}) {
+  return durableField("dictionary", stateName, options);
+}
+
+/** Injects a `DurableList<T>` journalled facet into a grain field. */
+export function durableList(stateName: string, options: DurableStateOptions = {}) {
+  return durableField("list", stateName, options);
 }
