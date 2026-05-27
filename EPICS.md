@@ -70,7 +70,9 @@ decisions.
 
 - [ ] **Browser state replication & browser-hosted grains** — replicate grain state to the browser and
       run permitted grains client-side, gated by a server-enforced trust model
-      ([docs/13 "Beyond parity"](docs/13-roadmap-and-phases.md)); needs an ADR.
+      ([docs/13 "Beyond parity"](docs/13-roadmap-and-phases.md)). Design settled in
+      [ADR 0017](docs/adr/0017-browser-state-replication.md) (read-only live read-views first);
+      implementation pending.
 
 ## ⏸ Deferred
 
