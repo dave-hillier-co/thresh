@@ -1,9 +1,5 @@
 import type { DurableJob } from "@tsva/core/durable-job";
-import type {
-  JobShardStore,
-  PersistedJob,
-  ShardRecord,
-} from "@tsva/durable-jobs/job-shard-store";
+import type { JobShardStore, PersistedJob, ShardRecord } from "@tsva/durable-jobs/job-shard-store";
 
 interface Entry {
   job: DurableJob;

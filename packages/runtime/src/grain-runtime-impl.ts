@@ -72,7 +72,8 @@ export class GrainRuntimeImpl implements GrainRuntime {
 
   getBroadcastChannelProvider(name?: string): BroadcastChannelProvider {
     const provider = this.services.broadcastChannels?.(name);
-    if (provider === undefined) throw new Error("broadcast channels are not configured on this silo");
+    if (provider === undefined)
+      throw new Error("broadcast channels are not configured on this silo");
     return provider;
   }
 

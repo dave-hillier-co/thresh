@@ -13,14 +13,19 @@ const silo = (n: number) => new SiloAddress(`silo-${n}`, `uid-${n}`, `silo-${n}:
 describe("gateway providers", () => {
   it("staticGatewayProvider returns the fixed list", async () => {
     const provider = staticGatewayProvider([silo(0), silo(1)]);
-    expect((await provider.getGateways()).map((g) => g.endpoint)).toEqual(["silo-0:11110", "silo-1:11111"]);
+    expect((await provider.getGateways()).map((g) => g.endpoint)).toEqual([
+      "silo-0:11110",
+      "silo-1:11111",
+    ]);
   });
 
   it("membershipGatewayProvider tracks the active silos and follows changes", async () => {
     let active = [silo(0), silo(1)];
     const provider = membershipGatewayProvider({
-      current: () => ({ version: 1, silos: active.map((s) => ({ address: s, status: "active" as const })) }),
-      // eslint-disable-next-line @typescript-eslint/no-empty-function
+      current: () => ({
+        version: 1,
+        silos: active.map((s) => ({ address: s, status: "active" as const })),
+      }),
       updates: async function* () {},
       localSilo: () => silo(0),
     });
@@ -31,7 +36,10 @@ describe("gateway providers", () => {
 
   it("urlGatewayProvider maps URLs to gateway endpoints, ignoring the scheme", async () => {
     const provider = urlGatewayProvider(["ws://10.0.0.1:5000", "10.0.0.2:5000/path"]);
-    expect((await provider.getGateways()).map((g) => g.endpoint)).toEqual(["10.0.0.1:5000", "10.0.0.2:5000"]);
+    expect((await provider.getGateways()).map((g) => g.endpoint)).toEqual([
+      "10.0.0.1:5000",
+      "10.0.0.2:5000",
+    ]);
   });
 });
 

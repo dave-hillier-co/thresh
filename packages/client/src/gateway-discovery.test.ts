@@ -10,10 +10,7 @@ import { WebSocketTransport } from "@tsva/messaging/web-socket-transport";
 import { ClusterNode } from "@tsva/runtime/cluster-node";
 import { StaticMembershipService } from "@tsva/runtime/static-membership";
 import { createClient } from "@tsva/client/client-node";
-import {
-  membershipGatewayProvider,
-  staticGatewayProvider,
-} from "@tsva/client/gateway-provider";
+import { membershipGatewayProvider, staticGatewayProvider } from "@tsva/client/gateway-provider";
 
 /** Ask the OS for a free TCP port so silos and the client don't collide on one. */
 function freePort(): Promise<number> {
@@ -137,4 +134,3 @@ describe("client over real WebSocket sockets", () => {
     }
   }, 15_000);
 });
-

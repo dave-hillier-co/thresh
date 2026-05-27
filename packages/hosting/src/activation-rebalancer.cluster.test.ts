@@ -87,11 +87,7 @@ describe("activation rebalancer converges across a cluster (slice 2b e2e)", () =
       }
 
       const after = await loadOf(silos[0]!);
-      const counts = [
-        after.get("silo-0") ?? 0,
-        after.get("silo-1") ?? 0,
-        after.get("silo-2") ?? 0,
-      ];
+      const counts = [after.get("silo-0") ?? 0, after.get("silo-1") ?? 0, after.get("silo-2") ?? 0];
       const total = counts.reduce((a, b) => a + b, 0);
       expect(total).toBe(30); // no activations lost
 

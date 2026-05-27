@@ -198,7 +198,11 @@ export function planCycle(
       ran: true,
       moves: [],
       imbalance,
-      nextState: { rebalancingCycle: cycle, stagnantCycles: state.stagnantCycles, previousEntropy: entropy },
+      nextState: {
+        rebalancingCycle: cycle,
+        stagnantCycles: state.stagnantCycles,
+        previousEntropy: entropy,
+      },
       stop: "stagnated",
     };
   }
@@ -231,11 +235,12 @@ export function planCycle(
   for (const [lowSilo, highSilo] of formSiloPairs(snapshot)) {
     const lowLoad = snapshot.get(lowSilo)!;
     const highLoad = snapshot.get(highSilo)!;
-    const difference = Math.abs((lowLoad - ideal) - (highLoad - ideal));
+    const difference = Math.abs(lowLoad - ideal - (highLoad - ideal));
     let delta = Math.trunc(alpha * scaling * (difference / 2));
     if (delta === 0) continue;
     if (delta > highLoad) delta = highLoad;
-    if (delta > options.activationMigrationCountLimit) delta = options.activationMigrationCountLimit;
+    if (delta > options.activationMigrationCountLimit)
+      delta = options.activationMigrationCountLimit;
     moves.push({ from: highSilo, to: lowSilo, count: delta });
   }
 

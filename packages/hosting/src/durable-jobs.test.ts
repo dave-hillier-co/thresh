@@ -76,7 +76,11 @@ async function flush(times = 5): Promise<void> {
  * (retry backoff, pollAfter re-poll) come due and fire. A single big `advance`
  * would miss them, since the next timer is only set after the current run settles.
  */
-async function advanceSettling(time: FakeTimeProvider, totalMs: number, stepMs = 1000): Promise<void> {
+async function advanceSettling(
+  time: FakeTimeProvider,
+  totalMs: number,
+  stepMs = 1000,
+): Promise<void> {
   let elapsed = 0;
   while (elapsed < totalMs) {
     const step = Math.min(stepMs, totalMs - elapsed);
@@ -219,9 +223,9 @@ describe("durable jobs end-to-end", () => {
       .build();
     await silo.start();
     try {
-      await expect(
-        silo.getGrain(IScheduler, "s").schedule("w", "ok", 1000),
-      ).rejects.toThrow(/durable jobs/);
+      await expect(silo.getGrain(IScheduler, "s").schedule("w", "ok", 1000)).rejects.toThrow(
+        /durable jobs/,
+      );
     } finally {
       await silo.stop();
     }

@@ -27,9 +27,10 @@ function membershipOf(local: SiloAddress, silos: readonly SiloAddress[]): Member
 }
 
 /** A cycle runner that records how many times it ran and returns a fixed result each tick. */
-function recordingRunner(
-  results: RebalanceCycleResult[],
-): { run: (state: CycleState) => Promise<RebalanceCycleResult>; calls: number } {
+function recordingRunner(results: RebalanceCycleResult[]): {
+  run: (state: CycleState) => Promise<RebalanceCycleResult>;
+  calls: number;
+} {
   const rec = {
     calls: 0,
     run: async (_state: CycleState): Promise<RebalanceCycleResult> => {
@@ -49,10 +50,18 @@ describe("ActivationRebalancerWorker — elected timer-driven singleton (slice 2
     const silos = [silo(2), silo(0), silo(1)];
     const time = new FakeTimeProvider();
     const leaderRunner = recordingRunner([
-      { nextState: { rebalancingCycle: 1, stagnantCycles: 0, previousEntropy: 0.5 }, imbalance: 0.4, moved: 2 },
+      {
+        nextState: { rebalancingCycle: 1, stagnantCycles: 0, previousEntropy: 0.5 },
+        imbalance: 0.4,
+        moved: 2,
+      },
     ]);
     const followerRunner = recordingRunner([
-      { nextState: { rebalancingCycle: 1, stagnantCycles: 0, previousEntropy: 0.5 }, imbalance: 0.4, moved: 2 },
+      {
+        nextState: { rebalancingCycle: 1, stagnantCycles: 0, previousEntropy: 0.5 },
+        imbalance: 0.4,
+        moved: 2,
+      },
     ]);
 
     // silo-0 is the leader (lowest ring key); silo-1 is a follower.
@@ -205,7 +214,11 @@ describe("ActivationRebalancerWorker — elected timer-driven singleton (slice 2
     const silos = [silo(0), silo(1)];
     const time = new FakeTimeProvider();
     const runner = recordingRunner([
-      { nextState: { rebalancingCycle: 1, stagnantCycles: 0, previousEntropy: 0 }, imbalance: 0.3, moved: 1 },
+      {
+        nextState: { rebalancingCycle: 1, stagnantCycles: 0, previousEntropy: 0 },
+        imbalance: 0.3,
+        moved: 1,
+      },
     ]);
     const worker = new ActivationRebalancerWorker({
       local: silo(0),

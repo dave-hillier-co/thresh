@@ -7,7 +7,6 @@ import {
 import { grain, implicitChannelSubscription } from "@tsva/core/decorators";
 import { defineGrain } from "@tsva/core/define-grain";
 import { Grain } from "@tsva/core/grain";
-import { GrainId } from "@tsva/core/grain-id";
 import { defineGrainInterface } from "@tsva/core/grain-interface";
 import type { GrainWithStringKey } from "@tsva/core/key-kinds";
 import { SiloAddress } from "@tsva/core/silo-address";
@@ -174,7 +173,11 @@ describe("broadcast channels — functional grain", () => {
     expect(node.broadcastGrainTypes("room")).toEqual(["FnWatcher"]);
     await node.start();
     try {
-      await node.publishToBroadcastChannel("default", { namespace: "room", key: "lobby" }, "joined");
+      await node.publishToBroadcastChannel(
+        "default",
+        { namespace: "room", key: "lobby" },
+        "joined",
+      );
       expect(observed).toEqual([{ key: "lobby", namespace: "room", item: "joined" }]);
     } finally {
       await node.stop();

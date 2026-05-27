@@ -5,11 +5,7 @@ import type { SiloHost } from "@tsva/hosting/silo-host";
 import { AlertPublisherGrain } from "@tsva/example-broadcast/alert-publisher-grain";
 import { AuditLogGrain } from "@tsva/example-broadcast/audit-log-grain";
 import { RegionMonitorGrain } from "@tsva/example-broadcast/region-monitor-grain";
-import {
-  IAlertPublisher,
-  IAuditLog,
-  IRegionMonitor,
-} from "@tsva/example-broadcast/interfaces";
+import { IAlertPublisher, IAuditLog, IRegionMonitor } from "@tsva/example-broadcast/interfaces";
 
 const local = new SiloAddress("silo-0", "uid-0", "silo-0:11111");
 

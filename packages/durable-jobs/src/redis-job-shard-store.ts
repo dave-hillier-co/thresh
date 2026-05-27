@@ -1,11 +1,7 @@
 import type { createClient } from "redis";
 import type { DurableJob } from "@tsva/core/durable-job";
 import { deserializeValue, serializeValue } from "@tsva/core/value-codec";
-import type {
-  JobShardStore,
-  PersistedJob,
-  ShardRecord,
-} from "@tsva/durable-jobs/job-shard-store";
+import type { JobShardStore, PersistedJob, ShardRecord } from "@tsva/durable-jobs/job-shard-store";
 
 export type RedisClient = ReturnType<typeof createClient>;
 

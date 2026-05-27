@@ -14,7 +14,11 @@ import type {
 export class BroadcastChannelProviderImpl implements BroadcastChannelProvider {
   constructor(
     private readonly providerName: string,
-    private readonly publish: (provider: string, channel: ChannelId, item: unknown) => Promise<void>,
+    private readonly publish: (
+      provider: string,
+      channel: ChannelId,
+      item: unknown,
+    ) => Promise<void>,
   ) {}
 
   getChannelWriter<T>(channel: ChannelId): BroadcastChannelWriter<T> {

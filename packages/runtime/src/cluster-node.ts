@@ -1065,7 +1065,12 @@ export class ClusterNode {
     if (replyTo === undefined) return;
     await this.reply(
       replyTo,
-      responseTo(message, "success", this.serializer.serialize(this.catalog.count()), this.options.local),
+      responseTo(
+        message,
+        "success",
+        this.serializer.serialize(this.catalog.count()),
+        this.options.local,
+      ),
     );
   }
 
@@ -1074,7 +1079,10 @@ export class ClusterNode {
    * load snapshot the rebalancer's model consumes. The local count is read
    * directly; peers answer a `load` query (an unreachable peer counts as 0).
    */
-  async gatherClusterLoad(): Promise<{ counts: Map<string, number>; silos: Map<string, SiloAddress> }> {
+  async gatherClusterLoad(): Promise<{
+    counts: Map<string, number>;
+    silos: Map<string, SiloAddress>;
+  }> {
     const active = activeSilos(this.options.membership.current());
     const counts = new Map<string, number>();
     const silos = new Map<string, SiloAddress>();
@@ -1110,7 +1118,10 @@ export class ClusterNode {
     for (const activation of candidates.slice(0, count)) {
       const accepted = await this.migrateActivationTo(activation, target);
       if (accepted) {
-        await activation.deactivate({ code: "migrating", description: "rebalanced to another silo" });
+        await activation.deactivate({
+          code: "migrating",
+          description: "rebalanced to another silo",
+        });
         moved++;
       }
     }

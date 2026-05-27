@@ -109,7 +109,11 @@ describe("planCycle", () => {
   });
 
   it("stops the session as stagnated once max stagnant cycles is reached", () => {
-    const state: CycleState = { rebalancingCycle: 8, stagnantCycles: opts.maxStagnantCycles, previousEntropy: 0.4 };
+    const state: CycleState = {
+      rebalancingCycle: 8,
+      stagnantCycles: opts.maxStagnantCycles,
+      previousEntropy: 0.4,
+    };
     const plan = planCycle(snap({ a: 20, b: 80 }), opts, state);
     expect(plan.stop).toBe("stagnated");
     expect(plan.moves).toEqual([]);

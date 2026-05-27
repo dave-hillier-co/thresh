@@ -104,9 +104,7 @@ export class SiloBuilder {
   private reminderTable: ReminderTable | undefined;
   private jobShardStore: JobShardStore | undefined;
   private durableJobsOptions: DurableJobsOptions = {};
-  private rebalancing:
-    | { options: RebalancerOptions; sessionCyclePeriodMs: number }
-    | undefined;
+  private rebalancing: { options: RebalancerOptions; sessionCyclePeriodMs: number } | undefined;
   private readonly streamProviders = new Map<string, StreamProvider>();
   private readonly incomingCallFilters: IncomingGrainCallFilter[] = [];
   private readonly outgoingCallFilters: OutgoingGrainCallFilter[] = [];
