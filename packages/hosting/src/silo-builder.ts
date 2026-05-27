@@ -51,6 +51,11 @@ import { MemoryStreamProvider } from "@tsva/streams/memory-stream-provider";
 import { RedisPullingStreamProvider } from "@tsva/streams/redis-pulling-stream-provider";
 import { ClusterNode } from "@tsva/runtime/cluster-node";
 import { StaticMembershipService } from "@tsva/runtime/static-membership";
+import { ActivationRebalancerWorker } from "@tsva/runtime/placement/rebalancing/rebalancer-worker";
+import {
+  DEFAULT_REBALANCER_OPTIONS,
+  type RebalancerOptions,
+} from "@tsva/runtime/placement/rebalancing/rebalancer-model";
 import { HealthCheck } from "@tsva/hosting/health-check";
 import { HealthServer } from "@tsva/hosting/health-server";
 import { buildSiloHost, type SiloHost } from "@tsva/hosting/silo-host";
@@ -88,6 +93,9 @@ export class SiloBuilder {
   private transactionalStorage: TransactionalStorageRegistry | undefined;
   private journalStorage: JournalStorageRegistry | undefined;
   private reminderTable: ReminderTable | undefined;
+  private rebalancing:
+    | { options: RebalancerOptions; sessionCyclePeriodMs: number }
+    | undefined;
   private readonly streamProviders = new Map<string, StreamProvider>();
   private readonly incomingCallFilters: IncomingGrainCallFilter[] = [];
   private readonly outgoingCallFilters: OutgoingGrainCallFilter[] = [];
@@ -149,6 +157,24 @@ export class SiloBuilder {
       await pool.end();
     });
     this.reminderTable = table;
+    return this;
+  }
+
+  /**
+   * Enable the adaptive activation rebalancer (ADR 0016). A single, deterministically
+   * elected silo runs entropy-minimizing rebalancing cycles on a timer, migrating live
+   * activations from busier to quieter silos so the cluster self-levels. `options`
+   * overrides the entropy-model tunables (defaults from `DEFAULT_REBALANCER_OPTIONS`);
+   * `sessionCyclePeriodSeconds` sets the cycle cadence (defaults to 60s).
+   */
+  useActivationRebalancing(
+    options?: Partial<RebalancerOptions> & { sessionCyclePeriodSeconds?: number },
+  ): this {
+    const { sessionCyclePeriodSeconds, ...modelOptions } = options ?? {};
+    this.rebalancing = {
+      options: { ...DEFAULT_REBALANCER_OPTIONS, ...modelOptions },
+      sessionCyclePeriodMs: (sessionCyclePeriodSeconds ?? 60) * 1000,
+    };
     return this;
   }
 
@@ -573,6 +599,21 @@ export class SiloBuilder {
       );
     }
 
+    // The rebalancer worker (ADR 0016) elects a single leader from membership and
+    // drives the node's `runRebalanceCycle` on a timer; the host starts/stops it.
+    let rebalancerWorker: ActivationRebalancerWorker | undefined;
+    if (this.rebalancing !== undefined) {
+      const rebalancing = this.rebalancing;
+      rebalancerWorker = new ActivationRebalancerWorker({
+        local: this.config.local,
+        membership: this.membership,
+        time: time ?? systemTimeProvider,
+        runCycle: (state) => node.runRebalanceCycle(state, rebalancing.options),
+        options: rebalancing.options,
+        sessionCyclePeriodMs: rebalancing.sessionCyclePeriodMs,
+      });
+    }
+
     // Pulling-agent stream providers deliver through the dispatcher to subscriber
     // activations, so they need the started node; the host runs the ownership hook
     // on start and on every membership change, so each silo runs agents only for
@@ -595,6 +636,7 @@ export class SiloBuilder {
       healthPort: this.healthPort,
       membership: this.membership,
       reminderService,
+      rebalancerWorker,
       onStart: this.starters,
       onOwnershipChange,
       onStop: this.closers,

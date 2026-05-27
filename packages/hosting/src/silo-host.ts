@@ -3,6 +3,8 @@ import type { GrainInterface } from "@tsva/core/grain-interface";
 import type { GrainKeyFor } from "@tsva/core/key-kinds";
 import type { MembershipService } from "@tsva/core/membership";
 import type { ClusterNode } from "@tsva/runtime/cluster-node";
+import type { ActivationRebalancerWorker } from "@tsva/runtime/placement/rebalancing/rebalancer-worker";
+import type { RebalancingReport } from "@tsva/runtime/placement/rebalancing/rebalancing-report";
 import { GracefulShutdown } from "@tsva/hosting/graceful-shutdown";
 import type { HealthCheck } from "@tsva/hosting/health-check";
 import type { HealthServer } from "@tsva/hosting/health-server";
@@ -21,6 +23,8 @@ export interface SiloHostParts {
   shutdown: GracefulShutdown;
   membership: MembershipService;
   reminderService?: ReminderService | undefined;
+  /** The elected activation-rebalancer worker (ADR 0016), started/stopped with the host. */
+  rebalancerWorker?: ActivationRebalancerWorker | undefined;
   /** Run before the node starts — e.g. connect durable provider clients. */
   onStart?: ReadonlyArray<() => Promise<void>>;
   /**
@@ -55,6 +59,11 @@ export class SiloHost {
     return this.parts.node.isActive(id);
   }
 
+  /** The latest activation-rebalancer report (ADR 0016), if rebalancing is enabled. */
+  rebalancingReport(): RebalancingReport | undefined {
+    return this.parts.rebalancerWorker?.report();
+  }
+
   async start(): Promise<void> {
     for (const hook of this.parts.onStart ?? []) await hook();
     await this.parts.node.start();
@@ -65,6 +74,7 @@ export class SiloHost {
     const ranges = this.parts.node.ownedHashRanges();
     for (const hook of this.parts.onOwnershipChange ?? []) await hook(ranges);
     await this.parts.reminderService?.refreshOwnership(ranges);
+    this.parts.rebalancerWorker?.start();
     this.watchMembership();
     this.parts.health.update({
       membershipHealthy: this.parts.membership.current().silos.length > 0,
@@ -74,6 +84,7 @@ export class SiloHost {
 
   async stop(): Promise<void> {
     this.membershipWatch?.abort();
+    this.parts.rebalancerWorker?.stop();
     this.parts.reminderService?.stop();
     await this.parts.shutdown.drain();
     await this.parts.healthServer?.close();
