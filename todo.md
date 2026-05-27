@@ -420,10 +420,12 @@ order, starting with transactions.
       failover. `gateway` kept as one-entry shorthand. Tests: manager/provider units + two in-process
       e2e (skips an unreachable gateway and routes through a live one; discovers gateways from
       membership).
-- [ ] WebSocket client e2e — exercise the client over the real WebSocket transport. Deferred: there is
-      no WS-client precedent yet (client tests are all in-process), and a raw `ClusterNode` + WS client
-      hangs on the reply path; this belongs in the hosting/examples layer with the `SiloHost` harness
-      (mirror `examples/cluster`'s `buildWebSocketCluster`), not the bare client package.
+- [x] WebSocket client e2e — the client runs over the real WebSocket transport: a call routes
+      client → gateway → activation and the reply flows back over a reverse connection to the client's
+      own listener (`gateway-discovery.test.ts`, membership-discovered gateway). This surfaced and fixed
+      a transport teardown bug: `WebSocketTransport.connect`'s `close()` waited on a `close` event that
+      never fires when the peer already closed the socket — now it resolves immediately if the socket is
+      already `CLOSED`, so client/silo shutdown can't hang regardless of close order.
 
 ## Examples as acceptance tests
 

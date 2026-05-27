@@ -35,10 +35,10 @@ decisions.
 
 ## 🚧 In progress
 
-- [~] **External client** — in-process gateway-routed client ships, now with **gateway discovery +
-      failover** (a `GatewayListProvider` — static / membership / URL — feeding a round-robin
-      `GatewayManager` that marks unreachable gateways dead and fails over). Only a real-socket
-      WebSocket client e2e remains (needs the `SiloHost` harness).
+- [x] **External client** — gateway-routed client with **gateway discovery + failover** (a
+      `GatewayListProvider` — static / membership / URL — feeding a round-robin `GatewayManager` that
+      marks unreachable gateways dead and fails over), verified both in-process and over the **real
+      WebSocket transport** (client → gateway → activation, reply over a reverse connection).
 - [~] **Functional-first examples** — docs lead functional; a few examples are still `@grain()`
       classes to migrate (one kept as a living interop example).
 

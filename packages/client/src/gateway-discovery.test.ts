@@ -1,3 +1,4 @@
+import { createServer } from "node:net";
 import { describe, expect, it } from "vitest";
 import { grain } from "@tsva/core/decorators";
 import { Grain } from "@tsva/core/grain";
@@ -5,6 +6,7 @@ import { defineGrainInterface } from "@tsva/core/grain-interface";
 import type { GrainWithStringKey } from "@tsva/core/key-kinds";
 import { SiloAddress } from "@tsva/core/silo-address";
 import { InProcessNetwork, InProcessTransport } from "@tsva/messaging/in-process-transport";
+import { WebSocketTransport } from "@tsva/messaging/web-socket-transport";
 import { ClusterNode } from "@tsva/runtime/cluster-node";
 import { StaticMembershipService } from "@tsva/runtime/static-membership";
 import { createClient } from "@tsva/client/client-node";
@@ -12,6 +14,19 @@ import {
   membershipGatewayProvider,
   staticGatewayProvider,
 } from "@tsva/client/gateway-provider";
+
+/** Ask the OS for a free TCP port so silos and the client don't collide on one. */
+function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const probe = createServer();
+    probe.once("error", reject);
+    probe.listen(0, "127.0.0.1", () => {
+      const info = probe.address();
+      const port = typeof info === "object" && info !== null ? info.port : 0;
+      probe.close(() => resolve(port));
+    });
+  });
+}
 
 interface IEcho extends GrainWithStringKey {
   echo(message: string): Promise<string>;
@@ -87,5 +102,39 @@ describe("client gateway discovery + failover (in-process)", () => {
       await silo.stop();
     }
   });
+});
+
+describe("client over real WebSocket sockets", () => {
+  it("routes a call through a membership-discovered gateway", async () => {
+    const siloPort = await freePort();
+    const clientPort = await freePort();
+    const siloAddr = new SiloAddress("silo-0", "uid-0", `127.0.0.1:${siloPort}`);
+    const membership = new StaticMembershipService(siloAddr, [siloAddr]);
+    const silo = new ClusterNode({
+      local: siloAddr,
+      clusterId: CLUSTER,
+      membership,
+      transport: new WebSocketTransport(CLUSTER),
+      random: () => 0,
+    });
+    silo.registerGrain(EchoGrain, { interfaces: [IEcho] });
+    await silo.start();
+    const client = createClient({
+      clusterId: CLUSTER,
+      local: new SiloAddress("client", "uid-c", `127.0.0.1:${clientPort}`),
+      transport: new WebSocketTransport(CLUSTER),
+      gateways: membershipGatewayProvider(membership),
+      callTimeoutMs: 2000,
+    }).registerGrain(EchoGrain, { interfaces: [IEcho] });
+    await client.connect();
+    try {
+      // The whole path runs over real sockets: client → gateway → activation, and
+      // the reply over a reverse connection back to the client's own listener.
+      expect(await client.getGrain(IEcho, "x").echo("over-sockets")).toBe("over-sockets");
+    } finally {
+      await client.close();
+      await silo.stop();
+    }
+  }, 15_000);
 });
 
