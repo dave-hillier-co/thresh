@@ -490,3 +490,24 @@ previously had only unit coverage. Outside-in / ATDD: failing example first, the
       `AuditLog` (two grain types implicitly subscribed to `alerts`, keyed by region) both receive each
       publish, with key-based isolation (eu alerts never reach us). Functional-first (`defineGrain` +
       `BROADCAST_CHANNEL_OBSERVER`); runnable via `pnpm --filter @tsva/example-broadcast start`.
+
+## Beyond parity — browser state replication ([ADR 0017](docs/adr/0017-browser-state-replication.md))
+
+- [x] ADR 0017 — design for replicating grain state to the browser and running permitted grains
+      client-side under a server-enforced trust model. Settled: latency-first motivation; v1 is a
+      server-authoritative **read-only** live read-view over the existing client→gateway WebSocket
+      path; writable/optimistic/CRDT client state and browser-hosted grains deferred to follow-up
+      ADRs. Status: Proposed (design only).
+- [ ] Slice 1 — client-session identity + gateway authorization seam: an authenticated client
+      identity in the preamble/request context; a gateway incoming call filter ([ADR 0012](docs/adr/0012-grain-call-filters.md))
+      enforces a default-deny replication policy. Failing test: replication of an unmarked grain type
+      is rejected at the gateway.
+- [ ] Slice 2 — grain-type eligibility marker: `browserReplication` on `GrainOptions`, recorded in the
+      silo registry and read server-side only (a client claim cannot override it).
+- [ ] Slice 3 — read-view subscription protocol over WebSocket (subscribe/snapshot/delta/resync) built
+      on event streams ([docs/09](docs/09-event-streams.md)) + state version/etag ([docs/07](docs/07-persistence.md)):
+      snapshot then deltas, gap→resync, eventual consistency with the authoritative activation.
+- [ ] Slice 4 — subscription lifecycle + resource bounds: re-subscribe across server activation
+      deactivation/migration; tear down on browser disconnect.
+- [ ] (follow-up ADRs) Layer 2 browser-hosted grains; writable client state with an optimistic/CRDT
+      reconciliation model + offline support.

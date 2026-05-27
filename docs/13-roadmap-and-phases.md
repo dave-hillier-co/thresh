@@ -221,7 +221,10 @@ parity items, and each warrants its own ADR before implementation.
      in particular assume a trusted single activation (wait-die locking, durable commit), so a browser
      replica of authoritative state needs a different consistency model (optimistic / CRDT with
      server reconciliation). The intended motivation (offline, optimistic-UI latency, or reduced
-     server load) drives the design and should be settled in the ADR first.
+     server load) drives the design and should be settled in the ADR first. Designed in
+     [ADR 0017](adr/0017-browser-state-replication.md): latency-first, with a server-authoritative
+     **read-only** live read-view as v1 (writable/optimistic/CRDT client state and browser-hosted
+     grains deferred to follow-up ADRs).
 
 ## Cross-cutting, throughout
 
