@@ -314,6 +314,25 @@ order, starting with transactions.
       Delivery awaits subscribers (one deliberate divergence from Orleans' fire-and-forget default).
       Tests: `channelKey` unit, namespace→types registration, dispatcher fan-out (class + functional +
       producer-grain publish, no-observer drop).
+- [ ] Durable journaling (`DurableGrain`) — Orleans 10 `Orleans.Journaling`; needs an ADR (overlaps
+      the reducer/persistent-state model). Next ADR slot (0017).
+- [~] Durable jobs — Orleans 10 `Orleans.DurableJobs`: a **sharded, durable, at-least-once
+      scheduled-execution** engine (one-shot grain invocations bucketed by due time, with retries,
+      per-silo concurrency control, slow-start, and crash-failover with poison-shard protection) —
+      **not** a workflow/replay engine despite the name. Designed in
+      [ADR 0018](docs/adr/0018-durable-jobs.md) as `@tsva/durable-jobs`, layered on the runtime the
+      way `@tsva/reminders` is (per-silo manager + durable shard store + memory/Redis backings; a
+      `DURABLE_JOB_HANDLER` symbol handler; `runtime.scheduleJob`/`cancelJob`; `useDurableJobs`).
+      Design only — implementation pending.
+  - [ ] Slice 1 — pure model: shard-key bucketing, the due-time job queue (cancel/retry), the default
+        retry policy, and the claim-budget computation, all pure + fake-clock unit-tested.
+  - [ ] Slice 2 — single-silo e2e on the memory store: a scheduled job fires the target's
+        `DURABLE_JOB_HANDLER` as a turn at due time; complete/throw-retry/cancel/`pollAfter`;
+        concurrency limit + overload backoff.
+  - [ ] Slice 3 — durable store + restart: Redis `JobShardStore`; a job survives silo restart and
+        re-fires (at-least-once); memory store asserted dev/test-only.
+  - [ ] Slice 4 — multi-silo ownership & failover (kind e2e): shard claim/adoption via membership,
+        poison-shard protection, claim ramp-up, graceful release on drain.
 - [~] Observability (cross-cutting) — OpenTelemetry traces propagated via request context, metrics
       (activations, turn latency, directory hit rate, reminder/stream lag), and structured logs.
   - [x] Slice 1 — ambient request context (Orleans `RequestContext`): `requestContext.get/set/getAll`

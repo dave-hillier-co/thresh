@@ -32,9 +32,10 @@ Grain call filters and cross-cutting observability (request context, OpenTelemet
 structured logs) ship too, on the grain-call-filter seam, as does implicit stream subscription.
 
 **Remaining for parity (Orleans 10):** grain migration and the activation rebalancer (the v10
-core-runtime block) and placement filters. The Orleans-10 additions of durable journaling
-(`DurableGrain`) and durable jobs need an ADR each (journaling overlaps the existing
-reducer/persistent-state model).
+core-runtime block) and placement filters. The Orleans-10 addition of durable journaling
+(`DurableGrain`) still needs an ADR (it overlaps the existing reducer/persistent-state model);
+durable jobs is now designed in [ADR 0018](adr/0018-durable-jobs.md) (design only, not yet
+implemented).
 
 **Deferred:** additional providers (Postgres storage/reminders, other stream backings) — alternatives
 to the shipped Redis defaults, not parity gaps.
@@ -187,8 +188,12 @@ verified.
 - **Durable journaling (`DurableGrain`)** — needs an ADR: Orleans 10's `Orleans.Journaling`
   (`DurableValue`/`DurableDictionary`/`DurableList`/… that journal mutations automatically) overlaps
   the existing reducer/persistent-state model; decide whether to adopt it or map it onto what ships.
-- **Durable jobs** — needs an ADR: Orleans 10's `Orleans.DurableJobs` (durable execution / workflow
-  engine) is a large, optional addition.
+- **Durable jobs** — designed in [ADR 0018](adr/0018-durable-jobs.md) (design only, not yet
+  implemented). Orleans 10's `Orleans.DurableJobs` is — despite the name — **not** a workflow/replay
+  engine but a **sharded, durable, at-least-once scheduled-execution** engine (one-shot grain
+  invocations bucketed by due time, with retries, per-silo concurrency control, slow-start, and
+  crash-failover with poison-shard protection). The ADR ports it as `@tsva/durable-jobs`, layered on
+  the runtime the way `@tsva/reminders` is, with a four-slice plan.
 
 ## Deferred (not parity gaps)
 
