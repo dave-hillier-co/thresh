@@ -1,5 +1,4 @@
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
+import { defineGrain } from "@tsva/core/define-grain";
 import type { StreamHandler } from "@tsva/core/stream";
 import { CHAT, type ChatMessage, type IChatUser } from "@tsva/example-chat/interfaces";
 
@@ -13,22 +12,21 @@ import { CHAT, type ChatMessage, type IChatUser } from "@tsva/example-chat/inter
  * neighbour's. `onNext` mutates `received` with no lock — proof it runs as a
  * turn on this activation.
  */
-@grain()
-export class ChatUserGrain extends Grain implements IChatUser {
-  private received: ChatMessage[] = [];
+export const ChatUserGrain = defineGrain<IChatUser>("ChatUser", (ctx) => {
+  const received: ChatMessage[] = [];
 
-  async join(room: string): Promise<void> {
-    const stream = this.runtime.getStreamProvider().getStream<ChatMessage>(CHAT, room);
-    const mine = await stream.getSubscriptions();
-    if (mine.length > 0) await mine[0]!.resume(this.handler());
-    else await stream.subscribe(this.handler());
-  }
+  const handler = (): StreamHandler<ChatMessage> => ({
+    onNext: async (message) => void received.push(message),
+  });
 
-  async history(): Promise<ChatMessage[]> {
-    return [...this.received]; // a snapshot — never leak the live internal array
-  }
+  return {
+    join: async (room: string): Promise<void> => {
+      const stream = ctx.runtime.getStreamProvider().getStream<ChatMessage>(CHAT, room);
+      const mine = await stream.getSubscriptions();
+      if (mine.length > 0) await mine[0]!.resume(handler());
+      else await stream.subscribe(handler());
+    },
 
-  private handler(): StreamHandler<ChatMessage> {
-    return { onNext: async (message) => void this.received.push(message) };
-  }
-}
+    history: async (): Promise<ChatMessage[]> => [...received], // a snapshot — never leak the live internal array
+  };
+});

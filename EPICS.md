@@ -32,9 +32,14 @@ decisions.
       **OpenTelemetry tracing**, **metrics** (call counter + duration histogram, activation gauge,
       directory-cache hit/miss), and **structured logging**, all on the call-filter seam and no-op
       without an SDK/logger. (Reminder/stream-lag gauges deferred as optional polish.)
+- [x] **Functional-first examples** — every example grain is authored with `defineGrain` + hooks,
+      matching the docs; one `@grain()` class (`examples/thermostat`) is kept on purpose as the living
+      interop example the functional aggregator consumes from.
 
 ## 🚧 In progress
 
+- [~] **External client** — in-process gateway-routed client ships; higher-level gateway discovery +
+      a WebSocket client e2e remain.
 - [x] **External client** — gateway-routed client with **gateway discovery + failover** (a
       `GatewayListProvider` — static / membership / URL — feeding a round-robin `GatewayManager` that
       marks unreachable gateways dead and fails over), verified both in-process and over the **real
