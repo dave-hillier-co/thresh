@@ -59,7 +59,10 @@ decisions.
       ([ADR 0015](docs/adr/0015-broadcast-channels.md)).
 - [ ] **Durable journaling (`DurableGrain`)** — Orleans 10 `Orleans.Journaling`; needs an ADR
       (overlaps reducer/persistent state).
-- [ ] **Durable jobs** — Orleans 10 `Orleans.DurableJobs` (durable workflows); needs an ADR.
+- [~] **Durable jobs** — Orleans 10 `Orleans.DurableJobs`: a sharded, durable, at-least-once
+      scheduled-execution engine (not a workflow engine). Designed in
+      [ADR 0018](docs/adr/0018-durable-jobs.md) (`@tsva/durable-jobs`); design only, not yet
+      implemented.
 
 ## 🔭 Beyond parity (future)
 

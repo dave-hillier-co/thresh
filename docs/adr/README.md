@@ -18,3 +18,4 @@ Each ADR captures one significant decision, its context, the rationale, and its 
 - [0014 — Grain-interface versioning (version-aware placement)](0014-grain-interface-versioning.md)
 - [0015 — Broadcast channels (lightweight in-cluster pub/sub)](0015-broadcast-channels.md)
 - [0016 — Activation rebalancer (adaptive, entropy-minimizing)](0016-activation-rebalancer.md)
+- [0018 — Durable jobs (sharded, durable, at-least-once scheduled execution)](0018-durable-jobs.md)
