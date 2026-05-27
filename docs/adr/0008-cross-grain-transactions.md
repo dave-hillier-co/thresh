@@ -94,33 +94,13 @@ serializable commit with a TM elected from the writers and durable recovery.
 
 ## Alternatives considered
 
-- **Pure version-validation OCC (validate-at-prepare only, no locks).** Simpler — no lock manager or
-  wait-die — but it is *not* how Orleans achieves isolation, so it is a parity gap; it also degrades to
-  high abort rates under contention without the timestamp-ordered wound direction. Rejected for
-  fidelity.
-- **Central-coordinator 2PC.** A standalone TM is a bottleneck and a single point of failure; Orleans
-  deliberately co-locates the TM on a participant. Rejected.
-- **Deterministic transactions (Snapper-style).** Higher throughput under contention, but requires
-  pre-declared access sets and a batching layer — a larger departure from the Orleans programming
-  model we are matching. Could layer on later behind the same facet.
-- **Sagas / compensation.** Eventual, not ACID; pushes correctness onto application code. Not parity.
-- **Single-grain only (status quo).** Insufficient — the defining feature is multi-grain atomicity.
+- **Pure version-validation OCC (no locks)** — not how Orleans achieves isolation (a parity gap) and
+  degrades to high aborts under contention without the timestamp-ordered wound direction. Rejected.
+- **Central-coordinator 2PC** — a standalone TM is a bottleneck and SPOF; Orleans co-locates it on a
+  participant. Rejected.
+- **Deterministic (Snapper-style)** — higher throughput under contention but needs pre-declared access
+  sets and a batching layer; a larger departure, could layer on later behind the same facet.
+- **Sagas / single-grain only** — eventual not ACID / insufficient for the defining multi-grain feature.
 
-## Implementation slices
-
-1. **Transaction context + boundaries.** `TransactionOption` on method options; the TA assigns id +
-   `CausalClock` timestamp; the proxy/dispatcher begins/joins a transaction and propagates the context
-   (id, timestamp, access counters) through the request context across silos. An in-memory TA/TM,
-   single silo, no durability. Failing test first: two grains updated in one transaction, an induced
-   failure aborts both (no half-apply).
-2. **Transactional state facet.** `TransactionalState<T>` with versioned state, per-transaction
-   tentative writes, read/write access tracking, and the **wait-die reader-writer lock**;
-   `performUpdate` / `performRead`. Sociable tests over the in-memory path (tentative writes invisible
-   outside the tx; two contending transactions ordered deterministically — the younger dies).
-3. **Optimistic serializable commit.** TM elected from the write participants; one-way prepare +
-   `prepareAndCommit` + prepared/cancel across participants (routed as system extensions over the
-   dispatcher); cascading abort. End-to-end: a transfer across two account grains is atomic,
-   concurrent transfers serialize, and a conflicting transaction aborts.
-4. **Durability + recovery.** Persist committed transactional state and commit records (Redis);
-   resolve in-doubt transactions on restart from the recorded TM; remote participants over the
-   dispatcher. Multi-silo end-to-end: a silo dies mid-commit and the outcome stays consistent.
+Built test-first in four vertical slices (context + boundaries → the wait-die facet → the elected-TM
+serializable commit → durability + in-doubt recovery), each demonstrable before the next.

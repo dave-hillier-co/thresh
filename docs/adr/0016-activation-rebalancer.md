@@ -1,7 +1,7 @@
 # ADR 0016 — Activation rebalancer (adaptive, entropy-minimizing)
 
-- Status: Accepted — in progress (slice 1: the entropy/migration-planning model, this commit; slice 2:
-  worker + load reporting + migrate-random RPC + e2e)
+- Status: Accepted — in progress (slice 1 model + slice 2a mechanism shipped; slice 2b — elected
+  worker + builder + convergence e2e — remains)
 - Context docs: [06 — Grain directory and placement](../06-grain-directory-and-placement.md),
   [13 — Roadmap](../13-roadmap-and-phases.md)
 
@@ -74,24 +74,20 @@ load snapshot and cycle state, decides one of:
 The adaptive scaling and the entropy stop-conditions are the point of the model and are ported
 exactly; only the load metric is simplified.
 
-### Slice 1 (this commit) — the model
+### Slices
 
-`packages/runtime/src/placement/rebalancing/rebalancer-model.ts` implements the math above as a
-**pure function** `planCycle(snapshot, options, state) → { moves, nextState, stop? }`, with
-`shannonEntropy`, `clusterImbalance`, `formSiloPairs`, and `adaptiveScaling` as tested building
-blocks. No cluster, no I/O — fully unit-testable and deterministic, de-risking the wiring slice.
-
-### Slice 2 (next) — wiring
-
-- **Elected single worker.** One silo runs the rebalancer (Orleans hosts it as a `[KeepAlive,
-  Immovable]` singleton system target). Election reuses the existing ring/membership leadership seam.
-- **Load reporting.** The worker needs every silo's activation count; add a cross-silo report (RPC or
-  piggyback on membership) feeding the snapshot.
-- **Migration.** `migrateRandomActivations(targetSilo, count)` — a system RPC asking a silo to migrate
-  `count` of its random activations to `targetSilo`, reusing the live-migration path
-  (`dehydrate` → `system: "migration"` send) with a directed target.
-- **Surface.** `createSilo(...).useActivationRebalancing(options?)`; a `RebalancingReport`
-  (host, status, imbalance, per-silo dispersed/acquired counts); suspend/resume.
+- **Slice 1 (shipped)** — the model as a **pure function**
+  `planCycle(snapshot, options, state) → { moves, nextState, stop? }`
+  (`rebalancer-model.ts`), with `shannonEntropy` / `clusterImbalance` / `formSiloPairs` /
+  `adaptiveScaling` as tested building blocks; no cluster, no I/O.
+- **Slice 2a (shipped)** — the distributed mechanism on `ClusterNode`: a `system: "load"` RPC +
+  `gatherClusterLoad`, `migrateRandomActivations(target, count)` (directed immediate migration reusing
+  the `dehydrate` → `system: "migration"` path, reachable on a peer via a `system: "rebalance"` RPC),
+  and `runRebalanceCycle(state)` that gathers load, runs `planCycle`, and executes the moves.
+- **Slice 2b (remaining)** — an **elected singleton worker** (one silo, via the ring/membership
+  leadership seam, Orleans' `[KeepAlive, Immovable]` system target) driving `runRebalanceCycle` on a
+  timer; `createSilo(...).useActivationRebalancing(options?)`; a `RebalancingReport` + suspend/resume;
+  a convergence e2e.
 
 ## Consequences
 
