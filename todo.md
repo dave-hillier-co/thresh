@@ -259,10 +259,16 @@ order, starting with transactions.
           migrations). Load is a single scalar = activation count (uniform-memory case; we don't gossip
           per-silo memory yet — documented divergence). Pure/deterministic, 16 unit tests incl. a
           full-session convergence simulation.
-    - [ ] Slice 2 — wiring: elected singleton worker (timer-driven sessions/cycles over the model),
-          cross-silo activation-count reporting, a `migrateRandomActivations(target, count)` system RPC
-          reusing live migration, builder `useActivationRebalancing(options?)`, and a multi-silo e2e
-          (a skewed cluster converges toward balance).
+    - [x] Slice 2a — the mechanism: cross-silo activation-count reporting (a `system: "load"` RPC +
+          `gatherClusterLoad` keyed by ring key); `migrateRandomActivations(target, count)` (directed
+          immediate migration of N random live activations, reusing the live-migration path then
+          deactivating locally), reachable on a peer via a `system: "rebalance"` RPC; and
+          `runRebalanceCycle(state)` that gathers load, runs `planCycle`, and executes each move by
+          telling the busier silo to shed to its paired quieter one. Multi-silo test: load gathering,
+          directed migration counts, and a cycle shedding from a [10,2]-skewed pair.
+    - [ ] Slice 2b — automation: an elected singleton worker driving `runRebalanceCycle` on a timer
+          (sessions/cycles, due-time/backoff), builder `useActivationRebalancing(options?)`, a
+          `RebalancingReport` + suspend/resume, and a convergence e2e over a running cluster.
 - [x] Grain-interface versioning — multiple interface versions live at once for heterogeneous rolling
       upgrades, with version-aware placement (Orleans' versioning). [ADR 0014](docs/adr/0014-grain-interface-versioning.md).
   - [x] `GrainInterface.version` (default 1; id stays name-derived) via `defineGrainInterface(name, { version })`;

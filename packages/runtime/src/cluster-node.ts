@@ -71,6 +71,13 @@ import type {
   PlacementStrategy,
 } from "@tsva/runtime/placement/placement-strategy";
 import { filterByVersion } from "@tsva/runtime/placement/version-placement-filter";
+import {
+  DEFAULT_REBALANCER_OPTIONS,
+  planCycle,
+  type CycleState,
+  type RebalancerOptions,
+  type StopReason,
+} from "@tsva/runtime/placement/rebalancing/rebalancer-model";
 import { systemTimeProvider, type TimeProvider } from "@tsva/runtime/time-provider";
 import { TransactionAgent } from "@tsva/runtime/transaction-agent";
 
@@ -738,6 +745,23 @@ export class ClusterNode {
         context,
       );
       if (target === undefined) return false;
+      return await this.migrateActivationTo(activation, target);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Migrate one activation to an explicit `target` silo (bypassing placement):
+   * dehydrate its state on a turn, hand it to the target, and on acceptance drop
+   * the stale cache entry. Used both by idle migration (target chosen by
+   * placement) and by the rebalancer (target chosen to even out load).
+   */
+  private async migrateActivationTo(
+    activation: ActivationData,
+    target: SiloAddress,
+  ): Promise<boolean> {
+    try {
       const bag = await activation.dehydrate();
       const sourceAddr: GrainAddress = {
         grainId: activation.id,
@@ -901,6 +925,14 @@ export class ClusterNode {
       void this.handleManifestRequest(message);
       return;
     }
+    if (message.system === "load") {
+      void this.handleLoadRequest(message);
+      return;
+    }
+    if (message.system === "rebalance") {
+      void this.handleRebalanceRequest(message);
+      return;
+    }
     void this.receiveRequest(message);
   }
 
@@ -976,6 +1008,149 @@ export class ClusterNode {
         this.options.local,
       ),
     );
+  }
+
+  // ── Activation rebalancer (ADR 0016, slice 2) ──────────────────────────────
+
+  /** Ask a peer for its current activation count as a `system: "load"` request. */
+  private async sendLoadQuery(silo: SiloAddress): Promise<number> {
+    const conn = await this.connections.get(silo);
+    const correlationId = nextCorrelationId();
+    const message: Message = {
+      correlationId,
+      direction: "request",
+      system: "load",
+      targetGrain: new GrainId("load", silo.ringKey),
+      sendingSilo: this.options.local,
+      interfaceId: 0,
+      method: "",
+      body: this.serializer.serialize(null),
+    };
+    const pending = this.correlation.register(correlationId, this.callTimeoutMs);
+    conn.send(message);
+    return this.interpretResponse(await pending) as number;
+  }
+
+  private async handleLoadRequest(message: Message): Promise<void> {
+    const replyTo = message.sendingSilo;
+    if (replyTo === undefined) return;
+    await this.reply(
+      replyTo,
+      responseTo(message, "success", this.serializer.serialize(this.catalog.count()), this.options.local),
+    );
+  }
+
+  /**
+   * Per-silo activation counts across the active cluster, keyed by ring key — the
+   * load snapshot the rebalancer's model consumes. The local count is read
+   * directly; peers answer a `load` query (an unreachable peer counts as 0).
+   */
+  async gatherClusterLoad(): Promise<{ counts: Map<string, number>; silos: Map<string, SiloAddress> }> {
+    const active = activeSilos(this.options.membership.current());
+    const counts = new Map<string, number>();
+    const silos = new Map<string, SiloAddress>();
+    await Promise.all(
+      active.map(async (silo) => {
+        const key = silo.ringKey;
+        silos.set(key, silo);
+        const count = silo.equals(this.options.local)
+          ? this.catalog.count()
+          : await this.sendLoadQuery(silo).catch(() => 0);
+        counts.set(key, count);
+      }),
+    );
+    return { counts, silos };
+  }
+
+  /**
+   * Migrate up to `count` of this silo's live activations to `target`, chosen at
+   * random (Orleans `MigrateRandomActivations`). Each is moved with its state and
+   * then deactivated locally; returns how many actually moved. The rebalancer
+   * invokes this on the busier silo of a pair to even out load.
+   */
+  async migrateRandomActivations(target: SiloAddress, count: number): Promise<number> {
+    if (count <= 0 || target.equals(this.options.local)) return 0;
+    const random = this.options.random ?? Math.random;
+    const candidates = this.catalog.liveActivations();
+    // Fisher–Yates over a copy, deterministic under an injected RNG.
+    for (let i = candidates.length - 1; i > 0; i--) {
+      const j = Math.floor(random() * (i + 1));
+      [candidates[i], candidates[j]] = [candidates[j]!, candidates[i]!];
+    }
+    let moved = 0;
+    for (const activation of candidates.slice(0, count)) {
+      const accepted = await this.migrateActivationTo(activation, target);
+      if (accepted) {
+        await activation.deactivate({ code: "migrating", description: "rebalanced to another silo" });
+        moved++;
+      }
+    }
+    return moved;
+  }
+
+  /** Tell `silo` to migrate `count` random activations to `target` (local fast-path or `rebalance` RPC). */
+  private async sendMigrateRandom(
+    silo: SiloAddress,
+    target: SiloAddress,
+    count: number,
+  ): Promise<number> {
+    if (silo.equals(this.options.local)) return this.migrateRandomActivations(target, count);
+    const conn = await this.connections.get(silo);
+    const correlationId = nextCorrelationId();
+    const message: Message = {
+      correlationId,
+      direction: "request",
+      system: "rebalance",
+      targetGrain: new GrainId("rebalance", silo.ringKey),
+      sendingSilo: this.options.local,
+      interfaceId: 0,
+      method: "",
+      body: this.serializer.serialize({ target, count }),
+    };
+    const pending = this.correlation.register(correlationId, this.callTimeoutMs);
+    conn.send(message);
+    return this.interpretResponse(await pending) as number;
+  }
+
+  private async handleRebalanceRequest(message: Message): Promise<void> {
+    const replyTo = message.sendingSilo;
+    if (replyTo === undefined) return;
+    const { target, count } = this.serializer.deserialize<{ target: SiloAddress; count: number }>(
+      message.body,
+    );
+    const moved = await this.migrateRandomActivations(target, count);
+    await this.reply(
+      replyTo,
+      responseTo(message, "success", this.serializer.serialize(moved), this.options.local),
+    );
+  }
+
+  /**
+   * Run one rebalancing cycle: gather the cluster load, ask the model for the
+   * migrations that would lower its entropy imbalance (ADR 0016), and execute
+   * them by telling each busier silo to shed activations to its paired quieter
+   * silo. Returns the model's next state and imbalance plus how many activations
+   * actually moved. The elected worker (slice 2b) drives this on a timer.
+   */
+  async runRebalanceCycle(
+    state: CycleState,
+    options: RebalancerOptions = DEFAULT_REBALANCER_OPTIONS,
+  ): Promise<{ nextState: CycleState; imbalance: number; moved: number; stop?: StopReason }> {
+    const { counts, silos } = await this.gatherClusterLoad();
+    const plan = planCycle(counts, options, state);
+    let moved = 0;
+    for (const move of plan.moves) {
+      const from = silos.get(move.from);
+      const to = silos.get(move.to);
+      if (from === undefined || to === undefined) continue;
+      moved += await this.sendMigrateRandom(from, to, move.count);
+    }
+    return {
+      nextState: plan.nextState,
+      imbalance: plan.imbalance,
+      moved,
+      ...(plan.stop !== undefined ? { stop: plan.stop } : {}),
+    };
   }
 
   private async applyDirectoryOp(

@@ -106,6 +106,13 @@ export class Catalog {
     return n;
   }
 
+  /** Valid (servable) activations — migration candidates for the rebalancer. */
+  liveActivations(): ActivationData[] {
+    const out: ActivationData[] = [];
+    for (const a of this.activations.values()) if (a.state === "valid") out.push(a);
+    return out;
+  }
+
   private create(
     id: GrainId,
     activationId?: string,
