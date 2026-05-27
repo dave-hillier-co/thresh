@@ -69,6 +69,18 @@ importers:
         specifier: workspace:*
         version: link:../../packages/persistence
 
+  examples/broadcast:
+    dependencies:
+      '@tsva/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@tsva/hosting':
+        specifier: workspace:*
+        version: link:../../packages/hosting
+      '@tsva/messaging':
+        specifier: workspace:*
+        version: link:../../packages/messaging
+
   examples/chat:
     dependencies:
       '@tsva/core':

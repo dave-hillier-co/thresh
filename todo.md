@@ -453,3 +453,8 @@ previously had only unit coverage. Outside-in / ATDD: failing example first, the
       activation via directory CAS, and reactivation on a survivor when the hosting silo leaves the
       view. Added builder seams `useMembership(service)` (share one view across in-process silos) and
       `random` (deterministic placement) to `createSilo`.
+- [x] `examples/broadcast` — broadcast-channel pub/sub fan-out ([ADR 0015](docs/adr/0015-broadcast-channels.md)):
+      an alert publisher writes to a region channel `(alerts, region)`; a `RegionMonitor` and an
+      `AuditLog` (two grain types implicitly subscribed to `alerts`, keyed by region) both receive each
+      publish, with key-based isolation (eu alerts never reach us). Functional-first (`defineGrain` +
+      `BROADCAST_CHANNEL_OBSERVER`); runnable via `pnpm --filter @tsva/example-broadcast start`.

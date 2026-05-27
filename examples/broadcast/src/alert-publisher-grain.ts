@@ -1,0 +1,17 @@
+import { defineGrain } from "@tsva/core/define-grain";
+import { type Alert, type IAlertPublisher } from "@tsva/example-broadcast/interfaces";
+
+/**
+ * Publishes an alert to a region's broadcast channel `(alerts, region)`. Every
+ * grain type implicitly subscribed to the `alerts` namespace and keyed by that
+ * region receives it — no subscription bookkeeping, no durable queue (ADR 0015).
+ */
+export const AlertPublisherGrain = defineGrain<IAlertPublisher>("AlertPublisher", (ctx) => ({
+  raise: async (region, text) => {
+    const alert: Alert = { region, text };
+    await ctx.runtime
+      .getBroadcastChannelProvider()
+      .getChannelWriter<Alert>({ namespace: "alerts", key: region })
+      .publish(alert);
+  },
+}));
