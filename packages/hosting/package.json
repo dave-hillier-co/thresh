@@ -10,6 +10,7 @@
     "@tsva/clustering-k8s": "workspace:*",
     "@tsva/core": "workspace:*",
     "@tsva/directory": "workspace:*",
+    "@tsva/durable-jobs": "workspace:*",
     "@tsva/journaling": "workspace:*",
     "@tsva/messaging": "workspace:*",
     "@tsva/observability": "workspace:*",

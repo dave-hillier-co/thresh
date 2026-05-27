@@ -1,6 +1,6 @@
 # ADR 0018 — Durable jobs (sharded, durable, at-least-once scheduled execution)
 
-- Status: Proposed — design only. Slice plan below.
+- Status: Accepted — implemented as `@tsva/durable-jobs` (all four slices). Slice plan below.
 - Context docs: [07 — Persistence](../07-persistence.md),
   [06 — Directory and placement](../06-grain-directory-and-placement.md),
   [13 — Roadmap](../13-roadmap-and-phases.md); [ADR 0005](0005-redis-default-providers.md),

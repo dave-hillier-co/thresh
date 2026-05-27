@@ -194,6 +194,15 @@ importers:
         specifier: workspace:*
         version: link:../core
 
+  packages/durable-jobs:
+    dependencies:
+      '@tsva/core':
+        specifier: workspace:*
+        version: link:../core
+      redis:
+        specifier: ^5.12.1
+        version: 5.12.1(@opentelemetry/api@1.9.1)
+
   packages/hosting:
     dependencies:
       '@tsva/clustering-k8s':
@@ -205,6 +214,9 @@ importers:
       '@tsva/directory':
         specifier: workspace:*
         version: link:../directory
+      '@tsva/durable-jobs':
+        specifier: workspace:*
+        version: link:../durable-jobs
       '@tsva/journaling':
         specifier: workspace:*
         version: link:../journaling

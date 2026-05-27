@@ -4,6 +4,7 @@ import type { GrainTimer } from "./grain-timer";
 import type { GrainKeyFor } from "./key-kinds";
 import type { SiloAddress } from "./silo-address";
 import type { BroadcastChannelProvider } from "./broadcast-channel";
+import type { DurableJob, ScheduleJobRequest } from "./durable-job";
 import type { StreamProvider } from "./stream";
 
 /**
@@ -15,6 +16,14 @@ export interface GrainRuntime {
   registerTimer(callback: () => Promise<void>, due: Duration, period?: Duration): GrainTimer;
   registerReminder(name: string, due: Duration, period: Duration): Promise<void>;
   unregisterReminder(name: string): Promise<void>;
+  /**
+   * Schedule a durable job: one invocation of a target grain's
+   * `DURABLE_JOB_HANDLER` at a due time, made durable, retried and failed-over
+   * (ADR 0018). Returns the durable job; pass it to {@link cancelJob} to cancel.
+   */
+  scheduleJob(request: ScheduleJobRequest): Promise<DurableJob>;
+  /** Best-effort cancel of a scheduled job that has not yet completed. */
+  cancelJob(job: DurableJob): Promise<void>;
   getStreamProvider(name?: string): StreamProvider;
   /** The named broadcast-channel provider (Orleans `IBroadcastChannelProvider`). */
   getBroadcastChannelProvider(name?: string): BroadcastChannelProvider;

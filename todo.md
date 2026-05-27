@@ -22,8 +22,14 @@ examples double as acceptance tests.
       `runRebalanceCycle` (slice 2a) — ship. Remaining: an elected singleton worker driving the cycle on
       a timer (sessions/cycles, due-time/backoff), the `useActivationRebalancing(options?)` builder
       surface, a `RebalancingReport` + suspend/resume, and a convergence e2e over a running cluster.
-- [ ] **Durable jobs** — implement [ADR 0018](docs/adr/0018-durable-jobs.md) (`@tsva/durable-jobs`): a
-      sharded, durable, at-least-once scheduled-execution engine. Design only so far.
+- [x] **Durable jobs** — [ADR 0018](docs/adr/0018-durable-jobs.md) (`@tsva/durable-jobs`): a sharded,
+      durable, at-least-once scheduled-execution engine. Shipped: the pure model (shard-key bucketing,
+      due-time queue, default retry policy, claim budget), the `ShardExecutor` (concurrency limiter,
+      slow-start, overload backoff, `pollAfter` loop, retry), the `LocalDurableJobManager`
+      (membership-reconciled shard ownership, dead-silo adoption, poison protection, ramp-up budget), the
+      `JobShardStore` contract with memory + Redis backings, the `DURABLE_JOB_HANDLER` receiver +
+      `useDurableJobHandler` hook, `runtime.scheduleJob` / `cancelJob`, and
+      `useMemoryDurableJobs()` / `useRedisDurableJobs()` hosting.
 
 ## Beyond parity
 

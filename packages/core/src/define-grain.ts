@@ -10,6 +10,7 @@ import {
   type GrainConstructor,
   type GrainOptions,
 } from "./grain-metadata";
+import { DURABLE_JOB_HANDLER, type DurableJobHandler } from "./durable-job";
 import type { GrainKeyFor } from "./key-kinds";
 import type { PersistentState } from "./persistent-state";
 import { registerPersistentField } from "./persistent-state-metadata";
@@ -140,6 +141,25 @@ export function defineGrain<T extends object>(
     markBroadcastSubscription(FunctionalGrain as GrainConstructor, namespace);
   }
   return FunctionalGrain;
+}
+
+/**
+ * The functional counterpart of exposing a `DURABLE_JOB_HANDLER` member: register
+ * the handler the runtime runs when a durable job targeting this grain fires (ADR
+ * 0018). The job runs as a turn on this activation; resolving the handler means
+ * the job is `Completed` (removed), throwing means `Failed` (the retry policy
+ * decides), and returning `pollAfter(delay)` re-polls under supervision. Handlers
+ * must be idempotent — delivery is at-least-once. Mirrors the symbol-observer
+ * idiom (`BROADCAST_CHANNEL_OBSERVER`).
+ */
+export function useDurableJobHandler(ctx: GrainSetup, handler: DurableJobHandler): void {
+  const instance = instanceOf(ctx);
+  Object.defineProperty(instance, DURABLE_JOB_HANDLER, {
+    value: handler,
+    writable: true,
+    enumerable: false,
+    configurable: true,
+  });
 }
 
 export interface UseReducerStateOptions<TState, TEvent> {

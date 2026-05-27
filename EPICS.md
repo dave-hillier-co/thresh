@@ -43,6 +43,11 @@ runtime). See [`todo.md`](todo.md) for outstanding work, [`docs/`](docs/) for th
 - **Reducer & functional-first authoring** (ADRs [0006](docs/adr/0006-reducer-grains.md)/[0009](docs/adr/0009-functional-grains.md)/[0010](docs/adr/0010-message-dispatch-reducer-grains.md)/[0011](docs/adr/0011-message-dispatch-substrate.md))
   — `defineGrain` + hooks, snapshot reducers, dispatch grains. Every example grain is functional
   (one `@grain()` class kept on purpose as the living interop example).
+- **Durable jobs** ([ADR 0018](docs/adr/0018-durable-jobs.md)) — `@tsva/durable-jobs`: sharded
+  (time-bucketed), durable, at-least-once scheduled grain invocation, with per-silo concurrency control
+  (limiter + slow-start + overload backoff), retry policy, `pollAfter` supervision, and
+  membership-driven shard ownership with dead-silo adoption, poison protection and a claim ramp-up
+  budget. Memory + Redis (Lua-CAS) shard stores; `useDurableJobHandler` + `runtime.scheduleJob`.
 
 ## 🚧 In progress
 
@@ -52,8 +57,6 @@ runtime). See [`todo.md`](todo.md) for outstanding work, [`docs/`](docs/) for th
 
 ## 📐 Designed (not yet implemented)
 
-- **Durable jobs** ([ADR 0018](docs/adr/0018-durable-jobs.md)) — sharded, durable, at-least-once
-  scheduled execution.
 - **Browser state replication** ([ADR 0017](docs/adr/0017-browser-state-replication.md), beyond parity).
 
 ## ⏸ Deferred

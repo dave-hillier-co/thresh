@@ -4,6 +4,7 @@ import type { GrainKey } from "@tsva/core/grain-key";
 import type { GrainRuntime } from "@tsva/core/grain-runtime";
 import type { GrainTimer } from "@tsva/core/grain-timer";
 import type { ReminderRegistry } from "@tsva/core/reminder";
+import type { DurableJob, DurableJobScheduler, ScheduleJobRequest } from "@tsva/core/durable-job";
 import type { SiloAddress } from "@tsva/core/silo-address";
 import type { BroadcastChannelProvider } from "@tsva/core/broadcast-channel";
 import { isActivationBound, type StreamProvider } from "@tsva/core/stream";
@@ -15,6 +16,7 @@ export interface GrainRuntimeServices {
   reminders?: () => ReminderRegistry | undefined;
   streams?: (name?: string) => StreamProvider | undefined;
   broadcastChannels?: (name?: string) => BroadcastChannelProvider | undefined;
+  durableJobs?: () => DurableJobScheduler | undefined;
 }
 
 /** Per-activation `GrainRuntime`, reached by a grain through `this.runtime`. */
@@ -39,6 +41,14 @@ export class GrainRuntimeImpl implements GrainRuntime {
 
   unregisterReminder(name: string): Promise<void> {
     return this.requireReminders().unregister(this.activation.id, name);
+  }
+
+  scheduleJob(request: ScheduleJobRequest): Promise<DurableJob> {
+    return this.requireDurableJobs().scheduleJob(request);
+  }
+
+  cancelJob(job: DurableJob): Promise<void> {
+    return this.requireDurableJobs().cancelJob(job);
   }
 
   getStreamProvider(name?: string): StreamProvider {
@@ -82,5 +92,11 @@ export class GrainRuntimeImpl implements GrainRuntime {
     const registry = this.services.reminders?.();
     if (registry === undefined) throw new Error("reminders are not configured on this silo");
     return registry;
+  }
+
+  private requireDurableJobs(): DurableJobScheduler {
+    const scheduler = this.services.durableJobs?.();
+    if (scheduler === undefined) throw new Error("durable jobs are not configured on this silo");
+    return scheduler;
   }
 }
