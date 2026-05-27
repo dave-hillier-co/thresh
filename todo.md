@@ -17,11 +17,11 @@ examples double as acceptance tests.
 
 ## Remaining
 
-- [ ] **Activation rebalancer — slice 2b** ([ADR 0016](docs/adr/0016-activation-rebalancer.md)). The
-      model (slice 1) and the distributed mechanism — load gathering, `migrateRandomActivations`,
-      `runRebalanceCycle` (slice 2a) — ship. Remaining: an elected singleton worker driving the cycle on
-      a timer (sessions/cycles, due-time/backoff), the `useActivationRebalancing(options?)` builder
-      surface, a `RebalancingReport` + suspend/resume, and a convergence e2e over a running cluster.
+- [x] **Activation rebalancer** ([ADR 0016](docs/adr/0016-activation-rebalancer.md)) — done. The model
+      (slice 1), the distributed mechanism (slice 2a), and the elected singleton worker driving the
+      cycle on a timer (sessions/cycles, completion cool-down + exponential stagnation backoff), the
+      `useActivationRebalancing(options?)` builder surface, a `RebalancingReport` + suspend/resume, and
+      a convergence e2e over a running cluster (slice 2b) all ship.
 - [ ] **Durable jobs** — implement [ADR 0018](docs/adr/0018-durable-jobs.md) (`@tsva/durable-jobs`): a
       sharded, durable, at-least-once scheduled-execution engine. Design only so far.
 

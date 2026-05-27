@@ -1,7 +1,7 @@
 # ADR 0016 — Activation rebalancer (adaptive, entropy-minimizing)
 
-- Status: Accepted — in progress (slice 1 model + slice 2a mechanism shipped; slice 2b — elected
-  worker + builder + convergence e2e — remains)
+- Status: Accepted — implemented (slice 1 model + slice 2a mechanism + slice 2b elected worker +
+  builder + `RebalancingReport` + convergence e2e all shipped)
 - Context docs: [06 — Grain directory and placement](../06-grain-directory-and-placement.md),
   [13 — Roadmap](../13-roadmap-and-phases.md)
 
@@ -84,10 +84,12 @@ exactly; only the load metric is simplified.
   `gatherClusterLoad`, `migrateRandomActivations(target, count)` (directed immediate migration reusing
   the `dehydrate` → `system: "migration"` path, reachable on a peer via a `system: "rebalance"` RPC),
   and `runRebalanceCycle(state)` that gathers load, runs `planCycle`, and executes the moves.
-- **Slice 2b (remaining)** — an **elected singleton worker** (one silo, via the ring/membership
-  leadership seam, Orleans' `[KeepAlive, Immovable]` system target) driving `runRebalanceCycle` on a
-  timer; `createSilo(...).useActivationRebalancing(options?)`; a `RebalancingReport` + suspend/resume;
-  a convergence e2e.
+- **Slice 2b (shipped)** — an **elected singleton worker** (`ActivationRebalancerWorker`; one silo,
+  elected deterministically as the lowest active ring key from `MembershipService`, Orleans'
+  `[KeepAlive, Immovable]` system target) driving `runRebalanceCycle` on a self-rescheduling timer,
+  threading `CycleState`, cooling down one period on a completed session and backing off exponentially
+  on a stagnated one; `createSilo(...).useActivationRebalancing(options?)` wires and starts/stops it
+  with the host; a `RebalancingReport` + `suspend`/`resume`; a multi-silo convergence e2e.
 
 ## Consequences
 

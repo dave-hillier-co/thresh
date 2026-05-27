@@ -43,12 +43,11 @@ runtime). See [`todo.md`](todo.md) for outstanding work, [`docs/`](docs/) for th
 - **Reducer & functional-first authoring** (ADRs [0006](docs/adr/0006-reducer-grains.md)/[0009](docs/adr/0009-functional-grains.md)/[0010](docs/adr/0010-message-dispatch-reducer-grains.md)/[0011](docs/adr/0011-message-dispatch-substrate.md))
   — `defineGrain` + hooks, snapshot reducers, dispatch grains. Every example grain is functional
   (one `@grain()` class kept on purpose as the living interop example).
-
-## 🚧 In progress
-
-- **Activation rebalancer** ([ADR 0016](docs/adr/0016-activation-rebalancer.md)) — the entropy model
-  (slice 1) and the distributed mechanism (load gathering + `migrateRandomActivations` +
-  `runRebalanceCycle`, slice 2a) ship; the elected worker + builder + convergence e2e (slice 2b) remain.
+- **Activation rebalancer** ([ADR 0016](docs/adr/0016-activation-rebalancer.md)) — the adaptive,
+  entropy-minimizing model (slice 1), the distributed mechanism (load gathering +
+  `migrateRandomActivations` + `runRebalanceCycle`, slice 2a), and the elected singleton worker +
+  `useActivationRebalancing(options?)` builder surface + `RebalancingReport` + convergence e2e
+  (slice 2b) all ship; the cluster self-levels skewed load toward balance.
 
 ## 📐 Designed (not yet implemented)
 
