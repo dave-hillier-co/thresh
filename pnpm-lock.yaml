@@ -135,6 +135,21 @@ importers:
         specifier: workspace:*
         version: link:../../packages/messaging
 
+  examples/migration:
+    dependencies:
+      '@tsva/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@tsva/hosting':
+        specifier: workspace:*
+        version: link:../../packages/hosting
+      '@tsva/messaging':
+        specifier: workspace:*
+        version: link:../../packages/messaging
+      '@tsva/persistence':
+        specifier: workspace:*
+        version: link:../../packages/persistence
+
   examples/thermostat:
     dependencies:
       '@tsva/core':
