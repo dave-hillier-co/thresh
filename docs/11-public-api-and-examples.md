@@ -1,351 +1,181 @@
 # 11 — Public API and examples
 
-This document collects the developer-facing surface in one place and shows complete, worked
-examples. Every symbol used here is defined in the deep-dive documents:
-[02 actor model](02-actor-model.md), [07 persistence](07-persistence.md),
+The developer-facing surface in one place, with worked examples. Symbols are defined in the deep-dive
+docs: [02 actor model](02-actor-model.md), [07 persistence](07-persistence.md),
 [08 timers/reminders](08-timers-and-reminders.md), [09 streams](09-event-streams.md).
 
-> Orleans references: `Orleans.Core.Abstractions/Core/Grain.cs`,
-> `Orleans.Core.Abstractions/Core/IGrainFactory.cs`,
-> `Orleans.Core.Abstractions/Runtime/IGrainRuntime.cs`,
-> `Orleans.Sdk` (the grain/attribute surface), `Orleans.Server` (the silo builder).
+> Orleans references: `Orleans.Core.Abstractions/Core/Grain.cs`, `.../IGrainFactory.cs`,
+> `.../IGrainRuntime.cs`, `Orleans.Sdk`, `Orleans.Server`.
 
-## API surface
+## Declaring grains
 
-### Declaring grains
-
-Grains are authored functionally by default (02, [ADR 0009](adr/0009-functional-grains.md)):
+Grains are authored functionally by default ([ADR 0009](adr/0009-functional-grains.md)): a factory
+closure runs once per activation and returns the grain's methods plus optional lifecycle hooks. Facet
+hooks read the `ctx`.
 
 ```ts
-// A factory closure that runs once per activation and returns the grain's
-// methods plus optional onActivate / onDeactivate hooks.
-function defineGrain<T>(
-  name: string,
-  factory: (ctx: GrainSetup) => T & Partial<GrainLifecycle>,
-  options?: GrainOptions & { reentrant?: boolean },   // reentrant = full interleaving
-): GrainConstructor;
-
-// The identity + services handed to the factory (the ctx the facet hooks read).
-interface GrainSetup {
-  readonly id: GrainId;
-  readonly runtime: GrainRuntime;
-  getGrain<T>(def: GrainInterface<T>, key: GrainKey): T;
-}
-
-// Facet hooks, read off the setup ctx (07).
-usePersistentState<T>(ctx, name, opts?): PersistentState<T>;
-useReducerState<S, E>(ctx, name, { initial, reduce }): ReducerState<S, E>;
-
-// Zero-boilerplate single-dispatch reducer grain (ADR 0010): the whole surface is
-// dispatch(action) + query(); cross-grain work is returned as effects, run after the fold.
-function defineReducerGrain<S, A>(name, { initial, reduce }): ReducerGrain<S, A>;
-
-interface GrainOptions {
-  placement?: "random" | "preferLocal" | "activationCount";
-  stateless?: boolean;                // stateless-worker grain (06)
-  collectionAgeSeconds?: number;      // idle deactivation threshold
-}
+const CounterGrain = defineGrain<ICounter>(
+  "Counter",
+  (ctx) => {
+    const state = usePersistentState<CounterState>(ctx, "counter", { defaultValue: () => ({ n: 0 }) });
+    return {
+      increment: async () => { state.value.n++; await state.write(); return state.value.n; },
+      get: async () => state.value.n,
+    };
+  },
+  { reentrant: false }, // GrainOptions: placement, stateless, collectionAgeSeconds, …
+);
 ```
 
-#### Class + decorators (interop)
+Hooks: `usePersistentState(ctx, name, { defaultValue })` (07), `useReducerState(ctx, name, { initial,
+reduce })` (folds events into a persisted snapshot; [ADR 0006](adr/0006-reducer-grains.md)).
+`defineReducerGrain(name, { initial, reduce })` is the zero-boilerplate single-dispatch form whose
+whole surface is `dispatch(action)` + `query()`, with cross-grain work returned as effects
+([ADR 0010](adr/0010-message-dispatch-reducer-grains.md)).
 
-`defineGrain` is a shell over a `Grain` base class and field decorators; that form stays supported for
-interop or subclassing (02):
+`defineGrain` is a shell over a `Grain` base class with field decorators (`@grain`, `@reentrant`,
+`@persistentState`, `@reducerState`, `@serializable`, `@implicitStreamSubscription`,
+`@implicitChannelSubscription`); that class form stays supported for interop and subclassing (02).
+
+Key kinds are marker interfaces: `GrainWithStringKey` / `GrainWithIntegerKey` / `GrainWithGuidKey` (02).
+
+## Defining an interface
+
+A compile-time view — the TypeScript type plus any non-default per-method options. Calls dispatch by
+name; there is no method table ([ADR 0011](adr/0011-message-dispatch-substrate.md)).
 
 ```ts
-abstract class Grain {
-  protected readonly context: GrainContext;
-  protected get id(): GrainId;
-  protected get runtime(): GrainRuntime;
-  protected getGrain<T>(def: GrainInterface<T>, key: GrainKey): T;
-  onActivate(reason: ActivationReason): Promise<void>;
-  onDeactivate(reason: DeactivationReason): Promise<void>;
-}
-
-@grain(options?: GrainOptions)            // register a class implementation
-@reentrant()                              // class-level full reentrancy
-@persistentState(name, opts?)             // the facet usePersistentState wraps (07)
-@reducerState(name, { initial, reduce })  // the facet useReducerState wraps (ADR 0006)
-@serializable(opts?)                      // register a wire/state type (04)
+const ICounter = defineGrainInterface<ICounter>("ICounter", { options: { get: { readOnly: true } } });
 ```
 
-### Key kinds (02)
+References are obtained as `getGrain(ICounter, key)` rather than Orleans'
+`GetGrain<ICounter>(key)`: TypeScript interfaces are erased at runtime, so the token carries the
+identity and per-method options the runtime needs to route and rehydrate. The `<ICounter>` parameter
+still gives full compile-time type-safety on the proxy — a TypeScript-idiom adaptation, not a loss of
+typing. (For the same reason a grain is registered with the interfaces it serves:
+`registerGrain(CounterGrain, { interfaces: [ICounter] })`.)
+
+## Runtime services available to a grain
+
+`GrainRuntime` (reached as `this.runtime` in a class grain, or `ctx.runtime` in a factory):
+`getGrain`, `registerTimer`, `registerReminder` / `unregisterReminder`, `getStreamProvider`,
+`getBroadcastChannelProvider`, `deactivateOnIdle`, `delayDeactivation`, `migrateOnIdle`. Persistent
+state is acquired through the `usePersistentState` hook / `@persistentState` decorator (injected before
+`onActivate`), not a runtime accessor.
+
+## Hosting a silo
+
+`createSilo({ clusterId, local })` returns a builder; `build()` yields a `SiloHost` whose `start()`
+brings the silo online (flipping readiness) and `stop()` drains it.
 
 ```ts
-interface GrainWithStringKey  { /* key: string */ }
-interface GrainWithIntegerKey { /* key: bigint */ }
-interface GrainWithGuidKey    { /* key: Guid   */ }
+const silo = createSilo({ clusterId: process.env.CLUSTER_ID!, local: siloAddress })
+  .useKubernetesMembership(watch)              // or .useStaticMembership([...]) / .useMembership(shared)
+  .useWebSocketTransport()                     // or .useInProcessTransport(network)
+  .addRedisStorage("default", { url })         // or useMemoryStorage() / addPostgresStorage(name, { connectionString })
+  .useRedisReminders({ url })                  // or useReminders() / usePostgresReminders({ connectionString })
+  .addRedisStreams("default", { url })         // or useMemoryStreams()
+  .useBroadcastChannels()                      // optional: in-cluster pub/sub
+  .registerGrain(ThermostatGrain, { interfaces: [IThermostat, IThermostatControl] })
+  .build();
+
+await silo.start();
 ```
 
-### Defining an interface (02)
+Durable backends are Redis by default; in-memory variants back dev/tests, and Postgres grain storage /
+reminder table also ship (each connects and creates its backing table on `start()`, disconnects on
+`stop()`). `createSilo` also accepts `collectionAgeSeconds` / `collectionIntervalSeconds`,
+`reminderRefreshSeconds`, and `random` (deterministic placement for tests); `useTracing()` /
+`useMetrics()` / `useLogging()` wire observability ([ADR 0013](adr/0013-observability.md)), and
+`useVersioning(...)` enables version-aware placement ([ADR 0014](adr/0014-grain-interface-versioning.md)).
 
-A compile-time view — the TypeScript type plus any non-default per-method options; no method table
-(calls dispatch by name, see [ADR 0011](adr/0011-message-dispatch-substrate.md)):
+## External client
 
-```ts
-const ICounter = defineGrainInterface<ICounter>("ICounter", {
-  options: { get: { readOnly: true } },
-});
-```
-
-This runtime interface token is why grain references are obtained as `getGrain(ICounter, key)` rather
-than Orleans' purely type-parameterised `IGrainFactory.GetGrain<ICounter>(key)`: TypeScript interfaces
-are erased at runtime, so the token carries the identity (and per-method options) the runtime needs to
-route and rehydrate. The `<ICounter>` type parameter still gives full compile-time type-safety on the
-returned proxy — the divergence is a TypeScript-idiom adaptation, not a loss of typing.
-
-### Runtime services available to a grain (03)
-
-```ts
-interface GrainRuntime {
-  getGrain<T>(def: GrainInterface<T>, key: GrainKey): T;
-  getStorage<TState>(name: string): PersistentState<TState>;
-  registerTimer(cb: () => Promise<void>, due: Duration, period?: Duration): GrainTimer;
-  registerReminder(name: string, due: Duration, period: Duration): Promise<void>;
-  unregisterReminder(name: string): Promise<void>;
-  getStreamProvider(name?: string): StreamProvider;
-  deactivateOnIdle(): void;
-  delayDeactivation(by: Duration): void;
-}
-```
-
-### Hosting a silo
-
-```ts
-const silo = createSilo({ clusterId: process.env.CLUSTER_ID! })
-  // membership
-  .useKubernetesMembership()                       // watch endpoints (05); or .useStaticMembership([...]) for local
-  // transport + serialization (04)
-  .useWebSocketTransport({ port: 11111 })
-  .useMessagePackSerialization()
-  // durable backends — Redis by default (07, 08, 09)
-  .addRedisStorage("default", { url: process.env.REDIS_URL! })
-  .useRedisReminders({ url: process.env.REDIS_URL! })
-  .addRedisStreams("default", { url: process.env.REDIS_URL!, partitions: 16 })
-  // health endpoints for probes (10)
-  .useHealthEndpoints({ port: 8080 })
-  // register grain implementations
-  .registerGrains([ThermostatGrain, AggregatorGrain]);
-
-await silo.start();   // joins membership, begins accepting calls
-```
-
-### What is implemented today
-
-The snippets above are the target surface. The shipped surface differs in a few concrete ways:
-
-- `createSilo({ clusterId, local })` takes the silo's own `SiloAddress`; `build()` returns a
-  `SiloHost` whose `start()` brings the silo online (flipping readiness) and `stop()` drains it.
-- Grains are registered with the interfaces they serve —
-  `registerGrain(ThermostatGrain, { interfaces: [IThermostat, IThermostatControl] })` — because
-  TypeScript interfaces are erased at runtime and cannot be reflected.
-- In-memory, Redis and Postgres providers ship. In-memory (dev/tests): `useMemoryStorage()` /
-  `addStorage(name, p)`, `useReminders(table?)`, `useMemoryStreams()`. Durable Redis:
-  `addRedisStorage(name, { url, keyPrefix? })`, `useRedisReminders({ url, keyPrefix? })`, and
-  `addRedisStreams(name, { url, keyPrefix? })`. Durable Postgres:
-  `addPostgresStorage(name, { connectionString, tableName? })` and
-  `usePostgresReminders({ connectionString, tableName? })` — each connects (and creates its backing
-  table on start) when the silo starts and disconnects when it stops (via host `onStart`/`onStop`
-  hooks). Stream partitioning (the `partitions` option above) is future work behind the same builder
-  shape.
-- Persistent state is acquired with `usePersistentState(ctx, name, { defaultValue })` — or the
-  `@persistentState(name, { defaultValue })` decorator it wraps — and injected before `onActivate`;
-  the `getStorage` accessor on `GrainRuntime` is not implemented (the hook/decorator is the supported
-  path). `registerTimer`, `registerReminder` / `unregisterReminder` and `getStreamProvider` (which
-  delivers each `onNext` as a turn) are all wired. A grain type can also be **implicitly subscribed**
-  to a stream namespace — `@implicitStreamSubscription(ns)` (class) or `defineGrain`'s
-  `implicitSubscriptions` (functional) — so a grain is auto-subscribed by key with no `subscribe`
-  call; it exposes its handler under the `STREAM_SUBSCRIPTION_OBSERVER` symbol (Redis streams only;
-  see [09](09-event-streams.md)).
-- Transport is `useInProcessTransport(network)` or `useWebSocketTransport()`; membership is
-  `useStaticMembership([...])`, `useKubernetesMembership(watch)`, or `useMembership(service)` to
-  share one view across several in-process silos.
-- `createSilo` also accepts `collectionAgeSeconds` / `collectionIntervalSeconds` (idle collection runs
-  in the hosted path), `reminderRefreshSeconds` (how often a silo re-reads its reminder ranges), and
-  `random` (deterministic placement for tests).
-- Reducer grains fold events into a snapshot: `useReducerState(ctx, name, { initial, reduce })` (the
-  hook over the `@reducerState` decorator) folds events into a `ReducerState<S, E>` persisted via
-  `GrainStorage`; `defineReducerGrain(name, { initial, reduce })` ([ADR 0010](adr/0010-message-dispatch-reducer-grains.md))
-  wraps that as a `dispatch`/`query` grain with `send` effects. See
-  [ADR 0006](adr/0006-reducer-grains.md).
-- The external client (`@tsva/client`) is implemented for in-process and WebSocket transports
-  (`createClient({ clusterId, local, transport, gateway })`), routing `getGrain` calls through a
-  gateway silo; see "External client" below.
-
-### External client
-
-A client (`@tsva/client`) is not a silo — it hosts no grains — but it uses the same `getGrain` proxy
-mechanism, forwarding every call to a **gateway** silo that routes it to the grain's activation and
-replies. The client is itself reachable (it listens) so responses return over a connection to it.
+A client (`@tsva/client`) hosts no grains but uses the same `getGrain` proxy, forwarding each call to a
+**gateway** silo that routes it and replies (the client listens so responses return to it). It
+discovers gateways through a `GatewayListProvider` (static / membership / URL) and fails over when one
+is unreachable.
 
 ```ts
 const client = createClient({
-  clusterId: process.env.CLUSTER_ID!,
-  local: clientAddress,                         // the client's own reachable address
-  transport: new WebSocketTransport(clusterId), // or an in-process transport for tests
-  gateway: gatewaySiloAddress,                  // the gateway silo (10)
+  clusterId, local: clientAddress,
+  transport: new WebSocketTransport(clusterId),
+  gateways: membershipGatewayProvider(membership), // or staticGatewayProvider([...]) / urlGatewayProvider([...])
 }).registerGrain(ThermostatGrain, { interfaces: [IThermostat] });
-
 await client.connect();
-
-const thermostat = client.getGrain<IThermostat>(IThermostat, deviceId);
-await thermostat.onUpdate(update);
+await client.getGrain(IThermostat, deviceId).onUpdate(update);
 ```
-
-As with a silo, grains are registered with the interfaces they serve so the client can address the
-same activation a silo-side caller would (TypeScript interfaces are erased — see "What is implemented
-today" above). The shipped client takes the gateway's `SiloAddress` and a transport; a higher-level
-gateway-discovery shape (`gateway: { url }`) is future work.
 
 ## Runnable examples
 
-Most examples under [`examples/`](../examples) run end-to-end over in-memory providers and the
-in-process transport, and double as acceptance tests in the suite. Start each with
-`pnpm --filter <name> start`. One — `@tsva/example-k8s-silo` — deploys to a real Kubernetes cluster
-instead (see [10](10-kubernetes-hosting.md)).
+Examples under [`examples/`](../examples) run end-to-end over in-memory providers and the in-process
+transport, double as acceptance tests, and start with `pnpm --filter <name> start`. Grains are
+authored functionally (`defineGrain`); `@tsva/example-thermostat` keeps one `@grain()` class on
+purpose as the living interop example its functional aggregator consumes from.
 
-> Note: the docs above lead with the functional authoring style ([ADR 0009](adr/0009-functional-grains.md)),
-> but only `@tsva/example-bank` has been migrated so far — the other examples are still written as
-> `@grain()` classes (the supported interop form). Migrating them is tracked in
-> [`todo.md`](../todo.md); one class grain is kept deliberately as a living interop example.
+- **greeter** — the smallest grain: `onActivate` before the first call, serialized turns, volatile
+  state resetting on idle reactivation.
+- **chat** — stream fan-out; a member that deactivates resumes its own durable subscription, recovering
+  exactly the messages it missed ([09](09-event-streams.md)).
+- **cluster** — three silos in one process over real WebSocket transport; records route to a single
+  activation, and killing the host silo reactivates the grain on a survivor ([06](06-grain-directory-and-placement.md)).
+- **bank** — reducer grains two ways: a `useReducerState` closure and a `defineReducerGrain` whose
+  transfer credit leg is an Elm-style effect ([ADR 0010](adr/0010-message-dispatch-reducer-grains.md)).
+- **broadcast** — broadcast-channel pub/sub fan-out to implicit subscribers ([ADR 0015](adr/0015-broadcast-channels.md)).
+- **migration** — live activation move carrying even unflushed state to another silo.
+- **thermostat** — the Orleans README example (below).
+- **k8s-silo** — a silo on **Kubernetes** with an opt-in (`K8S_E2E=1`) end-to-end test asserting the
+  Phase-3 criteria ([10](10-kubernetes-hosting.md)).
 
-- **`@tsva/example-greeter`** — the smallest grain. Demonstrates the core actor guarantees with no
-  providers: `onActivate` before the first call, serialized turns, and volatile state resetting when
-  an idle grain is collected and reactivated.
-- **`@tsva/example-chat`** — stream fan-out. A room publishes to one stream; many member grains each
-  receive every message as a turn on their own activation. A member that deactivates while idle
-  resumes its own durable subscription on reactivation, recovering exactly the messages it missed
-  (see consumer-scoped subscriptions in [09](09-event-streams.md)).
-- **`@tsva/example-cluster`** — three silos in one process over the **real WebSocket transport**,
-  sharing one membership view. Records issued from any silo route to a single leaderboard activation
-  (directory compare-and-set); killing the hosting silo and dropping it from the view reactivates the
-  grain on a surviving silo on the next call (see [06](06-grain-directory-and-placement.md)). Uses
-  `createSilo(...).useMembership(shared).useWebSocketTransport()`.
-- **`@tsva/example-bank`** — reducer grains in the functional style, shown two ways: a multi-method
-  `defineGrain` closure using `useReducerState`, and a `defineReducerGrain` whose whole surface is
-  `dispatch(action)` + `query()` with the transfer's credit leg returned as an Elm-style effect
-  ([ADR 0010](adr/0010-message-dispatch-reducer-grains.md)). Both fold a pure reducer into immutable
-  state; the folded snapshot persists via `GrainStorage`, surviving a silo restart; the events are
-  transient.
-- **`@tsva/example-thermostat`** — the full Orleans README example, below.
-- **`@tsva/example-k8s-silo`** — a silo on **Kubernetes**: membership from the headless Service's
-  EndpointSlices, WebSocket transport over per-pod IPs, durable state in an in-cluster Redis, health
-  probes, and a small HTTP API over a counter grain. Its opt-in end-to-end test (`K8S_E2E=1`) builds
-  the image, deploys the `StatefulSet`, and asserts the Phase-3 exit criteria — cluster formation,
-  single-activation routing across pods, pod-kill reactivation on a survivor, and rolling-update
-  state survival. See [10](10-kubernetes-hosting.md).
+## Worked example: IoT thermostat
 
-## Worked example: IoT thermostat (the Orleans README example, in TypeScript)
-
-### Interfaces
+Two interfaces served by one grain, persistent state, a stream, and a durable reminder.
 
 ```ts
 interface IThermostat extends GrainWithStringKey {
   onUpdate(status: ThermostatStatus): Promise<Command[]>;
 }
-
 interface IThermostatControl extends GrainWithStringKey {
   getStatus(): Promise<ThermostatStatus>;
   updateConfiguration(config: ThermostatConfiguration): Promise<void>;
 }
-
 const IThermostat = defineGrainInterface<IThermostat>("IThermostat");
 const IThermostatControl = defineGrainInterface<IThermostatControl>("IThermostatControl", {
   options: { getStatus: { readOnly: true } },
 });
-```
-
-### Implementation (persistent state + a stream + a reminder)
-
-```ts
-@serializable()
-class ThermostatState {
-  status: ThermostatStatus = ThermostatStatus.unknown();
-  pendingCommands: Command[] = [];
-  config: ThermostatConfiguration = ThermostatConfiguration.default();
-}
 
 const ThermostatGrain = defineGrain<IThermostat & IThermostatControl>("Thermostat", (ctx) => {
   const state = usePersistentState<ThermostatState>(ctx, "thermostat", {
     defaultValue: () => new ThermostatState(),
   });
-
-  // IThermostat — called by the device frontend
-  const onUpdate = async (status: ThermostatStatus): Promise<Command[]> => {
-    state.value.status = status;
-    const commands = state.value.pendingCommands;
-    state.value.pendingCommands = [];
-    await state.write();
-
-    // publish telemetry for downstream aggregation (09)
-    const stream = ctx.runtime.getStreamProvider().getStream<ThermostatStatus>("telemetry", ctx.id.key);
-    await stream.publish(status);
-
-    return commands;
-  };
-
-  // IThermostatControl — called by control systems
-  const getStatus = async (): Promise<ThermostatStatus> =>
-    state.value.status; // read-only, served from memory
-
-  const updateConfiguration = async (config: ThermostatConfiguration): Promise<void> => {
-    state.value.config = config;
-    state.value.pendingCommands.push(Command.configUpdate(config));
-    await state.write();
-  };
-
   return {
-    onUpdate,
-    getStatus,
-    updateConfiguration,
-    // a durable daily self-check that fires even if idle/restarted (08)
+    onUpdate: async (status) => {
+      state.value.status = status;
+      const commands = state.value.pendingCommands;
+      state.value.pendingCommands = [];
+      await state.write();
+      await ctx.runtime.getStreamProvider().getStream<ThermostatStatus>("telemetry", ctx.id.key).publish(status);
+      return commands;
+    },
+    getStatus: async () => state.value.status, // read-only, served from memory
+    updateConfiguration: async (config) => {
+      state.value.config = config;
+      state.value.pendingCommands.push(Command.configUpdate(config));
+      await state.write();
+    },
     onActivate: async () => {
       await ctx.runtime.registerReminder("self-check", { hours: 24 }, { hours: 24 });
     },
-    // Remindable (08): the runtime reactivates the grain and delivers this as a turn
-    receiveReminder: async (name: string, _tick: TickStatus) => {
+    receiveReminder: async (name) => {
       if (name === "self-check") state.value.pendingCommands.push(Command.selfTest());
     },
   };
 });
 ```
 
-Two interfaces served by one grain, exactly as in the Orleans README. The grain is single-threaded
-(no locks around `state`), durably persisted via Redis, publishes to a stream, and schedules durable
-work via a reminder.
-
-### Consuming the telemetry stream
-
-```ts
-const FleetAggregatorGrain = defineGrain<IFleetAggregator>("FleetAggregator", (ctx) => {
-  const handler = (): StreamHandler<ThermostatStatus> => ({
-    onNext: async (status) => { /* update rolling aggregates */ },
-  });
-
-  return {
-    onActivate: async () => {
-      const stream = ctx.runtime
-        .getStreamProvider()
-        .getStream<ThermostatStatus>("telemetry", ctx.id.key);
-      const existing = await stream.getSubscriptions();
-      if (existing.length > 0) await existing[0].resume(handler());
-      else await stream.subscribe(handler());
-    },
-    // ... aggregate query methods ...
-  };
-});
-```
-
-### Calling from a web frontend
-
-```ts
-// in an HTTP handler
-app.post("/devices/:id/update", async (req, res) => {
-  const thermostat = client.getGrain<IThermostat>(IThermostat, req.params.id);
-  const commands = await thermostat.onUpdate(req.body);
-  res.json(commands);
-});
-```
+The grain is single-threaded (no locks around `state`), durably persisted, publishes telemetry, and
+schedules durable work via a reminder. A consumer subscribes to the `telemetry` stream in its
+`onActivate` (resuming an existing subscription via `getSubscriptions`/`resume`, else `subscribe`).
 
 ## Error handling at call sites
 
@@ -354,7 +184,7 @@ try {
   await thermostat.onUpdate(update);
 } catch (e) {
   if (e instanceof RejectionError && e.kind === "siloDraining") {
-    // transient: the runtime will re-resolve on retry
+    // transient: the runtime re-resolves on retry
   } else if (e instanceof InconsistentStateError) {
     // optimistic-concurrency conflict (07): re-read and retry
   } else {
