@@ -7,6 +7,7 @@ import type { GrainMetadata } from "@tsva/core/grain-metadata";
 import type { GrainType } from "@tsva/core/grain-type";
 import type { DeactivationReason } from "@tsva/core/reasons";
 import type { ReminderRegistry } from "@tsva/core/reminder";
+import type { DurableJobScheduler } from "@tsva/core/durable-job";
 import type { StreamProvider } from "@tsva/core/stream";
 import { ActivationData } from "@tsva/runtime/activation";
 import type { GrainFactory } from "@tsva/runtime/grain-factory";
@@ -39,6 +40,8 @@ export interface CatalogOptions {
   migrate?: (activation: ActivationData) => Promise<boolean>;
   /** Resolves the reminder registry a grain's `registerReminder` delegates to. */
   reminderRegistry?: () => ReminderRegistry | undefined;
+  /** Resolves the durable-job scheduler a grain's `scheduleJob` delegates to. */
+  durableJobScheduler?: () => DurableJobScheduler | undefined;
   /** Resolves the stream provider a grain's `getStreamProvider` returns. */
   streamProvider?: (name?: string) => StreamProvider | undefined;
   /** Resolves the broadcast-channel provider a grain's `getBroadcastChannelProvider` returns. */
@@ -138,6 +141,9 @@ export class Catalog {
         : {}),
       ...(this.options.broadcastProvider !== undefined
         ? { broadcastChannels: this.options.broadcastProvider }
+        : {}),
+      ...(this.options.durableJobScheduler !== undefined
+        ? { durableJobs: this.options.durableJobScheduler }
         : {}),
     });
     const instance = new reg.ctor();

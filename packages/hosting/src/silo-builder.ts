@@ -43,6 +43,15 @@ import { RedisJournalStorage } from "@tsva/journaling/redis-journal-storage";
 import { JournalStorageRegistry } from "@tsva/journaling/journal-storage-registry";
 import { bindDurableStates } from "@tsva/journaling/durable-state-activator";
 import type { StreamProvider } from "@tsva/core/stream";
+import type { DurableJobsOptions } from "@tsva/core/durable-job";
+import { activeSilos } from "@tsva/core/membership";
+import {
+  LocalDurableJobManager,
+  resolveOptions as resolveDurableJobOptions,
+} from "@tsva/durable-jobs/local-durable-job-manager";
+import type { JobShardStore } from "@tsva/durable-jobs/job-shard-store";
+import { MemoryJobShardStore } from "@tsva/durable-jobs/memory-job-shard-store";
+import { RedisJobShardStore } from "@tsva/durable-jobs/redis-job-shard-store";
 import { LocalReminderService } from "@tsva/reminders/local-reminder-service";
 import { MemoryReminderTable } from "@tsva/reminders/memory-reminder-table";
 import { PostgresReminderTable } from "@tsva/reminders/postgres-reminder-table";
@@ -93,6 +102,8 @@ export class SiloBuilder {
   private transactionalStorage: TransactionalStorageRegistry | undefined;
   private journalStorage: JournalStorageRegistry | undefined;
   private reminderTable: ReminderTable | undefined;
+  private jobShardStore: JobShardStore | undefined;
+  private durableJobsOptions: DurableJobsOptions = {};
   private rebalancing:
     | { options: RebalancerOptions; sessionCyclePeriodMs: number }
     | undefined;
@@ -157,6 +168,47 @@ export class SiloBuilder {
       await pool.end();
     });
     this.reminderTable = table;
+    return this;
+  }
+
+  /**
+   * Enable durable jobs (ADR 0018) backed by an in-memory shard store (dev/test).
+   * A single store instance shared across silo restarts stands in for a durable
+   * backend. `options` mirrors Orleans `DurableJobsOptions`.
+   */
+  useMemoryDurableJobs(
+    store: JobShardStore = new MemoryJobShardStore(),
+    options: DurableJobsOptions = {},
+  ): this {
+    this.jobShardStore = store;
+    this.durableJobsOptions = options;
+    return this;
+  }
+
+  /**
+   * Enable durable jobs (ADR 0018) backed by Redis (the default store). The client
+   * connects when the silo starts and disconnects when it stops; `keyPrefix`
+   * namespaces keys (defaults to `"tsva"`). `options` mirrors Orleans
+   * `DurableJobsOptions`.
+   */
+  useRedisDurableJobs(options: {
+    url: string;
+    keyPrefix?: string;
+    jobs?: DurableJobsOptions;
+  }): this {
+    const client = createClient({ url: options.url });
+    client.on("error", () => {});
+    this.starters.push(async () => {
+      await client.connect();
+    });
+    this.closers.push(async () => {
+      await client.close();
+    });
+    this.jobShardStore = new RedisJobShardStore(
+      client,
+      options.keyPrefix !== undefined ? { keyPrefix: options.keyPrefix } : {},
+    );
+    this.durableJobsOptions = options.jobs ?? {};
     return this;
   }
 
@@ -517,6 +569,8 @@ export class SiloBuilder {
     const snapshotThreshold = this.config.snapshotThreshold;
     const time = this.config.time;
     let reminderService: LocalReminderService | undefined;
+    let jobManager: LocalDurableJobManager | undefined;
+    const membership = this.membership;
 
     const node = new ClusterNode({
       local: this.config.local,
@@ -572,6 +626,7 @@ export class SiloBuilder {
         );
       },
       ...(this.reminderTable !== undefined ? { reminderRegistry: () => reminderService } : {}),
+      ...(this.jobShardStore !== undefined ? { durableJobScheduler: () => jobManager } : {}),
       ...(this.streamProviders.size > 0
         ? {
             streamProvider: (name?: string) =>
@@ -621,6 +676,33 @@ export class SiloBuilder {
     const onOwnershipChange: Array<
       (ranges: ReadonlyArray<readonly [number, number]>) => Promise<void>
     > = [];
+
+    // Durable jobs (ADR 0018): the per-silo manager runs the executors for the
+    // time-bucketed shards this silo owns, delivering each due job as a turn on
+    // its target through the node. Ownership is membership-driven (not hash-range),
+    // so the ownership hook recomputes the active set on start and every view
+    // change and reconciles shard claims/adoptions/drops.
+    if (this.jobShardStore !== undefined) {
+      jobManager = new LocalDurableJobManager(
+        this.jobShardStore,
+        time ?? systemTimeProvider,
+        (job) => node.deliverDurableJob(job),
+        resolveDurableJobOptions(this.durableJobsOptions),
+        {
+          localRingKey: this.config.local.ringKey,
+          activeRingKeys: activeSilos(membership.current()).map((s) => s.ringKey),
+        },
+      );
+      const manager = jobManager;
+      onOwnershipChange.push(async () => {
+        await manager.refreshOwnership({
+          localRingKey: this.config.local.ringKey,
+          activeRingKeys: activeSilos(membership.current()).map((s) => s.ringKey),
+        });
+      });
+      // Graceful drain releases this silo's shards so a successor can claim them.
+      this.closers.push(async () => manager.stop());
+    }
     for (const provider of this.pullingStreams) {
       provider.setDeliver((grainId, streamKey, event, token) =>
         node.deliverStreamEvent(grainId, streamKey, event, token),

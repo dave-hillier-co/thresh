@@ -33,12 +33,12 @@ directory range handoff, placement filters, broadcast channels ([ADR 0015](adr/0
 grain call filters ([ADR 0012](adr/0012-grain-call-filters.md)), observability
 ([ADR 0013](adr/0013-observability.md)), durable journaling
 ([ADR 0019](adr/0019-durable-journaling.md)), the adaptive activation rebalancer
-([ADR 0016](adr/0016-activation-rebalancer.md)), and the external client with gateway discovery + failover.
+([ADR 0016](adr/0016-activation-rebalancer.md)), durable jobs ([ADR 0018](adr/0018-durable-jobs.md)),
+and the external client with gateway discovery + failover.
 
 ## Remaining for parity
 
-- **Durable jobs** ([ADR 0018](adr/0018-durable-jobs.md)) — a sharded, durable, at-least-once
-  scheduled-execution engine (`@tsva/durable-jobs`); designed, not yet implemented.
+Orleans-10 parity is complete — all of the above ship.
 
 ## Deferred (not parity gaps)
 

@@ -17,13 +17,9 @@ examples double as acceptance tests.
 
 ## Remaining
 
-- [x] **Activation rebalancer** ([ADR 0016](docs/adr/0016-activation-rebalancer.md)) — done. The model
-      (slice 1), the distributed mechanism (slice 2a), and the elected singleton worker driving the
-      cycle on a timer (sessions/cycles, completion cool-down + exponential stagnation backoff), the
-      `useActivationRebalancing(options?)` builder surface, a `RebalancingReport` + suspend/resume, and
-      a convergence e2e over a running cluster (slice 2b) all ship.
-- [ ] **Durable jobs** — implement [ADR 0018](docs/adr/0018-durable-jobs.md) (`@tsva/durable-jobs`): a
-      sharded, durable, at-least-once scheduled-execution engine. Design only so far.
+Nothing outstanding for Orleans-10 parity: the **activation rebalancer**
+([ADR 0016](docs/adr/0016-activation-rebalancer.md)) and **durable jobs**
+([ADR 0018](docs/adr/0018-durable-jobs.md)) both ship — see [`EPICS.md`](EPICS.md) for the board.
 
 ## Beyond parity
 

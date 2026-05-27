@@ -5,6 +5,11 @@ import {
   type BroadcastChannelHandler,
 } from "@tsva/core/broadcast-channel";
 import type { Duration } from "@tsva/core/duration";
+import {
+  DurableJobConsumerInterface,
+  durableJobHandler,
+  type JobRunContext,
+} from "@tsva/core/durable-job";
 import { GrainCallError, RejectionError } from "@tsva/core/errors";
 import type { Grain } from "@tsva/core/grain";
 import type { GrainContext } from "@tsva/core/grain-context";
@@ -293,6 +298,19 @@ export class ActivationData implements GrainContext {
       const handler = this.broadcastHandlerFor(channelKey);
       if (handler !== undefined) await handler.onPublished(item);
       return undefined;
+    }
+    // Durable-job delivery is a system extension (ADR 0018): run one attempt of
+    // the job on the grain's `DURABLE_JOB_HANDLER`, as a turn here. A grain with
+    // no handler throws, which the executor catches as `Failed` (the retry policy
+    // then drops it) — rather than treating a missing handler as completion, and
+    // without putting a non-serializable Error object in the cross-silo result.
+    if (req.interfaceId === DurableJobConsumerInterface.id) {
+      const [job] = req.args as [JobRunContext];
+      const handler = durableJobHandler(this.instance);
+      if (handler === undefined) {
+        throw new GrainCallError(`grain ${this.id.toString()} has no durable job handler`);
+      }
+      return await handler(job);
     }
     // Transaction-resource extension: drive a named transactional state's
     // prepare/commit/abort for the agent on another silo, found by state name.

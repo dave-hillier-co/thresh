@@ -28,6 +28,12 @@ import { Guid } from "@tsva/core/guid";
 import type { GrainReferenceIdentity } from "@tsva/core/grain-reference";
 import { RemindableInterface, type ReminderRegistry, type TickStatus } from "@tsva/core/reminder";
 import {
+  DurableJobConsumerInterface,
+  type DurableJobRunResult,
+  type DurableJobScheduler,
+  type JobRunContext,
+} from "@tsva/core/durable-job";
+import {
   BroadcastConsumerInterface,
   channelKey,
   type BroadcastChannelProvider,
@@ -105,6 +111,8 @@ export interface ClusterNodeOptions {
   ) => Promise<void>;
   /** Resolves the reminder registry a grain's `registerReminder` delegates to. */
   reminderRegistry?: () => ReminderRegistry | undefined;
+  /** Resolves the durable-job scheduler a grain's `scheduleJob` delegates to (ADR 0018). */
+  durableJobScheduler?: () => DurableJobScheduler | undefined;
   /** Resolves the stream provider a grain's `getStreamProvider` returns. */
   streamProvider?: (name?: string) => StreamProvider | undefined;
   /**
@@ -270,6 +278,9 @@ export class ClusterNode {
       ...(options.reminderRegistry !== undefined
         ? { reminderRegistry: options.reminderRegistry }
         : {}),
+      ...(options.durableJobScheduler !== undefined
+        ? { durableJobScheduler: options.durableJobScheduler }
+        : {}),
       ...(options.streamProvider !== undefined ? { streamProvider: options.streamProvider } : {}),
       ...(this.broadcastProviderNames.length > 0
         ? { broadcastProvider: (name?: string) => this.broadcastChannelProvider(name) }
@@ -416,6 +427,24 @@ export class ClusterNode {
       options: {},
       reentrancyId: newChainId(),
     });
+  }
+
+  /**
+   * Run one attempt of a durable job on the target grain's single activation,
+   * routed through the dispatcher (directory → placement) as a `DurableJobConsumer`
+   * system call — so the job runs as a turn wherever the grain is placed,
+   * reactivating it if idle, exactly like reminder delivery (ADR 0018). Returns
+   * the handler's run result for the shard executor to act on.
+   */
+  async deliverDurableJob(job: JobRunContext): Promise<DurableJobRunResult> {
+    return (await this.dispatcher.invoke({
+      target: job.target,
+      interfaceId: DurableJobConsumerInterface.id,
+      method: "runJob",
+      args: [job],
+      options: {},
+      reentrancyId: newChainId(),
+    })) as DurableJobRunResult;
   }
 
   /**
