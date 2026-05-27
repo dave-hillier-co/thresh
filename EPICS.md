@@ -22,6 +22,12 @@ runtime). See [`todo.md`](todo.md) for outstanding work, [`docs/`](docs/) for th
 - **Cross-grain ACID transactions** ([ADR 0008](docs/adr/0008-cross-grain-transactions.md)) —
   `TransactionalState<T>` with timestamp-ordered wait-die locking, optimistic two-phase commit
   (TM elected from writers), durable storage, cross-silo participants, in-doubt recovery.
+- **Durable journaling (`DurableGrain`)** ([ADR 0019](docs/adr/0019-durable-journaling.md)) — a
+  per-grain `StateMachineManager` over `DurableValue`/`DurableDictionary`/`DurableList` that journals
+  each mutation to an append-only log and replays it on activation, with snapshot/compaction; a
+  `JournalStorage` seam (memory + Redis), `useDurable*` hooks + `@durable*` decorators, and
+  `useMemoryJournaling()`/`addRedisJournaling()`. Separate from the reducer snapshot facet and
+  `PersistentState`.
 - **Grain migration** — live activation move with state preserved (`IGrainMigrationParticipant`,
   `MigrateOnIdle`, directed placement).
 - **Grain-interface versioning** ([ADR 0014](docs/adr/0014-grain-interface-versioning.md)) — versions
@@ -48,7 +54,6 @@ runtime). See [`todo.md`](todo.md) for outstanding work, [`docs/`](docs/) for th
 
 - **Durable jobs** ([ADR 0018](docs/adr/0018-durable-jobs.md)) — sharded, durable, at-least-once
   scheduled execution.
-- **Durable journaling (`DurableGrain`)** — Orleans 10 `Orleans.Journaling`; still needs an ADR.
 - **Browser state replication** ([ADR 0017](docs/adr/0017-browser-state-replication.md), beyond parity).
 
 ## ⏸ Deferred

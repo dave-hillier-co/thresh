@@ -13,6 +13,8 @@ import {
 import type { GrainKeyFor } from "./key-kinds";
 import type { PersistentState } from "./persistent-state";
 import { registerPersistentField } from "./persistent-state-metadata";
+import type { DurableDictionary, DurableList, DurableValue } from "./durable-state";
+import { registerDurableField } from "./durable-state-metadata";
 import type { Reducer, ReducerState } from "./reducer-state";
 import { registerReducerField } from "./reducer-state-metadata";
 import type { TransactionalState } from "./transactional-state";
@@ -274,5 +276,120 @@ export function useTransactionalState<TState>(
   return {
     performRead: (read) => bound().performRead(read),
     performUpdate: (update) => bound().performUpdate(update),
+  };
+}
+
+export interface UseDurableStateOptions {
+  /** Journal storage provider name; defaults to the silo's default provider. */
+  provider?: string;
+}
+
+/**
+ * The functional counterpart of `@durableState`. Registers a durable-journalling
+ * value facet on the activation and returns a handle; the runtime binds the
+ * grain's single state-machine manager and replays the log before `onActivate`
+ * (see [ADR 0019](../../docs/adr/0019-durable-journaling.md)). The handle throws
+ * if used before then.
+ */
+export function useDurableState<T>(
+  ctx: GrainSetup,
+  stateName: string,
+  options: UseDurableStateOptions = {},
+): DurableValue<T> {
+  const instance = instanceOf(ctx);
+  const fieldName = `__tsva_durable$${stateName}`;
+  registerDurableField(instance, {
+    fieldName,
+    stateName,
+    kind: "value",
+    ...(options.provider !== undefined ? { provider: options.provider } : {}),
+  });
+  const bound = (): DurableValue<T> => {
+    const facet = (instance as Record<string, unknown>)[fieldName] as DurableValue<T> | undefined;
+    if (facet === undefined) throw new Error(`durable value "${stateName}" not yet bound`);
+    return facet;
+  };
+  return {
+    get value() {
+      return bound().value;
+    },
+    get: () => bound().get(),
+    set: (value) => bound().set(value),
+    clear: () => bound().clear(),
+  };
+}
+
+/**
+ * The functional counterpart of `@durableDictionary` — a journalled scalar-keyed
+ * map bound and replayed before `onActivate`.
+ */
+export function useDurableDictionary<K, V>(
+  ctx: GrainSetup,
+  stateName: string,
+  options: UseDurableStateOptions = {},
+): DurableDictionary<K, V> {
+  const instance = instanceOf(ctx);
+  const fieldName = `__tsva_durabledict$${stateName}`;
+  registerDurableField(instance, {
+    fieldName,
+    stateName,
+    kind: "dictionary",
+    ...(options.provider !== undefined ? { provider: options.provider } : {}),
+  });
+  const bound = (): DurableDictionary<K, V> => {
+    const facet = (instance as Record<string, unknown>)[fieldName] as
+      | DurableDictionary<K, V>
+      | undefined;
+    if (facet === undefined) throw new Error(`durable dictionary "${stateName}" not yet bound`);
+    return facet;
+  };
+  return {
+    get size() {
+      return bound().size;
+    },
+    has: (key) => bound().has(key),
+    get: (key) => bound().get(key),
+    entries: () => bound().entries(),
+    keys: () => bound().keys(),
+    values: () => bound().values(),
+    set: (key, value) => bound().set(key, value),
+    delete: (key) => bound().delete(key),
+    clear: () => bound().clear(),
+  };
+}
+
+/**
+ * The functional counterpart of `@durableList` — a journalled ordered list bound
+ * and replayed before `onActivate`.
+ */
+export function useDurableList<T>(
+  ctx: GrainSetup,
+  stateName: string,
+  options: UseDurableStateOptions = {},
+): DurableList<T> {
+  const instance = instanceOf(ctx);
+  const fieldName = `__tsva_durablelist$${stateName}`;
+  registerDurableField(instance, {
+    fieldName,
+    stateName,
+    kind: "list",
+    ...(options.provider !== undefined ? { provider: options.provider } : {}),
+  });
+  const bound = (): DurableList<T> => {
+    const facet = (instance as Record<string, unknown>)[fieldName] as DurableList<T> | undefined;
+    if (facet === undefined) throw new Error(`durable list "${stateName}" not yet bound`);
+    return facet;
+  };
+  return {
+    get length() {
+      return bound().length;
+    },
+    get: (index) => bound().get(index),
+    toArray: () => bound().toArray(),
+    [Symbol.iterator]: () => bound()[Symbol.iterator](),
+    add: (value) => bound().add(value),
+    set: (index, value) => bound().set(index, value),
+    removeAt: (index) => bound().removeAt(index),
+    clear: () => bound().clear(),
   };
 }

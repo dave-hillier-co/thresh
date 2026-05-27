@@ -20,3 +20,4 @@ Each ADR captures one significant decision, its context, the rationale, and its 
 - [0016 — Activation rebalancer (adaptive, entropy-minimizing)](0016-activation-rebalancer.md)
 - [0017 — Browser state replication and browser-hosted grains](0017-browser-state-replication.md)
 - [0018 — Durable jobs (sharded, durable, at-least-once scheduled execution)](0018-durable-jobs.md)
+- [0019 — Durable journaling (`DurableGrain`)](0019-durable-journaling.md)

@@ -11,8 +11,9 @@ routing, the DHT directory with versioned range handoff, placement (strategies +
 version-aware), Kubernetes hosting, persistence and reminders (memory / Redis / Postgres), event
 streams (memory / Redis) with implicit subscriptions, cross-grain ACID transactions, grain call
 filters, observability, grain migration, grain-interface versioning, broadcast channels, the external
-client (gateway discovery + failover), and reducer / functional-first authoring. Worked examples
-double as acceptance tests.
+client (gateway discovery + failover), durable journaling (`DurableGrain`,
+[ADR 0019](docs/adr/0019-durable-journaling.md)), and reducer / functional-first authoring. Worked
+examples double as acceptance tests.
 
 ## Remaining
 
@@ -23,8 +24,6 @@ double as acceptance tests.
       surface, a `RebalancingReport` + suspend/resume, and a convergence e2e over a running cluster.
 - [ ] **Durable jobs** — implement [ADR 0018](docs/adr/0018-durable-jobs.md) (`@tsva/durable-jobs`): a
       sharded, durable, at-least-once scheduled-execution engine. Design only so far.
-- [ ] **Durable journaling (`DurableGrain`)** — Orleans 10 `Orleans.Journaling`; needs an ADR
-      (overlaps the reducer/persistent-state model) then implementation.
 
 ## Beyond parity
 
