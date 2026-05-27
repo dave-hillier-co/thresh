@@ -71,7 +71,13 @@ Work items, grouped by the phase they belong to in
       builder `addRedisStorage(name, { url, keyPrefix? })` connects on `start()` / disconnects on
       `stop()` via host `onStart`/`onStop` hooks. Integration-tested against a real Redis
       (skip-if-down): etag conflicts, value-codec round-trip, and state surviving a silo restart.
-- [ ] Postgres provider — **deferred** (additional provider, not a parity gap; Redis is the shipped default)
+- [x] Postgres provider — `PostgresGrainStorage` (one row per state with an `etag` column; a
+      conditional `INSERT ... ON CONFLICT DO UPDATE ... WHERE etag = $expected` gives the same etag
+      optimistic-concurrency contract as the in-memory/Redis providers, atomic across silos); builder
+      `addPostgresStorage(name, { connectionString, tableName? })` creates the table on `start()` /
+      closes the pool on `stop()` via host `onStart`/`onStop` hooks. Integration-tested against a real
+      Postgres (skip-if-down): etag conflicts, value-codec round-trip, and state surviving a silo
+      restart.
 
 ## Phase 5 — Timers and reminders
 
@@ -94,7 +100,13 @@ Work items, grouped by the phase they belong to in
       Builder `useRedisReminders({ url, keyPrefix? })`. Integration-tested (skip-if-down): CAS,
       range/wrap queries, codec round-trip, firing through `LocalReminderService`, and a successor
       silo resuming a reminder from Redis.
-- [ ] Postgres reminder table — **deferred** (additional provider, not a parity gap; Redis is the shipped default)
+- [x] Postgres reminder table — `PostgresReminderTable` (each reminder a row keyed by
+      `(grain_id, name)` with an indexed `hash` column so `readRange` hash-range ownership is a
+      server-side query, including wrap-around; a `grain_id` lookup backs `readForGrain`;
+      unconditional upsert with a fresh etag and an etag-CAS remove). Builder
+      `usePostgresReminders({ connectionString, tableName? })`. Integration-tested (skip-if-down):
+      CAS, range/wrap queries, codec round-trip, firing through `LocalReminderService`, and a
+      successor silo resuming a reminder from Postgres.
 
 ## Phase 6 — Event streams
 
@@ -259,10 +271,16 @@ order, starting with transactions.
           migrations). Load is a single scalar = activation count (uniform-memory case; we don't gossip
           per-silo memory yet — documented divergence). Pure/deterministic, 16 unit tests incl. a
           full-session convergence simulation.
-    - [ ] Slice 2 — wiring: elected singleton worker (timer-driven sessions/cycles over the model),
-          cross-silo activation-count reporting, a `migrateRandomActivations(target, count)` system RPC
-          reusing live migration, builder `useActivationRebalancing(options?)`, and a multi-silo e2e
-          (a skewed cluster converges toward balance).
+    - [x] Slice 2a — the mechanism: cross-silo activation-count reporting (a `system: "load"` RPC +
+          `gatherClusterLoad` keyed by ring key); `migrateRandomActivations(target, count)` (directed
+          immediate migration of N random live activations, reusing the live-migration path then
+          deactivating locally), reachable on a peer via a `system: "rebalance"` RPC; and
+          `runRebalanceCycle(state)` that gathers load, runs `planCycle`, and executes each move by
+          telling the busier silo to shed to its paired quieter one. Multi-silo test: load gathering,
+          directed migration counts, and a cycle shedding from a [10,2]-skewed pair.
+    - [ ] Slice 2b — automation: an elected singleton worker driving `runRebalanceCycle` on a timer
+          (sessions/cycles, due-time/backoff), builder `useActivationRebalancing(options?)`, a
+          `RebalancingReport` + suspend/resume, and a convergence e2e over a running cluster.
 - [x] Grain-interface versioning — multiple interface versions live at once for heterogeneous rolling
       upgrades, with version-aware placement (Orleans' versioning). [ADR 0014](docs/adr/0014-grain-interface-versioning.md).
   - [x] `GrainInterface.version` (default 1; id stays name-derived) via `defineGrainInterface(name, { version })`;
@@ -314,6 +332,25 @@ order, starting with transactions.
       Delivery awaits subscribers (one deliberate divergence from Orleans' fire-and-forget default).
       Tests: `channelKey` unit, namespace→types registration, dispatcher fan-out (class + functional +
       producer-grain publish, no-observer drop).
+- [ ] Durable journaling (`DurableGrain`) — Orleans 10 `Orleans.Journaling`; needs an ADR (overlaps
+      the reducer/persistent-state model). Next ADR slot (0017).
+- [~] Durable jobs — Orleans 10 `Orleans.DurableJobs`: a **sharded, durable, at-least-once
+      scheduled-execution** engine (one-shot grain invocations bucketed by due time, with retries,
+      per-silo concurrency control, slow-start, and crash-failover with poison-shard protection) —
+      **not** a workflow/replay engine despite the name. Designed in
+      [ADR 0018](docs/adr/0018-durable-jobs.md) as `@tsva/durable-jobs`, layered on the runtime the
+      way `@tsva/reminders` is (per-silo manager + durable shard store + memory/Redis backings; a
+      `DURABLE_JOB_HANDLER` symbol handler; `runtime.scheduleJob`/`cancelJob`; `useDurableJobs`).
+      Design only — implementation pending.
+  - [ ] Slice 1 — pure model: shard-key bucketing, the due-time job queue (cancel/retry), the default
+        retry policy, and the claim-budget computation, all pure + fake-clock unit-tested.
+  - [ ] Slice 2 — single-silo e2e on the memory store: a scheduled job fires the target's
+        `DURABLE_JOB_HANDLER` as a turn at due time; complete/throw-retry/cancel/`pollAfter`;
+        concurrency limit + overload backoff.
+  - [ ] Slice 3 — durable store + restart: Redis `JobShardStore`; a job survives silo restart and
+        re-fires (at-least-once); memory store asserted dev/test-only.
+  - [ ] Slice 4 — multi-silo ownership & failover (kind e2e): shard claim/adoption via membership,
+        poison-shard protection, claim ramp-up, graceful release on drain.
 - [~] Observability (cross-cutting) — OpenTelemetry traces propagated via request context, metrics
       (activations, turn latency, directory hit rate, reminder/stream lag), and structured logs.
   - [x] Slice 1 — ambient request context (Orleans `RequestContext`): `requestContext.get/set/getAll`
@@ -412,8 +449,22 @@ order, starting with transactions.
       over a connection back to the client. Registers grains for interface→type resolution. In-process
       acceptance test (routing to a single activation, application-error propagation, unregistered
       interface rejected).
-- [ ] Higher-level gateway discovery (`gateway: { url }`) + a WebSocket client e2e (needs the gateway
-      Service shape from docs/10)
+- [x] Gateway discovery + failover — the client no longer pins one `gateway`; a `GatewayListProvider`
+      (`staticGatewayProvider` / `membershipGatewayProvider` = active silos / `urlGatewayProvider`
+      = `gateway: { url }`) feeds a `GatewayManager` (round-robin selection; `markAsDead` drops an
+      unreachable gateway until the next `refresh` re-learns it — Orleans' `IGatewayListProvider` +
+      `GatewayManager`). `ClientNode.invoke` fails over on a transport failure (connect/send throws or
+      the reply times out): it drops that gateway and retries the next, refreshing the list once when
+      exhausted; an error carried in a *response* (grain throw / gateway rejection) propagates without
+      failover. `gateway` kept as one-entry shorthand. Tests: manager/provider units + two in-process
+      e2e (skips an unreachable gateway and routes through a live one; discovers gateways from
+      membership).
+- [x] WebSocket client e2e — the client runs over the real WebSocket transport: a call routes
+      client → gateway → activation and the reply flows back over a reverse connection to the client's
+      own listener (`gateway-discovery.test.ts`, membership-discovered gateway). This surfaced and fixed
+      a transport teardown bug: `WebSocketTransport.connect`'s `close()` waited on a `close` event that
+      never fires when the peer already closed the socket — now it resolves immediately if the socket is
+      already `CLOSED`, so client/silo shutdown can't hang regardless of close order.
 
 ## Examples as acceptance tests
 
@@ -443,3 +494,34 @@ previously had only unit coverage. Outside-in / ATDD: failing example first, the
       activation via directory CAS, and reactivation on a survivor when the hosting silo leaves the
       view. Added builder seams `useMembership(service)` (share one view across in-process silos) and
       `random` (deterministic placement) to `createSilo`.
+- [x] `examples/migration` — live grain migration: a cart grain on silo-0 accumulates state (one item
+      persisted, one only in memory), requests `moveTo(silo-1)`, and after the idle sweep serves from
+      silo-1 with **both** items intact — proving the unflushed item rode the migration bag, not a
+      storage re-read. Functional-first (`defineGrain` + `usePersistentState`, which auto-participates
+      in migration); runnable via `pnpm --filter @tsva/example-migration start`.
+- [x] `examples/broadcast` — broadcast-channel pub/sub fan-out ([ADR 0015](docs/adr/0015-broadcast-channels.md)):
+      an alert publisher writes to a region channel `(alerts, region)`; a `RegionMonitor` and an
+      `AuditLog` (two grain types implicitly subscribed to `alerts`, keyed by region) both receive each
+      publish, with key-based isolation (eu alerts never reach us). Functional-first (`defineGrain` +
+      `BROADCAST_CHANNEL_OBSERVER`); runnable via `pnpm --filter @tsva/example-broadcast start`.
+
+## Beyond parity — browser state replication ([ADR 0017](docs/adr/0017-browser-state-replication.md))
+
+- [x] ADR 0017 — design for replicating grain state to the browser and running permitted grains
+      client-side under a server-enforced trust model. Settled: latency-first motivation; v1 is a
+      server-authoritative **read-only** live read-view over the existing client→gateway WebSocket
+      path; writable/optimistic/CRDT client state and browser-hosted grains deferred to follow-up
+      ADRs. Status: Proposed (design only).
+- [ ] Slice 1 — client-session identity + gateway authorization seam: an authenticated client
+      identity in the preamble/request context; a gateway incoming call filter ([ADR 0012](docs/adr/0012-grain-call-filters.md))
+      enforces a default-deny replication policy. Failing test: replication of an unmarked grain type
+      is rejected at the gateway.
+- [ ] Slice 2 — grain-type eligibility marker: `browserReplication` on `GrainOptions`, recorded in the
+      silo registry and read server-side only (a client claim cannot override it).
+- [ ] Slice 3 — read-view subscription protocol over WebSocket (subscribe/snapshot/delta/resync) built
+      on event streams ([docs/09](docs/09-event-streams.md)) + state version/etag ([docs/07](docs/07-persistence.md)):
+      snapshot then deltas, gap→resync, eventual consistency with the authoritative activation.
+- [ ] Slice 4 — subscription lifecycle + resource bounds: re-subscribe across server activation
+      deactivation/migration; tear down on browser disconnect.
+- [ ] (follow-up ADRs) Layer 2 browser-hosted grains; writable client state with an optimistic/CRDT
+      reconciliation model + offline support.

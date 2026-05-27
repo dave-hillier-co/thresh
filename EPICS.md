@@ -40,6 +40,12 @@ decisions.
 
 - [~] **External client** — in-process gateway-routed client ships; higher-level gateway discovery +
       a WebSocket client e2e remain.
+- [x] **External client** — gateway-routed client with **gateway discovery + failover** (a
+      `GatewayListProvider` — static / membership / URL — feeding a round-robin `GatewayManager` that
+      marks unreachable gateways dead and fails over), verified both in-process and over the **real
+      WebSocket transport** (client → gateway → activation, reply over a reverse connection).
+- [~] **Functional-first examples** — docs lead functional; a few examples are still `@grain()`
+      classes to migrate (one kept as a living interop example).
 
 ## 📋 TODO — remaining for Orleans 10 parity
 
@@ -60,15 +66,22 @@ decisions.
       ([ADR 0015](docs/adr/0015-broadcast-channels.md)).
 - [ ] **Durable journaling (`DurableGrain`)** — Orleans 10 `Orleans.Journaling`; needs an ADR
       (overlaps reducer/persistent state).
-- [ ] **Durable jobs** — Orleans 10 `Orleans.DurableJobs` (durable workflows); needs an ADR.
+- [~] **Durable jobs** — Orleans 10 `Orleans.DurableJobs`: a sharded, durable, at-least-once
+      scheduled-execution engine (not a workflow engine). Designed in
+      [ADR 0018](docs/adr/0018-durable-jobs.md) (`@tsva/durable-jobs`); design only, not yet
+      implemented.
 
 ## 🔭 Beyond parity (future)
 
 - [ ] **Browser state replication & browser-hosted grains** — replicate grain state to the browser and
       run permitted grains client-side, gated by a server-enforced trust model
-      ([docs/13 "Beyond parity"](docs/13-roadmap-and-phases.md)); needs an ADR.
+      ([docs/13 "Beyond parity"](docs/13-roadmap-and-phases.md)). Design settled in
+      [ADR 0017](docs/adr/0017-browser-state-replication.md) (read-only live read-views first);
+      implementation pending.
 
 ## ⏸ Deferred
 
-- [ ] **Additional durable providers** — Postgres grain storage / reminder table and other stream
-      backings, behind the same interfaces. Redis is the shipped default.
+- [x] **Additional durable providers (Postgres)** — `PostgresGrainStorage` and
+      `PostgresReminderTable` ship behind the same interfaces (`addPostgresStorage` /
+      `usePostgresReminders`); Redis remains the shipped default. Other stream backings remain
+      deferred.

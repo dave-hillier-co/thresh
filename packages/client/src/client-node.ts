@@ -16,14 +16,25 @@ import type { Serializer } from "@tsva/messaging/serializer";
 import type { Listener, Transport } from "@tsva/messaging/transport";
 import type { Dispatcher } from "@tsva/runtime/dispatcher";
 import { GrainFactory } from "@tsva/runtime/grain-factory";
+import { GatewayManager } from "@tsva/client/gateway-manager";
+import { staticGatewayProvider, type GatewayListProvider } from "@tsva/client/gateway-provider";
 
 export interface ClientConfig {
   clusterId: string;
   /** The client's own reachable address — replies flow back over a connection to it. */
   local: SiloAddress;
   transport: Transport;
-  /** The gateway silo every call is routed through. */
-  gateway: SiloAddress;
+  /**
+   * A single fixed gateway silo to route every call through. Shorthand for a
+   * one-entry `gateways` provider; supply one of `gateway` or `gateways`.
+   */
+  gateway?: SiloAddress;
+  /**
+   * Discovers the gateway silos to route through, with round-robin selection and
+   * failover when one is unreachable (Orleans' gateway list provider + manager).
+   * Use `membershipGatewayProvider`, `urlGatewayProvider`, or `staticGatewayProvider`.
+   */
+  gateways?: GatewayListProvider;
   serializer?: Serializer;
   callTimeoutMs?: number;
 }
@@ -50,6 +61,7 @@ export class ClientNode implements Dispatcher {
   private readonly serializer: Serializer;
   private readonly factory: GrainFactory;
   private readonly callTimeoutMs: number;
+  private readonly gateways: GatewayManager;
   private listener: Listener | undefined;
 
   constructor(private readonly config: ClientConfig) {
@@ -60,6 +72,13 @@ export class ClientNode implements Dispatcher {
       new MessagePackSerializer({ resolveGrainReference: (id) => this.rehydrate(id) });
     this.factory = new GrainFactory((interfaceId) => this.resolveGrainType(interfaceId));
     this.factory.setDispatcher(this);
+    const provider =
+      config.gateways ??
+      (config.gateway !== undefined ? staticGatewayProvider([config.gateway]) : undefined);
+    if (provider === undefined) {
+      throw new Error("client requires a `gateway` or a `gateways` provider");
+    }
+    this.gateways = new GatewayManager(provider);
   }
 
   /**
@@ -83,9 +102,10 @@ export class ClientNode implements Dispatcher {
     return this;
   }
 
-  /** Begin listening for replies; resolves once the client is reachable. */
+  /** Begin listening for replies and learn the initial gateway set; resolves once reachable. */
   async connect(): Promise<this> {
     this.listener = await this.config.transport.listen(this.config.local, (m) => this.onMessage(m));
+    await this.gateways.refresh();
     return this;
   }
 
@@ -98,28 +118,62 @@ export class ClientNode implements Dispatcher {
     await this.connections.closeAll();
   }
 
-  /** Forward every grain call to the gateway and await its response. */
+  /**
+   * Forward a grain call to a gateway and await its response, failing over to
+   * another gateway when one is unreachable. A transport failure (a gateway we
+   * cannot connect to or send through, or a reply that never arrives) drops that
+   * gateway from rotation and retries the next; once all are exhausted we refresh
+   * the gateway list once and retry. An error *carried in a response* (a grain
+   * throw, or a rejection from the gateway's routing) is the call's real outcome
+   * and propagates — failover would not change it.
+   */
   async invoke(req: InvocationRequest): Promise<unknown> {
-    const conn = await this.connections.get(this.config.gateway);
-    const correlationId = nextCorrelationId();
-    const message: Message = {
-      correlationId,
-      direction: req.options.oneWay ? "oneWay" : "request",
-      targetGrain: req.target,
-      sendingSilo: this.config.local,
-      sendingGrain: req.sender,
-      interfaceId: req.interfaceId,
-      method: req.method,
-      requestContext: { reentrancyId: req.reentrancyId },
-      body: this.serializer.serialize(req.args),
-    };
-    if (req.options.oneWay) {
-      conn.send(message);
-      return undefined;
+    let refreshed = false;
+    let lastError: unknown;
+    for (;;) {
+      let gateway = this.gateways.next();
+      if (gateway === undefined && !refreshed) {
+        await this.gateways.refresh();
+        refreshed = true;
+        gateway = this.gateways.next();
+      }
+      if (gateway === undefined) {
+        throw lastError ?? new GrainCallError("no gateway available to route the call");
+      }
+
+      let response: Message;
+      try {
+        const conn = await this.connections.get(gateway);
+        const correlationId = nextCorrelationId();
+        const message: Message = {
+          correlationId,
+          direction: req.options.oneWay ? "oneWay" : "request",
+          targetGrain: req.target,
+          sendingSilo: this.config.local,
+          sendingGrain: req.sender,
+          interfaceId: req.interfaceId,
+          method: req.method,
+          requestContext: { reentrancyId: req.reentrancyId },
+          body: this.serializer.serialize(req.args),
+        };
+        if (req.options.oneWay) {
+          conn.send(message);
+          return undefined;
+        }
+        const pending = this.correlation.register(correlationId, this.callTimeoutMs);
+        conn.send(message);
+        response = await pending;
+      } catch (err) {
+        // The gateway is unreachable (connect/send threw, or the reply timed out):
+        // drop it and try another.
+        this.gateways.markAsDead(gateway);
+        await this.connections.drop(gateway);
+        lastError = err;
+        continue;
+      }
+      // We have a response: its kind decides success or an application error.
+      return this.interpretResponse(response);
     }
-    const pending = this.correlation.register(correlationId, this.callTimeoutMs);
-    conn.send(message);
-    return this.interpretResponse(await pending);
   }
 
   private onMessage(message: Message): void {

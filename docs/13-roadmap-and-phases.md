@@ -32,12 +32,13 @@ Grain call filters and cross-cutting observability (request context, OpenTelemet
 structured logs) ship too, on the grain-call-filter seam, as does implicit stream subscription.
 
 **Remaining for parity (Orleans 10):** grain migration and the activation rebalancer (the v10
-core-runtime block) and placement filters. The Orleans-10 additions of durable journaling
-(`DurableGrain`) and durable jobs need an ADR each (journaling overlaps the existing
-reducer/persistent-state model).
+core-runtime block) and placement filters. The Orleans-10 addition of durable journaling
+(`DurableGrain`) still needs an ADR (it overlaps the existing reducer/persistent-state model);
+durable jobs is now designed in [ADR 0018](adr/0018-durable-jobs.md) (design only, not yet
+implemented).
 
-**Deferred:** additional providers (Postgres storage/reminders, other stream backings) — alternatives
-to the shipped Redis defaults, not parity gaps.
+**Deferred:** additional stream backings — alternatives to the shipped Redis defaults, not parity
+gaps. (Postgres grain storage and the Postgres reminder table now ship alongside Redis.)
 
 ## Phase 1 — Single-silo core actor model
 
@@ -84,10 +85,9 @@ builder; reference manifests; graceful drain on `SIGTERM`.
 ## Phase 4 — Persistence
 
 `PersistentState` facet, `@persistentState`, the storage provider contract, etag concurrency;
-in-memory and **Redis (default)** providers. (A Postgres provider is deferred as an additional
-provider — not a parity gap.)
+in-memory, **Redis (default)** and Postgres providers.
 
-- Deliverables: `persistence` with memory/redis providers; runtime read-on-activate wiring.
+- Deliverables: `persistence` with memory/redis/postgres providers; runtime read-on-activate wiring.
 - **Exit criteria:**
   - State written by a grain survives deactivation and pod restart (Redis).
   - A conflicting write (stale etag) raises `InconsistentStateError`.
@@ -97,8 +97,7 @@ provider — not a parity gap.)
 ## Phase 5 — Timers and reminders
 
 In-memory timers; durable reminders with the `ReminderTable` contract, hash-range ownership, and
-rebalancing; **Redis (default)** + in-memory tables. (A Postgres table is deferred as an additional
-provider — not a parity gap.)
+rebalancing; **Redis (default)**, Postgres, and in-memory tables.
 
 - Deliverables: timers in `runtime`; `reminders` with memory/redis tables.
 - **Exit criteria:**
@@ -187,13 +186,17 @@ verified.
 - **Durable journaling (`DurableGrain`)** — needs an ADR: Orleans 10's `Orleans.Journaling`
   (`DurableValue`/`DurableDictionary`/`DurableList`/… that journal mutations automatically) overlaps
   the existing reducer/persistent-state model; decide whether to adopt it or map it onto what ships.
-- **Durable jobs** — needs an ADR: Orleans 10's `Orleans.DurableJobs` (durable execution / workflow
-  engine) is a large, optional addition.
+- **Durable jobs** — designed in [ADR 0018](adr/0018-durable-jobs.md) (design only, not yet
+  implemented). Orleans 10's `Orleans.DurableJobs` is — despite the name — **not** a workflow/replay
+  engine but a **sharded, durable, at-least-once scheduled-execution** engine (one-shot grain
+  invocations bucketed by due time, with retries, per-silo concurrency control, slow-start, and
+  crash-failover with poison-shard protection). The ADR ports it as `@tsva/durable-jobs`, layered on
+  the runtime the way `@tsva/reminders` is, with a four-slice plan.
 
 ## Deferred (not parity gaps)
 
-- **Additional providers** — Postgres grain storage and reminder table, plus other databases and
-  stream backings/queue adapters. Redis is the shipped default; these are alternatives.
+- **Additional providers** — other databases and stream backings/queue adapters. Redis is the
+  shipped default; Postgres grain storage and reminder table also ship; these are alternatives.
 
 ## Beyond parity (post-Orleans-10 directions)
 
@@ -216,7 +219,10 @@ parity items, and each warrants its own ADR before implementation.
      in particular assume a trusted single activation (wait-die locking, durable commit), so a browser
      replica of authoritative state needs a different consistency model (optimistic / CRDT with
      server reconciliation). The intended motivation (offline, optimistic-UI latency, or reduced
-     server load) drives the design and should be settled in the ADR first.
+     server load) drives the design and should be settled in the ADR first. Designed in
+     [ADR 0017](adr/0017-browser-state-replication.md): latency-first, with a server-authoritative
+     **read-only** live read-view as v1 (writable/optimistic/CRDT client state and browser-hosted
+     grains deferred to follow-up ADRs).
 
 ## Cross-cutting, throughout
 

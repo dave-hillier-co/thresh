@@ -43,8 +43,8 @@ export interface Message {
   interfaceVersion?: number | undefined;
   method: string;
 
-  /** Marks a system request (directory, migration, or manifest operation) vs a grain call. */
-  system?: "directory" | "migration" | "manifest" | undefined;
+  /** Marks a system request (directory, migration, manifest, load, or rebalance) vs a grain call. */
+  system?: "directory" | "migration" | "manifest" | "load" | "rebalance" | undefined;
 
   responseKind?: ResponseKind | undefined;
   requestContext?: RequestContext | undefined;

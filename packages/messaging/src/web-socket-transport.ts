@@ -82,6 +82,13 @@ export class WebSocketTransport implements Transport {
       send: (message) => socket.send(this.serializer.serialize(message)),
       close: () =>
         new Promise<void>((resolve) => {
+          // The peer may already have closed this socket (e.g. it shut down
+          // first). Once `close` has fired it won't fire again, so waiting on it
+          // would hang — resolve immediately when already closed.
+          if (socket.readyState === WebSocket.CLOSED) {
+            resolve();
+            return;
+          }
           socket.once("close", () => resolve());
           socket.close();
         }),
