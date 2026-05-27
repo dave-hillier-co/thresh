@@ -20,7 +20,9 @@ import { WebSocketTransport } from "@tsva/messaging/web-socket-transport";
 import type { ReminderTable } from "@tsva/core/reminder";
 import { systemTimeProvider, type TimeProvider } from "@tsva/core/time-provider";
 import { createClient } from "redis";
+import { Pool } from "pg";
 import { MemoryGrainStorage } from "@tsva/persistence/memory-grain-storage";
+import { PostgresGrainStorage } from "@tsva/persistence/postgres-grain-storage";
 import { RedisGrainStorage } from "@tsva/persistence/redis-grain-storage";
 import { bindPersistentStates } from "@tsva/persistence/state-activator";
 import { bindReducerStates } from "@tsva/persistence/reducer-state-activator";
@@ -38,6 +40,7 @@ import type { TransactionalStateStorage } from "@tsva/core/transactional-storage
 import type { StreamProvider } from "@tsva/core/stream";
 import { LocalReminderService } from "@tsva/reminders/local-reminder-service";
 import { MemoryReminderTable } from "@tsva/reminders/memory-reminder-table";
+import { PostgresReminderTable } from "@tsva/reminders/postgres-reminder-table";
 import { RedisReminderTable } from "@tsva/reminders/redis-reminder-table";
 import { MemoryStreamProvider } from "@tsva/streams/memory-stream-provider";
 import { RedisPullingStreamProvider } from "@tsva/streams/redis-pulling-stream-provider";
@@ -116,6 +119,28 @@ export class SiloBuilder {
       client,
       options.keyPrefix !== undefined ? { keyPrefix: options.keyPrefix } : {},
     );
+    return this;
+  }
+
+  /**
+   * Enable durable reminders backed by Postgres. The connection pool is created
+   * here, the reminder table is created on silo start (`start()`), and the pool
+   * is closed on stop; `tableName` namespaces rows (defaults to `"tsva_reminders"`).
+   */
+  usePostgresReminders(options: { connectionString: string; tableName?: string }): this {
+    const pool = new Pool({ connectionString: options.connectionString });
+    pool.on("error", () => {});
+    const table = new PostgresReminderTable(
+      pool,
+      options.tableName !== undefined ? { tableName: options.tableName } : {},
+    );
+    this.starters.push(async () => {
+      await table.start();
+    });
+    this.closers.push(async () => {
+      await pool.end();
+    });
+    this.reminderTable = table;
     return this;
   }
 
@@ -283,6 +308,32 @@ export class SiloBuilder {
         options.keyPrefix !== undefined ? { keyPrefix: options.keyPrefix } : {},
       ),
     );
+  }
+
+  /**
+   * Register a Postgres-backed storage provider. The connection pool is created
+   * here, the backing table is created on silo start (`start()`), and the pool is
+   * closed on stop; `tableName` namespaces rows in a Postgres shared by several
+   * clusters (defaults to `"tsva_grain_state"`). Good when state must also be
+   * queried outside the actor model.
+   */
+  addPostgresStorage(
+    name: string,
+    options: { connectionString: string; tableName?: string },
+  ): this {
+    const pool = new Pool({ connectionString: options.connectionString });
+    pool.on("error", () => {}); // surfaced by start()/queries; don't crash the process
+    const provider = new PostgresGrainStorage(
+      pool,
+      options.tableName !== undefined ? { tableName: options.tableName } : {},
+    );
+    this.starters.push(async () => {
+      await provider.start();
+    });
+    this.closers.push(async () => {
+      await pool.end();
+    });
+    return this.addStorage(name, provider);
   }
 
   /**

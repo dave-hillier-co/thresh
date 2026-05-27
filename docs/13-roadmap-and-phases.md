@@ -37,8 +37,8 @@ core-runtime block) and placement filters. The Orleans-10 addition of durable jo
 durable jobs is now designed in [ADR 0018](adr/0018-durable-jobs.md) (design only, not yet
 implemented).
 
-**Deferred:** additional providers (Postgres storage/reminders, other stream backings) — alternatives
-to the shipped Redis defaults, not parity gaps.
+**Deferred:** additional stream backings — alternatives to the shipped Redis defaults, not parity
+gaps. (Postgres grain storage and the Postgres reminder table now ship alongside Redis.)
 
 ## Phase 1 — Single-silo core actor model
 
@@ -85,10 +85,9 @@ builder; reference manifests; graceful drain on `SIGTERM`.
 ## Phase 4 — Persistence
 
 `PersistentState` facet, `@persistentState`, the storage provider contract, etag concurrency;
-in-memory and **Redis (default)** providers. (A Postgres provider is deferred as an additional
-provider — not a parity gap.)
+in-memory, **Redis (default)** and Postgres providers.
 
-- Deliverables: `persistence` with memory/redis providers; runtime read-on-activate wiring.
+- Deliverables: `persistence` with memory/redis/postgres providers; runtime read-on-activate wiring.
 - **Exit criteria:**
   - State written by a grain survives deactivation and pod restart (Redis).
   - A conflicting write (stale etag) raises `InconsistentStateError`.
@@ -98,8 +97,7 @@ provider — not a parity gap.)
 ## Phase 5 — Timers and reminders
 
 In-memory timers; durable reminders with the `ReminderTable` contract, hash-range ownership, and
-rebalancing; **Redis (default)** + in-memory tables. (A Postgres table is deferred as an additional
-provider — not a parity gap.)
+rebalancing; **Redis (default)**, Postgres, and in-memory tables.
 
 - Deliverables: timers in `runtime`; `reminders` with memory/redis tables.
 - **Exit criteria:**
@@ -197,8 +195,8 @@ verified.
 
 ## Deferred (not parity gaps)
 
-- **Additional providers** — Postgres grain storage and reminder table, plus other databases and
-  stream backings/queue adapters. Redis is the shipped default; these are alternatives.
+- **Additional providers** — other databases and stream backings/queue adapters. Redis is the
+  shipped default; Postgres grain storage and reminder table also ship; these are alternatives.
 
 ## Beyond parity (post-Orleans-10 directions)
 
