@@ -6,7 +6,7 @@ import type { IncomingGrainCallFilter } from "@tsva/core/grain-call-filter";
  * (grain, interface, method, duration, status) — successes at `info`, failures
  * at `error` with the message. Logging on the call-filter seam keeps it
  * consistent with tracing/metrics and means each log line sits inside the
- * request context ([ADR 0013](../../../docs/adr/0013-observability.md)).
+ * request context.
  */
 export function loggingFilter(logger: Logger): IncomingGrainCallFilter {
   return async (ctx) => {

@@ -65,7 +65,7 @@ export interface DefineReducerGrainOptions<S, A> extends DefineGrainOptions {
 
 /**
  * Register a grain whose entire public surface is `dispatch(action)` + `query()`,
- * driven by a pure reducer (see [ADR 0010](../../docs/adr/0010-message-dispatch-reducer-grains.md)).
+ * driven by a pure reducer.
  * The single fixed interface removes the per-grain method table that would
  * otherwise be hand-written or generated; the `Action` union is the protocol.
  *

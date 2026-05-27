@@ -170,7 +170,7 @@ export class SiloBuilder {
   }
 
   /**
-   * Enable durable jobs (ADR 0018) backed by an in-memory shard store (dev/test).
+   * Enable durable jobs backed by an in-memory shard store (dev/test).
    * A single store instance shared across silo restarts stands in for a durable
    * backend. `options` mirrors Orleans `DurableJobsOptions`.
    */
@@ -184,7 +184,7 @@ export class SiloBuilder {
   }
 
   /**
-   * Enable durable jobs (ADR 0018) backed by Redis (the default store). The client
+   * Enable durable jobs backed by Redis (the default store). The client
    * connects when the silo starts and disconnects when it stops; `keyPrefix`
    * namespaces keys (defaults to `"tsva"`). `options` mirrors Orleans
    * `DurableJobsOptions`.
@@ -211,7 +211,7 @@ export class SiloBuilder {
   }
 
   /**
-   * Enable the adaptive activation rebalancer (ADR 0016). A single, deterministically
+   * Enable the adaptive activation rebalancer. A single, deterministically
    * elected silo runs entropy-minimizing rebalancing cycles on a timer, migrating live
    * activations from busier to quieter silos so the cluster self-levels. `options`
    * overrides the entropy-model tunables (defaults from `DEFAULT_REBALANCER_OPTIONS`);
@@ -240,7 +240,7 @@ export class SiloBuilder {
   }
 
   /**
-   * Register a broadcast-channel provider (ADR 0015), named "default" unless
+   * Register a broadcast-channel provider, named "default" unless
    * given. Broadcast channels are direct in-cluster pub/sub with no backing store
    * — a publish fans the item out to the channel's implicit subscribers — so
    * there is nothing to connect or tear down; only the name is registered.
@@ -342,7 +342,7 @@ export class SiloBuilder {
   }
 
   /**
-   * Enable grain-interface versioning (ADR 0014): version-aware placement steers
+   * Enable grain-interface versioning: version-aware placement steers
    * a new activation onto a silo whose implemented interface version is
    * compatible with the caller's. `compatibility` defaults to `"backwardCompatible"`
    * (a newer silo can serve an older caller); `selector` defaults to `"latest"`.
@@ -443,7 +443,7 @@ export class SiloBuilder {
     );
   }
 
-  /** Register a named journal-storage provider for durable-journalling facets (ADR 0019). */
+  /** Register a named journal-storage provider for durable-journalling facets. */
   addJournaling(name: string, provider: JournalStorage): this {
     (this.journalStorage ??= new JournalStorageRegistry()).add(name, provider);
     return this;
@@ -652,7 +652,7 @@ export class SiloBuilder {
       );
     }
 
-    // The rebalancer worker (ADR 0016) elects a single leader from membership and
+    // The rebalancer worker elects a single leader from membership and
     // drives the node's `runRebalanceCycle` on a timer; the host starts/stops it.
     let rebalancerWorker: ActivationRebalancerWorker | undefined;
     if (this.rebalancing !== undefined) {
@@ -675,7 +675,7 @@ export class SiloBuilder {
       (ranges: ReadonlyArray<readonly [number, number]>) => Promise<void>
     > = [];
 
-    // Durable jobs (ADR 0018): the per-silo manager runs the executors for the
+    // Durable jobs: the per-silo manager runs the executors for the
     // time-bucketed shards this silo owns, delivering each due job as a turn on
     // its target through the node. Ownership is membership-driven (not hash-range),
     // so the ownership hook recomputes the active set on start and every view

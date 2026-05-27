@@ -3,8 +3,7 @@ import { defineGrainInterface } from "@tsva/core/grain-interface";
 import type { GrainWithStringKey } from "@tsva/core/key-kinds";
 
 /**
- * A bank account whose balance is **transactional** state (Phase 7,
- * [ADR 0008](../../../docs/adr/0008-cross-grain-transactions.md)). Unlike the
+ * A bank account whose balance is **transactional** state. Unlike the
  * reducer account's `transferTo` — a two-step move that can half-apply — a
  * transfer here runs as one cross-grain ACID transaction: debit and credit
  * commit together or not at all, and a failed debit rolls the credit back.

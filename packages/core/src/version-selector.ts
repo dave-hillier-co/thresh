@@ -2,8 +2,7 @@
  * Given the versions a cluster currently hosts that are *compatible* with a
  * request, chooses which of them placement may target — Orleans'
  * `VersionSelectorStrategy`. The director ([version-compatibility](./version-compatibility.ts))
- * decides compatibility; the selector narrows the surviving versions (see
- * [ADR 0014](../../docs/adr/0014-grain-interface-versioning.md)).
+ * decides compatibility; the selector narrows the surviving versions.
  */
 export type VersionSelectorStrategy = (
   requested: number,

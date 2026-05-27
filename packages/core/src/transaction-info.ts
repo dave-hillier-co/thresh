@@ -1,6 +1,5 @@
 /**
- * Cross-grain transaction context and participant contracts (Phase 7,
- * [ADR 0008](../../docs/adr/0008-cross-grain-transactions.md)). Mirrors Orleans'
+ * Cross-grain transaction context and participant contracts. Mirrors Orleans'
  * `TransactionInfo` / `ParticipantId` / `AccessCounter` from
  * `Orleans.Transactions`. These are pure contracts; the agent, the wait-die lock
  * and the commit protocol live in the runtime and `@tsva/transactions`.

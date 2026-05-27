@@ -29,7 +29,7 @@ const defaultState = (): ThermostatState => ({
  * a stream — single-threaded, no locks.
  *
  * Retained deliberately as the `@grain()` class form. Functional-first
- * (`defineGrain` + hooks) is the documented default (ADR 0009) and every other
+ * (`defineGrain` + hooks) is the documented default and every other
  * example now uses it — but the class is the runtime substrate both styles
  * compile down to, so one living example keeps that path exercised and shows the
  * two interoperate: the functional `FleetAggregatorGrain` in this same example

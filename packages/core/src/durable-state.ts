@@ -1,6 +1,5 @@
 /**
- * The grain-facing durable-journaling facets (see
- * [ADR 0019](../../docs/adr/0019-durable-journaling.md)). Each mutation is
+ * The grain-facing durable-journaling facets. Each mutation is
  * journalled to the grain's append-only log and replayed on activation; reads
  * are served from memory. Mutators are async because each appends to the log.
  */

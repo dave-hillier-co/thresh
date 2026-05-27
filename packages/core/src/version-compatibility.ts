@@ -1,8 +1,7 @@
 /**
  * Decides whether a silo that *implements* a given interface version can serve a
  * caller that *requested* another — Orleans' `CompatibilityDirector`. Used to
- * prune placement candidates during a heterogeneous rolling upgrade (see
- * [ADR 0014](../../docs/adr/0014-grain-interface-versioning.md)).
+ * prune placement candidates during a heterogeneous rolling upgrade.
  */
 export type CompatibilityDirector = (requested: number, implemented: number) => boolean;
 

@@ -96,8 +96,7 @@ export interface ReducerStateOptions<TState, TEvent> {
 }
 
 /**
- * Injects a `ReducerState<TState, TEvent>` facet into a grain field (see
- * [ADR 0006](../../docs/adr/0006-reducer-grains.md)). The runtime binds and reads
+ * Injects a `ReducerState<TState, TEvent>` facet into a grain field. The runtime binds and reads
  * its snapshot before `onActivate`; command handlers `raise` events that fold
  * through `reduce` into immutable state, and `write` persists the snapshot.
  */
@@ -126,8 +125,7 @@ export interface TransactionalStateOptions<TState> {
 }
 
 /**
- * Injects a `TransactionalState<T>` facet into a grain field (Phase 7,
- * [ADR 0008](../../docs/adr/0008-cross-grain-transactions.md)). The runtime binds
+ * Injects a `TransactionalState<T>` facet into a grain field. The runtime binds
  * it before `onActivate`; the grain reaches state only through `performRead` /
  * `performUpdate` inside a transaction, and the facet participates in the
  * cross-grain commit. The class-substrate counterpart of `useTransactionalState`.
@@ -155,8 +153,7 @@ export interface DurableStateOptions {
 }
 
 /**
- * Shared field decorator for the durable-journalling facets (see
- * [ADR 0019](../../docs/adr/0019-durable-journaling.md)). The runtime binds the
+ * Shared field decorator for the durable-journalling facets. The runtime binds the
  * grain's single state-machine manager and replays its log before `onActivate`;
  * each mutation appends to the log.
  */

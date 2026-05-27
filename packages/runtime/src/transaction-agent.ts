@@ -14,7 +14,7 @@ import type { TimeProvider } from "@tsva/runtime/time-provider";
  * The per-silo transaction agent (Orleans `TransactionAgent`). It begins a
  * transaction on behalf of the originating call — assigning a unique id and a
  * causal-clock timestamp — and resolves it at the boundary with an optimistic,
- * serializable commit ([ADR 0008](../../docs/adr/0008-cross-grain-transactions.md)).
+ * serializable commit.
  *
  * Resolve runs the faithful two-phase protocol: elect the transaction manager
  * from the writers, **prepare** every participant (each validates its lock and

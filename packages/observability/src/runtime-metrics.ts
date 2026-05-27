@@ -11,8 +11,8 @@ export interface RuntimeMetricSources {
 /**
  * Register OpenTelemetry observable instruments for silo runtime state that a
  * call filter cannot capture — `tsva.activations` (live activation count, a
- * gauge) and `tsva.directory.cache.hits`/`.misses` (cumulative counters)
- * ([ADR 0013](../../../docs/adr/0013-observability.md)). No-op without an SDK.
+ * gauge) and `tsva.directory.cache.hits`/`.misses` (cumulative counters).
+ * No-op without an SDK.
  * Returns a function that unregisters them (call it when the silo stops).
  */
 export function registerRuntimeMetrics(sources: RuntimeMetricSources): () => void {

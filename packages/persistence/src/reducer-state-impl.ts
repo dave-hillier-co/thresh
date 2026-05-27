@@ -5,7 +5,7 @@ import type { Reducer, ReducerState } from "@tsva/core/reducer-state";
 /**
  * Reducer state: keeps the folded state in memory and persists it (a snapshot)
  * through a `GrainStorage` with etag optimistic concurrency. The raised events are
- * transient — only the reduced `value` is durable (see ADR 0006).
+ * transient — only the reduced `value` is durable.
  */
 export class ReducerStateImpl<TState, TEvent> implements ReducerState<TState, TEvent> {
   private readonly holder: StateHolder<TState>;

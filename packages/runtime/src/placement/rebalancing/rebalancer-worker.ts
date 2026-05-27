@@ -1,5 +1,5 @@
 /**
- * The activation rebalancer's elected singleton worker (ADR 0016, slice 2b) — a
+ * The activation rebalancer's elected singleton worker — a
  * faithful port of Orleans'
  * `Orleans.Runtime/Placement/Rebalancing/ActivationRebalancerWorker.cs`. Orleans
  * runs it as a `[KeepAlive, Immovable]` grain on a single, deterministically
@@ -156,7 +156,7 @@ export class ActivationRebalancerWorker {
 
       if (result.stop === "complete") {
         // Session balanced: reset and cool down one cycle period before the next
-        // session — which is exactly the loop's normal cadence (ADR 0016).
+        // session — which is exactly the loop's normal cadence.
         this.state = INITIAL_CYCLE_STATE;
         this.failedSessions = 0;
         nextDelay = this.options.sessionCyclePeriodMs;

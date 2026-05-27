@@ -111,12 +111,12 @@ export interface ClusterNodeOptions {
   ) => Promise<void>;
   /** Resolves the reminder registry a grain's `registerReminder` delegates to. */
   reminderRegistry?: () => ReminderRegistry | undefined;
-  /** Resolves the durable-job scheduler a grain's `scheduleJob` delegates to (ADR 0018). */
+  /** Resolves the durable-job scheduler a grain's `scheduleJob` delegates to. */
   durableJobScheduler?: () => DurableJobScheduler | undefined;
   /** Resolves the stream provider a grain's `getStreamProvider` returns. */
   streamProvider?: (name?: string) => StreamProvider | undefined;
   /**
-   * Names of broadcast-channel providers configured on this silo (ADR 0015). Each
+   * Names of broadcast-channel providers configured on this silo. Each
    * becomes a `getBroadcastChannelProvider(name)` whose writers fan out to the
    * channel's implicit subscribers. The first registered name is the default.
    */
@@ -128,7 +128,7 @@ export interface ClusterNodeOptions {
   /** Injectable RNG for deterministic placement in tests. */
   random?: () => number;
   /**
-   * Grain-interface versioning policy (ADR 0014). Setting either field enables
+   * Grain-interface versioning policy. Setting either field enables
    * version-aware placement on this silo; otherwise versioning activates only
    * when a registered interface declares a version > 1. Defaults:
    * backward-compatible director + latest-version selector.
@@ -187,11 +187,11 @@ export class ClusterNode {
   private readonly interfaceToGrainType = new Map<number, GrainType>();
   /** Stream namespace → grain types implicitly subscribed to it (auto-subscribe by key). */
   private readonly implicitSubscriptions = new Map<string, GrainType[]>();
-  /** Broadcast-channel namespace → grain types implicitly subscribed to it (ADR 0015). */
+  /** Broadcast-channel namespace → grain types implicitly subscribed to it. */
   private readonly broadcastSubscriptions = new Map<string, GrainType[]>();
   /** Configured broadcast-channel provider names; the first is the default. */
   private readonly broadcastProviderNames: readonly string[];
-  /** Interface versions this silo implements (ADR 0014): interfaceId -> hosted version. */
+  /** Interface versions this silo implements: interfaceId -> hosted version. */
   private readonly localVersions = new Map<number, { version: number; grainType: GrainType }>();
   private maxLocalVersion = 1;
   /** Peer manifests, fetched lazily and cleared on any membership change. */
@@ -348,7 +348,7 @@ export class ClusterNode {
     return this.implicitSubscriptions.get(namespace) ?? [];
   }
 
-  /** Grain types implicitly subscribed to a broadcast-channel namespace (ADR 0015). */
+  /** Grain types implicitly subscribed to a broadcast-channel namespace. */
   broadcastGrainTypes(namespace: string): readonly GrainType[] {
     return this.broadcastSubscriptions.get(namespace) ?? [];
   }
@@ -368,7 +368,7 @@ export class ClusterNode {
    * as a `BroadcastConsumer` system call (directory → placement), reactivating an
    * idle subscriber, exactly like stream delivery. Deliveries are awaited so a
    * failing subscriber surfaces to the publisher; this diverges from Orleans'
-   * fire-and-forget default in favour of error visibility (ADR 0015).
+   * fire-and-forget default in favour of error visibility.
    */
   async publishToBroadcastChannel(
     _provider: string,
@@ -397,7 +397,7 @@ export class ClusterNode {
     return this.catalog.isActive(id);
   }
 
-  /** This silo's grain manifest: the interface versions it implements (ADR 0014). */
+  /** This silo's grain manifest: the interface versions it implements. */
   manifest(): SiloManifest {
     return { silo: this.options.local, entries: this.localManifestEntries() };
   }
@@ -433,7 +433,7 @@ export class ClusterNode {
    * Run one attempt of a durable job on the target grain's single activation,
    * routed through the dispatcher (directory → placement) as a `DurableJobConsumer`
    * system call — so the job runs as a turn wherever the grain is placed,
-   * reactivating it if idle, exactly like reminder delivery (ADR 0018). Returns
+   * reactivating it if idle, exactly like reminder delivery. Returns
    * the handler's run result for the shard executor to act on.
    */
   async deliverDurableJob(job: JobRunContext): Promise<DurableJobRunResult> {
@@ -655,7 +655,7 @@ export class ClusterNode {
   }
 
   /**
-   * Version-aware placement pre-filter (ADR 0014). Inert (returns the candidates
+   * Version-aware placement pre-filter. Inert (returns the candidates
    * unchanged, with no manifest round-trips) unless versioning is active.
    */
   private applyVersionFilter(
@@ -1039,7 +1039,7 @@ export class ClusterNode {
     );
   }
 
-  // ── Activation rebalancer (ADR 0016, slice 2) ──────────────────────────────
+  // ── Activation rebalancer ──────────────────────────────────────────────────
 
   /** Ask a peer for its current activation count as a `system: "load"` request. */
   private async sendLoadQuery(silo: SiloAddress): Promise<number> {
@@ -1167,7 +1167,7 @@ export class ClusterNode {
 
   /**
    * Run one rebalancing cycle: gather the cluster load, ask the model for the
-   * migrations that would lower its entropy imbalance (ADR 0016), and execute
+   * migrations that would lower its entropy imbalance, and execute
    * them by telling each busier silo to shed activations to its paired quieter
    * silo. Returns the model's next state and imbalance plus how many activations
    * actually moved. The elected worker (slice 2b) drives this on a timer.

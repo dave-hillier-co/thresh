@@ -3,7 +3,7 @@ import type { InvokeMethodOptions } from "./invoke-options";
 
 /**
  * A registered grain interface — now a *compile-time view* of a grain's message
- * surface (see [ADR 0011](../../docs/adr/0011-message-dispatch-substrate.md)).
+ * surface.
  * It carries a stable id (used to route a `getGrain` to the hosting grain type
  * and to rehydrate grain references) and the per-method invocation options.
  *
@@ -17,8 +17,7 @@ export interface GrainInterface<T> {
   /**
    * Interface version (defaults to 1). The `id` is name-derived and stable
    * across versions — two versions of one interface share an id — so a caller's
-   * version travels separately on the wire for version-aware placement
-   * ([ADR 0014](../../docs/adr/0014-grain-interface-versioning.md)).
+   * version travels separately on the wire for version-aware placement.
    */
   readonly version: number;
   readonly options: Readonly<Record<string, InvokeMethodOptions>>;

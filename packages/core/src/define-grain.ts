@@ -307,8 +307,8 @@ export interface UseDurableStateOptions {
 /**
  * The functional counterpart of `@durableState`. Registers a durable-journalling
  * value facet on the activation and returns a handle; the runtime binds the
- * grain's single state-machine manager and replays the log before `onActivate`
- * (see [ADR 0019](../../docs/adr/0019-durable-journaling.md)). The handle throws
+ * grain's single state-machine manager and replays the log before `onActivate`.
+ * The handle throws
  * if used before then.
  */
 export function useDurableState<T>(

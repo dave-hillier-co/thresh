@@ -12,8 +12,7 @@ export interface InvokeMethodOptions {
   /** Fire-and-forget; resolves once accepted, no response awaited. */
   oneWay?: boolean;
   /**
-   * How this call relates to the ambient transaction (Phase 7,
-   * [ADR 0008](../../docs/adr/0008-cross-grain-transactions.md)). Absent means
+   * How this call relates to the ambient transaction. Absent means
    * the method is non-transactional: an ambient transaction still flows through
    * to nested calls, but this method's state does not participate.
    */

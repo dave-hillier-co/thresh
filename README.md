@@ -19,10 +19,9 @@ reactivates elsewhere on its next call. This is "distributed objects that just w
 
 ## Quick example
 
-A grain is written as a **factory closure** — the React-inspired functional style is the default
-(see [ADR 0009](docs/adr/0009-functional-grains.md)). Per-activation state lives in closure
-variables; durable state and other facets come from hooks on the setup context; the returned object
-is the grain's message surface.
+A grain is written as a **factory closure** — the React-inspired functional style is the default.
+Per-activation state lives in closure variables; durable state and other facets come from hooks on
+the setup context; the returned object is the grain's message surface.
 
 ```ts
 // Interface — the contract callers see. A compile-time view; no method table.
@@ -51,32 +50,21 @@ const commands = await thermostat.onUpdate(update);
 
 `client.getGrain` returns a lightweight proxy; the grain is activated on first call, wherever the
 cluster decides to place it. The caller does not know — or need to know — which pod that is. The
-class + decorator form this functional API is built on is still supported as an interop surface —
-see [02 — the actor model](docs/02-actor-model.md).
+class + decorator form this functional API is built on is still supported as an interop surface.
 
 ## Documentation
 
-Read these in order for a full picture of the design and its build order.
+The target is **feature parity with Orleans 10**, so the model, persistence, reminders, streams and
+transactions are deliberately the same as Orleans — read the Orleans source for their mechanics. The
+docs cover only what is worth writing down here:
 
-- [01 — Overview and goals](docs/01-overview-and-goals.md)
-- [02 — The actor model](docs/02-actor-model.md)
-- [03 — Runtime and silo](docs/03-runtime-and-silo.md)
-- [04 — Messaging and serialization](docs/04-messaging-and-serialization.md)
-- [05 — Clustering and membership on Kubernetes](docs/05-clustering-membership-k8s.md)
-- [06 — Grain directory and placement](docs/06-grain-directory-and-placement.md)
-- [07 — Persistence](docs/07-persistence.md)
-- [08 — Timers and reminders](docs/08-timers-and-reminders.md)
-- [09 — Event streams](docs/09-event-streams.md)
-- [10 — Kubernetes hosting](docs/10-kubernetes-hosting.md)
-- [11 — Public API and examples](docs/11-public-api-and-examples.md)
-- [12 — Project structure and tooling](docs/12-project-structure-and-tooling.md)
-- [13 — Roadmap and phases](docs/13-roadmap-and-phases.md)
-- [Architecture decision records](docs/adr/)
+- [How this differs from Orleans](docs/deviations.md) — the deviations only (TypeScript idioms,
+  Kubernetes hosting, functional authoring), each linked to its decision record.
+- [`EPICS.md`](EPICS.md) — the live status board (shipped vs. remaining).
 
 ## Developing
 
-A [pnpm](https://pnpm.io) workspace of `@tsva/*` packages (see
-[project structure](docs/12-project-structure-and-tooling.md)). Requires Node 22+ and pnpm.
+A [pnpm](https://pnpm.io) workspace of `@tsva/*` packages. Requires Node 22+ and pnpm.
 
 ```sh
 pnpm install      # install workspace dependencies
@@ -109,8 +97,8 @@ pnpm --filter @tsva/example-thermostat start   # durable state + a reminder + a 
 - [`examples/bank`](examples/bank) — reducer grains in the functional style. The account is shown two
   ways: a multi-method `defineGrain` closure with `useReducerState`, and the zero-boilerplate
   `defineReducerGrain` whose whole surface is `dispatch(action)` + `query()` with cross-grain work
-  returned as Elm-style effects ([ADR 0010](docs/adr/0010-message-dispatch-reducer-grains.md)). Both
-  fold a pure reducer into immutable state, persisted as a snapshot that survives a silo restart.
+  returned as Elm-style effects. Both fold a pure reducer into immutable state, persisted as a
+  snapshot that survives a silo restart.
 - [`examples/thermostat`](examples/thermostat) — the Orleans README example: `@persistentState`, a
   durable self-check reminder, and a telemetry stream consumed by an aggregator.
 
@@ -120,7 +108,7 @@ One example deploys to a real cluster rather than running in-process:
   from the headless Service's EndpointSlices, durable state in an in-cluster Redis, and an
   HTTP-over-grain API. Its opt-in end-to-end test (`K8S_E2E=1`) deploys it and asserts the cluster
   forms, calls route to one activation across pods, a killed pod's grain reactivates on a survivor,
-  and a rolling update keeps state. See [docs/10](docs/10-kubernetes-hosting.md).
+  and a rolling update keeps state.
 
 Work proceeds test-first in vertical slices that map to the
-[roadmap](docs/13-roadmap-and-phases.md); [`todo.md`](todo.md) tracks outstanding items.
+[`EPICS.md`](EPICS.md) status board; [`todo.md`](todo.md) tracks outstanding items.

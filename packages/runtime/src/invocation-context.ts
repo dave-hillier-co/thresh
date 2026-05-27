@@ -10,7 +10,7 @@ import type { TransactionInfo } from "@tsva/core/transaction-info";
 export interface InvocationContext {
   senderId: GrainId | undefined;
   reentrancyId: string;
-  /** The transaction this turn runs inside, if any (Phase 7, ADR 0008). */
+  /** The transaction this turn runs inside, if any. */
   transaction?: TransactionInfo | undefined;
   /**
    * Ambient request-context headers (Orleans `RequestContext`): a string→string

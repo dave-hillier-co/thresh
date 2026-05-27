@@ -53,8 +53,8 @@ export class InconsistentStateError extends Error {
 /**
  * Raised when a transaction is aborted by the concurrency-control or commit
  * protocol — for example a younger transaction "dies" under wait-die when it
- * conflicts with an older holder, or a participant fails to prepare
- * ([ADR 0008](../../docs/adr/0008-cross-grain-transactions.md)). Propagates to
+ * conflicts with an older holder, or a participant fails to prepare.
+ * Propagates to
  * the originating call so the caller may retry.
  */
 export class TransactionAbortedError extends Error {

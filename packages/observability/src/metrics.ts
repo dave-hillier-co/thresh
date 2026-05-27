@@ -6,7 +6,7 @@ import type { IncomingGrainCallFilter } from "@tsva/core/grain-call-filter";
  * `tsva.grain.calls` counter (by interface, method, and ok/error status) and a
  * `tsva.grain.call.duration` histogram (milliseconds). Emitted through the global
  * OpenTelemetry meter — a no-op until the host registers an SDK. Pairs with the
- * tracing filter ([ADR 0013](../../../docs/adr/0013-observability.md)).
+ * tracing filter.
  */
 export function metricsFilters(): { incoming: IncomingGrainCallFilter } {
   const meter = metrics.getMeter("@tsva/observability");

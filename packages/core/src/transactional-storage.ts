@@ -3,7 +3,7 @@ import type { ParticipantId } from "./transaction-info";
 
 /**
  * Durable storage for transactional state, ported from Orleans
- * `ITransactionalStateStorage<TState>` ([ADR 0008](../../docs/adr/0008-cross-grain-transactions.md)).
+ * `ITransactionalStateStorage<TState>`.
  * Distinct from `GrainStorage`: it keeps a committed version with a dense local
  * sequence id, a list of prepared-but-uncommitted pending states, and a
  * commit-records log, so a commit is a single atomic `store` and recovery can

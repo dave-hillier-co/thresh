@@ -2,7 +2,7 @@ import { call, defineReducerGrain, type ReducerResult } from "@tsva/core/define-
 import { initialAccount, type AccountState } from "@tsva/example-bank/interfaces";
 
 /**
- * The bank account as a single-dispatch reducer grain (ADR 0010): its entire
+ * The bank account as a single-dispatch reducer grain: its entire
  * public surface is `dispatch(action)` + a read-only `query()`, so there is no
  * per-grain interface method table to hand-write or generate — the `Action`
  * union below is the protocol. Cross-grain work (the transfer's credit leg) is

@@ -2,7 +2,7 @@
 export type Reducer<TState, TEvent> = (state: TState, event: TEvent) => TState;
 
 /**
- * The grain-facing reducer facet (see [ADR 0006](../../docs/adr/0006-reducer-grains.md)).
+ * The grain-facing reducer facet.
  * State is immutable: a command handler `raise`s a past-tense event, which is
  * folded through the pure reducer to produce the next `value`. In snapshot mode
  * the folded `value` is what `write` persists; the events are transient.

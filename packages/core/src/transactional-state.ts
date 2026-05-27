@@ -1,6 +1,6 @@
 /**
  * The grain-facing transactional-state facet, mirroring Orleans
- * `ITransactionalState<T>` ([ADR 0008](../../docs/adr/0008-cross-grain-transactions.md)).
+ * `ITransactionalState<T>`.
  * State is reached only inside a transaction, through `performRead` (a read that
  * must not mutate) and `performUpdate` (a mutation applied to a per-transaction
  * tentative copy). The facet enlists itself as a participant on first access; the

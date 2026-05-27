@@ -20,7 +20,7 @@ export interface StateMachineManagerOptions {
 
 /**
  * Per-grain owner of one append-only log shared by all the grain's durable
- * structures (see [ADR 0019](../../docs/adr/0019-durable-journaling.md)). It
+ * structures. It
  * frames mutations, persists them through a `JournalStorage` under version CAS,
  * replays the log on activation, and snapshots + truncates past a threshold.
  * Within an activation everything runs on serialized turns, so no in-process

@@ -21,7 +21,7 @@ export interface SerializedParticipant {
 /** Ambient headers propagated along a call chain (trace ids, deadlines, etc.). */
 export interface RequestContext {
   reentrancyId?: string | undefined;
-  /** The ambient transaction this call participates in (Phase 7, ADR 0008). */
+  /** The ambient transaction this call participates in. */
   transaction?: TransactionContextHeader | undefined;
   /** Request-context headers (Orleans `RequestContext`): trace context + app baggage. */
   headers?: Record<string, string> | undefined;
@@ -49,7 +49,7 @@ export interface Message {
   responseKind?: ResponseKind | undefined;
   requestContext?: RequestContext | undefined;
 
-  /** On a reply: participants the callee enlisted, for the caller to merge (ADR 0008). */
+  /** On a reply: participants the callee enlisted, for the caller to merge. */
   transactionParticipants?: SerializedParticipant[] | undefined;
 
   /** Serialized arguments (request) or result/error (response). */

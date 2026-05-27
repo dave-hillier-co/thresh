@@ -5,7 +5,7 @@ export type DurableKind = "value" | "dictionary" | "list";
  * A durable-journaling field declared on a grain via the `@durableState` /
  * `@durableDictionary` / `@durableList` decorators or the `useDurable*` hooks.
  * The binder builds the matching structure and registers it on the grain's
- * single state-machine manager (see [ADR 0019](../../docs/adr/0019-durable-journaling.md)).
+ * single state-machine manager.
  */
 export interface DurableStateField {
   fieldName: string;

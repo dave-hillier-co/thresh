@@ -1,12 +1,12 @@
 /**
- * The activation rebalancer's decision model (ADR 0016) — a faithful, pure port
+ * The activation rebalancer's decision model — a faithful, pure port
  * of Orleans' adaptive, entropy-minimizing rebalancing
  * (`Orleans.Runtime/Placement/Rebalancing/ActivationRebalancerWorker.cs`; algorithm:
  * https://www.ledjonbehluli.com/posts/orleans_adaptive_rebalancing/).
  *
  * Each silo's load is modelled as a single scalar (its activation count): the
  * uniform-memory case of Orleans' `(memory, activations)` weighting, since this
- * runtime does not yet gossip per-silo memory (see ADR 0016 "Load metric"). The
+ * runtime does not yet gossip per-silo memory. The
  * load distribution is treated as a probability distribution whose Shannon
  * entropy we drive toward the maximum (`ln S`, the perfectly even split),
  * migrating a scaled, bounded number of activations from busy to quiet silos each

@@ -1,5 +1,5 @@
 /**
- * The rebalancer's externally observable status (ADR 0016), a faithful port of
+ * The rebalancer's externally observable status, a faithful port of
  * Orleans' `RebalancingReport` (`Orleans.Core/Placement/Rebalancing/RebalancingReport.cs`).
  * The elected worker tracks the latest report after each cycle; the host can
  * surface it for diagnostics.

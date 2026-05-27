@@ -4,7 +4,7 @@ import type { GrainId } from "./grain-id";
 
 /**
  * A durable job: one scheduled invocation of a target grain at a due time, made
- * durable, sharded by due time, retried and failed-over (ADR 0018). Despite the
+ * durable, sharded by due time, retried and failed-over. Despite the
  * name it is not a workflow — it is "a reminder at scale, one-shot, with retries,
  * concurrency control and crash-failover". Mirrors Orleans' `DurableJob`.
  */

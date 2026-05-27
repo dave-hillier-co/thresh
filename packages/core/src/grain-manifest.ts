@@ -4,8 +4,7 @@ import type { SiloAddress } from "./silo-address";
 /**
  * The interface versions a silo's registered grain implementations support — the
  * unit a silo advertises to peers so placement can be version-aware (Orleans'
- * `GrainVersionManifest` / `IClusterManifestProvider`). See
- * [ADR 0014](../../docs/adr/0014-grain-interface-versioning.md).
+ * `GrainVersionManifest` / `IClusterManifestProvider`).
  */
 export interface InterfaceVersionEntry {
   /** Name-derived interface id (stable across versions of one interface). */

@@ -19,7 +19,7 @@ export interface GrainRuntime {
   /**
    * Schedule a durable job: one invocation of a target grain's
    * `DURABLE_JOB_HANDLER` at a due time, made durable, retried and failed-over
-   * (ADR 0018). Returns the durable job; pass it to {@link cancelJob} to cancel.
+   * Returns the durable job; pass it to {@link cancelJob} to cancel.
    */
   scheduleJob(request: ScheduleJobRequest): Promise<DurableJob>;
   /** Best-effort cancel of a scheduled job that has not yet completed. */

@@ -37,8 +37,7 @@ export interface RedisPullingStreamProviderOptions {
 }
 
 /**
- * Durable, cluster-shared stream provider built on pulling agents
- * ([ADR 0007](../../docs/adr/0007-stream-pulling-agents.md)). All streams are
+ * Durable, cluster-shared stream provider built on pulling agents. All streams are
  * multiplexed over a fixed set of physical Redis-Stream queues; an agent per
  * queue pulls events and routes each to its stream's subscribers (discovered in
  * the durable registry) via the dispatcher, committing the queue cursor after

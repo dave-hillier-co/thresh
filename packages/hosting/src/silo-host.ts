@@ -23,7 +23,7 @@ export interface SiloHostParts {
   shutdown: GracefulShutdown;
   membership: MembershipService;
   reminderService?: ReminderService | undefined;
-  /** The elected activation-rebalancer worker (ADR 0016), started/stopped with the host. */
+  /** The elected activation-rebalancer worker, started/stopped with the host. */
   rebalancerWorker?: ActivationRebalancerWorker | undefined;
   /** Run before the node starts — e.g. connect durable provider clients. */
   onStart?: ReadonlyArray<() => Promise<void>>;
@@ -59,7 +59,7 @@ export class SiloHost {
     return this.parts.node.isActive(id);
   }
 
-  /** The latest activation-rebalancer report (ADR 0016), if rebalancing is enabled. */
+  /** The latest activation-rebalancer report, if rebalancing is enabled. */
   rebalancingReport(): RebalancingReport | undefined {
     return this.parts.rebalancerWorker?.report();
   }

@@ -292,14 +292,14 @@ export class ActivationData implements GrainContext {
       return undefined;
     }
     // Broadcast-channel delivery is likewise a system extension: route the
-    // published item to the grain's broadcast observer (ADR 0015).
+    // published item to the grain's broadcast observer.
     if (req.interfaceId === BroadcastConsumerInterface.id) {
       const [channelKey, item] = req.args as [string, unknown];
       const handler = this.broadcastHandlerFor(channelKey);
       if (handler !== undefined) await handler.onPublished(item);
       return undefined;
     }
-    // Durable-job delivery is a system extension (ADR 0018): run one attempt of
+    // Durable-job delivery is a system extension: run one attempt of
     // the job on the grain's `DURABLE_JOB_HANDLER`, as a turn here. A grain with
     // no handler throws, which the executor catches as `Failed` (the retry policy
     // then drops it) — rather than treating a missing handler as completion, and
