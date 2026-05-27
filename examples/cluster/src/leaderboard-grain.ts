@@ -1,5 +1,4 @@
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
+import { defineGrain } from "@tsva/core/define-grain";
 import type { ILeaderboard, ScoreEntry } from "@tsva/example-cluster/interfaces";
 
 /**
@@ -7,19 +6,19 @@ import type { ILeaderboard, ScoreEntry } from "@tsva/example-cluster/interfaces"
  * in the cluster are routed to this one activation and run as serialized turns,
  * so the `Map` is only ever touched by one turn at a time.
  */
-@grain()
-export class LeaderboardGrain extends Grain implements ILeaderboard {
-  private readonly best = new Map<string, number>();
+export const LeaderboardGrain = defineGrain<ILeaderboard>("Leaderboard", () => {
+  const best = new Map<string, number>();
 
-  async record(player: string, score: number): Promise<void> {
-    const current = this.best.get(player);
-    if (current === undefined || score > current) this.best.set(player, score);
-  }
+  return {
+    record: async (player: string, score: number): Promise<void> => {
+      const current = best.get(player);
+      if (current === undefined || score > current) best.set(player, score);
+    },
 
-  async top(limit = 10): Promise<ScoreEntry[]> {
-    return [...this.best.entries()]
-      .map(([player, score]) => ({ player, score }))
-      .sort((a, b) => b.score - a.score)
-      .slice(0, limit);
-  }
-}
+    top: async (limit = 10): Promise<ScoreEntry[]> =>
+      [...best.entries()]
+        .map(([player, score]) => ({ player, score }))
+        .sort((a, b) => b.score - a.score)
+        .slice(0, limit),
+  };
+});

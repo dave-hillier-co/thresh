@@ -1,5 +1,4 @@
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
+import { defineGrain } from "@tsva/core/define-grain";
 import type { StreamHandler } from "@tsva/core/stream";
 import {
   TELEMETRY,
@@ -7,35 +6,34 @@ import {
   type ThermostatStatus,
 } from "@tsva/example-thermostat/interfaces";
 
-/** Subscribes to a device's telemetry stream and keeps a rolling average. */
-@grain()
-export class FleetAggregatorGrain extends Grain implements IFleetAggregator {
-  private sum = 0;
-  private count = 0;
+/**
+ * Subscribes to a device's telemetry stream and keeps a rolling average. The
+ * functional counterpart to the class-based `ThermostatGrain` it consumes from —
+ * the two styles interoperate over the same stream (see `thermostat-grain.ts`).
+ */
+export const FleetAggregatorGrain = defineGrain<IFleetAggregator>("FleetAggregator", (ctx) => {
+  let sum = 0;
+  let count = 0;
 
-  override async onActivate(): Promise<void> {
-    const stream = this.runtime
-      .getStreamProvider()
-      .getStream<ThermostatStatus>(TELEMETRY, this.id.key);
-    const existing = await stream.getSubscriptions();
-    if (existing.length > 0) await existing[0]!.resume(this.handler());
-    else await stream.subscribe(this.handler());
-  }
+  const handler = (): StreamHandler<ThermostatStatus> => ({
+    onNext: async (status) => {
+      sum += status.tempC;
+      count++;
+    },
+  });
 
-  async averageTemp(): Promise<number> {
-    return this.count === 0 ? 0 : this.sum / this.count;
-  }
+  return {
+    onActivate: async () => {
+      const stream = ctx.runtime
+        .getStreamProvider()
+        .getStream<ThermostatStatus>(TELEMETRY, ctx.id.key);
+      const existing = await stream.getSubscriptions();
+      if (existing.length > 0) await existing[0]!.resume(handler());
+      else await stream.subscribe(handler());
+    },
 
-  async sampleCount(): Promise<number> {
-    return this.count;
-  }
+    averageTemp: async (): Promise<number> => (count === 0 ? 0 : sum / count),
 
-  private handler(): StreamHandler<ThermostatStatus> {
-    return {
-      onNext: async (status) => {
-        this.sum += status.tempC;
-        this.count++;
-      },
-    };
-  }
-}
+    sampleCount: async (): Promise<number> => count,
+  };
+});

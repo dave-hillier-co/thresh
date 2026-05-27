@@ -1,5 +1,4 @@
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
+import { defineGrain } from "@tsva/core/define-grain";
 import type { IGreeter } from "@tsva/example-greeter/interfaces";
 
 /**
@@ -11,21 +10,20 @@ import type { IGreeter } from "@tsva/example-greeter/interfaces";
  * - the `count` is volatile activation state — after the grain deactivates while
  *   idle, the next call reactivates it fresh and the count starts again at 1.
  */
-@grain()
-export class GreeterGrain extends Grain implements IGreeter {
-  private prefix = "uninitialised";
-  private count = 0;
+export const GreeterGrain = defineGrain<IGreeter>("Greeter", (ctx) => {
+  let prefix = "uninitialised";
+  let count = 0;
 
-  override async onActivate(): Promise<void> {
-    this.prefix = `[${String(this.id.key)}]`;
-  }
+  return {
+    onActivate: async () => {
+      prefix = `[${String(ctx.id.key)}]`;
+    },
 
-  async greet(name: string): Promise<string> {
-    this.count++;
-    return `${this.prefix} Hello, ${name}! (greeting #${this.count})`;
-  }
+    greet: async (name: string): Promise<string> => {
+      count++;
+      return `${prefix} Hello, ${name}! (greeting #${count})`;
+    },
 
-  async greetings(): Promise<number> {
-    return this.count;
-  }
-}
+    greetings: async (): Promise<number> => count,
+  };
+});

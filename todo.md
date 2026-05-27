@@ -370,9 +370,11 @@ order, starting with transactions.
       the substrate / interop surface. ADR 0009/0010 bumped to Accepted; README + `docs/01`/`02`/`07`/
       `08`/`09`/`11`/`12`/`13` reoriented functional-first with a short class-substrate note; the
       `examples/bank` class account grain dropped (functional + dispatch variants kept).
-- [ ] Migrate the remaining examples to functional-first so they match the docs: `examples/greeter`,
-      `examples/chat`, `examples/cluster`, `examples/thermostat`, `examples/k8s-silo` (each currently
-      a `@grain()` class). Keep one class grain somewhere as a living interop example.
+- [x] Migrated the remaining examples to functional-first so they match the docs: `examples/greeter`,
+      `examples/chat`, `examples/cluster`, `examples/k8s-silo`, and the `FleetAggregator` of
+      `examples/thermostat` are now `defineGrain` factories. `ThermostatGrain` is kept deliberately as
+      the `@grain()` class — the living interop example, consumed by the functional aggregator over
+      the telemetry stream. Smoke tests stay green.
 - [ ] Optional ergonomics from the review: move the facet hooks onto `ctx`
       (`ctx.persistentState(...)` / `ctx.reducerState(...)`) to drop the `INSTANCE`-symbol smuggling
       and the misleading `use*` prefix; add `useReminder` / `useTimer` / `useActivate` sugar.
