@@ -1,87 +1,56 @@
 # EPICS
 
-Headline status of the **Orleans 10 parity** port (a TypeScript, reducer/functional-first virtual-actor
-runtime). Epic-level only — see [`todo.md`](todo.md) for the per-slice breakdown,
-[`docs/13`](docs/13-roadmap-and-phases.md) for scope/exit criteria, and [`docs/adr`](docs/adr) for the
-decisions.
+Status board for the **Orleans 10 parity** port (a TypeScript, reducer/functional-first virtual-actor
+runtime). See [`todo.md`](todo.md) for outstanding work, [`docs/`](docs/) for the design, and
+[`docs/adr`](docs/adr) for the decisions.
 
 ## ✅ Shipped
 
-- [x] **Core actor model** — grains, identity, `Proxy` references, turn scheduler, activation
-      lifecycle, call-chain reentrancy (Phase 1).
-- [x] **Messaging & multi-silo** — WebSocket/in-process transport, message envelope, serializer,
-      dispatcher, DHT grain directory + location cache, placement strategies, static membership (Phase 2).
-- [x] **Kubernetes hosting** — EndpointSlice-watch membership, health probes, graceful drain, the
-      `createSilo()` builder, and a real-cluster e2e (Phase 3).
-- [x] **Persistence** — `PersistentState` facet, etag optimistic concurrency, memory + Redis providers
-      (Phase 4).
-- [x] **Timers & reminders** — in-memory timers; durable reminders with hash-range ownership and
-      rebalancing; memory + Redis tables (Phase 5).
-- [x] **Event streams** — `StreamProvider`/subscriptions, pulling agents, ring-based queue ownership,
-      durable cursors, at-least-once delivery; memory + Redis Streams (Phase 6).
-- [x] **Cross-grain ACID transactions** — declarative boundaries, `TransactionalState<T>` facet with
-      timestamp-ordered wait-die locking, optimistic two-phase commit (TM elected from writers),
-      durable storage (memory + Redis), cross-silo participants, and in-doubt recovery (Phase 7,
-      [ADR 0008](docs/adr/0008-cross-grain-transactions.md)).
-- [x] **Reducer grains & functional-first authoring** — `defineGrain` + hooks, `@reducerState`
-      snapshot mode, `defineReducerGrain` dispatch grains (ADRs
-      [0006](docs/adr/0006-reducer-grains.md)/[0009](docs/adr/0009-functional-grains.md)/[0010](docs/adr/0010-message-dispatch-reducer-grains.md)/[0011](docs/adr/0011-message-dispatch-substrate.md)).
-- [x] **Grain call filters** — incoming, outgoing, and per-grain interception (auth, retries, the
-      observability seam) ([ADR 0012](docs/adr/0012-grain-call-filters.md)).
-- [x] **Observability** ([ADR 0013](docs/adr/0013-observability.md)) — ambient **request context**,
-      **OpenTelemetry tracing**, **metrics** (call counter + duration histogram, activation gauge,
-      directory-cache hit/miss), and **structured logging**, all on the call-filter seam and no-op
-      without an SDK/logger. (Reminder/stream-lag gauges deferred as optional polish.)
-- [x] **Functional-first examples** — every example grain is authored with `defineGrain` + hooks,
-      matching the docs; one `@grain()` class (`examples/thermostat`) is kept on purpose as the living
-      interop example the functional aggregator consumes from.
+- **Core actor model** — grains, identity, `Proxy` references, turn scheduler, activation lifecycle,
+  call-chain reentrancy.
+- **Messaging & multi-silo** — WebSocket/in-process transport, message envelope, serializer,
+  dispatcher, DHT directory + location cache with versioned lossless range handoff, static membership.
+- **Placement** — random / prefer-local / activation-count / stateless-worker / silo-role /
+  resource-optimized strategies, metadata placement filters, and version-aware placement.
+- **Kubernetes hosting** — EndpointSlice-watch membership, health probes, graceful drain, the
+  `createSilo()` builder, and a real-cluster e2e.
+- **Persistence** — `PersistentState` facet with etag concurrency; memory + Redis + Postgres providers.
+- **Timers & reminders** — in-memory timers; durable reminders with hash-range ownership and
+  rebalancing; memory + Redis + Postgres tables.
+- **Event streams** — `StreamProvider`/subscriptions, pulling agents, ring-based queue ownership,
+  durable cursors, at-least-once delivery, implicit subscriptions; memory + Redis Streams.
+- **Cross-grain ACID transactions** ([ADR 0008](docs/adr/0008-cross-grain-transactions.md)) —
+  `TransactionalState<T>` with timestamp-ordered wait-die locking, optimistic two-phase commit
+  (TM elected from writers), durable storage, cross-silo participants, in-doubt recovery.
+- **Grain migration** — live activation move with state preserved (`IGrainMigrationParticipant`,
+  `MigrateOnIdle`, directed placement).
+- **Grain-interface versioning** ([ADR 0014](docs/adr/0014-grain-interface-versioning.md)) — versions
+  coexist for heterogeneous rolling upgrades, with version-aware placement.
+- **Broadcast channels** ([ADR 0015](docs/adr/0015-broadcast-channels.md)) — lightweight in-cluster
+  pub/sub to implicit subscribers.
+- **Grain call filters** ([ADR 0012](docs/adr/0012-grain-call-filters.md)) — incoming, outgoing, and
+  per-grain interception.
+- **Observability** ([ADR 0013](docs/adr/0013-observability.md)) — request context, OpenTelemetry
+  tracing/metrics, structured logging, on the call-filter seam; no-op without an SDK.
+- **External client** — gateway-routed client with gateway discovery + failover, verified in-process
+  and over real WebSocket sockets.
+- **Reducer & functional-first authoring** (ADRs [0006](docs/adr/0006-reducer-grains.md)/[0009](docs/adr/0009-functional-grains.md)/[0010](docs/adr/0010-message-dispatch-reducer-grains.md)/[0011](docs/adr/0011-message-dispatch-substrate.md))
+  — `defineGrain` + hooks, snapshot reducers, dispatch grains. Every example grain is functional
+  (one `@grain()` class kept on purpose as the living interop example).
 
 ## 🚧 In progress
 
-- [~] **External client** — in-process gateway-routed client ships; higher-level gateway discovery +
-      a WebSocket client e2e remain.
-- [x] **External client** — gateway-routed client with **gateway discovery + failover** (a
-      `GatewayListProvider` — static / membership / URL — feeding a round-robin `GatewayManager` that
-      marks unreachable gateways dead and fails over), verified both in-process and over the **real
-      WebSocket transport** (client → gateway → activation, reply over a reverse connection).
-- [~] **Functional-first examples** — docs lead functional; a few examples are still `@grain()`
-      classes to migrate (one kept as a living interop example).
+- **Activation rebalancer** ([ADR 0016](docs/adr/0016-activation-rebalancer.md)) — the entropy model
+  (slice 1) and the distributed mechanism (load gathering + `migrateRandomActivations` +
+  `runRebalanceCycle`, slice 2a) ship; the elected worker + builder + convergence e2e (slice 2b) remain.
 
-## 📋 TODO — remaining for Orleans 10 parity
+## 📐 Designed (not yet implemented)
 
-- [x] **Grain migration** — live-migrate an activation to another silo with state preserved
-      (`IGrainMigrationParticipant`, `MigrateOnIdle`, directed placement).
-- [~] **Activation rebalancer** — proactively move activations across silos to balance load
-      (`IActivationRebalancer`), [ADR 0016](docs/adr/0016-activation-rebalancer.md). Slice 1 (the
-      adaptive entropy-minimizing decision model) shipped; slice 2 (elected worker + cross-silo load
-      reporting + migrate-random RPC + e2e) remains.
-- [x] **Grain-interface versioning** — multiple interface versions coexist for heterogeneous rolling
-      upgrades, with version-aware placement ([ADR 0014](docs/adr/0014-grain-interface-versioning.md)).
-- [x] **Implicit stream subscriptions** — bind a grain type to a namespace and auto-subscribe by key.
-- [x] **Directory range handoff** — versioned, lossless directory handoff on membership change
-      (replacing the phase-2 drop-and-rebuild).
-- [x] **Placement filters** — prune candidate silos by metadata before placement; additional
-      placement strategies.
-- [x] **Broadcast channels** — lightweight in-cluster pub/sub without the pulling-agent machinery
-      ([ADR 0015](docs/adr/0015-broadcast-channels.md)).
-- [ ] **Durable journaling (`DurableGrain`)** — Orleans 10 `Orleans.Journaling`; needs an ADR
-      (overlaps reducer/persistent state).
-- [~] **Durable jobs** — Orleans 10 `Orleans.DurableJobs`: a sharded, durable, at-least-once
-      scheduled-execution engine (not a workflow engine). Designed in
-      [ADR 0018](docs/adr/0018-durable-jobs.md) (`@tsva/durable-jobs`); design only, not yet
-      implemented.
-
-## 🔭 Beyond parity (future)
-
-- [ ] **Browser state replication & browser-hosted grains** — replicate grain state to the browser and
-      run permitted grains client-side, gated by a server-enforced trust model
-      ([docs/13 "Beyond parity"](docs/13-roadmap-and-phases.md)). Design settled in
-      [ADR 0017](docs/adr/0017-browser-state-replication.md) (read-only live read-views first);
-      implementation pending.
+- **Durable jobs** ([ADR 0018](docs/adr/0018-durable-jobs.md)) — sharded, durable, at-least-once
+  scheduled execution.
+- **Durable journaling (`DurableGrain`)** — Orleans 10 `Orleans.Journaling`; still needs an ADR.
+- **Browser state replication** ([ADR 0017](docs/adr/0017-browser-state-replication.md), beyond parity).
 
 ## ⏸ Deferred
 
-- [x] **Additional durable providers (Postgres)** — `PostgresGrainStorage` and
-      `PostgresReminderTable` ship behind the same interfaces (`addPostgresStorage` /
-      `usePostgresReminders`); Redis remains the shipped default. Other stream backings remain
-      deferred.
+- Additional stream backings behind the existing interfaces (Redis is the default).
