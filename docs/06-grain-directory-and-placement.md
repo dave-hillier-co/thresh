@@ -1,68 +1,35 @@
 # 06 — Grain directory and placement
 
-Two related questions the runtime must answer for every call:
+Two questions the runtime answers for every call:
 
-- **Directory:** *where is the activation for this `GrainId` right now?*
-- **Placement:** *if it has no activation, which silo should create one?*
+- **Directory:** where is the activation for this `GrainId` right now?
+- **Placement:** if it has no activation, which silo should create one?
 
-These remain application-level concerns even on Kubernetes, because they are about *grains*, not
-pods. We implement the directory as an **in-silo distributed hash table** over a consistent-hash
-ring — the same design as Orleans — built on top of the Kubernetes-derived membership view from
-[05](05-clustering-membership-k8s.md).
+These are about *grains*, not pods, so they remain application-level even on Kubernetes. The directory
+is an **in-silo distributed hash table** over a consistent-hash ring — Orleans' design — built on the
+membership view from [05](05-clustering-membership-k8s.md). See [ADR 0003](adr/0003-in-silo-dht-directory.md).
 
-> Orleans references: `Orleans.Runtime/GrainDirectory/DistributedGrainDirectory.cs`,
-> `Orleans.Runtime/GrainDirectory/GrainLocator.cs`,
-> `Orleans.Runtime/GrainDirectory/DhtGrainLocator.cs`,
+> Orleans references: `Orleans.Runtime/GrainDirectory/{DistributedGrainDirectory,GrainLocator,DhtGrainLocator}.cs`,
 > `Orleans.Core.Abstractions/GrainDirectory/IGrainDirectory.cs`,
-> `Orleans.Core.Abstractions/Placement/PlacementStrategy.cs`,
-> `Orleans.Core.Abstractions/Placement/PlacementFilterStrategy.cs`,
+> `Orleans.Core.Abstractions/Placement/{PlacementStrategy,PlacementFilterStrategy}.cs`,
 > `Orleans.Runtime/Placement/*`.
 
-## Why a distributed directory and not an external store
+## Why an in-memory directory
 
-Grain-location entries are **ephemeral**: an entry says "grain X is currently activated on silo Y".
-If silo Y dies, the entry is meaningless and must be discarded; the grain simply reactivates
-elsewhere. Because the entries are disposable and reconstructable, there is no need for a durable
-external store (Redis, a database). Instead each silo owns a partition of the directory in memory,
-and partitions are rebalanced when membership changes. This is faithful to Orleans and avoids
-coupling the hot path to an external dependency. See
-[ADR 0003](adr/0003-in-silo-dht-directory.md).
-
-(Contrast with [07 persistence](07-persistence.md), [08 reminders](08-timers-and-reminders.md) and
-[09 streams](09-event-streams.md), which *are* durable and therefore *do* use external stores,
+Location entries are **ephemeral** — "grain X is activated on silo Y"; if Y dies the entry is
+meaningless and the grain reactivates elsewhere. Because entries are disposable and reconstructable,
+no durable external store is needed: each silo owns a partition of the directory in memory, rebalanced
+on membership change. (Persistence, reminders and streams *are* durable and do use external stores,
 defaulting to Redis.)
 
 ## The consistent-hash ring
 
-```mermaid
-flowchart TB
-    subgraph Ring
-      direction LR
-      S0["silo-0 vnodes"] --> S1["silo-1 vnodes"] --> S2["silo-2 vnodes"] --> S0
-    end
-    G["hash(GrainId)"] -->|lands in a range| S1
-    S1 --> E["owns directory entry for GrainId"]
-```
-
-- The hash space is a ring. Each silo owns a number of **virtual nodes** (ranges) spread around the
-  ring, so ownership is balanced and a join/leave only reshuffles a fraction of the space (Orleans
-  uses 30 virtual partitions per silo by default). This implementation places ~100 virtual nodes per
-  silo, hashing both vnodes and grain ids with an FNV-1a digest plus a MurmurHash3 finalizer for the
-  avalanche that even distribution depends on.
-- `hash(GrainId)` maps a grain to a point on the ring; the silo owning that range is the
-  **directory owner** for that grain and holds its `GrainAddress`.
-
-```ts
-interface GrainAddress {
-  grainId: GrainId;
-  silo: SiloAddress;       // where the activation lives
-  activationId: ActivationId;
-}
-```
-
-The ring is derived purely from the current `MembershipSnapshot` (the set of live silos and their
-stable `podName`s). Every silo computes the same ring from the same snapshot version, so they agree
-on owners without coordination.
+The hash space is a ring; each silo owns ~100 **virtual nodes** spread around it (Orleans uses 30),
+so ownership is balanced and a join/leave reshuffles only a fraction. Vnodes and grain ids are hashed
+with FNV-1a + a MurmurHash3 finalizer for avalanche. `hash(GrainId)` maps a grain to a point on the
+ring; the silo owning that range is its **directory owner** and holds its `GrainAddress`
+(`{ grainId, silo, activationId }`). The ring is derived purely from the current `MembershipSnapshot`,
+so every silo computes the same owners without coordination.
 
 ## Directory operations
 
@@ -75,68 +42,43 @@ interface GrainDirectory {
 }
 ```
 
-- **`register` is compare-and-set.** When a silo activates a grain it registers the address with the
-  owning partition. If an entry already exists (another silo won the race), the existing winner is
-  returned and the loser abandons its activation and forwards instead. This is how at-most-one
-  activation is preserved.
-- **`lookup`** returns the current address or `undefined` (meaning "not activated anywhere — place
-  it"). Most lookups are served from cache (below); only misses hit the owning partition.
+- **`register` is compare-and-set.** If an entry already exists (another silo won the race), the
+  existing winner is returned and the loser abandons its activation and forwards — this preserves
+  at-most-one activation.
+- **`lookup`** returns the current address or `undefined` ("not activated — place it"). Most lookups
+  are served from cache; only misses hit the owning partition.
 
-## Location cache and invalidation
+## Location cache
 
-A directory lookup that crossed the network on every call would defeat the point. Each silo keeps a
-**read-through cache** of `GrainId -> GrainAddress`, mirroring Orleans' `GrainLocator` cache:
-
-- Populated on lookup and on successful sends.
-- Invalidated when a message to a cached address is rejected ("no such activation" / wrong
-  `podUid`), or when the membership view changes such that the cached silo is gone.
-- Responses can piggyback **cache-invalidation hints** (Orleans does this via
-  `GrainAddressCacheUpdate`) so a caller learns about a moved grain without a separate lookup.
+Each silo keeps a read-through cache of `GrainId → GrainAddress` (Orleans' `GrainLocator` cache),
+populated on lookup and successful send, and invalidated when a message to a cached address is
+rejected (no such activation / wrong `podUid`) or the cached silo leaves the view. Responses can
+piggyback cache-invalidation hints so a caller learns of a moved grain without a separate lookup.
 
 ## Rebalancing on membership change
 
-```mermaid
-sequenceDiagram
-    participant M as MembershipService
-    participant D as Directory (each silo)
-    M->>D: snapshot vN+1 (silo joined/left)
-    D->>D: recompute ring ownership
-    alt silo left
-        D->>D: drop entries owned-by-dead, drop cache entries pointing at dead
-        Note over D: affected grains simply re-activate on next call
-    else silo joined
-        D->>D: hand off ranges now owned by the newcomer
-    end
-```
+Keyed off the membership view **version**, so concurrent view changes are linearised and a silo never
+mixes two ring topologies.
 
-- **On leave/crash:** entries the dead silo *owned* are lost (acceptable — they were ephemeral), and
-  entries *pointing at* the dead silo are removed everywhere. Affected grains reactivate on next
-  call.
-- **On join:** the newcomer takes over ranges from its ring neighbours. The previous owners **hand
-  off** the live entries in those ranges rather than dropping them. On a view change each silo sets
-  aside the entries whose range it has lost to a still-live successor, and the newcomer **recovers**
-  the ranges it now owns by pulling those entries from the previous owners (a versioned handoff with
-  range "wedges", as Orleans does). Reads for a range still being recovered **wait** for the pull to
-  finish, so a moved grain is found at its existing activation instead of being needlessly
-  reactivated. If a pull is lost the directory falls back to **drop-and-lazily-rebuild** for those
-  ranges — a few redundant reactivations rather than a corrupt entry.
+- **On leave/crash:** entries the dead silo *owned* are lost (they were ephemeral); entries *pointing
+  at* it are removed everywhere; affected grains reactivate on next call.
+- **On join:** the newcomer takes over ranges from its ring neighbours via a **versioned, lossless
+  handoff** — the previous owner sets aside the entries in a lost range and the newcomer **recovers**
+  them by pulling from the previous owner; reads for a range still recovering **wait**, so a moved
+  grain is found rather than needlessly reactivated. A lost pull falls back to drop-and-rebuild for
+  those ranges (a few redundant reactivations, never a corrupt entry).
 
-The implementation reaches the owning partition through a pluggable **directory peer**. By default it
-routes `lookup` / `register` / `unregister` / `recover` to the owning silo as **system messages** over
-the same transport and correlation path that grain calls use (an in-process peer remains for
-single-process tests). Every directory message carries the sender's applied view *version*: a silo
-that is behind catches up before serving, and one that is ahead and no longer owns the grain redirects
-the caller (a `staleView` rejection) so it refreshes its view and re-resolves the owner. On a view
-change each silo recomputes the ring and drops entries pointing at silos that have left.
-
-All of this is keyed off the membership view *version*, so concurrent view changes are linearised by
-version and a silo never mixes entries from two different ring topologies.
+The owning partition is reached through a pluggable **directory peer**: by default `lookup` /
+`register` / `unregister` / `recover` route to the owner as **system messages** over the same
+transport and correlation path as grain calls (an in-process peer remains for tests). Each message
+carries the sender's applied view version: a silo that is behind catches up before serving; one that
+is ahead and no longer owns the grain redirects the caller (a `staleView` rejection → refresh and
+re-resolve).
 
 ## Placement
 
-When a lookup returns `undefined`, placement chooses the silo. Placement is a pluggable strategy
-over the live silo set, mirroring Orleans' `PlacementStrategy` + placement directors
-(`Orleans.Core.Abstractions/Placement/PlacementStrategy.cs`).
+When a lookup returns `undefined`, a pluggable strategy chooses the silo over the live set (Orleans'
+`PlacementStrategy` + directors):
 
 ```ts
 interface PlacementStrategy {
@@ -144,55 +86,27 @@ interface PlacementStrategy {
 }
 ```
 
-Built-in strategies, each mapping onto an Orleans strategy class:
+- **Random (default)** — `RandomPlacement`.
+- **Prefer-local** — `PreferLocalPlacement`: the calling silo if a candidate, else random.
+- **Activation-count (power-of-k)** — `ActivationCountBasedPlacement`: sample k, pick least loaded.
+- **Stateless-worker** — `StatelessWorkerPlacement`: a local pool per silo, not directory-registered;
+  calls resolve locally.
+- **Silo-role** — `SiloRoleBasedPlacement`: random among silos advertising a role.
+- **Resource-optimized** — `ResourceOptimizedPlacement`: least-loaded by activation count (the local
+  silo's from its catalog; a peer's from membership metadata — no cross-silo load gossip yet).
 
-- **Random (default)** — Orleans `RandomPlacement`. Pick a random live silo. Cheap and
-  well-distributed.
-- **Prefer-local** — Orleans `PreferLocalPlacement`. Place on the calling silo if it is a candidate,
-  else random. Good when a grain is mostly called by co-located grains.
-- **Activation-count (power-of-k)** — Orleans `ActivationCountBasedPlacement`. Sample k silos and
-  pick the least loaded by activation count. Balances load without a global coordinator.
-- **Stateless-worker** — Orleans `StatelessWorkerPlacement`. Not directory-registered; each silo
-  keeps its own local pool of interchangeable activations for a stateless grain type, scaling out
-  CPU-bound work. Calls always resolve locally.
-- **Silo-role** — Orleans `SiloRoleBasedPlacement`. Place only on silos advertising a given role
-  (`@grain({ placement: "siloRole", role: "worker" })`); random among the matches. Roles come from
-  the silo's advertised metadata (below).
-- **Resource-optimized** — Orleans `ResourceOptimizedPlacement`. Place on the least-loaded silo by
-  activation count. The local silo's load is read from its catalog; a peer's comes from membership
-  (there is no cross-silo load gossip yet, so a peer's reported load is its membership metadata or
-  zero). Ties prefer the local silo.
-
-The directory owner itself is chosen by hashing the `GrainId` onto the ring — Orleans' equivalent is
-`HashBasedPlacement`.
+A grain selects its strategy via `@grain({ placement, role, stateless })`; a per-call placement hint
+can pin an activation to a silo. The directory owner itself is hash-based (Orleans' `HashBasedPlacement`).
 
 ### Placement filters
 
-A **placement-filter** layer (Orleans `PlacementFilterStrategy`) prunes the candidate silos *before*
-the strategy chooses among them. Filters are metadata-driven and compose — the output of one is the
-input to the next:
-
-```ts
-interface PlacementFilter {
-  filter(grainType: GrainType, candidates: SiloAddress[], context: PlacementContext): SiloAddress[];
-}
-```
-
-The shipped filter is `MetadataMatchFilter` (Orleans `PreferredMatchSiloMetadataPlacementFilter`),
-which keeps only silos whose advertised metadata defines every required key/value pair. A grain
-declares filters as serializable descriptors:
-`@grain({ placementFilters: [{ kind: "metadataMatch", match: { role: "worker" } }] })`. If filtering
-leaves no candidate, placement fails with a `noCandidates` rejection. Filters are inert for stateless
-workers (which always resolve locally and are never directory-registered).
-
-**Silo metadata** rides the membership snapshot (`SiloMember.metadata`, a string→string bag). A silo
-advertises its own via config (`metadata` on the silo builder / `ClusterNode`); under static
-membership a resolver supplies each silo's. Deriving silo metadata from Kubernetes pod labels is a
-follow-up ([roadmap](13-roadmap-and-phases.md)).
-
-A grain type selects its strategy via a decorator option, e.g. `@grain({ placement: "preferLocal" })`
-or `@grain({ stateless: true })`. A per-call **placement hint** in the request context can pin an
-activation to a specific silo when the caller has a reason to (Orleans supports the same).
+A **placement-filter** layer (Orleans `PlacementFilterStrategy`) prunes candidates *before* the
+strategy chooses; filters compose. The shipped `MetadataMatchFilter` (Orleans
+`PreferredMatchSiloMetadataPlacementFilter`) keeps only silos whose advertised metadata defines every
+required key/value pair, declared as serializable descriptors
+(`@grain({ placementFilters: [{ kind: "metadataMatch", match: { role: "worker" } }] })`); an empty
+result fails with `noCandidates`. Silo metadata rides the membership snapshot (`SiloMember.metadata`),
+advertised via the silo builder; deriving it from Kubernetes pod labels is a follow-up.
 
 ## Interaction summary
 
@@ -203,11 +117,10 @@ flowchart LR
     CACHE -- miss --> LOOK[lookup owning partition]
     LOOK -- found --> SEND
     LOOK -- not found --> PLACE[placement strategy]
-    PLACE --> ACT[target silo activates + register CAS]
+    PLACE --> ACT[target activates + register CAS]
     ACT --> SEND
     SEND -- rejected: stale --> LOOK
 ```
 
-The directory and placement together deliver the model's location transparency: callers name grains
-by identity, and the runtime turns that into "the right pod, right now", repairing itself as the
-cluster changes underneath.
+Together the directory and placement deliver location transparency: callers name grains by identity,
+and the runtime turns that into "the right pod, right now", repairing itself as the cluster changes.

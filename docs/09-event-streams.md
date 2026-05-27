@@ -1,29 +1,21 @@
 # 09 — Event streams
 
 Streams let grains and clients publish and consume sequences of events in near real-time, decoupled
-from one another. Like Orleans, streams are **managed**: you do not create or register a stream
-before using it — you address one by identity and publish or subscribe. Streams are durable and
-**default to Redis Streams** as the backing store.
+from one another. Like Orleans, streams are **managed** — you address one by identity and
+publish/subscribe, with no pre-registration — durable, and **default to Redis Streams**.
 
-> Orleans references: `Orleans.Streaming/Providers/IStreamProvider.cs`,
-> `Orleans.Streaming/Core/IAsyncStream.cs`,
-> `Orleans.Streaming/Core/StreamSubscriptionHandle.cs`,
-> `Orleans.Streaming/PersistentStreams/PersistentStreamProvider.cs`,
-> `Orleans.Streaming/PersistentStreams/PersistentStreamPullingAgent.cs`,
-> `Orleans.Streaming/PersistentStreams/IStreamQueueBalancer.cs`,
-> `Orleans.Streaming/PersistentStreams/IStreamQueueCheckpointer.cs`.
+> Orleans references: `Orleans.Streaming/Core/{IAsyncStream,StreamSubscriptionHandle}.cs`,
+> `Orleans.Streaming/Providers/IStreamProvider.cs`,
+> `Orleans.Streaming/PersistentStreams/{PersistentStreamProvider,PersistentStreamPullingAgent,IStreamQueueBalancer,IStreamQueueCheckpointer}.cs`.
 
 ## Concepts
 
-- **Stream identity** — `(provider, namespace, key)`. The namespace groups related streams (e.g.
-  `"device-telemetry"`); the key identifies one stream within it (e.g. a device id). Stable and
-  meaningful, like a `GrainId`.
-- **Producer** — anything holding a stream handle calls `publish(event)`.
-- **Consumer** — a grain or client `subscribe`s with a handler; it receives events in order.
-- **Subscription** — a durable record that a consumer is interested in a stream. Survives
-  deactivation: when the consuming grain reactivates, its subscriptions are re-established.
-- **Cursor / checkpoint** — the position a consumer has processed up to. Lets a consumer resume
-  exactly where it left off after deactivation or failure.
+- **Stream identity** — `(provider, namespace, key)`; stable and meaningful, like a `GrainId`.
+- **Producer** — anything holding a handle calls `publish(event)`.
+- **Consumer** — a grain or client `subscribe`s with a handler and receives events in order.
+- **Subscription** — a durable record of interest; survives deactivation and is re-established on
+  reactivation.
+- **Cursor / checkpoint** — the position a consumer has processed up to, for exact resume.
 
 ## API
 
@@ -31,195 +23,99 @@ before using it — you address one by identity and publish or subscribe. Stream
 interface StreamProvider {
   getStream<T>(namespace: string, key: GrainKey): AsyncStream<T>;
 }
-
 interface AsyncStream<T> {
   readonly id: StreamId;
   publish(event: T): Promise<void>;
   subscribe(handler: StreamHandler<T>, options?: SubscribeOptions): Promise<StreamSubscriptionHandle<T>>;
-  // re-bind this consumer's existing subscriptions after reactivation:
-  getSubscriptions(consumerId?: string): Promise<StreamSubscriptionHandle<T>[]>;
+  getSubscriptions(consumerId?: string): Promise<StreamSubscriptionHandle<T>[]>; // re-bind after reactivation
 }
-
-interface StreamHandler<T> {
-  onNext(event: T, token: SequenceToken): Promise<void>;
-  onError?(err: unknown): Promise<void>;
-  onCompleted?(): Promise<void>;
-}
-
-interface StreamSubscriptionHandle<T> {
-  resume(handler: StreamHandler<T>): Promise<void>;  // after reactivation
-  unsubscribe(): Promise<void>;
-}
-
-interface SubscribeOptions {
-  startToken?: SequenceToken;   // rewind to a position the backing store still has
-  consumerId?: string;          // scopes the subscription to a consumer; the runtime binds it
-}
+interface StreamHandler<T> { onNext(event: T, token: SequenceToken): Promise<void>; onError?(e): Promise<void>; onCompleted?(): Promise<void>; }
+interface StreamSubscriptionHandle<T> { resume(handler: StreamHandler<T>): Promise<void>; unsubscribe(): Promise<void>; }
+interface SubscribeOptions { startToken?: SequenceToken; consumerId?: string; }
 ```
 
-This mirrors Orleans' `IStreamProvider` / `IAsyncStream<T>` / `StreamSubscriptionHandle<T>` and the
-`IAsyncObserver` callback shape.
-
-### Producer example
+This mirrors Orleans' `IStreamProvider` / `IAsyncStream<T>` / `StreamSubscriptionHandle<T>`. A producer
+calls `getStream(ns, key).publish(event)`; a consumer subscribes in `onActivate`, re-binding an
+existing durable subscription or creating one:
 
 ```ts
-const DeviceGrain = defineGrain<IDevice>("Device", (ctx) => ({
-  report: async (reading: Reading): Promise<void> => {
-    const stream = ctx.runtime.getStreamProvider().getStream<Reading>("telemetry", ctx.id.key);
-    await stream.publish(reading);
-  },
-}));
+onActivate: async () => {
+  const stream = ctx.runtime.getStreamProvider().getStream<Reading>("telemetry", ctx.id.key);
+  const subs = await stream.getSubscriptions();
+  if (subs.length > 0) await subs[0].resume(handler());
+  else await stream.subscribe(handler());
+};
 ```
 
-### Consumer example (grain)
-
-```ts
-const AggregatorGrain = defineGrain<IAggregator>("Aggregator", (ctx) => {
-  const handler = (): StreamHandler<Reading> => ({
-    onNext: async (reading, token) => { /* aggregate; checkpoint via token */ },
-  });
-
-  return {
-    onActivate: async () => {
-      const stream = ctx.runtime.getStreamProvider().getStream<Reading>("telemetry", ctx.id.key);
-      // re-attach durable subscriptions, or create one the first time:
-      const subs = await stream.getSubscriptions();
-      if (subs.length > 0) await subs[0].resume(handler());
-      else await stream.subscribe(handler());
-    },
-    // ... grain methods ...
-  };
-});
-```
-
-Delivery into a consuming grain happens **as a turn** on that grain's activation, so stream handlers
-respect single-threaded execution just like method calls (see [02](02-actor-model.md)).
+Delivery into a consuming grain happens **as a turn** on its activation, so handlers respect
+single-threaded execution ([02](02-actor-model.md)). `subscribe`/`resume` don't await delivery —
+a grain may subscribe from within a turn and each `onNext` is itself a turn, so awaiting would
+deadlock the consumer against its own queue.
 
 ### Fan-out and per-consumer subscriptions
 
-Many grains can subscribe to the *same* stream — a room stream with many members, a topic with many
-followers. Each subscriber gets every event, delivered as a turn on its own activation. Because a
-subscription is durable and outlives the consumer's activation, `getSubscriptions()` is **scoped to
-the calling grain**: the runtime binds the consumer's identity, so a consumer that deactivated while
-idle reacquires *its own* subscription (and cursor) on reactivation rather than a neighbour's. The
-`subs[0]` re-bind pattern above is therefore correct even when thousands of consumers share one
-stream. The runnable [`examples/chat`](11-public-api-and-examples.md) exercises exactly this:
-a member that goes idle and is collected later resumes from where it left off, recovering only the
-messages it missed.
-
-Delivery is decoupled from `subscribe`/`resume` — those return without awaiting delivery, because a
-grain may subscribe or resume from within a turn and each `onNext` is itself a turn on the same
-activation; awaiting would deadlock the consumer against its own queue.
+Many grains can subscribe to the same stream; each gets every event as a turn on its own activation.
+`getSubscriptions()` is **scoped to the calling grain** (the runtime binds the consumer identity), so a
+consumer that idled and was collected reacquires *its own* subscription and cursor on reactivation —
+the `subs[0]` re-bind is correct even with thousands of consumers. [`examples/chat`](11-public-api-and-examples.md)
+exercises this: a collected member resumes from where it left off, recovering only the messages it
+missed.
 
 ## Architecture: pulling agents over physical queues
 
-The design follows Orleans' persistent-stream architecture: many logical streams are multiplexed
-over a smaller number of **physical queues**, and the work of pulling those queues is distributed
-across the cluster.
+Following Orleans' persistent-stream design, many logical streams are multiplexed over a smaller set
+of **physical queues** (Redis Streams), and pulling those queues is distributed across the cluster.
 
-```mermaid
-flowchart TB
-    P[Producers] -->|publish| Q[(Physical queues — Redis Streams)]
-    subgraph Cluster
-      direction LR
-      A1[Pulling agent\nsilo-0\nqueues 0..k] 
-      A2[Pulling agent\nsilo-1\nqueues k..n]
-    end
-    Q --> A1
-    Q --> A2
-    A1 -->|deliver as turn| C1[Consumer grains]
-    A2 -->|deliver as turn| C2[Consumer grains]
-```
-
-- **Physical queues.** A fixed set of Redis Streams (e.g. 8/16/32) acts as the transport. A logical
-  stream id is hashed to one physical queue, so all events for a given stream stay ordered within
-  that queue. This is Orleans' "many streams over few queues" multiplexing.
-- **Pulling agents.** Each silo runs pulling agents for the physical queues it owns. An agent reads
-  batches from its queue and delivers each event to the subscribed consumer grains.
-- **Queue ownership / balancing.** Physical queues are distributed across silos using the same
-  consistent-hash ring as the directory and reminders (Orleans abstracts this as an
-  `IStreamQueueBalancer`). On membership change, queue ownership rebalances; a newly responsible silo
-  resumes the queue from the last committed cursor.
-- **Cursors / checkpoints.** Each subscription's processed position is checkpointed durably (Orleans:
-  `IStreamQueueCheckpointer`). On reactivation or rebalance, delivery resumes from the cursor, giving
-  **at-least-once** delivery.
+- **Physical queues** — a fixed set of Redis Streams; a logical stream id hashes to one queue, so its
+  events stay ordered there.
+- **Pulling agents** — each silo runs agents for the queues it owns, reading batches and delivering
+  each event to subscribed consumers.
+- **Queue ownership** — queues are distributed across silos by the same consistent-hash ring as the
+  directory/reminders (Orleans' `IStreamQueueBalancer`); ownership rebalances on membership change and
+  a new owner resumes from the last committed cursor.
+- **Cursors** — each subscription's position is checkpointed durably (Orleans' `IStreamQueueCheckpointer`),
+  giving **at-least-once** delivery.
 
 ## Delivery semantics
 
-- **At-least-once.** Events are redelivered after a crash up to the last committed cursor; consumers
-  should be idempotent. (Redis Streams consumer groups give us per-queue acknowledgement to support
-  this.)
-- **Per-stream ordering.** Events within a single logical stream are delivered in publish order,
-  because that stream maps to a single physical queue.
-- **Rewind.** A consumer can subscribe from an earlier `SequenceToken` if the backing store still
-  retains those entries (Redis Stream trimming policy governs retention).
+- **At-least-once** — events are redelivered after a crash up to the last committed cursor; consumers
+  should be idempotent (Redis Streams consumer groups give per-queue acknowledgement).
+- **Per-stream ordering** — a logical stream maps to one queue, so its events arrive in publish order.
+- **Rewind** — a consumer may subscribe from an earlier `SequenceToken` if the store still retains it
+  (governed by Redis Stream trimming).
 
 ## Implicit subscriptions
 
-A grain type can be **implicitly subscribed** to a stream namespace, so a grain is auto-subscribed by
-key with no explicit `subscribe` call — Orleans' `[ImplicitStreamSubscription(namespace)]`. A grain
-of that type with key `K` receives every event published to the stream `(namespace, K)`; the pulling
-agent reactivates it on demand to deliver, exactly as for an explicit subscription.
+A grain type can be **implicitly subscribed** to a namespace (Orleans' `[ImplicitStreamSubscription]`),
+auto-subscribed by key with no `subscribe` call. A grain of that type with key `K` receives every event
+on stream `(namespace, K)`; the agent reactivates it on demand to deliver.
 
 ```ts
-// Class form:
-@grain()
-@implicitStreamSubscription("chat")
+@grain() @implicitStreamSubscription("chat")
 class ArchiveGrain extends Grain implements IArchive {
-  // The runtime calls this the first time an event for one of this grain's
-  // implicit streams arrives (mirroring Orleans' IStreamSubscriptionObserver);
-  // return the handler that should receive that stream's events.
+  // Called the first time an event for one of this grain's implicit streams arrives
+  // (Orleans' IStreamSubscriptionObserver); returns the handler for that stream.
   [STREAM_SUBSCRIPTION_OBSERVER](namespace: string, key: string): StreamHandler<Message> {
     return { onNext: async (msg) => { /* archive msg for room `key` */ } };
   }
 }
-
-// Functional form:
-const ArchiveGrain = defineGrain<IArchive>(
-  "Archive",
-  () => ({
-    [STREAM_SUBSCRIPTION_OBSERVER]: (namespace, key): StreamHandler<Message> => ({
-      onNext: async (msg) => { /* ... */ },
-    }),
-  }),
-  { implicitSubscriptions: ["chat"] },
-);
+// Functional: defineGrain(..., { implicitSubscriptions: ["chat"] }) with the same observer member.
 ```
 
-The grain never calls `subscribe`/`getSubscriptions`: the runtime knows the subscriber from the
-declaration. When an agent pulls an event for stream `(ns, K)`, it fans out to the registry's
-explicit subscribers **and** to every grain type implicitly subscribed to `ns`, addressing each at
-key `K` (deduplicated, so a grain that is both gets one delivery). Implicit subscriptions are a
-pulling-agent feature (the Redis provider); the in-memory provider is for explicit-subscription
-dev/tests only. Subscribers are addressed by string key, matching how a producer names the stream.
+When an agent pulls an event for `(ns, K)` it fans out to the registry's explicit subscribers **and**
+every grain type implicitly subscribed to `ns`, addressing each at key `K` (deduplicated). Implicit
+subscriptions are a pulling-agent feature (Redis provider); the in-memory provider is explicit-only.
 
 ## Providers
 
-| Provider | Use |
-| --- | --- |
-| **Redis Streams (default)** | Physical queues are Redis Streams; consumer groups give acknowledgement and redelivery; cursors stored per subscription. |
-| **In-memory** | Dev/tests only; single-silo, non-durable; useful for unit-testing producer/consumer grains. |
+- **Redis Streams (default)** — physical queues are Redis Streams; consumer groups give
+  acknowledgement and redelivery; cursors and subscriptions live in Redis, surviving deactivation and
+  silo failure; delivery routes through the dispatcher as a `StreamConsumer` system call (the path
+  reminders use) and the queue cursor commits only after delivery. Queue ownership follows the ring and
+  rebalances on membership change. Configured with `addRedisStreams(name, { url, keyPrefix? })`.
+  See [ADR 0005](adr/0005-redis-default-providers.md), [ADR 0007](adr/0007-stream-pulling-agents.md).
+- **In-memory** — dev/tests: single-silo, non-durable, explicit subscriptions only, with ordered
+  delivery, a per-subscription cursor that advances only after `onNext` resolves (so a thrown handler
+  is redelivered), resume, and rewind. Configured with `useMemoryStreams()`.
 
-Redis Streams is the default; see [ADR 0005](adr/0005-redis-default-providers.md). The provider
-interface keeps other backings (e.g. a log/queue service) open as future work, exactly as Orleans
-supports multiple queue adapters behind `PersistentStreamProvider`.
-
-Configured on the hosting builder, e.g.
-`silo.addRedisStreams("default", { url: process.env.REDIS_URL, partitions: 16 })`.
-
-The implementation ships the in-memory `MemoryStreamProvider`: events addressed by
-`(provider, namespace, key)`, ordered delivery to each subscriber, a per-subscription cursor that
-only advances after `onNext` resolves (so a thrown handler is redelivered — at-least-once), resume
-from the cursor after a consumer drops, and rewind via a `startToken`. The grain-facing
-`getStreamProvider` (configured with `useMemoryStreams` on the builder) delivers each `onNext` as a
-turn on the consumer's activation and re-binds durable subscriptions on reactivation via
-`getSubscriptions`/`resume`. A durable `RedisPullingStreamProvider` also ships (`addRedisStreams`),
-built on **pulling agents** ([ADR 0007](adr/0007-stream-pulling-agents.md)): all streams are
-multiplexed over a fixed set of physical Redis-Stream queues; an agent per queue pulls events and
-routes each to its stream's subscribers — discovered in a durable pub-sub registry — through the
-dispatcher as a `StreamConsumer` system call (the same delivery path reminders use), committing the
-queue cursor only after delivery (at-least-once). Subscriptions and cursors live in Redis, surviving
-deactivation and silo failure. Queue ownership is assigned to silos by the consistent-hash ring (each
-queue sits at a fixed ring point) and rebalances on every membership change, so when a silo leaves
-the view a survivor takes its queues over and resumes from the committed cursor with no gaps — the
-same hash-range-ownership mechanism reminders use.
+The provider interface keeps other queue backings open, as Orleans does behind `PersistentStreamProvider`.
