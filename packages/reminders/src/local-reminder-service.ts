@@ -1,5 +1,6 @@
 import { durationToMs, type Duration } from "@tsva/core/duration";
 import type { GrainId } from "@tsva/core/grain-id";
+import { noopLogger, type Logger } from "@tsva/core/logger";
 import type {
   ReminderEntry,
   ReminderRegistry,
@@ -13,6 +14,24 @@ export type ReminderFire = (grainId: GrainId, name: string, status: TickStatus) 
 
 /** A half-open hash range `[begin, end)` this silo owns on the ring. */
 export type HashRange = readonly [begin: number, end: number];
+
+/**
+ * Tunables for the reminder service. Mirrors a subset of Orleans
+ * `ReminderOptions`; everything is optional with safe defaults.
+ */
+export interface ReminderServiceOptions {
+  /**
+   * Minimum allowed reminder period. Orleans defaults to 1 minute — high
+   * frequency reminders are dangerous in production. Tests and dev hosts can
+   * lower this (e.g. `{ ms: 0 }`).
+   */
+  minimumPeriod?: Duration;
+  /** Logger for reconcile/fire/cleanup errors that would otherwise be swallowed. */
+  logger?: Logger;
+}
+
+/** Orleans `ReminderOptions.MinimumReminderPeriod` default: 1 minute. */
+const DEFAULT_MINIMUM_PERIOD_MS = 60_000;
 
 interface Scheduled {
   handle: TimerHandle;
@@ -38,6 +57,8 @@ export class LocalReminderService implements ReminderRegistry {
   private readonly scheduled = new Map<string, Scheduled>();
   private ranges: readonly HashRange[];
   private refreshHandle: TimerHandle | undefined;
+  private readonly logger: Logger;
+  private readonly minimumPeriodMs: number;
 
   constructor(
     private readonly table: ReminderTable,
@@ -46,13 +67,28 @@ export class LocalReminderService implements ReminderRegistry {
     ranges: readonly HashRange[] = [[0, 0x1_0000_0000]],
     /** How often to re-read owned ranges from the table (0 disables periodic refresh). */
     private readonly refreshIntervalMs = 0,
+    options: ReminderServiceOptions = {},
   ) {
     this.ranges = ranges;
+    this.logger = options.logger ?? noopLogger;
+    this.minimumPeriodMs =
+      options.minimumPeriod === undefined
+        ? DEFAULT_MINIMUM_PERIOD_MS
+        : durationToMs(options.minimumPeriod);
   }
 
   /** Register (or update) a reminder; schedules it locally if this silo owns it. */
   async register(grainId: GrainId, name: string, due: Duration, period: Duration): Promise<void> {
-    const startAt = new Date(this.time.now() + durationToMs(due));
+    const dueMs = durationToMs(due);
+    const periodMs = durationToMs(period);
+    if (dueMs < 0) throw new RangeError(`reminder ${name}: due time must not be negative`);
+    if (periodMs < 0) throw new RangeError(`reminder ${name}: period must not be negative`);
+    if (periodMs < this.minimumPeriodMs) {
+      throw new RangeError(
+        `reminder ${name}: period ${periodMs}ms is below the minimum allowed (${this.minimumPeriodMs}ms)`,
+      );
+    }
+    const startAt = new Date(this.time.now() + dueMs);
     const etag = await this.table.upsert({ grainId, name, startAt, period });
     if (this.owns(grainId)) this.scheduleEntry({ grainId, name, startAt, period, etag });
   }
@@ -63,10 +99,23 @@ export class LocalReminderService implements ReminderRegistry {
     this.cancel(this.key(grainId, name));
   }
 
+  async getReminder(grainId: GrainId, name: string): Promise<ReminderEntry | undefined> {
+    return this.table.read(grainId, name);
+  }
+
+  async getReminders(grainId: GrainId): Promise<ReminderEntry[]> {
+    return this.table.readForGrain(grainId);
+  }
+
   /** On a membership change (or first start): adopt the given ranges and reconcile. */
   async refreshOwnership(ranges: readonly HashRange[]): Promise<void> {
     this.ranges = ranges;
-    await this.reconcile();
+    try {
+      await this.reconcile();
+    } catch (error) {
+      // Don't lose the periodic-refresh schedule because the first read failed.
+      this.logger.error("reminder reconcile failed", { error });
+    }
     this.scheduleRefresh();
   }
 
@@ -102,7 +151,9 @@ export class LocalReminderService implements ReminderRegistry {
     if (this.refreshHandle !== undefined) this.time.clearTimer(this.refreshHandle);
     this.refreshHandle = this.time.setTimer(() => {
       this.scheduleRefresh(); // re-arm before reconciling, so the cadence is steady
-      void this.reconcile().catch(() => undefined);
+      void this.reconcile().catch((error: unknown) => {
+        this.logger.error("reminder reconcile failed", { error });
+      });
     }, this.refreshIntervalMs);
   }
 
@@ -130,14 +181,26 @@ export class LocalReminderService implements ReminderRegistry {
     } else {
       // One-shot: done. Remove it from the table so a refresh can't re-fire it.
       this.scheduled.delete(key);
-      void this.table.remove(entry.grainId, entry.name, entry.etag).catch(() => undefined);
+      void this.table.remove(entry.grainId, entry.name, entry.etag).catch((error: unknown) => {
+        this.logger.error("reminder one-shot cleanup failed", {
+          error,
+          grainId: entry.grainId.toString(),
+          name: entry.name,
+        });
+      });
     }
     const status: TickStatus = {
       firstTickAt: entry.startAt,
       period: entry.period,
       currentTickAt: new Date(this.time.now()),
     };
-    void this.onFire(entry.grainId, entry.name, status).catch(() => undefined);
+    void this.onFire(entry.grainId, entry.name, status).catch((error: unknown) => {
+      this.logger.error("reminder delivery failed", {
+        error,
+        grainId: entry.grainId.toString(),
+        name: entry.name,
+      });
+    });
   }
 
   private cancel(key: string): void {

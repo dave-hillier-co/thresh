@@ -58,4 +58,8 @@ export interface ReminderTable {
 export interface ReminderRegistry {
   register(grainId: GrainId, name: string, due: Duration, period: Duration): Promise<void>;
   unregister(grainId: GrainId, name: string): Promise<void>;
+  /** Look up a reminder registered to the grain (Orleans `IReminderRegistry.GetReminder`). */
+  getReminder(grainId: GrainId, name: string): Promise<ReminderEntry | undefined>;
+  /** All reminders registered to the grain (Orleans `IReminderRegistry.GetReminders`). */
+  getReminders(grainId: GrainId): Promise<ReminderEntry[]>;
 }

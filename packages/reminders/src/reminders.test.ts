@@ -53,7 +53,9 @@ describe("LocalReminderService", () => {
     const time = new FakeTimeProvider();
     const table = new MemoryReminderTable();
     const { fired, onFire } = recorder();
-    const service = new LocalReminderService(table, time, onFire, [WHOLE]);
+    const service = new LocalReminderService(table, time, onFire, [WHOLE], 0, {
+      minimumPeriod: { ms: 0 },
+    });
 
     await service.register(billing, "invoice", { ms: 1000 }, { ms: 1000 });
     time.advance(3000);
@@ -66,7 +68,9 @@ describe("LocalReminderService", () => {
     const time = new FakeTimeProvider();
     const table = new MemoryReminderTable();
     const { fired, onFire } = recorder();
-    const service = new LocalReminderService(table, time, onFire, [WHOLE]);
+    const service = new LocalReminderService(table, time, onFire, [WHOLE], 0, {
+      minimumPeriod: { ms: 0 },
+    });
 
     await service.register(billing, "invoice", { ms: 1000 }, { ms: 1000 });
     time.advance(1000);
@@ -83,7 +87,9 @@ describe("LocalReminderService", () => {
     const { fired, onFire } = recorder();
     const hash = billing.getUniformHashCode();
     // Own a range that excludes the billing grain's hash.
-    const service = new LocalReminderService(table, time, onFire, [[hash + 1, hash + 2]]);
+    const service = new LocalReminderService(table, time, onFire, [[hash + 1, hash + 2]], 0, {
+      minimumPeriod: { ms: 0 },
+    });
 
     await service.register(billing, "invoice", { ms: 1000 }, { ms: 1000 });
     time.advance(5000);
@@ -97,13 +103,17 @@ describe("LocalReminderService", () => {
     const table = new MemoryReminderTable();
 
     // Original owner registers the reminder, then "dies".
-    const original = new LocalReminderService(table, time, async () => undefined, [WHOLE]);
+    const original = new LocalReminderService(table, time, async () => undefined, [WHOLE], 0, {
+      minimumPeriod: { ms: 0 },
+    });
     await original.register(billing, "invoice", { ms: 1000 }, { ms: 1000 });
     original.stop();
 
     // A fresh silo takes over the range and picks the reminder up from the table.
     const { fired, onFire } = recorder();
-    const successor = new LocalReminderService(table, time, onFire, []);
+    const successor = new LocalReminderService(table, time, onFire, [], 0, {
+      minimumPeriod: { ms: 0 },
+    });
     await successor.refreshOwnership([WHOLE]);
 
     time.advance(1000);
@@ -124,8 +134,12 @@ describe("LocalReminderService — multi-silo ownership", () => {
     const table = new MemoryReminderTable();
     const a = recorder();
     const b = recorder();
-    const owner = new LocalReminderService(table, time, a.onFire, [ownsHash]);
-    const other = new LocalReminderService(table, time, b.onFire, [ownsRest]);
+    const owner = new LocalReminderService(table, time, a.onFire, [ownsHash], 0, {
+      minimumPeriod: { ms: 0 },
+    });
+    const other = new LocalReminderService(table, time, b.onFire, [ownsRest], 0, {
+      minimumPeriod: { ms: 0 },
+    });
     await owner.refreshOwnership([ownsHash]);
     await other.refreshOwnership([ownsRest]);
 
@@ -143,8 +157,12 @@ describe("LocalReminderService — multi-silo ownership", () => {
     const a = recorder();
     const b = recorder();
     const refresh = 10_000;
-    const owner = new LocalReminderService(table, time, a.onFire, [ownsHash], refresh);
-    const other = new LocalReminderService(table, time, b.onFire, [ownsRest], refresh);
+    const owner = new LocalReminderService(table, time, a.onFire, [ownsHash], refresh, {
+      minimumPeriod: { ms: 0 },
+    });
+    const other = new LocalReminderService(table, time, b.onFire, [ownsRest], refresh, {
+      minimumPeriod: { ms: 0 },
+    });
     await owner.refreshOwnership([ownsHash]);
     await other.refreshOwnership([ownsRest]);
 
@@ -167,8 +185,12 @@ describe("LocalReminderService — multi-silo ownership", () => {
     const table = new MemoryReminderTable();
     const a = recorder();
     const b = recorder();
-    const a1 = new LocalReminderService(table, time, a.onFire, [ownsHash]);
-    const b1 = new LocalReminderService(table, time, b.onFire, [ownsRest]);
+    const a1 = new LocalReminderService(table, time, a.onFire, [ownsHash], 0, {
+      minimumPeriod: { ms: 0 },
+    });
+    const b1 = new LocalReminderService(table, time, b.onFire, [ownsRest], 0, {
+      minimumPeriod: { ms: 0 },
+    });
     await a1.refreshOwnership([ownsHash]);
     await b1.refreshOwnership([ownsRest]);
 
