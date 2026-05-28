@@ -5,6 +5,7 @@ import type {
   JobRunContext,
   ShouldRetry,
 } from "@tsva/core/durable-job";
+import { Guid } from "@tsva/core/guid";
 import type { TimeProvider, TimerHandle } from "@tsva/core/time-provider";
 import { InMemoryJobQueue, type QueuedJob } from "@tsva/durable-jobs/job-model";
 import type { JobShardStore } from "@tsva/durable-jobs/job-shard-store";
@@ -94,6 +95,13 @@ export class ShardExecutor {
   /** Load the shard's persisted jobs into the working set and arm the poll loop. */
   async load(): Promise<void> {
     for (const persisted of await this.store.readJobs(this.shardKey)) {
+      // Idempotent fast-path: a tombstone entry (a prior RunId already marked
+      // completed but whose `persistRemove` was lost) means the job ran. Skip
+      // invocation and clean the entry — at-most-once for that RunId.
+      if (persisted.completed === true) {
+        await this.store.persistRemove(this.shardKey, persisted.job.id).catch(() => undefined);
+        continue;
+      }
       this.jobs.set(persisted.job.id, persisted.job);
       this.queue.add({
         id: persisted.job.id,
@@ -201,6 +209,13 @@ export class ShardExecutor {
       // `dequeueCount` carried on the queued job is the number of attempts already
       // made; this run is the next attempt (≥ 1).
       const attempt = job.dequeueCount + 1;
+      // Assign a fresh RunId per claimed attempt and persist it alongside the
+      // durable claim before invoking the handler. If this silo crashes mid-
+      // flight and another claims the shard, the next claimer sees the RunId
+      // marker; once we mark it completed below, a lost `persistRemove` is
+      // recoverable — the next claimer's `load()` will skip and clean up.
+      const runId = Guid.newGuid().toString();
+      await this.store.persistRunStart(this.shardKey, durable.id, runId).catch(() => undefined);
       const context: JobRunContext = {
         id: durable.id,
         name: durable.name,
@@ -208,6 +223,7 @@ export class ShardExecutor {
         target: durable.target,
         metadata: durable.metadata,
         dequeueCount: attempt,
+        runId,
       };
       let result: DurableJobRunResult;
       try {
@@ -215,7 +231,7 @@ export class ShardExecutor {
       } catch (error) {
         result = { kind: "failed", error };
       }
-      await this.applyResult(job, result, attempt, now);
+      await this.applyResult(job, result, attempt, now, runId);
     } finally {
       this.running -= 1;
       this.limiter.release();
@@ -229,8 +245,13 @@ export class ShardExecutor {
     result: DurableJobRunResult,
     attempt: number,
     now: number,
+    runId: string,
   ): Promise<void> {
     if (result.kind === "completed") {
+      // Mark the RunId completed *before* removing, so a crash between the two
+      // leaves a tombstone the next claimer can detect and skip (per-RunId
+      // dedup against double-invocation on shard rebalance).
+      await this.store.persistRunComplete(this.shardKey, job.id, runId).catch(() => undefined);
       this.jobs.delete(job.id);
       await this.store.persistRemove(this.shardKey, job.id).catch(() => undefined);
       return;

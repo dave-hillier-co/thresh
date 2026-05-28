@@ -5,6 +5,8 @@ interface Entry {
   job: DurableJob;
   dequeueCount: number;
   dueTime: Date;
+  runId?: string;
+  completed?: boolean;
 }
 
 interface ShardState {
@@ -53,14 +55,34 @@ export class MemoryJobShardStore implements JobShardStore {
     }
   }
 
+  async persistRunStart(shardKey: number, jobId: string, runId: string): Promise<void> {
+    const entry = this.shards.get(shardKey)?.jobs.get(jobId);
+    if (entry !== undefined) {
+      entry.runId = runId;
+      entry.completed = false;
+    }
+  }
+
+  async persistRunComplete(shardKey: number, jobId: string, runId: string): Promise<void> {
+    const entry = this.shards.get(shardKey)?.jobs.get(jobId);
+    if (entry !== undefined && entry.runId === runId) {
+      entry.completed = true;
+    }
+  }
+
   async readJobs(shardKey: number): Promise<PersistedJob[]> {
     const state = this.shards.get(shardKey);
     if (state === undefined) return [];
-    return [...state.jobs.values()].map((e) => ({
-      job: e.job,
-      dequeueCount: e.dequeueCount,
-      dueTime: e.dueTime,
-    }));
+    return [...state.jobs.values()].map((e) => {
+      const persisted: PersistedJob = {
+        job: e.job,
+        dequeueCount: e.dequeueCount,
+        dueTime: e.dueTime,
+      };
+      if (e.runId !== undefined) persisted.runId = e.runId;
+      if (e.completed !== undefined) persisted.completed = e.completed;
+      return persisted;
+    });
   }
 
   async listShards(): Promise<ShardRecord[]> {

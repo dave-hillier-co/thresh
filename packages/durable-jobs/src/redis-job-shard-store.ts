@@ -15,6 +15,8 @@ interface JobData {
   job: DurableJob;
   dequeueCount: number;
   dueTime: Date;
+  runId?: string;
+  completed?: boolean;
 }
 
 // Claim a shard for a new owner. Succeeds if the shard is unclaimed (no owner) or
@@ -97,11 +99,35 @@ export class RedisJobShardStore implements JobShardStore {
     await this.client.hSet(this.jobsKey(shardKey), jobId, serializeValue(next));
   }
 
+  async persistRunStart(shardKey: number, jobId: string, runId: string): Promise<void> {
+    const raw = await this.client.hGet(this.jobsKey(shardKey), jobId);
+    if (raw == null) return;
+    const data = deserializeValue<JobData>(raw);
+    const next: JobData = { ...data, runId, completed: false };
+    await this.client.hSet(this.jobsKey(shardKey), jobId, serializeValue(next));
+  }
+
+  async persistRunComplete(shardKey: number, jobId: string, runId: string): Promise<void> {
+    const raw = await this.client.hGet(this.jobsKey(shardKey), jobId);
+    if (raw == null) return;
+    const data = deserializeValue<JobData>(raw);
+    if (data.runId !== runId) return;
+    const next: JobData = { ...data, completed: true };
+    await this.client.hSet(this.jobsKey(shardKey), jobId, serializeValue(next));
+  }
+
   async readJobs(shardKey: number): Promise<PersistedJob[]> {
     const record = await this.client.hGetAll(this.jobsKey(shardKey));
     return Object.values(record).map((raw) => {
       const data = deserializeValue<JobData>(raw);
-      return { job: data.job, dequeueCount: data.dequeueCount, dueTime: data.dueTime };
+      const persisted: PersistedJob = {
+        job: data.job,
+        dequeueCount: data.dequeueCount,
+        dueTime: data.dueTime,
+      };
+      if (data.runId !== undefined) persisted.runId = data.runId;
+      if (data.completed !== undefined) persisted.completed = data.completed;
+      return persisted;
     });
   }
 

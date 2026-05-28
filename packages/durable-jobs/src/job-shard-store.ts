@@ -35,6 +35,17 @@ export interface JobShardStore {
   persistRemove(shardKey: number, jobId: string): Promise<void>;
   /** Persist a job's new due time and dequeue count after a retry / re-poll. */
   persistRetry(shardKey: number, jobId: string, dueTime: Date, dequeueCount: number): Promise<void>;
+  /**
+   * Record that an attempt with `runId` has started for this job, so a re-claim
+   * after a rebalance can recognise an in-flight / completed prior attempt.
+   */
+  persistRunStart(shardKey: number, jobId: string, runId: string): Promise<void>;
+  /**
+   * Mark the attempt with `runId` as completed for this job. Paired with
+   * `persistRemove` on the happy path; the marker survives a lost remove so the
+   * next claimer sees the completion and skips re-invocation.
+   */
+  persistRunComplete(shardKey: number, jobId: string, runId: string): Promise<void>;
   /** Read every job currently persisted under a shard (on claim / restart). */
   readJobs(shardKey: number): Promise<PersistedJob[]>;
 
@@ -65,4 +76,16 @@ export interface PersistedJob {
   dequeueCount: number;
   /** The current effective due time (advanced by retry / re-poll backoff). */
   dueTime: Date;
+  /**
+   * The most recent attempt id recorded for this job, if any. Set by
+   * `persistRunStart` when an executor claims the job for execution.
+   */
+  runId?: string;
+  /**
+   * True when `runId` has been marked completed via `persistRunComplete`. A
+   * persisted entry with `completed === true` is a tombstone left by a happy-
+   * path completion whose `persistRemove` was lost: the next claimer skips
+   * invocation and removes the entry (per-RunId dedup).
+   */
+  completed?: boolean;
 }

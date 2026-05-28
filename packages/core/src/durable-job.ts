@@ -45,6 +45,13 @@ export interface JobRunContext {
   metadata: Readonly<Record<string, unknown>>;
   /** How many times this job has been dequeued for execution (≥ 1). */
   dequeueCount: number;
+  /**
+   * A fresh per-attempt identifier (Orleans' `RunId`), assigned by the shard
+   * executor when a job is claimed for execution and persisted alongside the
+   * durable claim. It lets a re-claim after a mid-flight rebalance detect that
+   * a prior run already completed and skip invocation (idempotent fast-path).
+   */
+  runId: string;
 }
 
 /**
