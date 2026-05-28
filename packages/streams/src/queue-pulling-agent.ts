@@ -3,12 +3,39 @@ import type { QueueEntry, RedisStreamQueue } from "@tsva/streams/redis-stream-qu
 /** Delivers one pulled event to the stream's subscribers; the agent supplies it. */
 export type DeliverEvent = (streamKey: string, event: unknown, token: number) => Promise<void>;
 
+/**
+ * Reports a permanently-failed delivery — Orleans' `IStreamFailureHandler.OnDeliveryFailure`.
+ * Called once the agent has exhausted the retry budget and is about to advance
+ * the queue cursor past the bad event so it stops blocking other subscribers
+ * multiplexed on the same physical queue.
+ */
+export interface StreamFailureHandler {
+  onDeliveryFailure(
+    streamKey: string,
+    event: unknown,
+    token: number,
+    error: unknown,
+    attempts: number,
+  ): Promise<void> | void;
+}
+
 export interface QueuePullingAgentOptions {
   /** How often to poll the queue when idle (defaults to 50ms). */
   pollIntervalMs?: number;
   /** Maximum entries read per poll (defaults to 128). */
   batchSize?: number;
+  /** Max delivery attempts per event before skipping (defaults to 3). */
+  maxAttempts?: number;
+  /** Backoff between retries within a single pump (defaults to 2^attempt * 50ms, capped at 5s). */
+  retryBackoffMs?: (attempt: number) => number;
+  /** Notified when an event is skipped after exhausting the retry budget. */
+  failureHandler?: StreamFailureHandler;
+  /** Sleep injection — the clock is a true boundary, fake it in tests. */
+  sleep?: (ms: number) => Promise<void>;
 }
+
+const defaultBackoff = (attempt: number): number => Math.min(50 * 2 ** attempt, 5000);
+const defaultSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 /**
  * Pulls one physical queue and delivers each entry to its subscribers, then
@@ -17,10 +44,19 @@ export interface QueuePullingAgentOptions {
  * Mirrors an Orleans persistent-stream pulling agent. One agent runs per queue a
  * silo owns; `PullingAgentManager` (a later slice) starts/stops them as ring
  * ownership changes.
+ *
+ * On delivery failure the agent retries up to `maxAttempts` with exponential
+ * backoff. If still failing it skips the event (commits the cursor past it) and
+ * notifies the `failureHandler` — Orleans' `IStreamFailureHandler` — so a
+ * single poison event cannot stall every other subscriber sharing the queue.
  */
 export class QueuePullingAgent {
   private readonly pollIntervalMs: number;
   private readonly batchSize: number;
+  private readonly maxAttempts: number;
+  private readonly retryBackoffMs: (attempt: number) => number;
+  private readonly failureHandler: StreamFailureHandler | undefined;
+  private readonly sleep: (ms: number) => Promise<void>;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private cursor: number | undefined;
   private pumping = false;
@@ -33,6 +69,10 @@ export class QueuePullingAgent {
   ) {
     this.pollIntervalMs = options.pollIntervalMs ?? 50;
     this.batchSize = options.batchSize ?? 128;
+    this.maxAttempts = options.maxAttempts ?? 3;
+    this.retryBackoffMs = options.retryBackoffMs ?? defaultBackoff;
+    this.failureHandler = options.failureHandler;
+    this.sleep = options.sleep ?? defaultSleep;
   }
 
   start(): void {
@@ -66,11 +106,8 @@ export class QueuePullingAgent {
       const entries: QueueEntry[] = await this.queue.readAfter(this.cursor, this.batchSize);
       for (const { token, streamKey, event } of entries) {
         if (!this.running) break;
-        try {
-          await this.deliver(streamKey, event, token);
-        } catch {
-          break; // leave the cursor; this entry is redelivered on the next poll
-        }
+        const delivered = await this.tryDeliver(streamKey, event, token);
+        if (!delivered) break; // transient failure: keep the cursor, redeliver next poll
         this.cursor = token;
         await this.queue.commit(token); // commit only after delivery (at-least-once)
       }
@@ -78,5 +115,40 @@ export class QueuePullingAgent {
       this.pumping = false;
       if (this.running) this.schedule(this.pollIntervalMs);
     }
+  }
+
+  /**
+   * Attempts delivery up to `maxAttempts` times with exponential backoff.
+   * Returns true if the entry is durably handled (delivered, or skipped after
+   * exhausting the retry budget) so the caller advances the cursor; returns
+   * false to leave the cursor so the entry is redelivered on the next poll —
+   * used when the agent is stopping mid-retry.
+   */
+  private async tryDeliver(streamKey: string, event: unknown, token: number): Promise<boolean> {
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= this.maxAttempts; attempt++) {
+      if (!this.running) return false;
+      try {
+        await this.deliver(streamKey, event, token);
+        return true;
+      } catch (err) {
+        lastError = err;
+        if (attempt < this.maxAttempts) await this.sleep(this.retryBackoffMs(attempt));
+      }
+    }
+    // Retry budget exhausted: notify the failure handler, then advance past the
+    // event so a single poison entry does not stall the rest of the queue.
+    try {
+      await this.failureHandler?.onDeliveryFailure(
+        streamKey,
+        event,
+        token,
+        lastError,
+        this.maxAttempts,
+      );
+    } catch {
+      // Swallow handler errors — observability must not itself block delivery.
+    }
+    return true;
   }
 }
