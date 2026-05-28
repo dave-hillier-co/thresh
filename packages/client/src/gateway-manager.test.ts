@@ -78,4 +78,24 @@ describe("GatewayManager", () => {
     mgr.markAsDead(silo(0));
     expect(mgr.next()).toBeUndefined();
   });
+
+  it("hands out gateways without duplicates within a round under concurrent callers", async () => {
+    const silos = [silo(0), silo(1), silo(2), silo(3), silo(4)];
+    const mgr = new GatewayManager(provider(silos));
+    await mgr.refresh();
+    const rounds = 200;
+    const totalCalls = silos.length * rounds;
+    // Hammer next() concurrently — every gateway must be visited the same
+    // number of times, which is only true if the counter increment is atomic
+    // (no read-modify-write race).
+    const picks = await Promise.all(
+      Array.from({ length: totalCalls }, () => Promise.resolve().then(() => mgr.next()!.endpoint)),
+    );
+    const counts = new Map<string, number>();
+    for (const endpoint of picks) counts.set(endpoint, (counts.get(endpoint) ?? 0) + 1);
+    expect(counts.size).toBe(silos.length);
+    for (const s of silos) {
+      expect(counts.get(s.endpoint)).toBe(rounds);
+    }
+  });
 });

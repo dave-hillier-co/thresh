@@ -8,6 +8,7 @@ import { SiloAddress } from "@tsva/core/silo-address";
 import { InProcessNetwork, InProcessTransport } from "@tsva/messaging/in-process-transport";
 import { ClusterNode } from "@tsva/runtime/cluster-node";
 import { StaticMembershipService } from "@tsva/runtime/static-membership";
+import { staticGatewayProvider } from "@tsva/client/gateway-provider";
 import { createClient } from "@tsva/client/client-node";
 
 interface ICounter extends GrainWithStringKey {
@@ -89,6 +90,39 @@ describe("external client", () => {
       await client.close();
       await gateway.stop();
     }
+  });
+
+  it("backs off exponentially between failed gateway attempts rather than busy-spinning", async () => {
+    const network = new InProcessNetwork();
+    // Three gateways that nobody is listening on — every connect fails.
+    const dead = [
+      new SiloAddress("dead-1", "uid-d1", "dead-1:1"),
+      new SiloAddress("dead-2", "uid-d2", "dead-2:2"),
+      new SiloAddress("dead-3", "uid-d3", "dead-3:3"),
+    ];
+    const delays: number[] = [];
+    const client = createClient({
+      clusterId: CLUSTER,
+      local: clientAddr,
+      transport: new InProcessTransport(network, CLUSTER),
+      gateways: staticGatewayProvider(dead),
+      delay: async (ms: number) => {
+        delays.push(ms);
+      },
+    }).registerGrain(CounterGrain, { interfaces: [ICounter] });
+    await client.connect();
+    try {
+      await expect(client.getGrain(ICounter, "x").increment(1)).rejects.toThrow();
+    } finally {
+      await client.close();
+    }
+    // We expect a backoff between each failed attempt, starting at 100ms and
+    // doubling, capped at 2000ms (Orleans MINIMUM_INTERCONNECT_DELAY = 100ms).
+    expect(delays.length).toBeGreaterThanOrEqual(3);
+    expect(delays[0]).toBe(100);
+    expect(delays[1]).toBe(200);
+    expect(delays[2]).toBe(400);
+    for (const d of delays) expect(d).toBeLessThanOrEqual(2000);
   });
 
   it("rejects getGrain for an interface the client did not register", async () => {

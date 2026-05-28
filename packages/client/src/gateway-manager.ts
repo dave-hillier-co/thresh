@@ -22,9 +22,10 @@ export class GatewayManager {
   /** The next live gateway in round-robin order, or `undefined` if none remain. */
   next(): SiloAddress | undefined {
     if (this.live.length === 0) return undefined;
-    const picked = this.live[this.counter % this.live.length]!;
-    this.counter++;
-    return picked;
+    // Atomic increment-then-modulo in a single statement so concurrent callers
+    // (e.g. several `Promise.all` invocations resuming on the same microtask
+    // queue) cannot interleave between reading the counter and writing it back.
+    return this.live[this.counter++ % this.live.length];
   }
 
   /** Drop an unreachable gateway from rotation until the next `refresh` (Orleans `MarkAsDead`). */

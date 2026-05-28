@@ -37,7 +37,20 @@ export interface ClientConfig {
   gateways?: GatewayListProvider;
   serializer?: Serializer;
   callTimeoutMs?: number;
+  /**
+   * Injectable backoff used between failed gateway attempts in `invoke`.
+   * Defaults to a real `setTimeout`-based sleep; tests substitute a fake to
+   * keep the loop deterministic.
+   */
+  delay?: (ms: number) => Promise<void>;
 }
+
+/** Orleans `ClientMessageCenter.MINIMUM_INTERCONNECT_DELAY`. */
+const MINIMUM_INTERCONNECT_DELAY_MS = 100;
+const MAX_INTERCONNECT_DELAY_MS = 2_000;
+
+const defaultDelay = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
 
 interface RejectionPayload {
   message: string;
@@ -62,6 +75,7 @@ export class ClientNode implements Dispatcher {
   private readonly factory: GrainFactory;
   private readonly callTimeoutMs: number;
   private readonly gateways: GatewayManager;
+  private readonly delay: (ms: number) => Promise<void>;
   private listener: Listener | undefined;
 
   constructor(private readonly config: ClientConfig) {
@@ -79,6 +93,7 @@ export class ClientNode implements Dispatcher {
       throw new Error("client requires a `gateway` or a `gateways` provider");
     }
     this.gateways = new GatewayManager(provider);
+    this.delay = config.delay ?? defaultDelay;
   }
 
   /**
@@ -130,7 +145,16 @@ export class ClientNode implements Dispatcher {
   async invoke(req: InvocationRequest): Promise<unknown> {
     let refreshed = false;
     let lastError: unknown;
+    let backoffMs = MINIMUM_INTERCONNECT_DELAY_MS;
+    let hadFailure = false;
     for (;;) {
+      // Wait between failed attempts so the loop does not busy-spin when every
+      // gateway is unreachable (Orleans uses MINIMUM_INTERCONNECT_DELAY = 100ms
+      // between connect attempts; we double up to a 2s cap).
+      if (hadFailure) {
+        await this.delay(backoffMs);
+        backoffMs = Math.min(backoffMs * 2, MAX_INTERCONNECT_DELAY_MS);
+      }
       let gateway = this.gateways.next();
       if (gateway === undefined && !refreshed) {
         await this.gateways.refresh();
@@ -169,6 +193,7 @@ export class ClientNode implements Dispatcher {
         this.gateways.markAsDead(gateway);
         await this.connections.drop(gateway);
         lastError = err;
+        hadFailure = true;
         continue;
       }
       // We have a response: its kind decides success or an application error.
