@@ -33,8 +33,6 @@ for how the design differs from Orleans.
   version-aware placement.
 - **Broadcast channels** — lightweight in-cluster pub/sub to implicit subscribers.
 - **Grain call filters** — incoming, outgoing, and per-grain interception.
-- **Observability** — request context, OpenTelemetry tracing/metrics, structured logging, on the
-  call-filter seam; no-op without an SDK.
 - **External client** — gateway-routed client with gateway discovery + failover, verified in-process
   and over real WebSocket sockets.
 - **Reducer & functional-first authoring** — `defineGrain` + hooks, snapshot reducers, dispatch
@@ -49,6 +47,28 @@ for how the design differs from Orleans.
   gathering + `migrateRandomActivations` + `runRebalanceCycle`), and the elected singleton worker +
   `useActivationRebalancing(options?)` builder surface + `RebalancingReport` + convergence e2e; the
   cluster self-levels skewed load toward balance.
+
+## 🚧 Partial — parity gaps in flight
+
+- **Observability** — request context, OpenTelemetry tracing surface, W3C `traceparent`
+  propagation and structured logging are wired on the call-filter seam (no-op without an SDK), but
+  the runtime itself (catalog, directory, persistence, messaging, reminders, streams) is not yet
+  instrumented with the meter set, and spans do not yet carry `exception.*` attributes.
+- **Cancellation & per-call deadlines** — Orleans threads `CancellationToken` through every call,
+  deactivation, and storage operation; the TS port does not yet.
+- **Scheduler back-pressure & deactivation timeout** — per-activation queues are unbounded; no
+  stuck-turn detection (`MaxRequestProcessingTime`) and no enforced `onDeactivate` timeout.
+- **Serializer versioning & polymorphism** — the value codec has no schema version, surrogate
+  types, polymorphism resolution, `Map`/`Set` support or circular-reference guard.
+- **Grain observers & extensions** — no typed observer/client-callback surface and no
+  `IGrainExtension` mechanism.
+- **`StatelessWorker` enforcement** — the option is parsed but not honored (single-activation
+  semantics still apply).
+- **`@readOnly` runtime check** — advisory only; no mutation check even in dev.
+- **Directory handoff ACK & cleanup** — handoff snapshots are best-effort pull with no ACK-delete
+  loop; retained indefinitely if a successor crashes pre-pull.
+- **Transaction TM confirmation-worker keepalive** — in-doubt prepared records on remote
+  participants are only resolved once at activation; no periodic TM ping.
 
 ## 📐 Designed (not yet implemented)
 
