@@ -181,7 +181,7 @@ const randomPlacement = new RandomPlacement();
  * response messages with peers over the transport.
  */
 export class ClusterNode {
-  readonly partition = new LocalDirectoryPartition();
+  readonly partition: LocalDirectoryPartition;
 
   private readonly grainTypes = new Map<GrainType, RegisteredGrain>();
   private readonly interfaceToGrainType = new Map<number, GrainType>();
@@ -254,6 +254,13 @@ export class ClusterNode {
     this.selector = versionSelector(options.versionSelector ?? "latest");
     this.ring = this.buildRing();
     this.appliedVersion = options.membership.current().version;
+    // Orleans IsSiloDead: a directory entry whose host has fallen out of the
+    // live membership view is treated as a miss on lookup, not returned as a
+    // stale pointer. The partition consults the snapshot each call so it tracks
+    // membership changes without needing explicit reconciliation just for reads.
+    this.partition = new LocalDirectoryPartition((silo) =>
+      activeSilos(options.membership.current()).some((s) => s.equals(silo)),
+    );
     this.connections = new ConnectionManager(options.transport, options.local, options.clusterId);
     this.factory = new GrainFactory((interfaceId) => this.resolveGrainType(interfaceId));
     this.serializer =

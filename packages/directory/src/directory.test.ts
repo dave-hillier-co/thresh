@@ -115,6 +115,21 @@ describe("LocalDirectoryPartition", () => {
     expect(dir.size).toBe(0);
   });
 
+  it("treats a lookup whose host silo is no longer live as a miss (Orleans IsSiloDead)", () => {
+    // Sociable test: register a grain owned by siloA, then shift the membership
+    // view so siloA is no longer live and assert the partition returns undefined
+    // rather than the stale pointer.
+    const live = new Set<string>([siloA.ringKey, siloB.ringKey]);
+    const dir = new LocalDirectoryPartition((silo) => live.has(silo.ringKey));
+    const a = addr("x", siloA);
+    dir.register(a);
+    expect(dir.lookup(a.grainId)).toEqual(a);
+
+    live.delete(siloA.ringKey); // siloA falls out of membership
+
+    expect(dir.lookup(a.grainId)).toBeUndefined();
+  });
+
   it("entriesIn returns the live entries matching a predicate", () => {
     const dir = new LocalDirectoryPartition();
     const x = addr("x", siloA);

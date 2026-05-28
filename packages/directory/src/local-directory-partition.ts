@@ -10,13 +10,29 @@ import type { SiloAddress } from "@tsva/core/silo-address";
  */
 export class LocalDirectoryPartition {
   private readonly entries = new Map<string, GrainAddress>();
+  private readonly isSiloLive: (silo: SiloAddress) => boolean;
+
+  /**
+   * `isSiloLive` is consulted on lookup to mirror Orleans' `LookupCore` /
+   * `IsSiloDead` path: an entry whose host silo has fallen out of the live
+   * membership view is treated as a miss rather than returned as a stale
+   * pointer. The cluster wires the current membership snapshot through; tests
+   * and in-process callers without a membership view can default to assuming
+   * every silo is live.
+   */
+  constructor(isSiloLive: (silo: SiloAddress) => boolean = () => true) {
+    this.isSiloLive = isSiloLive;
+  }
 
   get size(): number {
     return this.entries.size;
   }
 
   lookup(grainId: GrainId): GrainAddress | undefined {
-    return this.entries.get(grainId.toString());
+    const existing = this.entries.get(grainId.toString());
+    if (existing === undefined) return undefined;
+    if (!this.isSiloLive(existing.silo)) return undefined;
+    return existing;
   }
 
   /**
