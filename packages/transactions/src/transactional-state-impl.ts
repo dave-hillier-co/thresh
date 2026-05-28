@@ -12,7 +12,12 @@ import type {
   TransactionalStorageLoadResponse,
 } from "@tsva/core/transactional-storage";
 import { requireTransaction } from "@tsva/runtime/invocation-context";
+import { systemTimeProvider, type TimeProvider } from "@tsva/core/time-provider";
 import { ReaderWriterLock } from "@tsva/transactions/reader-writer-lock";
+import {
+  defaultTransactionsOptions,
+  type TransactionsOptions,
+} from "@tsva/transactions/transactions-options";
 
 const clone = <T>(value: T): T =>
   typeof structuredClone === "function"
@@ -42,7 +47,8 @@ export type ResolveStatus = (manager: ParticipantId, transactionId: string) => P
  */
 export class TransactionalStateImpl<T> implements TransactionalState<T>, TransactionParticipant {
   private readonly key: string;
-  private readonly lock = new ReaderWriterLock();
+  private readonly lock: ReaderWriterLock;
+  private readonly options: TransactionsOptions;
   private committed!: T;
   private committedSequenceId = 0;
   private etag: string | undefined;
@@ -55,8 +61,12 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
     private readonly initial: () => T,
     private readonly storage: TransactionalStateStorage,
     private readonly resolveStatus?: ResolveStatus,
+    options?: Partial<TransactionsOptions>,
+    time: TimeProvider = systemTimeProvider,
   ) {
     this.key = `${grainId.toString()}/${stateName}`;
+    this.options = { ...defaultTransactionsOptions, ...options };
+    this.lock = new ReaderWriterLock(time);
   }
 
   private get participantId(): ParticipantId {
@@ -80,7 +90,9 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
 
   async performRead<R>(read: (state: T) => R): Promise<R> {
     const tx = requireTransaction();
-    await this.lock.enter(tx.id, tx.timeStamp, "read");
+    await this.lock.enter(tx.id, tx.timeStamp, "read", {
+      timeoutMs: this.options.lockTimeoutMs,
+    });
     this.enlist(tx, 1, 0);
     const state = this.tentative?.transactionId === tx.id ? this.tentative.value : this.committed;
     return read(state);
@@ -88,7 +100,9 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
 
   async performUpdate<R>(update: (state: T) => R): Promise<R> {
     const tx = requireTransaction();
-    await this.lock.enter(tx.id, tx.timeStamp, "write");
+    await this.lock.enter(tx.id, tx.timeStamp, "write", {
+      timeoutMs: this.options.lockTimeoutMs,
+    });
     this.enlist(tx, 0, 1);
     if (this.tentative?.transactionId !== tx.id) {
       this.tentative = {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { GrainId } from "@tsva/core/grain-id";
 import type { GrainType } from "@tsva/core/grain-type";
+import type { TimeProvider, TimerHandle } from "@tsva/core/time-provider";
 import type { TransactionInfo } from "@tsva/core/transaction-info";
 import { invocationContext } from "@tsva/runtime/invocation-context";
 import { systemTimeProvider } from "@tsva/runtime/time-provider";
@@ -85,5 +86,101 @@ describe("TransactionalStateImpl (Slice 2)", () => {
     await agent.resolve(older);
     const t = agent.startTransaction();
     expect(await inTransaction(t, () => state.performRead((s) => s.cents))).toBe(1);
+  });
+
+  it("aborts a contending transaction whose lock-acquisition deadline elapses, cascading to its participants", async () => {
+    // A holds the write lock and never releases. B attempts to acquire and is
+    // blocked. Because B is older than A under wait-die it would normally wait,
+    // but its lock-acquisition deadline elapses, so B aborts. Every state B
+    // had previously enlisted must observe abort().
+    const clock = (() => {
+      let current = 0;
+      const timers = new Map<number, { at: number; fire: () => void }>();
+      let nextId = 1;
+      const fireDue = () => {
+        for (const [id, t] of [...timers]) {
+          if (t.at <= current) {
+            timers.delete(id);
+            t.fire();
+          }
+        }
+      };
+      const tp: TimeProvider & { advance(ms: number): Promise<void> } = {
+        now: () => current,
+        setTimer: (handler, delayMs): TimerHandle => {
+          const id = nextId++;
+          timers.set(id, { at: current + delayMs, fire: handler });
+          return id;
+        },
+        clearTimer: (handle) => {
+          timers.delete(handle as number);
+        },
+        advance: async (ms: number) => {
+          current += ms;
+          fireDue();
+          await Promise.resolve();
+        },
+      };
+      return tp;
+    })();
+
+    const storage = new MemoryTransactionalStorage();
+    const contended = new TransactionalStateImpl<Balance>(
+      "balance",
+      grainId("contended"),
+      () => ({ cents: 100 }),
+      storage,
+      undefined,
+      { lockTimeoutMs: 5_000 },
+      clock,
+    );
+    await contended.load();
+
+    // A second state B has already enlisted in (no contention here) — the
+    // cascading abort must reach this participant too.
+    const other = new TransactionalStateImpl<Balance>(
+      "ledger",
+      grainId("other"),
+      () => ({ cents: 0 }),
+      new MemoryTransactionalStorage(),
+      undefined,
+      { lockTimeoutMs: 5_000 },
+      clock,
+    );
+    await other.load();
+
+    const localAgent = new TransactionAgent(clock);
+
+    // Younger A grabs the write lock first; older B must then wait under wait-die.
+    const younger = localAgent.startTransaction();
+    const older = localAgent.startTransaction();
+    // Make older older than younger (lower timestamp).
+    (older as { timeStamp: number }).timeStamp = younger.timeStamp - 1;
+
+    await inTransaction(younger, () => contended.performUpdate((s) => (s.cents = 1)));
+
+    // B enlists in `other` first (uncontended) so we can observe a cascading
+    // abort across multiple participants.
+    await inTransaction(older, () => other.performUpdate((s) => (s.cents = 99)));
+
+    // B attempts the contended lock — should block until the deadline.
+    const attempt = inTransaction(older, () => contended.performUpdate((s) => (s.cents = 2)));
+
+    // Drive the deadline.
+    await clock.advance(5_001);
+
+    await expect(attempt).rejects.toBeInstanceOf(TransactionAbortedError);
+    await expect(attempt).rejects.toMatchObject({
+      message: expect.stringContaining("deadline"),
+    });
+
+    // Caller-side: now propagate cascading abort to all enlisted participants.
+    await localAgent.abort(older);
+
+    // The `other` participant must drop B's tentative writes; reading after
+    // commit shows the initial value.
+    const observer = localAgent.startTransaction();
+    expect(await inTransaction(observer, () => other.performRead((s) => s.cents))).toBe(0);
+    await localAgent.resolve(observer);
   });
 });
