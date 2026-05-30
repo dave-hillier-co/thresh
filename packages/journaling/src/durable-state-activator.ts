@@ -4,6 +4,8 @@ import { getDurableFields, type DurableKind } from "@tsva/core/durable-state-met
 import { DurableValueImpl } from "@tsva/journaling/durable-value-impl";
 import { DurableDictionaryImpl } from "@tsva/journaling/durable-dictionary-impl";
 import { DurableListImpl } from "@tsva/journaling/durable-list-impl";
+import { DurableQueueImpl } from "@tsva/journaling/durable-queue-impl";
+import { DurableSetImpl } from "@tsva/journaling/durable-set-impl";
 import type { JournalStorageRegistry } from "@tsva/journaling/journal-storage-registry";
 import { StateMachineManagerImpl } from "@tsva/journaling/state-machine-manager-impl";
 
@@ -19,6 +21,10 @@ function makeMachine(
       return new DurableDictionaryImpl(stateName, manager);
     case "list":
       return new DurableListImpl(stateName, manager);
+    case "queue":
+      return new DurableQueueImpl(stateName, manager);
+    case "set":
+      return new DurableSetImpl(stateName, manager);
   }
 }
 

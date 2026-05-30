@@ -14,7 +14,13 @@ import { DURABLE_JOB_HANDLER, type DurableJobHandler } from "./durable-job";
 import type { GrainKeyFor } from "./key-kinds";
 import type { PersistentState } from "./persistent-state";
 import { registerPersistentField } from "./persistent-state-metadata";
-import type { DurableDictionary, DurableList, DurableValue } from "./durable-state";
+import type {
+  DurableDictionary,
+  DurableList,
+  DurableQueue,
+  DurableSet,
+  DurableValue,
+} from "./durable-state";
 import { registerDurableField } from "./durable-state-metadata";
 import type { Reducer, ReducerState } from "./reducer-state";
 import { registerReducerField } from "./reducer-state-metadata";
@@ -410,6 +416,76 @@ export function useDurableList<T>(
     add: (value) => bound().add(value),
     set: (index, value) => bound().set(index, value),
     removeAt: (index) => bound().removeAt(index),
+    clear: () => bound().clear(),
+  };
+}
+
+/**
+ * The functional counterpart of `@durableQueue` — a journalled FIFO queue bound
+ * and replayed before `onActivate`.
+ */
+export function useDurableQueue<T>(
+  ctx: GrainSetup,
+  stateName: string,
+  options: UseDurableStateOptions = {},
+): DurableQueue<T> {
+  const instance = instanceOf(ctx);
+  const fieldName = `__tsva_durablequeue$${stateName}`;
+  registerDurableField(instance, {
+    fieldName,
+    stateName,
+    kind: "queue",
+    ...(options.provider !== undefined ? { provider: options.provider } : {}),
+  });
+  const bound = (): DurableQueue<T> => {
+    const facet = (instance as Record<string, unknown>)[fieldName] as DurableQueue<T> | undefined;
+    if (facet === undefined) throw new Error(`durable queue "${stateName}" not yet bound`);
+    return facet;
+  };
+  return {
+    get size() {
+      return bound().size;
+    },
+    peek: () => bound().peek(),
+    toArray: () => bound().toArray(),
+    [Symbol.iterator]: () => bound()[Symbol.iterator](),
+    enqueue: (value) => bound().enqueue(value),
+    dequeue: () => bound().dequeue(),
+    clear: () => bound().clear(),
+  };
+}
+
+/**
+ * The functional counterpart of `@durableSet` — a journalled set of scalar
+ * values bound and replayed before `onActivate`.
+ */
+export function useDurableSet<T>(
+  ctx: GrainSetup,
+  stateName: string,
+  options: UseDurableStateOptions = {},
+): DurableSet<T> {
+  const instance = instanceOf(ctx);
+  const fieldName = `__tsva_durableset$${stateName}`;
+  registerDurableField(instance, {
+    fieldName,
+    stateName,
+    kind: "set",
+    ...(options.provider !== undefined ? { provider: options.provider } : {}),
+  });
+  const bound = (): DurableSet<T> => {
+    const facet = (instance as Record<string, unknown>)[fieldName] as DurableSet<T> | undefined;
+    if (facet === undefined) throw new Error(`durable set "${stateName}" not yet bound`);
+    return facet;
+  };
+  return {
+    get size() {
+      return bound().size;
+    },
+    has: (value) => bound().has(value),
+    values: () => bound().values(),
+    [Symbol.iterator]: () => bound()[Symbol.iterator](),
+    add: (value) => bound().add(value),
+    delete: (value) => bound().delete(value),
     clear: () => bound().clear(),
   };
 }
