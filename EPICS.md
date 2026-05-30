@@ -23,7 +23,8 @@ for how the design differs from Orleans.
   locking, optimistic two-phase commit (TM elected from writers), durable storage, cross-silo
   participants, in-doubt recovery.
 - **Durable journaling (`DurableGrain`)** — a per-grain `StateMachineManager` over
-  `DurableValue`/`DurableDictionary`/`DurableList` that journals each mutation to an append-only log
+  `DurableValue`/`DurableDictionary`/`DurableList`/`DurableQueue`/`DurableSet` that journals each
+  mutation to an append-only log
   and replays it on activation, with snapshot/compaction; a `JournalStorage` seam (memory + Redis),
   `useDurable*` hooks + `@durable*` decorators, and `useMemoryJournaling()`/`addRedisJournaling()`.
   Separate from the reducer snapshot facet and `PersistentState`.

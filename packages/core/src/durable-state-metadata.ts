@@ -1,5 +1,5 @@
 /** Which durable structure a journalled field declares. */
-export type DurableKind = "value" | "dictionary" | "list";
+export type DurableKind = "value" | "dictionary" | "list" | "queue" | "set";
 
 /**
  * A durable-journaling field declared on a grain via the `@durableState` /

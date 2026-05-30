@@ -186,3 +186,13 @@ export function durableDictionary(stateName: string, options: DurableStateOption
 export function durableList(stateName: string, options: DurableStateOptions = {}) {
   return durableField("list", stateName, options);
 }
+
+/** Injects a `DurableQueue<T>` journalled facet into a grain field. */
+export function durableQueue(stateName: string, options: DurableStateOptions = {}) {
+  return durableField("queue", stateName, options);
+}
+
+/** Injects a `DurableSet<T>` journalled facet into a grain field. */
+export function durableSet(stateName: string, options: DurableStateOptions = {}) {
+  return durableField("set", stateName, options);
+}

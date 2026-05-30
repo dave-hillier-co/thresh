@@ -46,3 +46,36 @@ export interface DurableList<T> {
   /** Journal a clear of all items. */
   clear(): Promise<void>;
 }
+
+/** A journalled FIFO queue. Orleans' `IDurableQueue<T>`. */
+export interface DurableQueue<T> {
+  readonly size: number;
+  /** The element at the front without removing it; `undefined` when empty. */
+  peek(): T | undefined;
+  toArray(): readonly T[];
+  [Symbol.iterator](): IterableIterator<T>;
+  /** Journal an enqueue at the back and update memory. */
+  enqueue(value: T): Promise<void>;
+  /** Journal a dequeue from the front; resolves to the removed element, or `undefined` when empty. */
+  dequeue(): Promise<T | undefined>;
+  /** Journal a clear of all elements. */
+  clear(): Promise<void>;
+}
+
+/**
+ * A journalled set of scalar values. Orleans' `IDurableSet<T>`. Values must be
+ * JSON-stable scalars (string/number/boolean) so they round-trip through the
+ * value-codec on replay and compare by value rather than reference.
+ */
+export interface DurableSet<T> {
+  readonly size: number;
+  has(value: T): boolean;
+  values(): IterableIterator<T>;
+  [Symbol.iterator](): IterableIterator<T>;
+  /** Journal an add; resolves to whether the value was newly added. */
+  add(value: T): Promise<boolean>;
+  /** Journal a delete; resolves to whether the value was present. */
+  delete(value: T): Promise<boolean>;
+  /** Journal a clear of all values. */
+  clear(): Promise<void>;
+}
