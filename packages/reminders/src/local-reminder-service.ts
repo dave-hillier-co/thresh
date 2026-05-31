@@ -1,5 +1,6 @@
 import { durationToMs, type Duration } from "@tsva/core/duration";
 import type { GrainId } from "@tsva/core/grain-id";
+import { isHashInRanges, type HashRange } from "@tsva/core/hash-ring";
 import { noopLogger, type Logger } from "@tsva/core/logger";
 import type {
   ReminderEntry,
@@ -12,8 +13,7 @@ import type { TimeProvider, TimerHandle } from "@tsva/core/time-provider";
 /** Delivers a due reminder: the silo wires this to reactivate the grain and call `receiveReminder`. */
 export type ReminderFire = (grainId: GrainId, name: string, status: TickStatus) => Promise<void>;
 
-/** A half-open hash range `[begin, end)` this silo owns on the ring. */
-export type HashRange = readonly [begin: number, end: number];
+export type { HashRange };
 
 /**
  * Tunables for the reminder service. Mirrors a subset of Orleans
@@ -36,12 +36,6 @@ const DEFAULT_MINIMUM_PERIOD_MS = 60_000;
 interface Scheduled {
   handle: TimerHandle;
   entry: ReminderEntry;
-}
-
-function inRanges(hash: number, ranges: readonly HashRange[]): boolean {
-  return ranges.some(([begin, end]) =>
-    begin <= end ? hash >= begin && hash < end : hash >= begin || hash < end,
-  );
 }
 
 /**
@@ -158,7 +152,7 @@ export class LocalReminderService implements ReminderRegistry {
   }
 
   private owns(grainId: GrainId): boolean {
-    return inRanges(grainId.getUniformHashCode(), this.ranges);
+    return isHashInRanges(grainId.getUniformHashCode(), this.ranges);
   }
 
   private scheduleEntry(entry: ReminderEntry): void {

@@ -113,7 +113,7 @@ export class ClientNode implements Dispatcher {
   registerGrains(
     registrations: { ctor: new () => Grain; interfaces: GrainInterface<unknown>[] }[],
   ) {
-    for (const r of registrations) this.registerGrain(r.ctor, { interfaces: r.interfaces });
+    for (const r of registrations) this.registerGrain(r.ctor, r);
     return this;
   }
 

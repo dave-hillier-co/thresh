@@ -22,7 +22,7 @@ export class DurableValueImpl<T> implements DurableValue<T>, DurableStateMachine
   }
 
   get(): T | undefined {
-    return this.current;
+    return this.value;
   }
 
   async set(value: T): Promise<void> {

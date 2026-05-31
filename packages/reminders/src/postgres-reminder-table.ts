@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { Pool } from "pg";
-import type { Duration } from "@tsva/core/duration";
 import type { GrainId } from "@tsva/core/grain-id";
 import type { ReminderEntry, ReminderRegistration, ReminderTable } from "@tsva/core/reminder";
 import { deserializeValue, serializeValue } from "@tsva/core/value-codec";
+import type { ReminderData } from "./reminder-data";
 
 export interface PostgresReminderTableOptions {
   /** Table holding the reminder rows (defaults to `"tsva_reminders"`). */
@@ -17,14 +17,6 @@ const IDENTIFIER = /^[a-z_][a-z0-9_]*$/;
 function isDuplicate(err: unknown): boolean {
   const code = (err as { code?: string }).code;
   return code === "23505" || code === "42P07";
-}
-
-/** The codec-serialized payload of a reminder (etag is stored alongside). */
-interface ReminderData {
-  grainId: GrainId;
-  name: string;
-  startAt: Date;
-  period: Duration;
 }
 
 /**

@@ -190,7 +190,7 @@ class PullingStream<T> implements AsyncStream<T> {
     return new PullingSubscription<T>(this.streamKey, this.registry, binding);
   }
 
-  async getSubscriptions(_consumerId?: string): Promise<StreamSubscriptionHandle<T>[]> {
+  async getSubscriptions(): Promise<StreamSubscriptionHandle<T>[]> {
     if (this.binding === undefined) return [];
     const subs = await this.registry.subscribers(this.streamKey);
     return subs.some((g) => g.equals(this.binding!.grainId))

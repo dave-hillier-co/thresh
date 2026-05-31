@@ -14,6 +14,7 @@ import type {
 import { requireTransaction } from "@tsva/runtime/invocation-context";
 import { systemTimeProvider, type TimeProvider } from "@tsva/core/time-provider";
 import { ReaderWriterLock } from "@tsva/transactions/reader-writer-lock";
+import { EMPTY_METADATA } from "@tsva/transactions/transactional-storage-apply";
 import {
   defaultTransactionsOptions,
   type TransactionsOptions,
@@ -52,7 +53,7 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
   private committed!: T;
   private committedSequenceId = 0;
   private etag: string | undefined;
-  private metadata: TransactionalStateMetadata = { timeStamp: 0, commitRecords: {} };
+  private metadata: TransactionalStateMetadata = EMPTY_METADATA;
   private tentative: Tentative<T> | undefined;
 
   constructor(
@@ -71,6 +72,23 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
 
   private get participantId(): ParticipantId {
     return { grainId: this.grainId, stateName: this.stateName };
+  }
+
+  /** Persist the current metadata with the given pending/commit/abort deltas, updating the etag. */
+  private async storeState(
+    statesToPrepare: PendingTransactionState<T>[],
+    commitUpTo?: number,
+    abortAfter?: number,
+  ): Promise<void> {
+    this.etag = await this.storage.store(
+      this.stateName,
+      this.grainId,
+      this.etag,
+      this.metadata,
+      statesToPrepare,
+      commitUpTo,
+      abortAfter,
+    );
   }
 
   /** Load the committed version before `onActivate`, then resolve any in-doubt pending. */
@@ -130,15 +148,7 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
       transactionManager: manager,
       state: this.tentative.value,
     };
-    this.etag = await this.storage.store(
-      this.stateName,
-      this.grainId,
-      this.etag,
-      this.metadata,
-      [pending],
-      undefined,
-      undefined,
-    );
+    await this.storeState([pending]);
     this.tentative.prepared = true;
     return true;
   }
@@ -159,15 +169,7 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
         },
       },
     };
-    this.etag = await this.storage.store(
-      this.stateName,
-      this.grainId,
-      this.etag,
-      this.metadata,
-      [],
-      undefined,
-      undefined,
-    );
+    await this.storeState([]);
   }
 
   /** TM only: whether the transaction committed (recovery query). */
@@ -178,15 +180,7 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
   async commit(transactionId: string): Promise<void> {
     const tentative = this.tentative;
     if (tentative?.transactionId === transactionId) {
-      this.etag = await this.storage.store(
-        this.stateName,
-        this.grainId,
-        this.etag,
-        this.metadata,
-        [],
-        tentative.sequenceId,
-        undefined,
-      );
+      await this.storeState([], tentative.sequenceId);
       this.committed = tentative.value;
       this.committedSequenceId = tentative.sequenceId;
       this.tentative = undefined;
@@ -198,15 +192,7 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
     const tentative = this.tentative;
     if (tentative?.transactionId === transactionId) {
       if (tentative.prepared) {
-        this.etag = await this.storage.store(
-          this.stateName,
-          this.grainId,
-          this.etag,
-          this.metadata,
-          [],
-          undefined,
-          this.committedSequenceId,
-        );
+        await this.storeState([], undefined, this.committedSequenceId);
       }
       this.tentative = undefined;
     }
@@ -228,33 +214,18 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
         manager !== undefined &&
         manager.grainId.equals(this.grainId) &&
         manager.stateName === this.stateName;
-      const committed =
-        manager !== undefined &&
-        (isSelf
+      let committed = false;
+      if (manager !== undefined) {
+        committed = isSelf
           ? this.status(pending.transactionId)
-          : await this.resolveStatus(manager, pending.transactionId));
+          : await this.resolveStatus(manager, pending.transactionId);
+      }
       if (committed) {
-        this.etag = await this.storage.store(
-          this.stateName,
-          this.grainId,
-          this.etag,
-          this.metadata,
-          [],
-          pending.sequenceId,
-          undefined,
-        );
+        await this.storeState([], pending.sequenceId);
         this.committed = pending.state;
         this.committedSequenceId = pending.sequenceId;
       } else {
-        this.etag = await this.storage.store(
-          this.stateName,
-          this.grainId,
-          this.etag,
-          this.metadata,
-          [],
-          undefined,
-          this.committedSequenceId,
-        );
+        await this.storeState([], undefined, this.committedSequenceId);
       }
     }
   }

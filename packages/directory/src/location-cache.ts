@@ -12,10 +12,6 @@ export class LocationCache {
   private hits = 0;
   private misses = 0;
 
-  get size(): number {
-    return this.cache.size;
-  }
-
   /** Cumulative cache hits/misses, for the directory hit-rate metric. */
   get stats(): { hits: number; misses: number; size: number } {
     return { hits: this.hits, misses: this.misses, size: this.cache.size };

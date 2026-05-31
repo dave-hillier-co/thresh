@@ -23,11 +23,9 @@ export interface IGrainMigrationParticipant {
 
 /** Duck-type guard: an object is a participant if it exposes both migration hooks. */
 export function isMigrationParticipant(value: unknown): value is IGrainMigrationParticipant {
+  const candidate = value as Partial<IGrainMigrationParticipant> | null | undefined;
   return (
-    value !== null &&
-    typeof value === "object" &&
-    typeof (value as Partial<IGrainMigrationParticipant>).onDehydrate === "function" &&
-    typeof (value as Partial<IGrainMigrationParticipant>).onRehydrate === "function"
+    typeof candidate?.onDehydrate === "function" && typeof candidate?.onRehydrate === "function"
   );
 }
 

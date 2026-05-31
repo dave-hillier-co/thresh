@@ -1,4 +1,5 @@
 import { defineGrainInterface, type GrainInterface } from "./grain-interface";
+import { createSymbolObserver } from "./symbol-observer";
 
 /**
  * Identifies one broadcast channel: `(namespace, key)`. Unlike a `StreamId` there
@@ -46,15 +47,10 @@ export interface OnBroadcastChannelSubscribed {
 export function broadcastChannelObserver(
   instance: object,
 ): ((namespace: string, key: string) => BroadcastChannelHandler<unknown>) | undefined {
-  const fn = (instance as Record<symbol, unknown>)[BROADCAST_CHANNEL_OBSERVER];
-  return typeof fn === "function"
-    ? (namespace, key) =>
-        (fn as OnBroadcastChannelSubscribed[typeof BROADCAST_CHANNEL_OBSERVER]).call(
-          instance,
-          namespace,
-          key,
-        )
-    : undefined;
+  return createSymbolObserver<BroadcastChannelHandler<unknown>>(
+    instance,
+    BROADCAST_CHANNEL_OBSERVER,
+  );
 }
 
 /**

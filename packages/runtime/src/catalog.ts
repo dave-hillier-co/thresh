@@ -58,11 +58,7 @@ export class Catalog {
 
   /** Single-silo path (Phase 1): create with a fresh activation id if absent. */
   getOrCreate(id: GrainId): ActivationData {
-    const existing = this.activations.get(id.toString());
-    if (existing !== undefined && existing.state !== "invalid") return existing;
-    const created = this.create(id);
-    this.activations.set(id.toString(), created);
-    return created;
+    return this.getOrActivate(id);
   }
 
   /**
@@ -70,11 +66,7 @@ export class Catalog {
    * directory CAS. Returns an existing live activation if one is already here.
    */
   activateLocal(id: GrainId, activationId: string): ActivationData {
-    const existing = this.activations.get(id.toString());
-    if (existing !== undefined && existing.state !== "invalid") return existing;
-    const created = this.create(id, activationId);
-    this.activations.set(id.toString(), created);
-    return created;
+    return this.getOrActivate(id, activationId);
   }
 
   /**
@@ -87,9 +79,18 @@ export class Catalog {
     activationId: string,
     bag: Record<string, unknown>,
   ): ActivationData {
+    return this.getOrActivate(id, activationId, bag);
+  }
+
+  /** Lookup-create-store: return a live activation if present, otherwise create, store, and return one. */
+  private getOrActivate(
+    id: GrainId,
+    activationId?: string,
+    rehydrationBag?: Record<string, unknown>,
+  ): ActivationData {
     const existing = this.activations.get(id.toString());
     if (existing !== undefined && existing.state !== "invalid") return existing;
-    const created = this.create(id, activationId, bag);
+    const created = this.create(id, activationId, rehydrationBag);
     this.activations.set(id.toString(), created);
     return created;
   }

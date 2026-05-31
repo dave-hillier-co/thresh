@@ -15,21 +15,14 @@ interface StreamEvent<T> {
 }
 
 class MemorySubscription<T> implements StreamSubscriptionHandle<T> {
-  handler: StreamHandler<T> | undefined;
-  cursor: number;
   pumping = false;
-  readonly consumerId: string | undefined;
 
   constructor(
     private readonly stream: MemoryStream<T>,
-    handler: StreamHandler<T> | undefined,
-    cursor: number,
-    consumerId?: string,
-  ) {
-    this.handler = handler;
-    this.cursor = cursor;
-    this.consumerId = consumerId;
-  }
+    public handler: StreamHandler<T> | undefined,
+    public cursor: number,
+    public readonly consumerId?: string,
+  ) {}
 
   async resume(handler: StreamHandler<T>): Promise<void> {
     this.handler = handler;

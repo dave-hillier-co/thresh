@@ -44,6 +44,12 @@ import { TurnScheduler } from "@tsva/runtime/turn-scheduler";
 
 export type ActivationState = "creating" | "activating" | "valid" | "deactivating" | "invalid";
 
+/** Split a `namespace/key` string; with no slash the whole string is the namespace and key is empty. */
+function parseNamespaceKey(key: string): [namespace: string, key: string] {
+  const slash = key.indexOf("/");
+  return slash < 0 ? [key, ""] : [key.slice(0, slash), key.slice(slash + 1)];
+}
+
 /**
  * The runtime's per-grain bookkeeping object and the grain's `GrainContext`.
  * It owns the turn scheduler and drives the activation lifecycle.
@@ -153,9 +159,7 @@ export class ActivationData implements GrainContext {
     if (existing !== undefined) return existing;
     const observe = implicitStreamObserver(this.instance);
     if (observe === undefined) return undefined;
-    const slash = streamKey.indexOf("/");
-    const namespace = slash < 0 ? streamKey : streamKey.slice(0, slash);
-    const key = slash < 0 ? "" : streamKey.slice(slash + 1);
+    const [namespace, key] = parseNamespaceKey(streamKey);
     const handler = observe(namespace, key);
     this.streamHandlers.set(streamKey, handler);
     return handler;
@@ -172,9 +176,7 @@ export class ActivationData implements GrainContext {
     if (existing !== undefined) return existing;
     const observe = broadcastChannelObserver(this.instance);
     if (observe === undefined) return undefined;
-    const slash = channelKey.indexOf("/");
-    const namespace = slash < 0 ? channelKey : channelKey.slice(0, slash);
-    const key = slash < 0 ? "" : channelKey.slice(slash + 1);
+    const [namespace, key] = parseNamespaceKey(channelKey);
     const handler = observe(namespace, key);
     this.broadcastHandlers.set(channelKey, handler);
     return handler;

@@ -76,7 +76,9 @@ export class StateMachineManagerImpl implements StateMachineManager {
     this.version = await this.storage.append(this.logName, this.grainId, [entry], this.version);
     machine.apply(payload);
     this.liveEntryCount += 1;
-    if (this.liveEntryCount >= this.threshold()) await this.compact();
+    // Keep the threshold above the machine count so we don't recompact on every append.
+    if (this.liveEntryCount >= Math.max(this.snapshotThreshold, this.machines.size + 1))
+      await this.compact();
   }
 
   async compact(): Promise<void> {
@@ -85,10 +87,5 @@ export class StateMachineManagerImpl implements StateMachineManager {
     );
     this.version = await this.storage.replace(this.logName, this.grainId, frames, this.version);
     this.liveEntryCount = frames.length;
-  }
-
-  /** Keep the threshold above the machine count so we don't recompact on every append. */
-  private threshold(): number {
-    return Math.max(this.snapshotThreshold, this.machines.size + 1);
   }
 }

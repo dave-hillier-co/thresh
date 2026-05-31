@@ -13,18 +13,21 @@ export interface RedisJournalStorageOptions {
 
 const CONFLICT = "TSVA_ETAG_CONFLICT";
 
-// Conditional append: the caller's expected version (ARGV[1], '' = "no log yet")
-// must match the stored version, then push the new entries (ARGV[2..]) and bump
-// the version. Atomic on the server, so two silos racing to append produce one
-// winner and one conflict — the optimistic-concurrency contract of GrainStorage,
-// carried over to an append-only log.
-const APPEND = `
+// Optimistic-concurrency guard shared by APPEND and REPLACE: the caller's expected
+// version (ARGV[1], '' = "no log yet") must match the stored version, else conflict.
+const VERSION_CHECK = `
 local cur = redis.call('GET', KEYS[2])
 if ARGV[1] == '' then
   if cur then return redis.error_reply('${CONFLICT} ' .. cur) end
 elseif (not cur) or (cur ~= ARGV[1]) then
   return redis.error_reply('${CONFLICT} ' .. (cur or ''))
-end
+end`;
+
+// Conditional append: after the version guard, push the new entries (ARGV[2..])
+// and bump the version. Atomic on the server, so two silos racing to append
+// produce one winner and one conflict — the optimistic-concurrency contract of
+// GrainStorage, carried over to an append-only log.
+const APPEND = `${VERSION_CHECK}
 for i = 2, #ARGV do
   redis.call('RPUSH', KEYS[1], ARGV[i])
 end
@@ -33,13 +36,7 @@ return redis.call('INCR', KEYS[2])`;
 // Conditional snapshot replace: same version guard, then drop the whole log and
 // write the snapshot frames in its place. Atomic, so a compaction racing a
 // stale incarnation's append still leaves exactly one winner.
-const REPLACE = `
-local cur = redis.call('GET', KEYS[2])
-if ARGV[1] == '' then
-  if cur then return redis.error_reply('${CONFLICT} ' .. cur) end
-elseif (not cur) or (cur ~= ARGV[1]) then
-  return redis.error_reply('${CONFLICT} ' .. (cur or ''))
-end
+const REPLACE = `${VERSION_CHECK}
 redis.call('DEL', KEYS[1])
 for i = 2, #ARGV do
   redis.call('RPUSH', KEYS[1], ARGV[i])

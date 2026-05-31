@@ -17,11 +17,14 @@ export interface StoredRecord<T> {
 // round-trip — `structuredClone`/JSON would strip their class identity.
 const clone = <T>(value: T): T => decodeValue(encodeValue(value)) as T;
 
+/** A fresh record's default metadata (no committed timestamp, no commit records). */
+export const EMPTY_METADATA: TransactionalStateMetadata = { timeStamp: 0, commitRecords: {} };
+
 export function emptyRecord<T>(): StoredRecord<T> {
   return {
     committedState: undefined as T,
     committedSequenceId: 0,
-    metadata: { timeStamp: 0, commitRecords: {} },
+    metadata: EMPTY_METADATA,
     pendingStates: [],
   };
 }

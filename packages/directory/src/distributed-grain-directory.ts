@@ -58,7 +58,6 @@ export class DistributedGrainDirectory implements GrainDirectory {
       },
       async (owner) => {
         await this.peer.unregister(owner, addr);
-        return undefined;
       },
     );
   }

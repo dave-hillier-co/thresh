@@ -9,6 +9,7 @@ import type {
 import { decodeValue, encodeValue } from "@tsva/core/value-codec";
 import {
   applyStore,
+  EMPTY_METADATA,
   emptyRecord,
   type StoredRecord,
 } from "@tsva/transactions/transactional-storage-apply";
@@ -47,7 +48,7 @@ export class MemoryTransactionalStorage implements TransactionalStateStorage {
         etag: undefined,
         committedState: undefined,
         committedSequenceId: 0,
-        metadata: { timeStamp: 0, commitRecords: {} },
+        metadata: EMPTY_METADATA,
         pendingStates: [],
       };
     }
