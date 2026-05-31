@@ -1,6 +1,7 @@
 import type { GrainId } from "./grain-id";
 import { defineGrainInterface, type GrainInterface } from "./grain-interface";
 import type { GrainKey } from "./grain-key";
+import { createSymbolObserver } from "./symbol-observer";
 
 /** Identifies one stream: `(provider, namespace, key)`. */
 export interface StreamId {
@@ -78,15 +79,7 @@ export interface ImplicitStreamSubscriber {
 export function implicitStreamObserver(
   instance: object,
 ): ((namespace: string, key: string) => StreamHandler<unknown>) | undefined {
-  const fn = (instance as Record<symbol, unknown>)[STREAM_SUBSCRIPTION_OBSERVER];
-  return typeof fn === "function"
-    ? (namespace, key) =>
-        (fn as ImplicitStreamSubscriber[typeof STREAM_SUBSCRIPTION_OBSERVER]).call(
-          instance,
-          namespace,
-          key,
-        )
-    : undefined;
+  return createSymbolObserver<StreamHandler<unknown>>(instance, STREAM_SUBSCRIPTION_OBSERVER);
 }
 
 /**

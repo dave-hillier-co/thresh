@@ -1,3 +1,5 @@
+import { createFieldRegistry } from "./field-registry";
+
 /** A reducer-state field declared on a grain via `@reducerState`. */
 export interface ReducerStateField {
   fieldName: string;
@@ -10,14 +12,7 @@ export interface ReducerStateField {
 // Per-instance registry populated by the decorator's initializer during
 // construction; the runtime reads it to inject and read the facets before
 // `onActivate`. Mirrors persistent-state-metadata.
-const registry = new WeakMap<object, ReducerStateField[]>();
+const registry = createFieldRegistry<ReducerStateField>();
 
-export function registerReducerField(instance: object, field: ReducerStateField): void {
-  const list = registry.get(instance);
-  if (list === undefined) registry.set(instance, [field]);
-  else list.push(field);
-}
-
-export function getReducerFields(instance: object): readonly ReducerStateField[] {
-  return registry.get(instance) ?? [];
-}
+export const registerReducerField = registry.register;
+export const getReducerFields = registry.getFields;

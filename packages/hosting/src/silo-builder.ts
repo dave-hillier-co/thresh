@@ -93,6 +93,19 @@ interface Registration {
   interfaces: GrainInterface<unknown>[];
 }
 
+/**
+ * Build a single-key config object from an optional value, omitting the key
+ * when the value is `undefined`. A defined empty string is preserved (passed
+ * through as `{ [key]: "" }`), matching `!== undefined` semantics under
+ * `exactOptionalPropertyTypes`.
+ */
+function toConfigOption<K extends string, V>(
+  key: K,
+  value: V | undefined,
+): Record<K, V> | Record<string, never> {
+  return value !== undefined ? ({ [key]: value } as Record<K, V>) : {};
+}
+
 /** Fluent builder for a silo, mirroring the hosting surface in docs/11. */
 export class SiloBuilder {
   private membership: MembershipService | undefined;
@@ -120,6 +133,23 @@ export class SiloBuilder {
 
   constructor(private readonly config: SiloConfig) {}
 
+  /**
+   * Create a Redis client, attach a no-op error handler (errors surface through
+   * `connect()`/commands; we don't crash the process), and register its
+   * connect/close on the silo's start/stop lifecycle hooks.
+   */
+  private createManagedRedisClient(options: { url: string }): ReturnType<typeof createClient> {
+    const client = createClient({ url: options.url });
+    client.on("error", () => {});
+    this.starters.push(async () => {
+      await client.connect();
+    });
+    this.closers.push(async () => {
+      await client.close();
+    });
+    return client;
+  }
+
   /** Enable durable reminders backed by the given table (in-memory by default). */
   useReminders(table: ReminderTable = new MemoryReminderTable()): this {
     this.reminderTable = table;
@@ -132,17 +162,10 @@ export class SiloBuilder {
    * to `"tsva"`).
    */
   useRedisReminders(options: { url: string; keyPrefix?: string }): this {
-    const client = createClient({ url: options.url });
-    client.on("error", () => {});
-    this.starters.push(async () => {
-      await client.connect();
-    });
-    this.closers.push(async () => {
-      await client.close();
-    });
+    const client = this.createManagedRedisClient(options);
     this.reminderTable = new RedisReminderTable(
       client,
-      options.keyPrefix !== undefined ? { keyPrefix: options.keyPrefix } : {},
+      toConfigOption("keyPrefix", options.keyPrefix),
     );
     return this;
   }
@@ -155,10 +178,7 @@ export class SiloBuilder {
   usePostgresReminders(options: { connectionString: string; tableName?: string }): this {
     const pool = new Pool({ connectionString: options.connectionString });
     pool.on("error", () => {});
-    const table = new PostgresReminderTable(
-      pool,
-      options.tableName !== undefined ? { tableName: options.tableName } : {},
-    );
+    const table = new PostgresReminderTable(pool, toConfigOption("tableName", options.tableName));
     this.starters.push(async () => {
       await table.start();
     });
@@ -194,17 +214,10 @@ export class SiloBuilder {
     keyPrefix?: string;
     jobs?: DurableJobsOptions;
   }): this {
-    const client = createClient({ url: options.url });
-    client.on("error", () => {});
-    this.starters.push(async () => {
-      await client.connect();
-    });
-    this.closers.push(async () => {
-      await client.close();
-    });
+    const client = this.createManagedRedisClient(options);
     this.jobShardStore = new RedisJobShardStore(
       client,
-      options.keyPrefix !== undefined ? { keyPrefix: options.keyPrefix } : {},
+      toConfigOption("keyPrefix", options.keyPrefix),
     );
     this.durableJobsOptions = options.jobs ?? {};
     return this;
@@ -262,7 +275,7 @@ export class SiloBuilder {
     const provider = new RedisPullingStreamProvider(
       client,
       name,
-      options.keyPrefix !== undefined ? { keyPrefix: options.keyPrefix } : {},
+      toConfigOption("keyPrefix", options.keyPrefix),
     );
     this.pullingStreams.push(provider);
     this.starters.push(async () => {
@@ -377,20 +390,10 @@ export class SiloBuilder {
    * shared by several clusters (defaults to `"tsva"`).
    */
   addRedisStorage(name: string, options: { url: string; keyPrefix?: string }): this {
-    const client = createClient({ url: options.url });
-    client.on("error", () => {}); // surfaced by connect()/commands; don't crash the process
-    this.starters.push(async () => {
-      await client.connect();
-    });
-    this.closers.push(async () => {
-      await client.close();
-    });
+    const client = this.createManagedRedisClient(options);
     return this.addStorage(
       name,
-      new RedisGrainStorage(
-        client,
-        options.keyPrefix !== undefined ? { keyPrefix: options.keyPrefix } : {},
-      ),
+      new RedisGrainStorage(client, toConfigOption("keyPrefix", options.keyPrefix)),
     );
   }
 
@@ -407,10 +410,7 @@ export class SiloBuilder {
   ): this {
     const pool = new Pool({ connectionString: options.connectionString });
     pool.on("error", () => {}); // surfaced by start()/queries; don't crash the process
-    const provider = new PostgresGrainStorage(
-      pool,
-      options.tableName !== undefined ? { tableName: options.tableName } : {},
-    );
+    const provider = new PostgresGrainStorage(pool, toConfigOption("tableName", options.tableName));
     this.starters.push(async () => {
       await provider.start();
     });
@@ -426,20 +426,10 @@ export class SiloBuilder {
    * `keyPrefix` namespaces keys (defaults to `"tsva"`).
    */
   addRedisTransactionalStorage(name: string, options: { url: string; keyPrefix?: string }): this {
-    const client = createClient({ url: options.url });
-    client.on("error", () => {});
-    this.starters.push(async () => {
-      await client.connect();
-    });
-    this.closers.push(async () => {
-      await client.close();
-    });
+    const client = this.createManagedRedisClient(options);
     return this.addTransactionalStorage(
       name,
-      new RedisTransactionalStorage(
-        client,
-        options.keyPrefix !== undefined ? { keyPrefix: options.keyPrefix } : {},
-      ),
+      new RedisTransactionalStorage(client, toConfigOption("keyPrefix", options.keyPrefix)),
     );
   }
 
@@ -463,20 +453,10 @@ export class SiloBuilder {
    * `keyPrefix` namespaces keys (defaults to `"tsva"`).
    */
   addRedisJournaling(name: string, options: { url: string; keyPrefix?: string }): this {
-    const client = createClient({ url: options.url });
-    client.on("error", () => {});
-    this.starters.push(async () => {
-      await client.connect();
-    });
-    this.closers.push(async () => {
-      await client.close();
-    });
+    const client = this.createManagedRedisClient(options);
     return this.addJournaling(
       name,
-      new RedisJournalStorage(
-        client,
-        options.keyPrefix !== undefined ? { keyPrefix: options.keyPrefix } : {},
-      ),
+      new RedisJournalStorage(client, toConfigOption("keyPrefix", options.keyPrefix)),
     );
   }
 

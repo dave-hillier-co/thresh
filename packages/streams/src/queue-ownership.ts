@@ -1,13 +1,7 @@
 import { stableHash32 } from "@tsva/core/hash";
+import { isHashInRanges, type HashRange } from "@tsva/core/hash-ring";
 
-/** A half-open hash range `[begin, end)` a silo owns on the ring. */
-export type HashRange = readonly [begin: number, end: number];
-
-function inRanges(hash: number, ranges: readonly HashRange[]): boolean {
-  return ranges.some(([begin, end]) =>
-    begin <= end ? hash >= begin && hash < end : hash >= begin || hash < end,
-  );
-}
+export type { HashRange };
 
 /**
  * The ring point of physical queue `index`. Each queue sits at a fixed point on
@@ -27,7 +21,7 @@ export function ownedQueueIndices(
 ): number[] {
   const owned: number[] = [];
   for (let i = 0; i < queueCount; i++) {
-    if (inRanges(queueRingHash(providerName, i), ranges)) owned.push(i);
+    if (isHashInRanges(queueRingHash(providerName, i), ranges)) owned.push(i);
   }
   return owned;
 }

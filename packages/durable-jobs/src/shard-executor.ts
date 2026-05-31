@@ -34,12 +34,8 @@ export class ConcurrencyLimiter {
   private inUse = 0;
   constructor(private readonly max: number) {}
 
-  get available(): number {
-    return Math.max(0, this.max - this.inUse);
-  }
-
   get saturated(): boolean {
-    return this.available <= 0;
+    return this.max - this.inUse <= 0;
   }
 
   tryAcquire(): boolean {
@@ -135,17 +131,21 @@ export class ShardExecutor {
 
   stop(): void {
     this.stopped = true;
-    if (this.pollHandle !== undefined) this.time.clearTimer(this.pollHandle);
-    this.pollHandle = undefined;
+    this.clearPoll();
+  }
+
+  /** Clear the poll timer if one is armed and reset the handle. */
+  private clearPoll(): void {
+    if (this.pollHandle !== undefined) {
+      this.time.clearTimer(this.pollHandle);
+      this.pollHandle = undefined;
+    }
   }
 
   /** Re-arm the poll timer for the next due job (or immediately if one is already due). */
   private schedulePoll(): void {
     if (this.stopped) return;
-    if (this.pollHandle !== undefined) {
-      this.time.clearTimer(this.pollHandle);
-      this.pollHandle = undefined;
-    }
+    this.clearPoll();
     const next = this.queue.nextDueMs();
     if (next === undefined) return;
     const delay = Math.max(0, next - this.time.now());

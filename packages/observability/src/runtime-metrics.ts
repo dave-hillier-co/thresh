@@ -19,14 +19,23 @@ export function registerRuntimeMetrics(sources: RuntimeMetricSources): () => voi
   const meter = metrics.getMeter("@tsva/observability");
   const unregister: Array<() => void> = [];
 
+  type ObservableInstrument = {
+    addCallback: (cb: (result: ObservableResult) => void) => void;
+    removeCallback: (cb: (result: ObservableResult) => void) => void;
+  };
+  const registerObservableInstrument = (
+    instrument: ObservableInstrument,
+    callback: (result: ObservableResult) => void,
+  ): void => {
+    instrument.addCallback(callback);
+    unregister.push(() => instrument.removeCallback(callback));
+  };
+
   const activations = meter.createObservableGauge("tsva.activations", {
     description: "Live grain activations on this silo",
     unit: "{activation}",
   });
-  const activationsCb = (result: ObservableResult): void =>
-    result.observe(sources.activationCount());
-  activations.addCallback(activationsCb);
-  unregister.push(() => activations.removeCallback(activationsCb));
+  registerObservableInstrument(activations, (result) => result.observe(sources.activationCount()));
 
   const { directoryCache } = sources;
   if (directoryCache !== undefined) {
@@ -38,14 +47,12 @@ export function registerRuntimeMetrics(sources: RuntimeMetricSources): () => voi
       description: "Location-cache misses",
       unit: "{lookup}",
     });
-    const hitsCb = (result: ObservableResult): void => result.observe(directoryCache().hits);
-    const missesCb = (result: ObservableResult): void => result.observe(directoryCache().misses);
-    hits.addCallback(hitsCb);
-    misses.addCallback(missesCb);
-    unregister.push(
-      () => hits.removeCallback(hitsCb),
-      () => misses.removeCallback(missesCb),
-    );
+    const makeObservableCb =
+      (field: "hits" | "misses") =>
+      (result: ObservableResult): void =>
+        result.observe(directoryCache()[field]);
+    registerObservableInstrument(hits, makeObservableCb("hits"));
+    registerObservableInstrument(misses, makeObservableCb("misses"));
   }
 
   return () => unregister.forEach((fn) => fn());

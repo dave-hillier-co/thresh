@@ -7,9 +7,6 @@ interface Log {
   version: number;
 }
 
-const versionStr = (v: number | undefined): string | undefined =>
-  v === undefined ? undefined : String(v);
-
 /**
  * In-memory journal store for development and tests. Not durable and not shared
  * across silos; mirrors `MemoryGrainStorage`. The `version` is a per-log op
@@ -68,8 +65,8 @@ export class MemoryJournalStorage implements JournalStorage {
     if (stored !== expected) {
       throw new InconsistentStateError(
         `journal version conflict on ${logName} for ${grainId.toString()}`,
-        versionStr(expected),
-        versionStr(stored),
+        expected === undefined ? undefined : String(expected),
+        stored === undefined ? undefined : String(stored),
       );
     }
   }

@@ -55,7 +55,12 @@ import { LocalDirectoryPartition } from "@tsva/directory/local-directory-partiti
 import { LocationCache } from "@tsva/directory/location-cache";
 import { ConnectionManager } from "@tsva/messaging/connection-manager";
 import { CorrelationTable } from "@tsva/messaging/correlation-table";
-import { nextCorrelationId, responseTo, type Message } from "@tsva/messaging/message";
+import {
+  nextCorrelationId,
+  responseTo,
+  type Message,
+  type ResponseKind,
+} from "@tsva/messaging/message";
 import { MessagePackSerializer } from "@tsva/messaging/msgpack-serializer";
 import type { Serializer } from "@tsva/messaging/serializer";
 import type { Listener, Transport } from "@tsva/messaging/transport";
@@ -817,22 +822,37 @@ export class ClusterNode {
     }
   }
 
-  private async sendMigration(target: SiloAddress, payload: MigrationPayload): Promise<boolean> {
+  /** Shared boilerplate for a `system:` request: connect, correlate, send, await, interpret. */
+  private async sendSystemMessage(
+    target: SiloAddress,
+    system: NonNullable<Message["system"]>,
+    targetGrain: GrainId,
+    body: Uint8Array,
+  ): Promise<unknown> {
     const conn = await this.connections.get(target);
     const correlationId = nextCorrelationId();
     const message: Message = {
       correlationId,
       direction: "request",
-      system: "migration",
-      targetGrain: payload.grainId,
+      system,
+      targetGrain,
       sendingSilo: this.options.local,
       interfaceId: 0,
       method: "",
-      body: this.serializer.serialize(payload),
+      body,
     };
     const pending = this.correlation.register(correlationId, this.callTimeoutMs);
     conn.send(message);
-    return this.interpretResponse(await pending) as boolean;
+    return this.interpretResponse(await pending);
+  }
+
+  private async sendMigration(target: SiloAddress, payload: MigrationPayload): Promise<boolean> {
+    return (await this.sendSystemMessage(
+      target,
+      "migration",
+      payload.grainId,
+      this.serializer.serialize(payload),
+    )) as boolean;
   }
 
   private async handleMigration(message: Message): Promise<void> {
@@ -973,21 +993,12 @@ export class ClusterNode {
   }
 
   private async sendDirectory(owner: SiloAddress, op: DirectoryOp): Promise<unknown> {
-    const conn = await this.connections.get(owner);
-    const correlationId = nextCorrelationId();
-    const message: Message = {
-      correlationId,
-      direction: "request",
-      system: "directory",
-      targetGrain: directoryOpGrainId(op),
-      sendingSilo: this.options.local,
-      interfaceId: 0,
-      method: "",
-      body: this.serializer.serialize(op),
-    };
-    const pending = this.correlation.register(correlationId, this.callTimeoutMs);
-    conn.send(message);
-    return this.interpretResponse(await pending);
+    return this.sendSystemMessage(
+      owner,
+      "directory",
+      directoryOpGrainId(op),
+      this.serializer.serialize(op),
+    );
   }
 
   private async handleDirectoryRequest(message: Message): Promise<void> {
@@ -1001,34 +1012,34 @@ export class ClusterNode {
         responseTo(message, "success", this.serializer.serialize(result), this.options.local),
       );
     } catch (err) {
-      const kind = err instanceof RejectionError ? "rejection" : "error";
-      const body =
-        err instanceof RejectionError
-          ? this.serializer.serialize({ message: err.message, kind: err.kind })
-          : this.serializer.serialize({
-              message: err instanceof Error ? err.message : String(err),
-            });
+      const { kind, body } = this.serializeError(err);
       await this.reply(replyTo, responseTo(message, kind, body, this.options.local));
     }
   }
 
+  /** Map a thrown error to the `(kind, body)` of an error/rejection response. */
+  private serializeError(err: unknown): { kind: ResponseKind; body: Uint8Array } {
+    return err instanceof RejectionError
+      ? {
+          kind: "rejection",
+          body: this.serializer.serialize({ message: err.message, kind: err.kind }),
+        }
+      : {
+          kind: "error",
+          body: this.serializer.serialize({
+            message: err instanceof Error ? err.message : String(err),
+          }),
+        };
+  }
+
   /** Fetch a peer's manifest as a `system: "manifest"` request (mirrors directory RPC). */
   private async sendManifest(owner: SiloAddress): Promise<SiloManifest> {
-    const conn = await this.connections.get(owner);
-    const correlationId = nextCorrelationId();
-    const message: Message = {
-      correlationId,
-      direction: "request",
-      system: "manifest",
-      targetGrain: new GrainId("manifest", owner.ringKey),
-      sendingSilo: this.options.local,
-      interfaceId: 0,
-      method: "",
-      body: this.serializer.serialize(null),
-    };
-    const pending = this.correlation.register(correlationId, this.callTimeoutMs);
-    conn.send(message);
-    const entries = this.interpretResponse(await pending) as InterfaceVersionEntry[];
+    const entries = (await this.sendSystemMessage(
+      owner,
+      "manifest",
+      new GrainId("manifest", owner.ringKey),
+      this.serializer.serialize(null),
+    )) as InterfaceVersionEntry[];
     return { silo: owner, entries };
   }
 
@@ -1050,21 +1061,12 @@ export class ClusterNode {
 
   /** Ask a peer for its current activation count as a `system: "load"` request. */
   private async sendLoadQuery(silo: SiloAddress): Promise<number> {
-    const conn = await this.connections.get(silo);
-    const correlationId = nextCorrelationId();
-    const message: Message = {
-      correlationId,
-      direction: "request",
-      system: "load",
-      targetGrain: new GrainId("load", silo.ringKey),
-      sendingSilo: this.options.local,
-      interfaceId: 0,
-      method: "",
-      body: this.serializer.serialize(null),
-    };
-    const pending = this.correlation.register(correlationId, this.callTimeoutMs);
-    conn.send(message);
-    return this.interpretResponse(await pending) as number;
+    return (await this.sendSystemMessage(
+      silo,
+      "load",
+      new GrainId("load", silo.ringKey),
+      this.serializer.serialize(null),
+    )) as number;
   }
 
   private async handleLoadRequest(message: Message): Promise<void> {
@@ -1142,21 +1144,12 @@ export class ClusterNode {
     count: number,
   ): Promise<number> {
     if (silo.equals(this.options.local)) return this.migrateRandomActivations(target, count);
-    const conn = await this.connections.get(silo);
-    const correlationId = nextCorrelationId();
-    const message: Message = {
-      correlationId,
-      direction: "request",
-      system: "rebalance",
-      targetGrain: new GrainId("rebalance", silo.ringKey),
-      sendingSilo: this.options.local,
-      interfaceId: 0,
-      method: "",
-      body: this.serializer.serialize({ target, count }),
-    };
-    const pending = this.correlation.register(correlationId, this.callTimeoutMs);
-    conn.send(message);
-    return this.interpretResponse(await pending) as number;
+    return (await this.sendSystemMessage(
+      silo,
+      "rebalance",
+      new GrainId("rebalance", silo.ringKey),
+      this.serializer.serialize({ target, count }),
+    )) as number;
   }
 
   private async handleRebalanceRequest(message: Message): Promise<void> {
@@ -1254,13 +1247,7 @@ export class ClusterNode {
       await this.reply(replyTo, response);
     } catch (err) {
       if (message.direction === "oneWay" || replyTo === undefined) return;
-      const body =
-        err instanceof RejectionError
-          ? this.serializer.serialize({ message: err.message, kind: err.kind })
-          : this.serializer.serialize({
-              message: err instanceof Error ? err.message : String(err),
-            });
-      const kind = err instanceof RejectionError ? "rejection" : "error";
+      const { kind, body } = this.serializeError(err);
       const response = responseTo(message, kind, body, this.options.local);
       this.attachParticipants(response, transaction);
       await this.reply(replyTo, response);

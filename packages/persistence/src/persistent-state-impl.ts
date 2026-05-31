@@ -23,13 +23,10 @@ export class PersistentStateImpl<T> implements PersistentState<T>, IGrainMigrati
     private readonly stateName: string,
     private readonly grainId: GrainId,
     private readonly storage: GrainStorage,
-    defaultValue: () => T,
+    private readonly defaultValue: () => T,
   ) {
     this.holder = { value: defaultValue(), exists: false };
-    this.defaultValue = defaultValue;
   }
-
-  private readonly defaultValue: () => T;
 
   get value(): T {
     return this.holder.value;
@@ -77,7 +74,6 @@ export class PersistentStateImpl<T> implements PersistentState<T>, IGrainMigrati
     if (snapshot === undefined) return;
     this.holder.value = snapshot.value;
     this.holder.exists = snapshot.exists;
-    if (snapshot.etag !== undefined) this.holder.etag = snapshot.etag;
-    else delete this.holder.etag;
+    this.holder.etag = snapshot.etag;
   }
 }

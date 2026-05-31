@@ -30,9 +30,7 @@ export class LocalDirectoryPartition {
 
   lookup(grainId: GrainId): GrainAddress | undefined {
     const existing = this.entries.get(grainId.toString());
-    if (existing === undefined) return undefined;
-    if (!this.isSiloLive(existing.silo)) return undefined;
-    return existing;
+    return existing && this.isSiloLive(existing.silo) ? existing : undefined;
   }
 
   /**

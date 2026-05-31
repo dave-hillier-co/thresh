@@ -89,3 +89,25 @@ export interface PersistedJob {
    */
   completed?: boolean;
 }
+
+/**
+ * Build a `PersistedJob` from a stored entry, assigning the optional `runId` /
+ * `completed` only when defined (to satisfy `exactOptionalPropertyTypes`). Shared
+ * by the memory and Redis stores, whose stored shapes are structurally identical.
+ */
+export function toPersistedJob(data: {
+  job: DurableJob;
+  dequeueCount: number;
+  dueTime: Date;
+  runId?: string;
+  completed?: boolean;
+}): PersistedJob {
+  const persisted: PersistedJob = {
+    job: data.job,
+    dequeueCount: data.dequeueCount,
+    dueTime: data.dueTime,
+  };
+  if (data.runId !== undefined) persisted.runId = data.runId;
+  if (data.completed !== undefined) persisted.completed = data.completed;
+  return persisted;
+}

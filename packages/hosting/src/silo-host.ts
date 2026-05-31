@@ -64,46 +64,67 @@ export class SiloHost {
     return this.parts.rebalancerWorker?.report();
   }
 
+  /** Run a sequence of optional hooks in order, awaiting each, with the given args. */
+  private async runHooks<A extends unknown[]>(
+    hooks: ReadonlyArray<(...args: A) => Promise<void>> | undefined,
+    ...args: A
+  ): Promise<void> {
+    for (const hook of hooks ?? []) await hook(...args);
+  }
+
   async start(): Promise<void> {
-    for (const hook of this.parts.onStart ?? []) await hook();
-    await this.parts.node.start();
-    this.parts.health.update({ transportReady: true });
-    if (this.parts.healthServer !== undefined && this.parts.healthPort !== undefined) {
-      await this.parts.healthServer.listen(this.parts.healthPort);
+    const {
+      node,
+      health,
+      healthServer,
+      healthPort,
+      membership,
+      reminderService,
+      rebalancerWorker,
+      onStart,
+      onOwnershipChange,
+    } = this.parts;
+    await this.runHooks(onStart);
+    await node.start();
+    health.update({ transportReady: true });
+    if (healthServer !== undefined && healthPort !== undefined) {
+      await healthServer.listen(healthPort);
     }
-    const ranges = this.parts.node.ownedHashRanges();
-    for (const hook of this.parts.onOwnershipChange ?? []) await hook(ranges);
-    await this.parts.reminderService?.refreshOwnership(ranges);
-    this.parts.rebalancerWorker?.start();
+    const ranges = node.ownedHashRanges();
+    await this.runHooks(onOwnershipChange, ranges);
+    await reminderService?.refreshOwnership(ranges);
+    rebalancerWorker?.start();
     this.watchMembership();
-    this.parts.health.update({
-      membershipHealthy: this.parts.membership.current().silos.length > 0,
+    health.update({
+      membershipHealthy: membership.current().silos.length > 0,
       started: true,
     });
   }
 
   async stop(): Promise<void> {
+    const { rebalancerWorker, reminderService, shutdown, healthServer, onStop } = this.parts;
     this.membershipWatch?.abort();
-    this.parts.rebalancerWorker?.stop();
-    this.parts.reminderService?.stop();
-    await this.parts.shutdown.drain();
-    await this.parts.healthServer?.close();
-    for (const hook of this.parts.onStop ?? []) await hook();
+    rebalancerWorker?.stop();
+    reminderService?.stop();
+    await shutdown.drain();
+    await healthServer?.close();
+    await this.runHooks(onStop);
   }
 
   /** React to membership view changes: rebuild the ring and refresh health. */
   private watchMembership(): void {
+    const { node, health, membership, reminderService, onOwnershipChange } = this.parts;
     const abort = new AbortController();
     this.membershipWatch = abort;
     void (async () => {
-      for await (const snapshot of this.parts.membership.updates()) {
+      for await (const snapshot of membership.updates()) {
         if (abort.signal.aborted) return;
-        this.parts.node.updateView();
+        node.updateView();
         // Ring changed: take over (or release) reminder ranges and stream queues.
-        const updated = this.parts.node.ownedHashRanges();
-        for (const hook of this.parts.onOwnershipChange ?? []) await hook(updated);
-        await this.parts.reminderService?.refreshOwnership(updated);
-        this.parts.health.update({ membershipHealthy: snapshot.silos.length > 0 });
+        const updated = node.ownedHashRanges();
+        await this.runHooks(onOwnershipChange, updated);
+        await reminderService?.refreshOwnership(updated);
+        health.update({ membershipHealthy: snapshot.silos.length > 0 });
       }
     })();
   }

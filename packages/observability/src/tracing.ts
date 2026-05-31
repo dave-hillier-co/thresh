@@ -16,6 +16,8 @@ import type {
 
 const tracer = trace.getTracer("@tsva/observability");
 
+const spanName = (ctx: GrainCallContext): string => `${ctx.interfaceName}/${ctx.methodName}`;
+
 function attributes(ctx: GrainCallContext): Attributes {
   return {
     "rpc.system": "tsva",
@@ -71,7 +73,7 @@ export function tracingFilters(): {
   outgoing: OutgoingGrainCallFilter;
 } {
   const outgoing: OutgoingGrainCallFilter = async (ctx) =>
-    withSpan(`${ctx.interfaceName}/${ctx.methodName}`, SpanKind.CLIENT, ctx, async () => {
+    withSpan(spanName(ctx), SpanKind.CLIENT, ctx, async () => {
       propagation.inject(context.active(), ctx.headers);
       await ctx.invoke();
     });
@@ -79,7 +81,7 @@ export function tracingFilters(): {
   const incoming: IncomingGrainCallFilter = async (ctx) => {
     const parent = propagation.extract(context.active(), ctx.headers);
     await context.with(parent, () =>
-      withSpan(`${ctx.interfaceName}/${ctx.methodName}`, SpanKind.SERVER, ctx, () => ctx.invoke()),
+      withSpan(spanName(ctx), SpanKind.SERVER, ctx, () => ctx.invoke()),
     );
   };
 

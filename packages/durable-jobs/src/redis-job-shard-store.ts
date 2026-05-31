@@ -1,7 +1,12 @@
 import type { createClient } from "redis";
 import type { DurableJob } from "@tsva/core/durable-job";
 import { deserializeValue, serializeValue } from "@tsva/core/value-codec";
-import type { JobShardStore, PersistedJob, ShardRecord } from "@tsva/durable-jobs/job-shard-store";
+import {
+  type JobShardStore,
+  type PersistedJob,
+  type ShardRecord,
+  toPersistedJob,
+} from "@tsva/durable-jobs/job-shard-store";
 
 export type RedisClient = ReturnType<typeof createClient>;
 
@@ -118,17 +123,7 @@ export class RedisJobShardStore implements JobShardStore {
 
   async readJobs(shardKey: number): Promise<PersistedJob[]> {
     const record = await this.client.hGetAll(this.jobsKey(shardKey));
-    return Object.values(record).map((raw) => {
-      const data = deserializeValue<JobData>(raw);
-      const persisted: PersistedJob = {
-        job: data.job,
-        dequeueCount: data.dequeueCount,
-        dueTime: data.dueTime,
-      };
-      if (data.runId !== undefined) persisted.runId = data.runId;
-      if (data.completed !== undefined) persisted.completed = data.completed;
-      return persisted;
-    });
+    return Object.values(record).map((raw) => toPersistedJob(deserializeValue<JobData>(raw)));
   }
 
   async listShards(): Promise<ShardRecord[]> {

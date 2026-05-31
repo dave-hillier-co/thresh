@@ -66,24 +66,27 @@ export function markReentrant(ctor: GrainConstructor): void {
   reentrantRegistry.add(ctor);
 }
 
-/** Record that this grain type is implicitly subscribed to a stream namespace. */
-export function markImplicitSubscription(ctor: GrainConstructor, namespace: string): void {
-  let namespaces = implicitSubscriptionRegistry.get(ctor);
+function markSubscription(
+  registry: WeakMap<GrainConstructor, Set<string>>,
+  ctor: GrainConstructor,
+  namespace: string,
+): void {
+  let namespaces = registry.get(ctor);
   if (namespaces === undefined) {
     namespaces = new Set();
-    implicitSubscriptionRegistry.set(ctor, namespaces);
+    registry.set(ctor, namespaces);
   }
   namespaces.add(namespace);
 }
 
+/** Record that this grain type is implicitly subscribed to a stream namespace. */
+export function markImplicitSubscription(ctor: GrainConstructor, namespace: string): void {
+  markSubscription(implicitSubscriptionRegistry, ctor, namespace);
+}
+
 /** Record that this grain type is implicitly subscribed to a broadcast-channel namespace. */
 export function markBroadcastSubscription(ctor: GrainConstructor, namespace: string): void {
-  let namespaces = broadcastSubscriptionRegistry.get(ctor);
-  if (namespaces === undefined) {
-    namespaces = new Set();
-    broadcastSubscriptionRegistry.set(ctor, namespaces);
-  }
-  namespaces.add(namespace);
+  markSubscription(broadcastSubscriptionRegistry, ctor, namespace);
 }
 
 export function getGrainMetadata(ctor: GrainConstructor): GrainMetadata | undefined {

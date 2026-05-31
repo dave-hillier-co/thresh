@@ -21,7 +21,7 @@ import type {
   DurableSet,
   DurableValue,
 } from "./durable-state";
-import { registerDurableField } from "./durable-state-metadata";
+import { registerDurableField, type DurableKind } from "./durable-state-metadata";
 import type { Reducer, ReducerState } from "./reducer-state";
 import { registerReducerField } from "./reducer-state-metadata";
 import type { TransactionalState } from "./transactional-state";
@@ -317,24 +317,48 @@ export interface UseDurableStateOptions {
  * The handle throws
  * if used before then.
  */
+/**
+ * Shared plumbing for the `useDurable*` hooks: registers the field under the
+ * per-kind storage-key prefix and returns a `bound()` accessor that resolves the
+ * facet (throwing the per-kind "not yet bound" error if the runtime has not bound
+ * it yet). Each hook wraps the result in its own facade.
+ */
+function createDurableFacetHook<F>(
+  ctx: GrainSetup,
+  stateName: string,
+  kind: DurableKind,
+  fieldPrefix: string,
+  label: string,
+  options: UseDurableStateOptions,
+): () => F {
+  const instance = instanceOf(ctx);
+  const fieldName = `${fieldPrefix}${stateName}`;
+  registerDurableField(instance, {
+    fieldName,
+    stateName,
+    kind,
+    ...(options.provider !== undefined ? { provider: options.provider } : {}),
+  });
+  return (): F => {
+    const facet = (instance as Record<string, unknown>)[fieldName] as F | undefined;
+    if (facet === undefined) throw new Error(`${label} "${stateName}" not yet bound`);
+    return facet;
+  };
+}
+
 export function useDurableState<T>(
   ctx: GrainSetup,
   stateName: string,
   options: UseDurableStateOptions = {},
 ): DurableValue<T> {
-  const instance = instanceOf(ctx);
-  const fieldName = `__tsva_durable$${stateName}`;
-  registerDurableField(instance, {
-    fieldName,
+  const bound = createDurableFacetHook<DurableValue<T>>(
+    ctx,
     stateName,
-    kind: "value",
-    ...(options.provider !== undefined ? { provider: options.provider } : {}),
-  });
-  const bound = (): DurableValue<T> => {
-    const facet = (instance as Record<string, unknown>)[fieldName] as DurableValue<T> | undefined;
-    if (facet === undefined) throw new Error(`durable value "${stateName}" not yet bound`);
-    return facet;
-  };
+    "value",
+    "__tsva_durable$",
+    "durable value",
+    options,
+  );
   return {
     get value() {
       return bound().value;
@@ -354,21 +378,14 @@ export function useDurableDictionary<K, V>(
   stateName: string,
   options: UseDurableStateOptions = {},
 ): DurableDictionary<K, V> {
-  const instance = instanceOf(ctx);
-  const fieldName = `__tsva_durabledict$${stateName}`;
-  registerDurableField(instance, {
-    fieldName,
+  const bound = createDurableFacetHook<DurableDictionary<K, V>>(
+    ctx,
     stateName,
-    kind: "dictionary",
-    ...(options.provider !== undefined ? { provider: options.provider } : {}),
-  });
-  const bound = (): DurableDictionary<K, V> => {
-    const facet = (instance as Record<string, unknown>)[fieldName] as
-      | DurableDictionary<K, V>
-      | undefined;
-    if (facet === undefined) throw new Error(`durable dictionary "${stateName}" not yet bound`);
-    return facet;
-  };
+    "dictionary",
+    "__tsva_durabledict$",
+    "durable dictionary",
+    options,
+  );
   return {
     get size() {
       return bound().size;
@@ -393,19 +410,14 @@ export function useDurableList<T>(
   stateName: string,
   options: UseDurableStateOptions = {},
 ): DurableList<T> {
-  const instance = instanceOf(ctx);
-  const fieldName = `__tsva_durablelist$${stateName}`;
-  registerDurableField(instance, {
-    fieldName,
+  const bound = createDurableFacetHook<DurableList<T>>(
+    ctx,
     stateName,
-    kind: "list",
-    ...(options.provider !== undefined ? { provider: options.provider } : {}),
-  });
-  const bound = (): DurableList<T> => {
-    const facet = (instance as Record<string, unknown>)[fieldName] as DurableList<T> | undefined;
-    if (facet === undefined) throw new Error(`durable list "${stateName}" not yet bound`);
-    return facet;
-  };
+    "list",
+    "__tsva_durablelist$",
+    "durable list",
+    options,
+  );
   return {
     get length() {
       return bound().length;
@@ -429,19 +441,14 @@ export function useDurableQueue<T>(
   stateName: string,
   options: UseDurableStateOptions = {},
 ): DurableQueue<T> {
-  const instance = instanceOf(ctx);
-  const fieldName = `__tsva_durablequeue$${stateName}`;
-  registerDurableField(instance, {
-    fieldName,
+  const bound = createDurableFacetHook<DurableQueue<T>>(
+    ctx,
     stateName,
-    kind: "queue",
-    ...(options.provider !== undefined ? { provider: options.provider } : {}),
-  });
-  const bound = (): DurableQueue<T> => {
-    const facet = (instance as Record<string, unknown>)[fieldName] as DurableQueue<T> | undefined;
-    if (facet === undefined) throw new Error(`durable queue "${stateName}" not yet bound`);
-    return facet;
-  };
+    "queue",
+    "__tsva_durablequeue$",
+    "durable queue",
+    options,
+  );
   return {
     get size() {
       return bound().size;
@@ -464,19 +471,14 @@ export function useDurableSet<T>(
   stateName: string,
   options: UseDurableStateOptions = {},
 ): DurableSet<T> {
-  const instance = instanceOf(ctx);
-  const fieldName = `__tsva_durableset$${stateName}`;
-  registerDurableField(instance, {
-    fieldName,
+  const bound = createDurableFacetHook<DurableSet<T>>(
+    ctx,
     stateName,
-    kind: "set",
-    ...(options.provider !== undefined ? { provider: options.provider } : {}),
-  });
-  const bound = (): DurableSet<T> => {
-    const facet = (instance as Record<string, unknown>)[fieldName] as DurableSet<T> | undefined;
-    if (facet === undefined) throw new Error(`durable set "${stateName}" not yet bound`);
-    return facet;
-  };
+    "set",
+    "__tsva_durableset$",
+    "durable set",
+    options,
+  );
   return {
     get size() {
       return bound().size;

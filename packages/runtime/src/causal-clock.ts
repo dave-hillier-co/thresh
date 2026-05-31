@@ -27,7 +27,7 @@ export class CausalClock {
 
   /** Fold in an observed timestamp and issue a fresh reading past it and now. */
   mergeUtcNow(timestamp: number): number {
-    this.previous = Math.max(Math.max(this.previous + 1, timestamp + 1), this.time.now());
+    this.previous = Math.max(this.previous + 1, timestamp + 1, this.time.now());
     return this.previous;
   }
 }

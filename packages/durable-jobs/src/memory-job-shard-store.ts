@@ -1,5 +1,10 @@
 import type { DurableJob } from "@tsva/core/durable-job";
-import type { JobShardStore, PersistedJob, ShardRecord } from "@tsva/durable-jobs/job-shard-store";
+import {
+  type JobShardStore,
+  type PersistedJob,
+  type ShardRecord,
+  toPersistedJob,
+} from "@tsva/durable-jobs/job-shard-store";
 
 interface Entry {
   job: DurableJob;
@@ -73,16 +78,7 @@ export class MemoryJobShardStore implements JobShardStore {
   async readJobs(shardKey: number): Promise<PersistedJob[]> {
     const state = this.shards.get(shardKey);
     if (state === undefined) return [];
-    return [...state.jobs.values()].map((e) => {
-      const persisted: PersistedJob = {
-        job: e.job,
-        dequeueCount: e.dequeueCount,
-        dueTime: e.dueTime,
-      };
-      if (e.runId !== undefined) persisted.runId = e.runId;
-      if (e.completed !== undefined) persisted.completed = e.completed;
-      return persisted;
-    });
+    return [...state.jobs.values()].map((e) => toPersistedJob(e));
   }
 
   async listShards(): Promise<ShardRecord[]> {

@@ -70,17 +70,16 @@ export function responseTo(
   body: Uint8Array,
   sendingSilo?: SiloAddress,
 ): Message {
-  return {
+  const response: Message = {
     correlationId: request.correlationId,
     direction: "response",
     targetGrain: request.targetGrain,
     sendingSilo,
     interfaceId: request.interfaceId,
-    ...(request.interfaceVersion !== undefined
-      ? { interfaceVersion: request.interfaceVersion }
-      : {}),
     method: request.method,
     responseKind,
     body,
   };
+  if (request.interfaceVersion !== undefined) response.interfaceVersion = request.interfaceVersion;
+  return response;
 }

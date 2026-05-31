@@ -1,3 +1,5 @@
+import { createFieldRegistry } from "./field-registry";
+
 /** Which durable structure a journalled field declares. */
 export type DurableKind = "value" | "dictionary" | "list" | "queue" | "set";
 
@@ -16,14 +18,7 @@ export interface DurableStateField {
   provider?: string;
 }
 
-const registry = new WeakMap<object, DurableStateField[]>();
+const registry = createFieldRegistry<DurableStateField>();
 
-export function registerDurableField(instance: object, field: DurableStateField): void {
-  const list = registry.get(instance);
-  if (list === undefined) registry.set(instance, [field]);
-  else list.push(field);
-}
-
-export function getDurableFields(instance: object): readonly DurableStateField[] {
-  return registry.get(instance) ?? [];
-}
+export const registerDurableField = registry.register;
+export const getDurableFields = registry.getFields;

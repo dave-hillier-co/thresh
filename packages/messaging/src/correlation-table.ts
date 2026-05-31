@@ -49,7 +49,7 @@ export class CorrelationTable {
     const entry = this.pending.get(key);
     if (entry === undefined) return false;
     this.pending.delete(key);
-    if (entry.timer !== undefined) this.timer.clear(entry.timer);
+    this.clearTimer(entry);
     entry.resolve(message);
     return true;
   }
@@ -57,9 +57,13 @@ export class CorrelationTable {
   /** Fail all outstanding calls, e.g. when a connection is lost. */
   rejectAll(err: unknown): void {
     for (const entry of this.pending.values()) {
-      if (entry.timer !== undefined) this.timer.clear(entry.timer);
+      this.clearTimer(entry);
       entry.reject(err);
     }
     this.pending.clear();
+  }
+
+  private clearTimer(entry: Pending): void {
+    if (entry.timer !== undefined) this.timer.clear(entry.timer);
   }
 }
