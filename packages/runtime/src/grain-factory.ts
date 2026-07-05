@@ -12,6 +12,7 @@ import { Guid } from "@tsva/core/guid";
 import type { InvokeMethodOptions } from "@tsva/core/invoke-options";
 import type { InvocationRequest } from "@tsva/core/request";
 import type { TransactionInfo } from "@tsva/core/transaction-info";
+import { TransactionsDisabledError } from "@tsva/core/errors";
 import type { Dispatcher } from "@tsva/runtime/dispatcher";
 import { invocationContext } from "@tsva/runtime/invocation-context";
 import type { TransactionAgent } from "@tsva/runtime/transaction-agent";
@@ -211,9 +212,15 @@ export class GrainFactory {
     }
   }
 
+  /**
+   * Resolve the transaction agent, or raise the Orleans-parity
+   * "transactions disabled" error when this silo was built without one — a
+   * silo built via `SiloBuilder` only wires an agent when transactional
+   * storage is configured (transactions are opt-in).
+   */
   private requireAgent(): TransactionAgent {
     if (this.transactionAgent === undefined) {
-      throw new Error("grain factory has no transaction agent");
+      throw new TransactionsDisabledError();
     }
     return this.transactionAgent;
   }

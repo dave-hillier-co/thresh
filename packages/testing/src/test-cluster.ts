@@ -27,6 +27,15 @@ export interface TestClusterOptions {
   grains?: ReadonlyArray<GrainRegistrationSpec>;
   /** Clock injected into every silo; pass a `FakeTimeProvider` for determinism. */
   time?: TimeProvider;
+  /**
+   * Whether silos are built with transaction support. Defaults to `true`
+   * (every silo gets a shared in-memory transactional-storage provider); pass
+   * `false` to build a cluster with no transactional storage at all, so a
+   * `[Transaction]`-style grain call throws `TransactionsDisabledError`
+   * (Orleans: a cluster whose `SiloHostConfigurator` never calls
+   * `.UseTransactions()`).
+   */
+  transactions?: boolean;
   /** Per-silo overrides, applied after the defaults. */
   configureSilo?: (builder: SiloBuilder, silo: { index: number; address: SiloAddress }) => void;
 }
@@ -157,9 +166,13 @@ export class TestCluster {
       .useReminders(this.reminderTable)
       .useMemoryStreams()
       .useBroadcastChannels()
-      .useMemoryTransactionalStorage(this.transactionalStorage)
       .useMemoryJournaling(this.journalStorage)
       .useMemoryDurableJobs(this.jobShardStore);
+    if (this.options.transactions ?? true) {
+      builder.useMemoryTransactionalStorage(this.transactionalStorage);
+    } else {
+      builder.disableTransactions();
+    }
     for (const spec of this.options.grains ?? []) {
       builder.registerGrain(spec.ctor, { interfaces: spec.interfaces });
     }

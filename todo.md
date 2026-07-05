@@ -80,7 +80,7 @@ shows per-tag counts). One-line definitions live on the `GapTag` union. Grouped 
       `GAP-BROADCAST-CHANNEL-CLIENT`, `GAP-CHANNEL-NAMESPACE-PREDICATE`.
 - [ ] **Transactions** — `GAP-TRANSACTION-EXCEPTION-TYPES` (typed abort hierarchy),
       `GAP-TRANSACTION-CONTEXT-INTROSPECTION`, `GAP-TRANSACTION-EXCLUSIVE-LOCK`,
-      `GAP-TRANSACTION-OVERLOAD-DETECTOR`, `GAP-TRANSACTIONS-OPT-OUT`,
+      `GAP-TRANSACTION-OVERLOAD-DETECTOR`,
       `GAP-TRANSACTION-CONSISTENCY-HARNESS` (randomized workload + serializability checker).
 - [ ] **Journaling & event sourcing** — `GAP-EVENT-SOURCING` (`JournaledGrain` equivalent),
       `GAP-DURABLE-COLLECTION-API`, `GAP-STATE-MACHINE-RETIREMENT`.

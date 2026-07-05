@@ -130,6 +130,7 @@ export class SiloBuilder {
   private readonly closers: Array<() => Promise<void>> = [];
   private readonly pullingStreams: RedisPullingStreamProvider[] = [];
   private readonly broadcastProviders = new Set<string>();
+  private transactionsDisabled = false;
 
   constructor(private readonly config: SiloConfig) {}
 
@@ -375,6 +376,20 @@ export class SiloBuilder {
   }
 
   /**
+   * Build this silo with transactions disabled (Orleans: no `.UseTransactions()`
+   * call). No transactional-storage provider is wired — not even the default
+   * in-memory one — so any `[Transaction]`-style grain call throws
+   * `TransactionsDisabledError`. Mutually exclusive with configuring
+   * transactional storage; call before any `addTransactionalStorage` /
+   * `useMemoryTransactionalStorage` / `addRedisTransactionalStorage` call, or
+   * not at all.
+   */
+  disableTransactions(): this {
+    this.transactionsDisabled = true;
+    return this;
+  }
+
+  /**
    * Convenience: register an in-memory "default" transactional-storage provider.
    * Sharing one instance across silo restarts stands in for a durable backend.
    */
@@ -538,11 +553,15 @@ export class SiloBuilder {
     if (this.transport === undefined) throw new Error("silo: no transport configured");
     const health = new HealthCheck();
     const storage = this.storage;
-    // Transactional facets always have a provider; default to a per-silo
-    // in-memory one when none is configured (non-durable across restarts).
-    const transactionalStorage =
-      this.transactionalStorage ??
-      new TransactionalStorageRegistry().add("default", new MemoryTransactionalStorage());
+    // Transactional facets default to a per-silo in-memory provider
+    // (non-durable across restarts) unless transactions were explicitly
+    // disabled via `disableTransactions()`, in which case no provider is
+    // wired at all and `[Transaction]`-style calls fail (Orleans parity:
+    // transactions are opt-in).
+    const transactionalStorage = this.transactionsDisabled
+      ? undefined
+      : (this.transactionalStorage ??
+        new TransactionalStorageRegistry().add("default", new MemoryTransactionalStorage()));
     const journalStorage = this.journalStorage;
     const snapshotThreshold = this.config.snapshotThreshold;
     const time = this.config.time;
@@ -572,6 +591,7 @@ export class SiloBuilder {
           }
         : {}),
       ...(this.config.metadata !== undefined ? { metadata: this.config.metadata } : {}),
+      transactionsEnabled: transactionalStorage !== undefined,
       ...(this.broadcastProviders.size > 0
         ? { broadcastProviders: [...this.broadcastProviders] }
         : {}),
@@ -599,9 +619,11 @@ export class SiloBuilder {
             ...(snapshotThreshold !== undefined ? { snapshotThreshold } : {}),
           });
         }
-        await bindTransactionalStates(instance, grainId, transactionalStorage, (manager, txId) =>
-          node.resolveTransactionStatus(manager, txId),
-        );
+        if (transactionalStorage !== undefined) {
+          await bindTransactionalStates(instance, grainId, transactionalStorage, (manager, txId) =>
+            node.resolveTransactionStatus(manager, txId),
+          );
+        }
       },
       ...(this.reminderTable !== undefined ? { reminderRegistry: () => reminderService } : {}),
       ...(this.jobShardStore !== undefined ? { durableJobScheduler: () => jobManager } : {}),

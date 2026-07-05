@@ -142,6 +142,14 @@ export interface ClusterNodeOptions {
   versionSelector?: VersionSelectorKind;
   /** Static metadata the local silo advertises (e.g. `{ role: "worker" }`), for metadata-aware placement. */
   metadata?: Readonly<Record<string, string>>;
+  /**
+   * Whether this silo has transaction support configured. Defaults to `true`.
+   * When `false`, no `TransactionAgent` is wired, so any `[Transaction]`-style
+   * grain call (a method whose `TransactionOption` isn't
+   * `"suppress"`/`"notAllowed"`/`undefined`) throws
+   * `TransactionsDisabledError` (Orleans parity: transactions are opt-in).
+   */
+  transactionsEnabled?: boolean;
 }
 
 interface RejectionPayload {
@@ -315,9 +323,11 @@ export class ClusterNode {
       versionFilter: (req, candidates) => this.applyVersionFilter(req, candidates),
     });
     this.factory.setDispatcher(this.dispatcher);
-    const transactionAgent = new TransactionAgent(time);
-    transactionAgent.setDispatcher(this.dispatcher);
-    this.factory.setTransactionAgent(transactionAgent);
+    if (options.transactionsEnabled ?? true) {
+      const transactionAgent = new TransactionAgent(time);
+      transactionAgent.setDispatcher(this.dispatcher);
+      this.factory.setTransactionAgent(transactionAgent);
+    }
     if (options.outgoingCallFilters !== undefined) {
       this.factory.setOutgoingCallFilters(options.outgoingCallFilters);
     }

@@ -7,27 +7,117 @@
 // never calls `.UseTransactions()`, so any grain call carrying a `[Transaction]`
 // attribute throws OrleansTransactionsDisabledException. It inherits both its
 // [Theory] methods, undecorated by any Skip, from DisabledTransactionsTestRunnerxUnit
-// (src/Orleans.Transactions.TestKit.xUnit/DisabledTransactionsTestRunner.cs).
+// (src/Orleans.Transactions.TestKit.xUnit/DisabledTransactionsTestRunner.cs):
+// TransactionGrainsThrowWhenTransactions calls a single `[Transaction(Create)]`
+// grain method directly; MultiTransactionGrainsThrowWhenTransactions routes the
+// same assertion through a coordinator grain whose own `[Transaction(Create)]`
+// method fans out `Set`/`Add` calls (`[Transaction(Join)]`) to several grains.
 //
-// This framework has no equivalent "transactions not configured" mode: a silo
-// built via @tsva/hosting always wires a default in-memory transactional-storage
-// provider for `@transactionalState` facets (see silo-builder.ts), so there is
-// no way to construct a cluster where a `[Transaction]`-style call throws for
-// lack of a transaction manager. Ported as a gap rather than excluded, since the
-// upstream behaviour (opt-in transactions) is a real, unimplemented feature.
-import { it } from "vitest";
+// `TestCluster` now supports `{ transactions: false }` (@tsva/testing), which
+// builds every silo via `SiloBuilder.disableTransactions()` — no transactional
+// storage provider is wired, so `GrainFactory.resolveTransaction` throws
+// `TransactionsDisabledError` (@tsva/core/errors) before the call ever reaches
+// an activation.
+import { expect } from "vitest";
+import { defineGrain, useTransactionalState } from "@tsva/core/define-grain";
+import { defineGrainInterface } from "@tsva/core/grain-interface";
+import type { GrainWithStringKey } from "@tsva/core/key-kinds";
+import { TransactionsDisabledError } from "@tsva/core/errors";
+import { TestCluster } from "@tsva/testing/test-cluster";
 import { orleansTest } from "@tsva/testing/orleans-test";
 
-orleansTest.gap(
-  "GAP-TRANSACTIONS-OPT-OUT",
+interface Counter {
+  value: number;
+}
+
+interface TransactionTestGrain extends GrainWithStringKey {
+  set(delta: number): Promise<void>;
+  add(delta: number): Promise<void>;
+  get(): Promise<number>;
+}
+
+interface TransactionCoordinatorGrain extends GrainWithStringKey {
+  multiGrainSet(keys: string[], delta: number): Promise<void>;
+}
+
+const TransactionTestGrainInterface = defineGrainInterface<TransactionTestGrain>(
+  "DisabledTxTestGrain",
+  {
+    options: {
+      set: { transaction: "create" },
+      add: { transaction: "join" },
+      get: { transaction: "createOrJoin" },
+    },
+  },
+);
+
+const TransactionCoordinatorGrainInterface = defineGrainInterface<TransactionCoordinatorGrain>(
+  "DisabledTxCoordinatorGrain",
+  { options: { multiGrainSet: { transaction: "create" } } },
+);
+
+const TransactionTestGrainImpl = defineGrain<TransactionTestGrain>("DisabledTxTestGrain", (ctx) => {
+  const counter = useTransactionalState<Counter>(ctx, "counter", {
+    initial: () => ({ value: 0 }),
+  });
+  return {
+    set: (delta) =>
+      counter.performUpdate((s) => {
+        s.value = delta;
+      }),
+    add: (delta) =>
+      counter.performUpdate((s) => {
+        s.value += delta;
+      }),
+    get: () => counter.performRead((s) => s.value),
+  };
+});
+
+const TransactionCoordinatorGrainImpl = defineGrain<TransactionCoordinatorGrain>(
+  "DisabledTxCoordinatorGrain",
+  (ctx) => ({
+    multiGrainSet: async (keys, delta) => {
+      for (const key of keys) {
+        await ctx.getGrain(TransactionTestGrainInterface, key).add(delta);
+      }
+    },
+  }),
+);
+
+async function buildDisabledTransactionsCluster(): Promise<TestCluster> {
+  return TestCluster.start({
+    initialSilos: 1,
+    transactions: false,
+    grains: [
+      { ctor: TransactionTestGrainImpl, interfaces: [TransactionTestGrainInterface] },
+      { ctor: TransactionCoordinatorGrainImpl, interfaces: [TransactionCoordinatorGrainInterface] },
+    ],
+  });
+}
+
+orleansTest(
   "Orleans.Transactions.Tests.DisabledTransactionsTests.TransactionGrainsThrowWhenTransactions",
+  async () => {
+    const cluster = await buildDisabledTransactionsCluster();
+    try {
+      const grain = cluster.getGrain(TransactionTestGrainInterface, "grain-0");
+      await expect(grain.set(5)).rejects.toThrow(TransactionsDisabledError);
+    } finally {
+      await cluster.dispose();
+    }
+  },
 );
 
-orleansTest.gap(
-  "GAP-TRANSACTIONS-OPT-OUT",
+orleansTest(
   "Orleans.Transactions.Tests.DisabledTransactionsTests.MultiTransactionGrainsThrowWhenTransactions",
+  async () => {
+    const cluster = await buildDisabledTransactionsCluster();
+    try {
+      const keys = ["grain-0", "grain-1", "grain-2"];
+      const coordinator = cluster.getGrain(TransactionCoordinatorGrainInterface, "coordinator-0");
+      await expect(coordinator.multiGrainSet(keys, 5)).rejects.toThrow(TransactionsDisabledError);
+    } finally {
+      await cluster.dispose();
+    }
+  },
 );
-
-// vitest requires at least one runtime test per file; both upstream Facts are
-// gapped above, so this placeholder keeps the file a valid suite.
-it.skip("(all tests in this file are orleansTest.gap — see above)", () => undefined);

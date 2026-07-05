@@ -60,7 +60,6 @@ export type GapTag =
   | "GAP-TRANSACTION-EXCEPTION-TYPES" // only a generic TransactionAbortedError, no typed hierarchy
   | "GAP-TRANSACTION-EXCLUSIVE-LOCK" // no shared-vs-exclusive lock distinction on transactional state
   | "GAP-TRANSACTION-OVERLOAD-DETECTOR" // no transaction-rate load shedding
-  | "GAP-TRANSACTIONS-OPT-OUT" // cannot build a silo with transactions disabled
   // Confirmed framework defects exposed by ported tests: fix the bug, then
   // un-gap the test. Each has a todo.md entry under "Bugs found by the parity suite".
   | "GAP-BUG-LOCAL-CALL-UNDEFINED"; // local calls return undefined where remote calls yield null

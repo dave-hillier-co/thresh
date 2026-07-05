@@ -51,6 +51,23 @@ export class InconsistentStateError extends Error {
 }
 
 /**
+ * Raised when a `[Transaction]`-style grain call (a method with a
+ * `TransactionOption` other than `"suppress"`/`"notAllowed"`/`undefined`) is
+ * invoked on a silo that was built without transaction support (Orleans
+ * `OrleansTransactionsDisabledException`). Transactions are opt-in — a silo
+ * must configure transactional storage (e.g. `useMemoryTransactionalStorage`)
+ * for `[Transaction]` calls to work.
+ */
+export class TransactionsDisabledError extends Error {
+  constructor() {
+    super(
+      "Orleans transactions have not been enabled. Transactions are disabled by default and must be configured to be used.",
+    );
+    this.name = "TransactionsDisabledError";
+  }
+}
+
+/**
  * Raised when a transaction is aborted by the concurrency-control or commit
  * protocol — for example a younger transaction "dies" under wait-die when it
  * conflicts with an older holder, or a participant fails to prepare.
