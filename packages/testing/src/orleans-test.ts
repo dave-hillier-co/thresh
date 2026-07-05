@@ -28,7 +28,6 @@ export type GapTag =
   | "GAP-COMPOUND-KEY" // no compound key kind (guid/integer primary + string extension)
   | "GAP-DURABLE-COLLECTION-API" // DurableQueue/Set/List miss parts of Orleans' API surface
   | "GAP-EVENT-SOURCING" // no JournaledGrain<TState,TEvent>/log-consistency-provider mechanism
-  | "GAP-GRAIN-ACTIVATOR" // no IGrainActivator / grain-instantiation extensibility point
   | "GAP-GRAIN-DIRECTORY-API" // internal directory not exposed via a pluggable IGrainDirectory API
   | "GAP-GRAIN-REF-CAST" // no AsReference<T>() runtime re-typing of grain references
   | "GAP-GRAIN-SERVICE" // no per-silo grain-service registration/lifecycle mechanism
@@ -41,7 +40,6 @@ export type GapTag =
   | "GAP-REQUEST-CONTEXT" // ambient RequestContext not exposed on @tsva/core's public surface
   | "GAP-SERVICE-ID" // no ServiceId concept surviving silo restarts
   | "GAP-SILO-ROLE-CONFIG" // no silo role/name-based placement configuration
-  | "GAP-STARTUP-TASK" // no AddStartupTask hook before request acceptance
   | "GAP-STATE-MACHINE-RETIREMENT" // no retirement/grace period for unregistered durable structures
   | "GAP-STORAGE-FACET" // no third-party facet extensibility (named DI-resolved storage facets)
   | "GAP-STREAM-BATCHING" // no OnNextBatchAsync / batch-send stream API

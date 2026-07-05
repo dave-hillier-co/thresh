@@ -65,7 +65,7 @@ import { MessagePackSerializer } from "@tsva/messaging/msgpack-serializer";
 import type { Serializer } from "@tsva/messaging/serializer";
 import type { Listener, Transport } from "@tsva/messaging/transport";
 import { ActivationCollector } from "@tsva/runtime/activation-collector";
-import { Catalog, type RegisteredGrain } from "@tsva/runtime/catalog";
+import { Catalog, type GrainActivator, type RegisteredGrain } from "@tsva/runtime/catalog";
 import type { ActivationData } from "@tsva/runtime/activation";
 import { DistributedDispatcher } from "@tsva/runtime/distributed-dispatcher";
 import { BroadcastChannelProviderImpl } from "@tsva/runtime/broadcast-channel-provider";
@@ -150,6 +150,11 @@ export interface ClusterNodeOptions {
    * `TransactionsDisabledError` (Orleans parity: transactions are opt-in).
    */
   transactionsEnabled?: boolean;
+  /**
+   * Optional hook to construct/dispose grain instances instead of `new ctor()` —
+   * e.g. object pooling or non-DI construction. Defaults to `new ctor()` when unset.
+   */
+  grainActivator?: GrainActivator;
 }
 
 interface RejectionPayload {
@@ -309,6 +314,7 @@ export class ClusterNode {
       ...(options.incomingCallFilters !== undefined
         ? { incomingCallFilters: options.incomingCallFilters }
         : {}),
+      ...(options.grainActivator !== undefined ? { grainActivator: options.grainActivator } : {}),
     });
     this.dispatcher = new DistributedDispatcher({
       local: options.local,

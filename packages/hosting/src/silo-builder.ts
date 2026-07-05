@@ -4,6 +4,7 @@ import type {
   OutgoingGrainCallFilter,
 } from "@tsva/core/grain-call-filter";
 import type { GrainInterface } from "@tsva/core/grain-interface";
+import type { GrainKeyFor } from "@tsva/core/key-kinds";
 import type { MembershipService } from "@tsva/core/membership";
 import type { SiloAddress } from "@tsva/core/silo-address";
 import type { CompatibilityKind } from "@tsva/core/version-compatibility";
@@ -59,6 +60,7 @@ import { RedisReminderTable } from "@tsva/reminders/redis-reminder-table";
 import { MemoryStreamProvider } from "@tsva/streams/memory-stream-provider";
 import { RedisPullingStreamProvider } from "@tsva/streams/redis-pulling-stream-provider";
 import { ClusterNode } from "@tsva/runtime/cluster-node";
+import type { GrainActivator } from "@tsva/runtime/catalog";
 import { StaticMembershipService } from "@tsva/runtime/static-membership";
 import { ActivationRebalancerWorker } from "@tsva/runtime/placement/rebalancing/rebalancer-worker";
 import {
@@ -93,6 +95,11 @@ interface Registration {
   interfaces: GrainInterface<unknown>[];
 }
 
+/** Grain-factory access handed to startup tasks (Orleans `IGrainFactory`, trimmed to `getGrain`). */
+export interface GrainFactoryAccess {
+  getGrain<T>(def: GrainInterface<T>, key: GrainKeyFor<T>): T;
+}
+
 /**
  * Build a single-key config object from an optional value, omitting the key
  * when the value is `undefined`. A defined empty string is preserved (passed
@@ -121,6 +128,7 @@ export class SiloBuilder {
   private readonly streamProviders = new Map<string, StreamProvider>();
   private readonly incomingCallFilters: IncomingGrainCallFilter[] = [];
   private readonly outgoingCallFilters: OutgoingGrainCallFilter[] = [];
+  private grainActivator: GrainActivator | undefined;
   private metricsEnabled = false;
   private readonly registrations: Registration[] = [];
   private versioning:
@@ -128,6 +136,7 @@ export class SiloBuilder {
     | undefined;
   private readonly starters: Array<() => Promise<void>> = [];
   private readonly closers: Array<() => Promise<void>> = [];
+  private readonly startupTasks: Array<(grains: GrainFactoryAccess) => Promise<void>> = [];
   private readonly pullingStreams: RedisPullingStreamProvider[] = [];
   private readonly broadcastProviders = new Set<string>();
   private transactionsDisabled = false;
@@ -318,6 +327,16 @@ export class SiloBuilder {
    */
   addOutgoingCallFilter(filter: OutgoingGrainCallFilter): this {
     this.outgoingCallFilters.push(filter);
+    return this;
+  }
+
+  /**
+   * Install a custom grain activator (Orleans `IGrainActivator`): a hook to
+   * construct/dispose grain instances instead of `new ctor()`, e.g. object
+   * pooling or non-DI construction.
+   */
+  useGrainActivator(activator: GrainActivator): this {
+    this.grainActivator = activator;
     return this;
   }
 
@@ -548,6 +567,16 @@ export class SiloBuilder {
     return this;
   }
 
+  /**
+   * Register a startup task (Orleans `ISiloBuilder.AddStartupTask` / `IStartupTask`):
+   * runs after the silo's node has started — so it can call grains — but before
+   * the silo is marked ready. Tasks run in registration order.
+   */
+  addStartupTask(fn: (grains: GrainFactoryAccess) => Promise<void>): this {
+    this.startupTasks.push(fn);
+    return this;
+  }
+
   build(): SiloHost {
     if (this.membership === undefined) throw new Error("silo: no membership configured");
     if (this.transport === undefined) throw new Error("silo: no transport configured");
@@ -601,6 +630,7 @@ export class SiloBuilder {
       ...(this.outgoingCallFilters.length > 0
         ? { outgoingCallFilters: this.outgoingCallFilters }
         : {}),
+      ...(this.grainActivator !== undefined ? { grainActivator: this.grainActivator } : {}),
       // Transactional facets need no storage provider in this slice, so the
       // binder always runs; persistent/reducer facets bind only when storage is
       // configured.
@@ -722,6 +752,7 @@ export class SiloBuilder {
       onStart: this.starters,
       onOwnershipChange,
       onStop: this.closers,
+      startupTasks: this.startupTasks.map((fn) => () => fn(node)),
     });
   }
 }

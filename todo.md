@@ -65,8 +65,7 @@ shows per-tag counts). One-line definitions live on the `GapTag` union. Grouped 
 - [ ] **Grain identity & references** — `GAP-COMPOUND-KEY` (guid+string compound keys),
       `GAP-GRAIN-REF-CAST` (`AsReference<T>()` re-typing), `GAP-GENERIC-GRAINS` (closed-generic
       grain interface story).
-- [ ] **Activation & lifecycle** — `GAP-LIFECYCLE-SUBJECT`, `GAP-GRAIN-ACTIVATOR`,
-      `GAP-STARTUP-TASK`, `GAP-GRAIN-SERVICE`, `GAP-STORAGE-FACET`.
+- [ ] **Activation & lifecycle** — `GAP-LIFECYCLE-SUBJECT`, `GAP-GRAIN-SERVICE`, `GAP-STORAGE-FACET`.
 - [ ] **Request context** — `GAP-REQUEST-CONTEXT` (expose on `@tsva/core` public surface),
       `GAP-CLIENT-REQUEST-CONTEXT`, `GAP-CALL-FILTER-CLIENT-LAYER`, `GAP-CLIENT-SILO-SEPARATION`.
 - [ ] **Timers** — `GAP-TIMER-INTERLEAVE` (per-timer interleave option), `GAP-TIMER-VALIDATION`.

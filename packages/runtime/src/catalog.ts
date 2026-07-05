@@ -20,11 +20,27 @@ export interface RegisteredGrain {
   metadata: GrainMetadata;
 }
 
+/**
+ * Optional hook to construct/dispose grain instances instead of `new ctor()`
+ * (Orleans `IGrainActivator`) — e.g. object pooling or non-DI construction.
+ */
+export interface GrainActivator {
+  /** Construct a grain instance instead of `new ctor()`. */
+  createInstance(ctor: new () => Grain, id: GrainId): Grain;
+  /** Called when an activation using this activator is deactivated (idle collection or explicit). */
+  disposeInstance?(instance: Grain, id: GrainId): void | Promise<void>;
+}
+
 export interface CatalogOptions {
   grainTypes: ReadonlyMap<GrainType, RegisteredGrain>;
   factory: GrainFactory;
   time: TimeProvider;
   defaultCollectionAgeSeconds: number;
+  /**
+   * Optional hook to construct/dispose grain instances instead of `new ctor()` —
+   * e.g. object pooling or non-DI construction. Defaults to `new ctor()` when unset.
+   */
+  grainActivator?: GrainActivator;
   /** Called after an activation has been deactivated (idle collection or shutdown). */
   onDeactivated?: (activation: ActivationData) => void;
   /**
@@ -151,7 +167,10 @@ export class Catalog {
         : {}),
       ...(this.options.localSilo !== undefined ? { localSilo: this.options.localSilo } : {}),
     });
-    const instance = new reg.ctor();
+    const instance =
+      this.options.grainActivator !== undefined
+        ? this.options.grainActivator.createInstance(reg.ctor, id)
+        : new reg.ctor();
     instance.setContext(activation);
     activation.instance = instance;
     if (this.options.incomingCallFilters !== undefined) {
@@ -201,6 +220,9 @@ export class Catalog {
       }
       if (activation.state === "invalid") {
         this.activations.delete(key);
+        if (this.options.grainActivator?.disposeInstance !== undefined) {
+          await this.options.grainActivator.disposeInstance(activation.instance, activation.id);
+        }
         this.options.onDeactivated?.(activation);
       }
     }
@@ -210,6 +232,11 @@ export class Catalog {
     const all = [...this.activations.values()];
     await Promise.all(all.map((a) => a.deactivate(reason)));
     this.activations.clear();
-    for (const a of all) this.options.onDeactivated?.(a);
+    for (const a of all) {
+      if (this.options.grainActivator?.disposeInstance !== undefined) {
+        await this.options.grainActivator.disposeInstance(a.instance, a.id);
+      }
+      this.options.onDeactivated?.(a);
+    }
   }
 }
