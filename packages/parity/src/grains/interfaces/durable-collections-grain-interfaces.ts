@@ -34,11 +34,16 @@ export interface IDurableCollectionsGrain extends GrainWithStringKey {
   listClear(): Promise<void>;
   listLength(): Promise<number>;
   listToArray(): Promise<unknown[]>;
+  listContains(v: unknown): Promise<boolean>;
+  listRemove(v: unknown): Promise<boolean>;
+  listInsert(i: number, v: unknown): Promise<void>;
 
   // DurableQueue<unknown>
   queueEnqueue(v: unknown): Promise<void>;
   queueDequeue(): Promise<unknown>;
   queuePeek(): Promise<unknown>;
+  queuePeekOrThrow(): Promise<unknown>;
+  queueDequeueOrThrow(): Promise<unknown>;
   queueClear(): Promise<void>;
   queueSize(): Promise<number>;
   queueToArray(): Promise<unknown[]>;

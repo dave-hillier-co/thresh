@@ -120,6 +120,18 @@ export class DurableCollectionsGrain extends Grain implements IDurableCollection
     return [...this.list.toArray()];
   }
 
+  async listContains(v: unknown): Promise<boolean> {
+    return this.list.contains(v);
+  }
+
+  async listRemove(v: unknown): Promise<boolean> {
+    return this.list.remove(v);
+  }
+
+  async listInsert(i: number, v: unknown): Promise<void> {
+    await this.list.insert(i, v);
+  }
+
   async queueEnqueue(v: unknown): Promise<void> {
     await this.queue.enqueue(v);
   }
@@ -130,6 +142,14 @@ export class DurableCollectionsGrain extends Grain implements IDurableCollection
 
   async queuePeek(): Promise<unknown> {
     return this.queue.peek();
+  }
+
+  async queuePeekOrThrow(): Promise<unknown> {
+    return this.queue.peekOrThrow();
+  }
+
+  async queueDequeueOrThrow(): Promise<unknown> {
+    return this.queue.dequeueOrThrow();
   }
 
   async queueClear(): Promise<void> {

@@ -27,6 +27,57 @@ describe("DurableListImpl", () => {
     expect(list.length).toBe(0);
   });
 
+  it("contains reports whether a value is present", async () => {
+    const { list } = makeList<string>(new MemoryJournalStorage());
+    await list.add("one");
+    await list.add("two");
+    await list.add("three");
+
+    expect(list.contains("two")).toBe(true);
+    expect(list.contains("four")).toBe(false);
+
+    await list.remove("two");
+    expect(list.contains("two")).toBe(false);
+  });
+
+  it("remove deletes the first occurrence of a value and reports whether it was present", async () => {
+    const { list } = makeList<string>(new MemoryJournalStorage());
+    await list.add("one");
+    await list.add("two");
+    await list.add("three");
+
+    const removed = await list.remove("two");
+    const removedAgain = await list.remove("two");
+
+    expect(removed).toBe(true);
+    expect(removedAgain).toBe(false);
+    expect(list.toArray()).toEqual(["one", "three"]);
+  });
+
+  it("insert adds a value at the given index, shifting later items", async () => {
+    const { list } = makeList<string>(new MemoryJournalStorage());
+    await list.add("one");
+    await list.add("three");
+
+    await list.insert(1, "two");
+
+    expect(list.length).toBe(3);
+    expect(list.toArray()).toEqual(["one", "two", "three"]);
+  });
+
+  it("rebuilds from the log on a fresh activation, replaying insert and remove", async () => {
+    const storage = new MemoryJournalStorage();
+    const a = makeList<string>(storage);
+    await a.list.add("one");
+    await a.list.add("three");
+    await a.list.insert(1, "two");
+    await a.list.remove("one");
+
+    const b = makeList<string>(storage);
+    await b.manager.replay();
+    expect(b.list.toArray()).toEqual(["two", "three"]);
+  });
+
   it("rebuilds from the log on a fresh activation (index ops replay in order)", async () => {
     const storage = new MemoryJournalStorage();
     const a = makeList<number>(storage);

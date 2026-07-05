@@ -111,13 +111,20 @@ describe("Orleans.Journaling.Tests.DurableQueueTests", () => {
     expect(await grain.queueSize()).toBe(0);
   });
 
-  // GAP: upstream asserts Peek()/Dequeue() on an empty queue throw
-  // InvalidOperationException. DurableQueueImpl deliberately returns
-  // `undefined` instead (see durable-queue-impl.ts: "An empty dequeue is a
-  // no-op"), so there is no throwing behaviour to exercise here.
-  orleansTest.gap(
-    "GAP-DURABLE-COLLECTION-API",
+  // Upstream asserts Peek()/Dequeue() on an empty queue throw
+  // InvalidOperationException. The non-throwing `peek()`/`dequeue()` stay as the
+  // Try* equivalents (returning `undefined`); the throwing variants are exposed
+  // through the grain as queuePeekOrThrow/queueDequeueOrThrow.
+  orleansTest(
     "Orleans.Journaling.Tests.DurableQueueTests.DurableQueue_EmptyQueueOperations_Test",
+    async () => {
+      const grain = cluster.getGrain(IDurableCollectionsGrain, freshKey());
+
+      expect(await grain.queueSize()).toBe(0);
+
+      await expect(grain.queuePeekOrThrow()).rejects.toThrow(/empty/i);
+      await expect(grain.queueDequeueOrThrow()).rejects.toThrow(/empty/i);
+    },
   );
 
   orleansTest(

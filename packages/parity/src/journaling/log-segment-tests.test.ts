@@ -164,18 +164,46 @@ describe("Orleans.Journaling.Tests.InMemoryLogSegmentTests", () => {
     },
   );
 
-  // GAP: exercises DurableList.Remove(value) (remove-by-value), which
-  // DurableListImpl does not expose — only add/set(index)/removeAt(index)/clear.
-  orleansTest.gap(
-    "GAP-DURABLE-COLLECTION-API",
+  orleansTest(
     "Orleans.Journaling.Tests.InMemoryLogSegmentTests.DurableList_Contains_Test",
+    async () => {
+      const grain = cluster.getGrain(IDurableCollectionsGrain, freshKey());
+
+      await grain.listAdd("one");
+      await grain.listAdd("two");
+      await grain.listAdd("three");
+
+      expect(await grain.listContains("two")).toBe(true);
+      expect(await grain.listContains("four")).toBe(false);
+
+      await grain.listRemove("two");
+
+      expect(await grain.listContains("two")).toBe(false);
+    },
   );
 
-  // GAP: exercises DurableList.Insert(index, value) and Remove(value), neither
-  // of which DurableListImpl exposes.
-  orleansTest.gap(
-    "GAP-DURABLE-COLLECTION-API",
+  orleansTest(
     "Orleans.Journaling.Tests.InMemoryLogSegmentTests.DurableList_InsertAndRemove_Test",
+    async () => {
+      const grain = cluster.getGrain(IDurableCollectionsGrain, freshKey());
+
+      await grain.listAdd("one");
+      await grain.listAdd("three");
+
+      await grain.listInsert(1, "two");
+
+      expect(await grain.listLength()).toBe(3);
+      expect(await grain.listGet(0)).toBe("one");
+      expect(await grain.listGet(1)).toBe("two");
+      expect(await grain.listGet(2)).toBe("three");
+
+      const removed = await grain.listRemove("two");
+
+      expect(removed).toBe(true);
+      expect(await grain.listLength()).toBe(2);
+      expect(await grain.listGet(0)).toBe("one");
+      expect(await grain.listGet(1)).toBe("three");
+    },
   );
 
   orleansTest(

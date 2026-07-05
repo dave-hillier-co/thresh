@@ -37,12 +37,21 @@ export interface DurableList<T> {
   get(index: number): T | undefined;
   toArray(): readonly T[];
   [Symbol.iterator](): IterableIterator<T>;
+  /** Whether `value` is present. Orleans' `IDurableList<T>.Contains`. */
+  contains(value: T): boolean;
   /** Journal an append and update memory. */
   add(value: T): Promise<void>;
   /** Journal a set-at-index and update memory. */
   set(index: number, value: T): Promise<void>;
+  /** Journal an insert-at-index, shifting later items back, and update memory. Orleans' `IDurableList<T>.Insert`. */
+  insert(index: number, value: T): Promise<void>;
   /** Journal a remove-at-index and update memory. */
   removeAt(index: number): Promise<void>;
+  /**
+   * Journal a remove of the first occurrence of `value` and update memory;
+   * resolves to whether a matching item was found. Orleans' `IDurableList<T>.Remove`.
+   */
+  remove(value: T): Promise<boolean>;
   /** Journal a clear of all items. */
   clear(): Promise<void>;
 }
@@ -52,12 +61,22 @@ export interface DurableQueue<T> {
   readonly size: number;
   /** The element at the front without removing it; `undefined` when empty. */
   peek(): T | undefined;
+  /**
+   * The element at the front without removing it; throws when empty.
+   * Orleans' `IDurableQueue<T>.Peek` (which throws `InvalidOperationException`).
+   */
+  peekOrThrow(): T;
   toArray(): readonly T[];
   [Symbol.iterator](): IterableIterator<T>;
   /** Journal an enqueue at the back and update memory. */
   enqueue(value: T): Promise<void>;
   /** Journal a dequeue from the front; resolves to the removed element, or `undefined` when empty. */
   dequeue(): Promise<T | undefined>;
+  /**
+   * Journal a dequeue from the front and resolve to the removed element; throws
+   * when empty. Orleans' `IDurableQueue<T>.Dequeue` (which throws `InvalidOperationException`).
+   */
+  dequeueOrThrow(): Promise<T>;
   /** Journal a clear of all elements. */
   clear(): Promise<void>;
 }

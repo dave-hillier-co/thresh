@@ -25,6 +25,18 @@ export class DurableQueueImpl<T> implements DurableQueue<T>, DurableStateMachine
     return this.items[0];
   }
 
+  /**
+   * The element at the front without removing it. Orleans' `IDurableQueue<T>.Peek()`,
+   * which throws `InvalidOperationException` on an empty queue rather than
+   * returning a sentinel; `peek()` above stays the non-throwing option.
+   */
+  peekOrThrow(): T {
+    if (this.items.length === 0) {
+      throw new Error("Queue is empty.");
+    }
+    return this.items[0] as T;
+  }
+
   toArray(): readonly T[] {
     return [...this.items];
   }
@@ -44,6 +56,18 @@ export class DurableQueueImpl<T> implements DurableQueue<T>, DurableStateMachine
     const head = this.items[0];
     await this.manager.append(this.name, { t: "deq" } satisfies QueueOp<T>);
     return head;
+  }
+
+  /**
+   * Removes and returns the front element. Orleans' `IDurableQueue<T>.Dequeue()`,
+   * which throws `InvalidOperationException` on an empty queue; `dequeue()`
+   * above stays the non-throwing (no-op) option.
+   */
+  async dequeueOrThrow(): Promise<T> {
+    if (this.items.length === 0) {
+      throw new Error("Queue is empty.");
+    }
+    return (await this.dequeue()) as T;
   }
 
   async clear(): Promise<void> {

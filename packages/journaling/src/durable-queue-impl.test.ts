@@ -43,6 +43,37 @@ describe("DurableQueueImpl", () => {
     expect(replayed.queue.size).toBe(0);
   });
 
+  it("peekOrThrow returns the front element without removing it", async () => {
+    const { queue } = makeQueue<string>(new MemoryJournalStorage());
+    await queue.enqueue("a");
+    await queue.enqueue("b");
+    expect(queue.peekOrThrow()).toBe("a");
+    expect(queue.size).toBe(2);
+  });
+
+  it("peekOrThrow throws on an empty queue", async () => {
+    const { queue } = makeQueue<string>(new MemoryJournalStorage());
+    expect(() => queue.peekOrThrow()).toThrow(/empty/i);
+  });
+
+  it("dequeueOrThrow removes and returns the front element", async () => {
+    const { queue } = makeQueue<string>(new MemoryJournalStorage());
+    await queue.enqueue("a");
+    await queue.enqueue("b");
+    expect(await queue.dequeueOrThrow()).toBe("a");
+    expect(queue.size).toBe(1);
+  });
+
+  it("dequeueOrThrow throws on an empty queue without journaling", async () => {
+    const storage = new MemoryJournalStorage();
+    const { queue } = makeQueue<string>(storage);
+    await expect(queue.dequeueOrThrow()).rejects.toThrow(/empty/i);
+
+    const replayed = makeQueue<string>(storage);
+    await replayed.manager.replay();
+    expect(replayed.queue.size).toBe(0);
+  });
+
   it("rebuilds from the log on a fresh activation", async () => {
     const storage = new MemoryJournalStorage();
     const a = makeQueue<number>(storage);
