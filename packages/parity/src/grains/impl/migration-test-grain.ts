@@ -6,6 +6,7 @@ import type {
   IGrainMigrationParticipant,
   RehydrationContext,
 } from "@tsva/core/grain-migration-participant";
+import type { DeactivationReason } from "@tsva/core/reasons";
 import type { PersistentState } from "@tsva/core/persistent-state";
 import type { SiloAddress } from "@tsva/core/silo-address";
 import {
@@ -28,6 +29,7 @@ export class MigrationTestGrain
 {
   private state = 0;
   private failRehydrateNext = false;
+  private migrateTargetOnDeactivate: SiloAddress | undefined;
 
   async setState(state: number): Promise<void> {
     this.state = state;
@@ -43,6 +45,20 @@ export class MigrationTestGrain
 
   async failNextRehydrate(): Promise<void> {
     this.failRehydrateNext = true;
+  }
+
+  async migrateDuringDeactivation(target: SiloAddress): Promise<void> {
+    this.migrateTargetOnDeactivate = target;
+    this.runtime.deactivateOnIdle();
+  }
+
+  override async onDeactivate(reason: DeactivationReason): Promise<void> {
+    if (this.migrateTargetOnDeactivate !== undefined) {
+      const target = this.migrateTargetOnDeactivate;
+      this.migrateTargetOnDeactivate = undefined;
+      this.runtime.migrateOnIdle(target);
+    }
+    await super.onDeactivate(reason);
   }
 
   onDehydrate(context: DehydrationContext): void {

@@ -92,14 +92,29 @@ describe("DefaultCluster.Tests.General.MigrationTests", () => {
     }
   });
 
-  // The collector's `collectIdle` decides whether an activation "wants
-  // migration" *before* it invokes `onDeactivate` (see `catalog.ts`), so a
-  // `migrateOnIdle` call made from inside `onDeactivate` — as upstream's grain
-  // does to trigger migration from that hook — never takes effect for the
-  // sweep already in progress: the activation is deactivated in place instead.
-  orleansTest.gap(
-    "GAP-MIGRATE-FROM-DEACTIVATE",
+  orleansTest(
     "DefaultCluster.Tests.General.MigrationTests.InitiateMigrationFromOnDeactivateAsyncTest",
+    async () => {
+      for (let i = 0; i < 3; i++) {
+        const key = randomIntegerKey();
+        const grain = cluster.getGrain(IMigrationTestGrain, key);
+        const grainId = new GrainId(migrationGrainType, key);
+        const expectedState = Math.floor(Math.random() * 1_000_000);
+
+        await grain.setState(expectedState);
+        const originalHost = hostOf(cluster, grainId);
+        const targetHost = cluster.silos.find((s) => s !== originalHost)!;
+
+        // Trigger deactivation and tell the grain that it should migrate to the
+        // target host from its own onDeactivate hook.
+        await grain.migrateDuringDeactivation(targetHost.address);
+        await forceMigrationSweep(time);
+        await waitFor(() => hostOf(cluster, grainId) === targetHost);
+
+        expect(hostOf(cluster, grainId)).toBe(targetHost);
+        expect(await grain.getState()).toBe(expectedState);
+      }
+    },
   );
 
   orleansTest(

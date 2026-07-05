@@ -31,6 +31,11 @@ export interface IMigrationTestGrain extends GrainWithIntegerKey {
   migrateOnIdle(target?: SiloAddress): Promise<void>;
   /** Marks the *next* migration's rehydration to fail on the target silo. */
   failNextRehydrate(): Promise<void>;
+  /**
+   * Requests deactivation now, and asks the grain to call `migrateOnIdle(target)`
+   * from its own `onDeactivate` hook when the sweep collects it.
+   */
+  migrateDuringDeactivation(target: SiloAddress): Promise<void>;
 }
 
 export const IMigrationTestGrain = defineGrainInterface<IMigrationTestGrain>(

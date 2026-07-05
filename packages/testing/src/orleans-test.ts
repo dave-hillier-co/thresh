@@ -15,7 +15,6 @@ export type GapTag =
   | "GAP-GRAIN-EXTENSION" // no IGrainExtension equivalent
   | "GAP-MAY-INTERLEAVE" // no MayInterleave predicate
   | "GAP-MGMT-GRAIN" // no management grain / silo-control system targets
-  | "GAP-MIGRATE-FROM-DEACTIVATE" // migrateOnIdle from onDeactivate misses the in-progress sweep
   | "GAP-SERIALIZER-POLYMORPHISM" // serializer lacks polymorphism/cycles
   | "GAP-STREAM-FAILURE-HANDLER" // streams lack IStreamFailureHandler
   | "GAP-GENERIC-GRAINS" // open generic grain interfaces are unrepresentable
@@ -27,7 +26,6 @@ export type GapTag =
   | "GAP-CLIENT-REQUEST-CONTEXT" // no client-side ambient RequestContext outside a grain turn
   | "GAP-CLIENT-SILO-SEPARATION" // no separate client process distinct from a silo in the harness
   | "GAP-COMPOUND-KEY" // no compound key kind (guid/integer primary + string extension)
-  | "GAP-DEACTIVATE-DURING-ACTIVATION" // deactivateOnIdle in onActivate defers instead of rejecting
   | "GAP-DURABLE-COLLECTION-API" // DurableQueue/Set/List miss parts of Orleans' API surface
   | "GAP-EVENT-SOURCING" // no JournaledGrain<TState,TEvent>/log-consistency-provider mechanism
   | "GAP-GRAIN-ACTIVATOR" // no IGrainActivator / grain-instantiation extensibility point

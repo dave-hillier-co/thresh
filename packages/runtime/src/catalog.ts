@@ -177,18 +177,27 @@ export class Catalog {
   async collectIdle(): Promise<void> {
     for (const [key, activation] of this.activations) {
       if (activation.isStale()) {
-        // A grain that asked to migrate moves to another silo first (flipping the
-        // directory); then the local activation is deactivated either way — its
-        // address-matched directory unregister is a no-op once the entry moved.
-        const moved =
-          activation.wantsMigration && this.options.migrate !== undefined
-            ? await this.options.migrate(activation)
-            : false;
-        await activation.deactivate(
-          moved
-            ? { code: "migrating", description: "migrated to another silo" }
-            : { code: "idle", description: "idle collection" },
-        );
+        if (activation.wantsMigration && this.options.migrate !== undefined) {
+          // Migration was requested before this sweep: dehydrate the grain's
+          // state and hand it off first (so `onDeactivate` — which may clear
+          // state — runs only after the state has been captured), then run the
+          // deactivate hook with the "migrating" reason.
+          const moved = await this.options.migrate(activation);
+          await activation.deactivate(
+            moved
+              ? { code: "migrating", description: "migrated to another silo" }
+              : { code: "idle", description: "idle collection" },
+          );
+        } else {
+          // No migration requested yet: run `onDeactivate` first, since a grain
+          // may call `migrateOnIdle()` from within it; honour a migration it
+          // asks for during the hook, then finalize.
+          await activation.runDeactivateHook({ code: "idle", description: "idle collection" });
+          if (activation.wantsMigration && this.options.migrate !== undefined) {
+            await this.options.migrate(activation);
+          }
+          activation.finalizeDeactivation();
+        }
       }
       if (activation.state === "invalid") {
         this.activations.delete(key);

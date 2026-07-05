@@ -29,15 +29,6 @@ import { ITestGrain, TestGrain } from "@tsva/parity/grains/impl/test-grain";
 // an activation whose `onActivate` throws surfaces a generic "activation
 // unavailable" error to every caller, discarding the real application error.
 
-// `deactivateOnIdle()` called from within `onActivate` only sets a deferred
-// flag (`ActivationData.requestDeactivation`) picked up by the next idle-
-// collection sweep — it does not synchronously reject in-flight or subsequent
-// calls the way Orleans' "Forwarding failed" rejection does when a message
-// targets an activation that is deactivating while still activating. Spiked
-// directly against this grain: `doSomething()` runs to completion (and throws
-// its own "should not have been called" error) rather than failing with a
-// forwarding rejection.
-
 let nextId = 1;
 // Upstream: `Random.Shared.Next()`; a monotonic counter keeps activations
 // distinct across tests sharing one cluster without needing a real RNG.
@@ -298,8 +289,11 @@ describe("DefaultCluster.Tests.ActivationsLifeCycleTests.GrainActivateDeactivate
     },
   );
 
-  orleansTest.gap(
-    "GAP-DEACTIVATE-DURING-ACTIVATION",
+  orleansTest(
     "DefaultCluster.Tests.ActivationsLifeCycleTests.GrainActivateDeactivateTests.DeactivateOnIdleWhileActivate",
+    async () => {
+      const grain = cluster.getGrain(IDeactivatingWhileActivatingTestGrain, freshId());
+      await expect(grain.doSomething()).rejects.toThrow("activation unavailable");
+    },
   );
 });

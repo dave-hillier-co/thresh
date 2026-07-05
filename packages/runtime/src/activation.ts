@@ -91,6 +91,14 @@ export class ActivationData implements GrainContext {
   private lastActiveMs: number;
   private keepAliveUntilMs = 0;
   private deactivateRequested = false;
+  /**
+   * True when `deactivateOnIdle()` was called while this activation was still
+   * `"activating"` (from within `onActivate`). Orleans rejects the triggering
+   * (and any in-flight) call rather than serving it from an activation that
+   * asked to go away before it ever became valid, so this activation never
+   * transitions to `"valid"` — see `beginActivate`.
+   */
+  private deactivateRequestedDuringActivation = false;
   private migrationRequested = false;
   private dehydrated = false;
   private readonly timers = new Set<GrainTimerImpl>();
@@ -122,6 +130,26 @@ export class ActivationData implements GrainContext {
           try {
             if (this.preActivate !== undefined) await this.preActivate();
             await this.instance.onActivate(reason);
+            if (this.deactivateRequestedDuringActivation) {
+              // The grain asked to deactivate from onActivate: never go valid.
+              // Run the deactivate hook inline (NOT via runDeactivateHook/the
+              // scheduler — this callback is itself still running as the
+              // activation turn, so scheduling another turn here would
+              // deadlock) so the next queued turn (the call that triggered
+              // this activation) observes "invalid" and is rejected rather
+              // than served (Orleans parity: "Forwarding failed").
+              this.state = "deactivating";
+              for (const timer of this.timers) timer.dispose();
+              this.timers.clear();
+              await this.instance
+                .onDeactivate({
+                  code: "runtime-requested",
+                  description: "deactivateOnIdle requested during activation",
+                })
+                .catch(() => undefined);
+              this.state = "invalid";
+              return;
+            }
             this.state = "valid";
           } catch (err) {
             // Activation failed: mark invalid and capture the error (set
@@ -240,6 +268,17 @@ export class ActivationData implements GrainContext {
   }
 
   async deactivate(reason: DeactivationReason): Promise<void> {
+    await this.runDeactivateHook(reason);
+    this.finalizeDeactivation();
+  }
+
+  /**
+   * Run the `onDeactivate` hook only, leaving the activation in the
+   * "deactivating" state so the caller can inspect `wantsMigration` (which
+   * the hook may have just set, e.g. via `migrateOnIdle` called from
+   * `onDeactivate`) before finalizing. No-op if already deactivating/invalid.
+   */
+  async runDeactivateHook(reason: DeactivationReason): Promise<void> {
     if (this.state === "invalid" || this.state === "deactivating") return;
     this.state = "deactivating";
     for (const timer of this.timers) timer.dispose();
@@ -247,11 +286,20 @@ export class ActivationData implements GrainContext {
     await this.scheduler
       .schedule({ options: {}, run: () => this.instance.onDeactivate(reason) })
       .catch(() => undefined);
+  }
+
+  /** Complete a deactivation whose hook already ran via `runDeactivateHook`. */
+  finalizeDeactivation(): void {
     this.state = "invalid";
   }
 
   requestDeactivation(): void {
     this.deactivateRequested = true;
+    // Called during onActivate (still "activating"): don't defer to the next
+    // idle sweep — the activation must never become servable (see
+    // `beginActivate`). Called during a regular turn ("valid"): unchanged,
+    // deferred flag picked up by the next `collectIdle` sweep.
+    if (this.state === "activating") this.deactivateRequestedDuringActivation = true;
   }
 
   delayDeactivation(byMs: number): void {
