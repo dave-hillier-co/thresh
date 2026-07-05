@@ -36,4 +36,10 @@ export interface GrainRuntime {
    * move at a specific silo; otherwise the grain's placement strategy chooses.
    */
   migrateOnIdle(targetSilo?: SiloAddress): void;
+  /**
+   * The `SiloAddress` of the silo currently hosting this activation (Orleans'
+   * `IGrainContext.Address` / `GetRuntimeInstanceId()`), so a grain can report
+   * where it is placed.
+   */
+  localSiloAddress(): SiloAddress;
 }

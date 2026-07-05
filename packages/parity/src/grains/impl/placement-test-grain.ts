@@ -23,6 +23,10 @@ export class RandomPlacementTestGrain extends Grain implements IRandomPlacementT
     await this.getGrain(IPreferLocalPlacementTestGrain, key).nop();
     return key;
   }
+
+  async getRuntimeInstanceId(): Promise<string> {
+    return this.runtime.localSiloAddress().toString();
+  }
 }
 
 @grain({ name: "UnitTests.Grains.PreferLocalPlacementTestGrain", placement: "preferLocal" })
@@ -32,5 +36,9 @@ export class PreferLocalPlacementTestGrain extends Grain implements IPreferLocal
   async startPreferLocalGrain(key: Guid): Promise<Guid> {
     await this.getGrain(IPreferLocalPlacementTestGrain, key).nop();
     return key;
+  }
+
+  async getRuntimeInstanceId(): Promise<string> {
+    return this.runtime.localSiloAddress().toString();
   }
 }

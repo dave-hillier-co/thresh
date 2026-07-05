@@ -8,6 +8,7 @@ import type { GrainType } from "@tsva/core/grain-type";
 import type { DeactivationReason } from "@tsva/core/reasons";
 import type { ReminderRegistry } from "@tsva/core/reminder";
 import type { DurableJobScheduler } from "@tsva/core/durable-job";
+import type { SiloAddress } from "@tsva/core/silo-address";
 import type { StreamProvider } from "@tsva/core/stream";
 import { ActivationData } from "@tsva/runtime/activation";
 import type { GrainFactory } from "@tsva/runtime/grain-factory";
@@ -46,6 +47,8 @@ export interface CatalogOptions {
   streamProvider?: (name?: string) => StreamProvider | undefined;
   /** Resolves the broadcast-channel provider a grain's `getBroadcastChannelProvider` returns. */
   broadcastProvider?: (name?: string) => BroadcastChannelProvider | undefined;
+  /** Resolves this silo's own address, for a grain's `runtime.localSiloAddress()`. */
+  localSilo?: () => SiloAddress | undefined;
   /** Incoming call filters wrapping each grain-method dispatch (silo-wide). */
   incomingCallFilters?: readonly IncomingGrainCallFilter[];
 }
@@ -146,6 +149,7 @@ export class Catalog {
       ...(this.options.durableJobScheduler !== undefined
         ? { durableJobs: this.options.durableJobScheduler }
         : {}),
+      ...(this.options.localSilo !== undefined ? { localSilo: this.options.localSilo } : {}),
     });
     const instance = new reg.ctor();
     instance.setContext(activation);

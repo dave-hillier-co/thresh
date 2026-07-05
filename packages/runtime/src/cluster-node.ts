@@ -286,6 +286,7 @@ export class ClusterNode {
       defaultCollectionAgeSeconds: options.defaultCollectionAgeSeconds ?? 900,
       onDeactivated: (a) => this.onDeactivated(a),
       migrate: (a) => this.migrateActivation(a),
+      localSilo: () => this.options.local,
       ...(options.stateBinder !== undefined ? { activateState: options.stateBinder } : {}),
       ...(options.reminderRegistry !== undefined
         ? { reminderRegistry: options.reminderRegistry }

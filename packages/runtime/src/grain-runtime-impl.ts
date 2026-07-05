@@ -17,6 +17,8 @@ export interface GrainRuntimeServices {
   streams?: (name?: string) => StreamProvider | undefined;
   broadcastChannels?: (name?: string) => BroadcastChannelProvider | undefined;
   durableJobs?: () => DurableJobScheduler | undefined;
+  /** Resolves this silo's own address, for `GrainRuntime.localSiloAddress()`. */
+  localSilo?: () => SiloAddress | undefined;
 }
 
 /** Per-activation `GrainRuntime`, reached by a grain through `this.runtime`. */
@@ -83,6 +85,12 @@ export class GrainRuntimeImpl implements GrainRuntime {
 
   migrateOnIdle(targetSilo?: SiloAddress): void {
     this.activation.requestMigration(targetSilo);
+  }
+
+  localSiloAddress(): SiloAddress {
+    const silo = this.services.localSilo?.();
+    if (silo === undefined) throw new Error("local silo address is not configured on this runtime");
+    return silo;
   }
 
   delayDeactivation(by: Duration): void {

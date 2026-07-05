@@ -1,17 +1,12 @@
 // Ported from dotnet/orleans test/Orleans.Placement.Tests/General/GrainPlacementTests.cs @ v10.1.0 (MIT).
 //
 // Upstream observes placement via `GetRuntimeInstanceId()`/`GetEndpoint()`, a
-// grain reporting its own hosting silo address. Nothing here reaches that
-// address from inside a grain (GAP-PLACEMENT-INTROSPECTION below), so the
-// ported tests instead observe *which* silo holds the activation externally,
-// via `SiloHost.isActive` — the same fact the upstream assertions turn on
-// (same silo / different silos / more than one distinct silo), just read from
-// outside the grain rather than reported by it.
+// grain reporting its own hosting silo address — now available via
+// `GrainRuntime.localSiloAddress()`, so the ported tests below call the
+// grain's own `getRuntimeInstanceId()` directly, same as upstream.
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { GrainId } from "@tsva/core/grain-id";
-import { getGrainMetadata } from "@tsva/core/grain-metadata";
 import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster, type TestSiloHandle } from "@tsva/testing/test-cluster";
+import { TestCluster } from "@tsva/testing/test-cluster";
 import {
   IPreferLocalPlacementTestGrain,
   IRandomPlacementTestGrain,
@@ -19,13 +14,6 @@ import {
   RandomPlacementTestGrain,
 } from "@tsva/parity/grains/impl/placement-test-grain";
 import { randomGuidKey } from "@tsva/parity/support/keys";
-
-const randomGrainType = getGrainMetadata(RandomPlacementTestGrain)!.grainType;
-const preferLocalGrainType = getGrainMetadata(PreferLocalPlacementTestGrain)!.grainType;
-
-function hostOf(cluster: TestCluster, grainId: GrainId): TestSiloHandle | undefined {
-  return cluster.silos.find((s) => s.host.isActive(grainId));
-}
 
 describe("UnitTests.General.GrainPlacementTests", () => {
   let cluster: TestCluster;
@@ -55,9 +43,8 @@ describe("UnitTests.General.GrainPlacementTests", () => {
       const places = new Set<string>();
       for (let i = 0; i < 20; i++) {
         const key = randomGuidKey();
-        await cluster.getGrain(IRandomPlacementTestGrain, key).nop();
-        const host = hostOf(cluster, new GrainId(randomGrainType, key));
-        places.add(host?.address.podName ?? `unknown-${i}`);
+        const place = await cluster.getGrain(IRandomPlacementTestGrain, key).getRuntimeInstanceId();
+        places.add(place);
       }
       // Consider: it seems like we should check that we get close to a 50/50
       // split for placement. Will randomly fail one in a million times if the
@@ -75,21 +62,22 @@ describe("UnitTests.General.GrainPlacementTests", () => {
       const numGrains = 20;
       const randomKeys = Array.from({ length: numGrains }, () => randomGuidKey());
 
+      const randomPlaces: string[] = [];
       for (const key of randomKeys) {
-        await cluster.getGrain(IRandomPlacementTestGrain, key).nop();
+        randomPlaces.push(
+          await cluster.getGrain(IRandomPlacementTestGrain, key).getRuntimeInstanceId(),
+        );
       }
-      const randomPlaces = randomKeys.map(
-        (key) => hostOf(cluster, new GrainId(randomGrainType, key))?.address.podName,
-      );
 
+      const preferLocalPlaces: string[] = [];
       for (const key of randomKeys) {
         // Upstream: `grain.StartPreferLocalGrain(grain.GetPrimaryKey())` — the
         // random grain's own key doubles as the prefer-local grain's key.
         await cluster.getGrain(IRandomPlacementTestGrain, key).startPreferLocalGrain(key);
+        preferLocalPlaces.push(
+          await cluster.getGrain(IPreferLocalPlacementTestGrain, key).getRuntimeInstanceId(),
+        );
       }
-      const preferLocalPlaces = randomKeys.map(
-        (key) => hostOf(cluster, new GrainId(preferLocalGrainType, key))?.address.podName,
-      );
 
       // Check that every "prefer local grain" was placed on the same silo with
       // its requesting random grain.
