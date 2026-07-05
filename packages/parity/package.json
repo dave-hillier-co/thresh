@@ -14,6 +14,7 @@
     "@tsva/core": "workspace:*",
     "@tsva/durable-jobs": "workspace:*",
     "@tsva/hosting": "workspace:*",
+    "@tsva/runtime": "workspace:*",
     "@tsva/testing": "workspace:*"
   },
   "devDependencies": {

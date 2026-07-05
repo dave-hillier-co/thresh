@@ -296,6 +296,9 @@ importers:
       '@tsva/hosting':
         specifier: workspace:*
         version: link:../hosting
+      '@tsva/runtime':
+        specifier: workspace:*
+        version: link:../runtime
       '@tsva/testing':
         specifier: workspace:*
         version: link:../testing

@@ -42,7 +42,6 @@ export type GapTag =
   | "GAP-PLACEMENT-INTROSPECTION" // a grain cannot learn its own hosting silo address
   | "GAP-REBALANCER-CONTROL" // no rebalancer suspend/resume/report-listener control API
   | "GAP-REQUEST-CONTEXT" // ambient RequestContext not exposed on @tsva/core's public surface
-  | "GAP-RESOURCE-OPTIMIZED-OPTIONS" // resource-optimized placement has no configurable weights
   | "GAP-SERVICE-ID" // no ServiceId concept surviving silo restarts
   | "GAP-SILO-ROLE-CONFIG" // no silo role/name-based placement configuration
   | "GAP-STARTUP-TASK" // no AddStartupTask hook before request acceptance
