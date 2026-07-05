@@ -21,7 +21,6 @@ export type GapTag =
   | "GAP-GET-REMINDERS" // no GetReminder(s) on the grain runtime surface
   | "GAP-GENERIC-GRAINS" // open generic grain interfaces are unrepresentable
   | "GAP-ACTIVATION-REPARTITIONING" // no activation-repartitioning subsystem (communication-graph driven)
-  | "GAP-ASYNC-SERIAL-EXECUTOR" // no public AsyncSerialExecutor-equivalent primitive
   | "GAP-BROADCAST-CHANNEL-CLIENT" // no client-side broadcast-channel writer/diagnostics/regex namespaces
   | "GAP-CALL-FILTER-CLIENT-LAYER" // no distinct client-issued vs grain-issued outgoing-filter layer
   | "GAP-CHANNEL-NAMESPACE-PREDICATE" // no IChannelNamespacePredicate provider abstraction
@@ -44,7 +43,6 @@ export type GapTag =
   | "GAP-REBALANCER-CONTROL" // no rebalancer suspend/resume/report-listener control API
   | "GAP-REQUEST-CONTEXT" // ambient RequestContext not exposed on @tsva/core's public surface
   | "GAP-RESOURCE-OPTIMIZED-OPTIONS" // resource-optimized placement has no configurable weights
-  | "GAP-RETRY-EXECUTOR" // no reusable retry-executor primitive (AsyncExecutorWithRetries)
   | "GAP-SERVICE-ID" // no ServiceId concept surviving silo restarts
   | "GAP-SILO-ROLE-CONFIG" // no silo role/name-based placement configuration
   | "GAP-STARTUP-TASK" // no AddStartupTask hook before request acceptance
