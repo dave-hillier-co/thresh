@@ -70,8 +70,7 @@ shows per-tag counts). One-line definitions live on the `GapTag` union. Grouped 
       `GAP-CLIENT-REQUEST-CONTEXT`, `GAP-CALL-FILTER-CLIENT-LAYER`, `GAP-CLIENT-SILO-SEPARATION`.
 - [ ] **Timers** — `GAP-TIMER-INTERLEAVE` (per-timer interleave option), `GAP-TIMER-VALIDATION`.
 - [ ] **Placement & rebalancing** — `GAP-PLACEMENT-FILTER-DIRECTORS`, `GAP-PLACEMENT-INTROSPECTION`,
-      `GAP-REBALANCER-CONTROL`, `GAP-ACTIVATION-REPARTITIONING`, `GAP-LOAD-SHEDDING`,
-      `GAP-SILO-ROLE-CONFIG`.
+      `GAP-REBALANCER-CONTROL`, `GAP-ACTIVATION-REPARTITIONING`, `GAP-LOAD-SHEDDING`.
 - [ ] **Streams** — `GAP-STREAM-IMPLICIT-MEMORY` (implicit subscriptions on the memory provider),
       `GAP-STREAM-BATCHING`, `GAP-STREAM-FILTER`, `GAP-STREAM-SUBSCRIPTION-MANAGER`,
       `GAP-STREAM-PROVIDER-WIRING` (TestCluster/client surface), `GAP-STREAM-PROVIDER-CONFIG`,
@@ -82,7 +81,7 @@ shows per-tag counts). One-line definitions live on the `GapTag` union. Grouped 
       `GAP-TRANSACTION-OVERLOAD-DETECTOR`,
       `GAP-TRANSACTION-CONSISTENCY-HARNESS` (randomized workload + serializability checker).
 - [ ] **Journaling & event sourcing** — `GAP-EVENT-SOURCING` (`JournaledGrain` equivalent),
-      `GAP-DURABLE-COLLECTION-API`, `GAP-STATE-MACHINE-RETIREMENT`.
+      `GAP-DURABLE-COLLECTION-API`.
 - [ ] **Durable jobs** — `GAP-JOB-SHARD-MANAGER-API`, `GAP-CLAIM-BUDGET-RAMPUP`.
 - [ ] **Misc primitives** — `GAP-GRAIN-DIRECTORY-API`, `GAP-SERVICE-ID`, `GAP-TRACING`.
 

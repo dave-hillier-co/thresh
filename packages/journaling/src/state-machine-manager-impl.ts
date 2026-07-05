@@ -7,15 +7,49 @@ import { deserializeValue, serializeValue } from "@tsva/core/value-codec";
 interface LogEnvelope {
   /** Owning machine name (= `stateName`). */
   m: string;
-  /** Frame kind: `"op"` = incremental mutation, `"snap"` = full-state snapshot. */
-  k: "op" | "snap";
-  /** Machine-specific payload (op or snapshot), opaque to the manager. */
+  /**
+   * Frame kind: `"op"` = incremental mutation, `"snap"` = full-state snapshot,
+   * `"vessel"` = buffered data kept for a currently-unregistered structure (see
+   * `RetirementRecord`).
+   */
+  k: "op" | "snap" | "vessel";
+  /** Machine-specific payload (op/snapshot) or a `VesselPayload`; opaque to callers. */
   p: unknown;
+}
+
+/** A `"vessel"` frame's payload: written and read only by the manager itself. */
+interface VesselPayload {
+  /** How many compactions this name has survived while unregistered. */
+  count: number;
+  /** Raw op/snapshot payloads applied to this name before/while unregistered. */
+  ops: unknown[];
+}
+
+/**
+ * In-memory bookkeeping for a structure whose name appears in the log but is
+ * not registered on this activation's manager — removed from the grain across
+ * a deploy. Mirrors Orleans' `RetiredStateMachineVessel` plus its retirement
+ * tracker: the data is kept alive across a bounded number of compactions
+ * rather than dropped at the very next one, and is resurrected in full if the
+ * name is registered again before its grace period runs out.
+ */
+interface RetirementRecord {
+  ops: unknown[];
+  compactionsSinceOrphaned: number;
 }
 
 export interface StateMachineManagerOptions {
   /** Snapshot + truncate once the live log reaches this many entries (default 100). */
   snapshotThreshold?: number;
+  /**
+   * Number of compactions an unregistered structure's data survives before
+   * being purged for good (default 2): kept through the first compaction that
+   * still finds it unregistered, purged on the next. Re-registering the
+   * structure before that resurrects it immediately — its buffered ops are
+   * replayed onto the real machine — and, if it is ever removed again, its
+   * grace period starts over.
+   */
+  retirementGraceCompactions?: number;
 }
 
 /**
@@ -30,6 +64,8 @@ export interface StateMachineManagerOptions {
 export class StateMachineManagerImpl implements StateMachineManager {
   private readonly machines = new Map<string, DurableStateMachine>();
   private readonly snapshotThreshold: number;
+  private readonly retirementGraceCompactions: number;
+  private readonly retiring = new Map<string, RetirementRecord>();
   private version: number | undefined;
   private liveEntryCount = 0;
 
@@ -40,6 +76,7 @@ export class StateMachineManagerImpl implements StateMachineManager {
     options: StateMachineManagerOptions = {},
   ) {
     this.snapshotThreshold = options.snapshotThreshold ?? 100;
+    this.retirementGraceCompactions = options.retirementGraceCompactions ?? 2;
   }
 
   register(machine: DurableStateMachine): void {
@@ -55,14 +92,34 @@ export class StateMachineManagerImpl implements StateMachineManager {
     const segment = await this.storage.read(this.logName, this.grainId);
     this.version = segment.version;
     this.liveEntryCount = segment.entries.length;
+    this.retiring.clear();
     for (const machine of this.machines.values()) machine.reset();
-    for (const entry of segment.entries) {
-      const env = deserializeValue<LogEnvelope>(entry);
+    for (const raw of segment.entries) {
+      const env = deserializeValue<LogEnvelope>(raw);
       const machine = this.machines.get(env.m);
-      // A structure removed from the grain across deploys: drop its orphan
-      // entries (they vanish at the next compaction) rather than crash activation.
-      if (machine === undefined) continue;
-      machine.apply(env.p);
+      if (machine !== undefined) {
+        // Registered this activation: a vessel frame unwraps into the buffered
+        // ops it holds (resurrection), applied in original order.
+        if (env.k === "vessel") {
+          for (const op of (env.p as VesselPayload).ops) machine.apply(op);
+        } else {
+          machine.apply(env.p);
+        }
+        continue;
+      }
+      // Unregistered this activation: buffer rather than drop, so a bounded
+      // grace period can still save it if it comes back.
+      if (env.k === "vessel") {
+        const payload = env.p as VesselPayload;
+        this.retiring.set(env.m, {
+          ops: [...payload.ops],
+          compactionsSinceOrphaned: payload.count,
+        });
+      } else {
+        const record = this.retiring.get(env.m) ?? { ops: [], compactionsSinceOrphaned: 0 };
+        record.ops.push(env.p);
+        this.retiring.set(env.m, record);
+      }
     }
   }
 
@@ -85,6 +142,23 @@ export class StateMachineManagerImpl implements StateMachineManager {
     const frames = [...this.machines.values()].map((machine) =>
       serializeValue({ m: machine.name, k: "snap", p: machine.snapshot() } satisfies LogEnvelope),
     );
+    for (const [name, record] of this.retiring) {
+      const count = record.compactionsSinceOrphaned + 1;
+      if (count >= this.retirementGraceCompactions) {
+        // Grace period elapsed while still unregistered: purge for good by
+        // simply not writing a frame for it.
+        this.retiring.delete(name);
+        continue;
+      }
+      record.compactionsSinceOrphaned = count;
+      frames.push(
+        serializeValue({
+          m: name,
+          k: "vessel",
+          p: { count, ops: record.ops } satisfies VesselPayload,
+        } satisfies LogEnvelope),
+      );
+    }
     this.version = await this.storage.replace(this.logName, this.grainId, frames, this.version);
     this.liveEntryCount = frames.length;
   }

@@ -31,9 +31,32 @@ describe("DefaultCluster.Tests.General.SiloRoleBasedPlacementDirectorTests", () 
       await expect(grain.ping()).rejects.toThrow();
     },
   );
+});
 
-  orleansTest.gap(
-    "GAP-SILO-ROLE-CONFIG",
+describe("DefaultCluster.Tests.General.SiloRoleBasedPlacementDirectorTests (role advertised)", () => {
+  let cluster: TestCluster;
+
+  beforeAll(async () => {
+    cluster = await TestCluster.start({
+      initialSilos: 2,
+      grains: [{ ctor: SiloRoleBasedPlacementGrain, interfaces: [ISiloRoleBasedPlacementGrain] }],
+      // Silo 1 advertises the role the grain is fixed to at registration
+      // (`@grain({ placement: "siloRole", role: "Sibyl.Silo" })`), the way an
+      // upstream silo's own name resolves the target role at placement time.
+      siloMetadata: ({ index }) => (index === 1 ? { role: "Sibyl.Silo" } : undefined),
+    });
+  });
+
+  afterAll(async () => {
+    await cluster.dispose();
+  });
+
+  orleansTest(
     "DefaultCluster.Tests.General.SiloRoleBasedPlacementDirectorTests.SiloRoleBasedPlacementDirector_CanFindSilo",
+    async () => {
+      const grain = cluster.getGrain(ISiloRoleBasedPlacementGrain, "testhost");
+      const result = await grain.ping();
+      expect(result).toBe(true);
+    },
   );
 });

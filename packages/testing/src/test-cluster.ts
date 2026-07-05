@@ -38,6 +38,15 @@ export interface TestClusterOptions {
   transactions?: boolean;
   /** Per-silo overrides, applied after the defaults. */
   configureSilo?: (builder: SiloBuilder, silo: { index: number; address: SiloAddress }) => void;
+  /**
+   * Static metadata a silo advertises via membership (e.g. `{ role: "worker" }`),
+   * consulted by metadata-aware placement (Orleans role-based placement). Return
+   * `undefined` for a silo that advertises no metadata.
+   */
+  siloMetadata?: (silo: {
+    index: number;
+    address: SiloAddress;
+  }) => Readonly<Record<string, string>> | undefined;
 }
 
 export interface TestSiloHandle {
@@ -149,16 +158,22 @@ export class TestCluster {
       `uid-${index}`,
       `test-silo-${index}:11111`,
     );
+    const metadata = this.options.siloMetadata?.({ index, address });
     if (this.shared === undefined) {
-      this.shared = new StaticMembershipService(address, [address]);
+      this.shared = new StaticMembershipService(
+        address,
+        [address],
+        metadata !== undefined ? () => metadata : undefined,
+      );
     } else {
-      this.shared.addSilo(address);
+      this.shared.addSilo(address, "active", metadata);
     }
     const membership = new MembershipView(this.shared, address);
     const builder = createSilo({
       clusterId: this.options.clusterId ?? "test-cluster",
       local: address,
       ...(this.options.time !== undefined ? { time: this.options.time } : {}),
+      ...(metadata !== undefined ? { metadata } : {}),
     })
       .useMembership(membership)
       .useInProcessTransport(this.network)

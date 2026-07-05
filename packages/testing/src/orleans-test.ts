@@ -39,8 +39,6 @@ export type GapTag =
   | "GAP-REBALANCER-CONTROL" // no rebalancer suspend/resume/report-listener control API
   | "GAP-REQUEST-CONTEXT" // ambient RequestContext not exposed on @tsva/core's public surface
   | "GAP-SERVICE-ID" // no ServiceId concept surviving silo restarts
-  | "GAP-SILO-ROLE-CONFIG" // no silo role/name-based placement configuration
-  | "GAP-STATE-MACHINE-RETIREMENT" // no retirement/grace period for unregistered durable structures
   | "GAP-STORAGE-FACET" // no third-party facet extensibility (named DI-resolved storage facets)
   | "GAP-STREAM-BATCHING" // no OnNextBatchAsync / batch-send stream API
   | "GAP-STREAM-CACHE-DIAGNOSTICS" // no pulling-agent cache/eviction model or diagnostic observer

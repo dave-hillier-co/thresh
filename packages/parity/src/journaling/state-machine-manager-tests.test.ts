@@ -12,6 +12,14 @@ import {
   DurableCollectionsGrain,
   IDurableCollectionsGrain,
 } from "@tsva/parity/grains/impl/durable-collections-grain";
+import {
+  RetiringCollectionsGrain,
+  RetiringCollectionsGrainPartial,
+} from "@tsva/parity/grains/impl/retiring-collections-grain";
+import {
+  IRetiringCollectionsGrain,
+  IRetiringCollectionsGrainPartial,
+} from "@tsva/parity/grains/interfaces/retiring-collections-grain-interfaces";
 
 describe("Orleans.Journaling.Tests.StateMachineManagerTests", () => {
   let cluster: TestCluster;
@@ -184,15 +192,136 @@ describe("Orleans.Journaling.Tests.StateMachineManagerTests", () => {
     15_000,
   );
 
-  // GAP: this exercises StateMachineManager's "retiring" state machines —
-  // an unregistered structure's data is preserved for a configurable grace
-  // period (and can be "un-retired" by re-registering it) before a
-  // compaction purges it for good. StateMachineManagerImpl has no such
-  // concept: `compact()` only ever writes snapshot frames for currently
-  // registered machines, so an unregistered structure's entries are dropped
-  // at the very next compaction with no grace period at all.
-  orleansTest.gap(
-    "GAP-STATE-MACHINE-RETIREMENT",
+  // Exercises StateMachineManager's "retiring" state machines — an
+  // unregistered structure's data is preserved for a grace period (and can be
+  // "un-retired" by re-registering it) before a compaction purges it for good.
+  //
+  // Upstream constructs a fresh `IStateMachineManager` over the same storage
+  // at each step, registering a different set of machines each time (a
+  // "dictToKeep" that is always registered, and a "dictToRetire" that comes
+  // and goes) to simulate a durable structure being removed from a grain's
+  // dependencies across a deploy, then drives a real grace period via a
+  // `FakeTimeProvider`.
+  //
+  // Reaching the manager surface directly is out of bounds here (see the file
+  // banner above), and the grain activation path has no way to plumb a fake
+  // clock down to `StateMachineManagerImpl` without editing the hosting layer
+  // (out of scope for this gap). So this drives the same scenario through two
+  // grain *classes* that share one grain type name
+  // ("Orleans.Journaling.Tests.RetiringCollectionsGrain": see
+  // retiring-collections-grain.ts) — one with both durable dictionaries, one
+  // with only "keep" — resolving to the *same* `GrainId` over a shared
+  // journal-storage instance passed between separately-started `TestCluster`s
+  // (the same "new manager, same storage" pattern the rest of this file uses
+  // `restartSilo` for). The grace period itself is expressed as a small,
+  // fixed number of compactions an unregistered structure survives (default
+  // 2: `StateMachineManagerImpl`'s `retirementGraceCompactions`) rather than
+  // upstream's `TimeSpan`, and is driven by crossing the manager's ordinary
+  // snapshot threshold repeatedly instead of advancing a clock.
+  orleansTest(
     "Orleans.Journaling.Tests.StateMachineManagerTests.StateMachineManager_AutoRetiringStateMachines",
+    async () => {
+      const key = freshKey();
+      const clusters: TestCluster[] = [];
+      type ConfigureSilo = NonNullable<Parameters<typeof TestCluster.start>[0]>["configureSilo"];
+      const startFull = (configureSilo?: ConfigureSilo) =>
+        TestCluster.start({
+          initialSilos: 1,
+          grains: [{ ctor: RetiringCollectionsGrain, interfaces: [IRetiringCollectionsGrain] }],
+          ...(configureSilo !== undefined ? { configureSilo } : {}),
+        });
+      const startPartial = (configureSilo?: ConfigureSilo) =>
+        TestCluster.start({
+          initialSilos: 1,
+          grains: [
+            {
+              ctor: RetiringCollectionsGrainPartial,
+              interfaces: [IRetiringCollectionsGrainPartial],
+            },
+          ],
+          ...(configureSilo !== undefined ? { configureSilo } : {}),
+        });
+      // Force a value past the manager's default snapshot threshold (100),
+      // triggering exactly one compaction cycle.
+      const pumpKeep = async (
+        grain: { keepSet(key: unknown, value: unknown): Promise<void> },
+        count: number,
+        start: number,
+      ) => {
+        for (let i = 0; i < count; i += 1) await grain.keepSet("a", start + i);
+      };
+
+      try {
+        // -------------- STEP 1 --------------
+        // Both "keep" and "retire" registered: as-shipped, before "retire" is
+        // ever removed from the grain's dependencies.
+        const cluster1 = await startFull();
+        clusters.push(cluster1);
+        const g1 = cluster1.getGrain(IRetiringCollectionsGrain, key);
+        await g1.keepSet("a", 0);
+        await g1.retireSet("b", 1);
+
+        // Every later cluster shares this storage, standing in for "the same
+        // durable backend across silo restarts / deploys" the rest of this
+        // file gets from `restartSilo`.
+        const sharedJournal = cluster1.journalStorage;
+
+        // -------------- STEP 2 --------------
+        // Only "keep" is registered from here on: "retire" is now an orphan
+        // (removed from the grain's dependencies, per the file banner above).
+        const cluster2 = await startPartial((builder) =>
+          builder.useMemoryJournaling(sharedJournal),
+        );
+        clusters.push(cluster2);
+        const g2 = cluster2.getGrain(IRetiringCollectionsGrainPartial, key);
+        expect(await g2.keepGet("a")).toBe(0);
+
+        // Cross the snapshot threshold once: 1 compaction while "retire" is
+        // unregistered. Within the grace period (2), so it must be kept.
+        await pumpKeep(g2, 100, 1);
+
+        // -------------- STEP 3 --------------
+        // Verify the retired dictionary was NOT purged, then re-register it
+        // (resurrecting it) and cross the threshold again so the resurrection
+        // is durably persisted as an ordinary snapshot.
+        const cluster3 = await startFull((builder) => builder.useMemoryJournaling(sharedJournal));
+        clusters.push(cluster3);
+        const g3 = cluster3.getGrain(IRetiringCollectionsGrain, key);
+
+        expect(await g3.keepGet("a")).toBe(100); // last value pumped in step 2
+        // The fact this entry exists proves "retire"'s state survived step 2's
+        // compaction even though it was not registered there.
+        expect(await g3.retireGet("b")).toBe(1);
+
+        await g3.retireSet("b", 2);
+        await pumpKeep(g3, 100, 200); // crosses the threshold: persists the resurrection for good
+
+        // -------------- STEP 4 --------------
+        // Because re-registering "retire" in step 3 resurrected it, this is
+        // like step 2: only "keep" is registered, so "retire" is unregistered
+        // again — but its grace period starts fresh (it was cleared on
+        // resurrection). Cross the threshold twice while it stays
+        // unregistered: the 2nd compaction (grace period elapsed) purges it.
+        const cluster4 = await startPartial((builder) =>
+          builder.useMemoryJournaling(sharedJournal),
+        );
+        clusters.push(cluster4);
+        const g4 = cluster4.getGrain(IRetiringCollectionsGrainPartial, key);
+        await pumpKeep(g4, 250, 300);
+
+        // -------------- STEP 5 --------------
+        // Re-register both. "keep" has the latest data; "retire" comes back
+        // empty because its data was purged for good during step 4.
+        const cluster5 = await startFull((builder) => builder.useMemoryJournaling(sharedJournal));
+        clusters.push(cluster5);
+        const g5 = cluster5.getGrain(IRetiringCollectionsGrain, key);
+
+        expect(await g5.keepGet("a")).toBe(549); // last value pumped in step 4
+        expect(await g5.retireHas("b")).toBe(false);
+      } finally {
+        await Promise.all(clusters.map((c) => c.dispose()));
+      }
+    },
+    30_000,
   );
 });
