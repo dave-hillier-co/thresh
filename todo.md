@@ -86,7 +86,7 @@ shows per-tag counts). One-line definitions live on the `GapTag` union. Grouped 
 - [ ] **Journaling & event sourcing** — `GAP-EVENT-SOURCING` (`JournaledGrain` equivalent),
       `GAP-DURABLE-COLLECTION-API`, `GAP-STATE-MACHINE-RETIREMENT`.
 - [ ] **Durable jobs** — `GAP-JOB-SHARD-MANAGER-API`, `GAP-CLAIM-BUDGET-RAMPUP`.
-- [ ] **Misc primitives** — `GAP-LEASE-PROVIDER`, `GAP-ASYNC-SERIAL-EXECUTOR`, `GAP-RETRY-EXECUTOR`,
+- [ ] **Misc primitives** — `GAP-ASYNC-SERIAL-EXECUTOR`, `GAP-RETRY-EXECUTOR`,
       `GAP-GRAIN-DIRECTORY-API`, `GAP-SERVICE-ID`, `GAP-TRACING`.
 
 ### Bugs found by the parity suite (`GAP-BUG-*`, fix then un-gap the tests)

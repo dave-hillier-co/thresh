@@ -37,7 +37,6 @@ export type GapTag =
   | "GAP-GRAIN-REF-CAST" // no AsReference<T>() runtime re-typing of grain references
   | "GAP-GRAIN-SERVICE" // no per-silo grain-service registration/lifecycle mechanism
   | "GAP-JOB-SHARD-MANAGER-API" // no explicit JobShardManager/shard-object API (implicit time-bucketing)
-  | "GAP-LEASE-PROVIDER" // no ILeaseProvider-equivalent lease abstraction
   | "GAP-LIFECYCLE-SUBJECT" // no LifecycleSubject/ILifecycleObservable primitive
   | "GAP-LOAD-SHEDDING" // no overload detector / load shedding / CPU-aware placement scoring
   | "GAP-PLACEMENT-FILTER-DIRECTORS" // no DI-based custom placement-filter directors
