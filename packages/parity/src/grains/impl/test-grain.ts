@@ -40,6 +40,19 @@ export class TestGrain extends Grain implements ITestGrain {
   async getMultipleGrainInterfaces_List(): Promise<unknown[]> {
     return this.getMultipleGrainInterfaces_Array();
   }
+
+  async testRequestContext(): Promise<[string | undefined, string | undefined]> {
+    this.runtime.setRequestContext("jarjar", "binks");
+
+    const bar1 = new Promise<string | undefined>((resolve) => {
+      setImmediate(() => resolve(this.runtime.getRequestContext("jarjar")));
+    });
+    const bar2 = new Promise<string | undefined>((resolve) => {
+      setImmediate(() => resolve(this.runtime.getRequestContext("jarjar")));
+    });
+
+    return Promise.all([bar1, bar2]);
+  }
 }
 
 @grain({ name: "UnitTests.Grains.TestGrainLongOnActivateAsync" })

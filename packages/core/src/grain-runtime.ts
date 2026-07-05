@@ -47,4 +47,16 @@ export interface GrainRuntime {
    * where it is placed.
    */
   localSiloAddress(): SiloAddress;
+  /**
+   * Read a value from the ambient request-context bag for this turn (Orleans
+   * `RequestContext.Get`). Sourced from the caller's request and any values a
+   * call filter wrote into it; `undefined` if the key was never set.
+   */
+  getRequestContext(key: string): string | undefined;
+  /**
+   * Write a value into the ambient request-context bag for this turn (Orleans
+   * `RequestContext.Set`). Flows to any downstream grain call made during the
+   * same turn; does not affect the caller's own context.
+   */
+  setRequestContext(key: string, value: string): void;
 }

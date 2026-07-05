@@ -5,6 +5,7 @@ import { TestCluster } from "@tsva/testing/test-cluster";
 import { Guid } from "@tsva/core/guid";
 import { ITestGrain, TestGrain } from "@tsva/parity/grains/impl/test-grain";
 import { IGuidTestGrain, GuidTestGrain } from "@tsva/parity/grains/impl/guid-test-grain";
+import { randomIntegerKey } from "@tsva/parity/support/keys";
 
 // See bugsFound: an activation whose `onActivate` throws surfaces the generic
 // "activation unavailable: <id>" GrainCallError to every caller — the real
@@ -25,12 +26,6 @@ import { IGuidTestGrain, GuidTestGrain } from "@tsva/parity/grains/impl/guid-tes
 // repro. `BasicActivation_BurstFail` (10,000 concurrent calls to such a grain)
 // would trigger exactly this, so its body is written for documentation but
 // never executed (gapped, not ported) to avoid hanging this suite.
-
-// RequestContext (Orleans' ambient call-context bag) is not exposed to grain
-// implementations anywhere in @tsva/core's public surface — the ambient store
-// exists only inside @tsva/runtime (an internal package parity grains do not
-// depend on), so a grain cannot read/write it the way `TestRequestContext`
-// requires.
 
 describe("DefaultCluster.Tests.General.BasicActivationTests", () => {
   let cluster: TestCluster;
@@ -215,8 +210,13 @@ describe("DefaultCluster.Tests.General.BasicActivationTests", () => {
     "DefaultCluster.Tests.General.BasicActivationTests.BasicActivation_Reentrant_RecoveryAfterExpiredMessage",
   );
 
-  orleansTest.gap(
-    "GAP-REQUEST-CONTEXT",
+  orleansTest(
     "DefaultCluster.Tests.General.BasicActivationTests.BasicActivation_TestRequestContext",
+    async () => {
+      const g1 = cluster.getGrain(ITestGrain, randomIntegerKey());
+      const [bar1, bar2] = await g1.testRequestContext();
+      expect(bar1).toBeDefined();
+      expect(bar2).toBeDefined();
+    },
   );
 });

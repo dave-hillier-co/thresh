@@ -65,7 +65,6 @@ export type GapTag =
   | "GAP-TRANSACTIONS-OPT-OUT" // cannot build a silo with transactions disabled
   // Confirmed framework defects exposed by ported tests: fix the bug, then
   // un-gap the test. Each has a todo.md entry under "Bugs found by the parity suite".
-  | "GAP-BUG-CALL-FILTER-REQUEST-CONTEXT" // filter header writes never reach the grain's requestContext
   | "GAP-BUG-LOCAL-CALL-UNDEFINED"; // local calls return undefined where remote calls yield null
 
 type TestBody = () => void | Promise<void>;

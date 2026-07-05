@@ -90,8 +90,6 @@ shows per-tag counts). One-line definitions live on the `GapTag` union. Grouped 
 
 ### Bugs found by the parity suite (`GAP-BUG-*`, fix then un-gap the tests)
 
-- [ ] **`GAP-BUG-CALL-FILTER-REQUEST-CONTEXT`** — header writes by incoming filters never reach
-      the ambient request context seen by the grain method body. `packages/runtime/src/activation.ts`.
 - [ ] **`GAP-BUG-LOCAL-CALL-UNDEFINED`** — `LocalDispatcher` returns `undefined` unchanged while
       cross-silo calls serialize it to `null`, so a value's shape depends on placement.
 - [ ] **TestCluster teardown flakiness** — `dispose()` on a 2-silo cluster intermittently races

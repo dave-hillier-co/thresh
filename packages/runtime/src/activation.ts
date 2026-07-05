@@ -361,6 +361,11 @@ export class ActivationData implements GrainContext {
     }
     // Run the grain-method dispatch through the incoming call-filter pipeline;
     // filters see the context and proceed via `invoke()` (Orleans parity).
+    // `headers` is the SAME object `invocationContext`'s AsyncLocalStorage
+    // store holds for this turn (installed by `invoke()`) rather than a fresh
+    // copy of `req.headers` — so a filter's write is visible to the grain
+    // method body via `requestContext.get()` (Orleans parity: RequestContext
+    // set in a filter flows into the handler it wraps).
     const context: IncomingGrainCallContext = {
       target: this.id,
       source: req.sender,
@@ -369,7 +374,7 @@ export class ActivationData implements GrainContext {
       methodName: req.method,
       args: [...req.args],
       result: undefined,
-      headers: req.headers !== undefined ? { ...req.headers } : {},
+      headers: invocationContext.getStore()?.headers ?? {},
       grain: this.instance,
       invoke: () => Promise.resolve(),
     };

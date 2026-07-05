@@ -42,12 +42,10 @@ export const IOutgoingMethodInterceptionGrain =
   );
 
 /**
- * Upstream `IGrainCallFilterTestGrain`. `GetRequestContext` is omitted: it
- * needs a grain method body to read the ambient RequestContext that upstream
- * filters progressively wrote into — `@tsva/parity` cannot import
- * `@tsva/runtime` (not a declared workspace dependency), and independently the
- * incoming-filter pipeline here does not thread filter-mutated headers back
- * into the ambient request context used for the method call (see bugsFound).
+ * Upstream `IGrainCallFilterTestGrain`. `GetRequestContext` reads the ambient
+ * RequestContext value that the silo-wide and grain-level incoming filters
+ * progressively build up (via the now-exposed `GrainRuntime.getRequestContext`/
+ * `setRequestContext`), proving a filter's header write reaches the method body.
  */
 export interface IGrainCallFilterTestGrain extends GrainWithIntegerKey {
   throwIfGreaterThanZero(value: number): Promise<string>;
@@ -58,6 +56,8 @@ export interface IGrainCallFilterTestGrain extends GrainWithIntegerKey {
   sumSet(numbers: readonly number[]): Promise<number>;
   systemWideCallFilterMarker(): Promise<void>;
   grainSpecificCallFilterMarker(): Promise<void>;
+  /** Upstream `GetRequestContext`: reads back the `RequestContext` value filters wrote. */
+  getRequestContext(): Promise<string | undefined>;
 }
 
 export const IGrainCallFilterTestGrain = defineGrainInterface<IGrainCallFilterTestGrain>(

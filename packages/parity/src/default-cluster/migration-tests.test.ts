@@ -125,6 +125,16 @@ describe("DefaultCluster.Tests.General.MigrationTests", () => {
     },
   );
 
+  // Uses `RequestContext.Set(IPlacementDirector.PlacementHintKey, targetHost)`
+  // from the *client* (test method) to steer placement, then migrates via the
+  // cast-to-extension `MigrateOnIdle()` with no explicit target — two distinct
+  // gaps stacked: client-side ambient RequestContext (GAP-CLIENT-REQUEST-CONTEXT,
+  // an escape hatch this pass intentionally left alone — see
+  // request-context-test.test.ts) and RequestContext-driven placement hints,
+  // which this framework has no equivalent for (`migrateOnIdle` instead takes
+  // an explicit `targetSilo`, already exercised by `DirectedGrainMigrationTest`
+  // above). Un-gapping this needs both, not just the grain-facing
+  // `requestContext` exposure this pass added.
   orleansTest.gap(
     "GAP-REQUEST-CONTEXT",
     "DefaultCluster.Tests.General.MigrationTests.MultiGrainDirectedMigrationTest",
@@ -179,6 +189,11 @@ describe("DefaultCluster.Tests.General.MigrationTests", () => {
     },
   );
 
+  // Same client-side `RequestContext`-as-placement-hint pattern as
+  // `MultiGrainDirectedMigrationTest` above (`RequestContext.Set(...targetHost)`
+  // from the test method), plus `RequestContext.Set("fail_dehydrate", true)`
+  // from the client to tell the grain to fail its next dehydration — both
+  // client-side ambient-context uses this framework has no equivalent for yet.
   orleansTest.gap(
     "GAP-REQUEST-CONTEXT",
     "DefaultCluster.Tests.General.MigrationTests.FailDehydrationTest",

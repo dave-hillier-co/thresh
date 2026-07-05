@@ -11,6 +11,13 @@ export interface ITestGrain extends GrainWithIntegerKey {
   setLabel(label: string): Promise<void>;
   getMultipleGrainInterfaces_Array(): Promise<unknown[]>;
   getMultipleGrainInterfaces_List(): Promise<unknown[]>;
+  /**
+   * Upstream `TestRequestContext`: sets a `RequestContext` value, then reads it
+   * back from two concurrently-scheduled continuations, proving the ambient
+   * value survives being read from work scheduled after the `set` rather than
+   * only synchronously alongside it.
+   */
+  testRequestContext(): Promise<[string | undefined, string | undefined]>;
 }
 
 export const ITestGrain = defineGrainInterface<ITestGrain>("UnitTests.GrainInterfaces.ITestGrain");

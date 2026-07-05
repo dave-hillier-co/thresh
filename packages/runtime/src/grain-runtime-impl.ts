@@ -11,6 +11,7 @@ import { isActivationBound, type StreamProvider } from "@tsva/core/stream";
 import type { ActivationData } from "@tsva/runtime/activation";
 import { ActivationStreamProvider } from "@tsva/runtime/activation-stream-provider";
 import type { GrainFactory } from "@tsva/runtime/grain-factory";
+import { requestContext } from "@tsva/runtime/invocation-context";
 
 export interface GrainRuntimeServices {
   reminders?: () => ReminderRegistry | undefined;
@@ -105,6 +106,14 @@ export class GrainRuntimeImpl implements GrainRuntime {
 
   delayDeactivation(by: Duration): void {
     this.activation.delayDeactivation(durationToMs(by));
+  }
+
+  getRequestContext(key: string): string | undefined {
+    return requestContext.get(key);
+  }
+
+  setRequestContext(key: string, value: string): void {
+    requestContext.set(key, value);
   }
 
   private requireReminders(): ReminderRegistry {

@@ -7,6 +7,7 @@ import type {
   OutgoingGrainCallFilter,
 } from "@tsva/core/grain-call-filter";
 import {
+  GRAIN_CALL_FILTER_TEST_KEY,
   GrainCallFilterTestGrain,
   IGrainCallFilterTestGrain,
   IMethodInterceptionGrain,
@@ -19,12 +20,32 @@ import { randomIntegerKey } from "@tsva/parity/support/keys";
 // System-wide incoming filter: mirrors the upstream fixture's
 // `SiloInvokerTestSiloBuilderConfigurator` incoming filter, trimmed to just
 // the `SystemWideCallFilterMarker` short-circuit this file exercises (the
-// RequestContext-accumulation and extension-value-negation branches belong to
-// gapped tests — see the file-level notes below).
+// extension-value-negation branch belongs to a gapped test — see the
+// file-level notes below). Also starts the RequestContext value the
+// `GrainCallFilter_Incoming_Order_Test` below reads back: "1".
 const systemWideIncoming: IncomingGrainCallFilter = async (ctx) => {
+  if (
+    ctx.methodName === "getRequestContext" &&
+    ctx.headers[GRAIN_CALL_FILTER_TEST_KEY] === undefined
+  ) {
+    ctx.headers[GRAIN_CALL_FILTER_TEST_KEY] = "1";
+  }
   if (ctx.methodName === "systemWideCallFilterMarker") {
     // explicitly do not continue calling invoke()
     return;
+  }
+  await ctx.invoke();
+};
+
+// A second silo-wide incoming filter, mirroring upstream's separately
+// registered `GrainCallFilterWithDependencies` (a distinct filter class with
+// its own DI-resolved dependency): continues the RequestContext build-up
+// "1" -> "12", proving two independently registered silo-wide filters (not
+// just one) each see the same ambient headers.
+const requestContextContinuation: IncomingGrainCallFilter = async (ctx) => {
+  if (ctx.methodName === "getRequestContext") {
+    const existing = ctx.headers[GRAIN_CALL_FILTER_TEST_KEY];
+    if (existing !== undefined) ctx.headers[GRAIN_CALL_FILTER_TEST_KEY] = `${existing}2`;
   }
   await ctx.invoke();
 };
@@ -78,6 +99,7 @@ describe("UnitTests.General.GrainCallFilterTests", () => {
       ],
       configureSilo: (builder) => {
         builder.addIncomingCallFilter(systemWideIncoming);
+        builder.addIncomingCallFilter(requestContextContinuation);
         builder.addOutgoingCallFilter(systemWideOutgoing);
       },
     });
@@ -99,11 +121,18 @@ describe("UnitTests.General.GrainCallFilterTests", () => {
   );
 
   // Builds up RequestContext across filters ("1"->"12"->"123") then reads it
-  // in the grain method ("1234"); not portable here — see the interface file's
-  // note on `GetRequestContext` and the GAP-BUG below on filter/header wiring.
-  orleansTest.gap(
-    "GAP-BUG-CALL-FILTER-REQUEST-CONTEXT",
+  // in the grain method ("1234"): two silo-wide filters each add a digit,
+  // the grain's own filter adds a third, and the method body appends the
+  // last, reading the ambient value back via `runtime.getRequestContext`.
+  orleansTest(
     "UnitTests.General.GrainCallFilterTests.GrainCallFilter_Incoming_Order_Test",
+    async () => {
+      const grain = cluster.getGrain(IGrainCallFilterTestGrain, randomIntegerKey());
+
+      const context = await grain.getRequestContext();
+
+      expect(context).toBe("1234");
+    },
   );
 
   // Stream providers are not wired into TestCluster/the parity harness.

@@ -122,10 +122,22 @@ export class GrainCallFilterTestGrain extends Grain implements IGrainCallFilterT
 
   async grainSpecificCallFilterMarker(): Promise<void> {}
 
+  /** Upstream `GetRequestContext`: `RequestContext.Get(Key) + "4"`. */
+  async getRequestContext(): Promise<string | undefined> {
+    return `${this.runtime.getRequestContext(GRAIN_CALL_FILTER_TEST_KEY) ?? ""}4`;
+  }
+
   async [INCOMING_CALL_FILTER](context: IncomingGrainCallContext): Promise<void> {
     if (context.methodName === "grainSpecificCallFilterMarker") {
       // explicitly do not continue calling invoke()
       return;
+    }
+
+    // Continue building the RequestContext value: e.g. "12" -> "123" (Orleans
+    // parity: the grain's own filter runs innermost, just before the method).
+    if (context.methodName === "getRequestContext") {
+      const existing = context.headers[GRAIN_CALL_FILTER_TEST_KEY];
+      if (existing !== undefined) context.headers[GRAIN_CALL_FILTER_TEST_KEY] = `${existing}3`;
     }
 
     let attemptsRemaining = 2;
@@ -146,3 +158,6 @@ export class GrainCallFilterTestGrain extends Grain implements IGrainCallFilterT
     }
   }
 }
+
+/** Upstream `GrainCallFilterTestConstants.Key`. */
+export const GRAIN_CALL_FILTER_TEST_KEY = "GrainInfo";
