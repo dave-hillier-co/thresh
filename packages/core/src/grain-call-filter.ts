@@ -5,7 +5,10 @@ import type { GrainId } from "./grain-id";
  * Orleans' `IGrainCallContext` (grain call filters — see
  * `Orleans.Core.Abstractions/Core/IGrainCallContext.cs`). A filter may inspect
  * or rewrite `args` before calling `invoke()` to proceed, and read or replace
- * `result` after; not calling `invoke()` short-circuits the call.
+ * `result` after. A filter may short-circuit by setting `result` and returning
+ * without calling `invoke()`; but returning without either calling `invoke()`
+ * or setting a `result` is an error (see {@link runCallFilters}), matching
+ * Orleans' behaviour.
  */
 export interface GrainCallContext {
   /** The grain being invoked. */
@@ -25,7 +28,11 @@ export interface GrainCallContext {
    * sent with the request; on an incoming call it holds the headers that arrived.
    */
   headers: Record<string, string>;
-  /** Proceed to the next filter, or — at the end of the chain — the method itself. */
+  /**
+   * Proceed to the next filter, or — at the end of the chain — the method
+   * itself. A filter that returns without calling this and without setting
+   * `result` is treated as a broken chain and {@link runCallFilters} throws.
+   */
   invoke(): Promise<void>;
 }
 
@@ -65,8 +72,12 @@ export function grainIncomingFilter(instance: object): IncomingGrainCallFilter |
  * Run a call through the filter chain, then the terminal step (the method, or the
  * dispatch for an outgoing call). Each filter receives the context and calls
  * `context.invoke()` to continue; the terminal sets `context.result`. Returns the
- * final result. The chain advances by a shared cursor, so a filter that omits
- * `invoke()` short-circuits the rest of the chain and the terminal.
+ * final result. A filter may short-circuit the chain by setting `context.result`
+ * and returning without calling `invoke()`. But a filter that returns having
+ * neither called `invoke()` nor set a result is an error: the chain never
+ * advanced and no result was produced, so this throws (mirroring Orleans'
+ * `InvalidOperationException` for a broken filter chain) rather than resolving
+ * with an unset result.
  */
 export async function runCallFilters<C extends GrainCallContext>(
   filters: readonly ((context: C) => Promise<void>)[],
@@ -74,15 +85,22 @@ export async function runCallFilters<C extends GrainCallContext>(
   terminal: () => Promise<unknown>,
 ): Promise<unknown> {
   let index = 0;
+  let reachedTerminal = false;
   const invoke = async (): Promise<void> => {
     if (index < filters.length) {
       const filter = filters[index++]!;
       await filter(context);
     } else {
+      reachedTerminal = true;
       context.result = await terminal();
     }
   };
   context.invoke = invoke;
   await invoke();
+  if (!reachedTerminal && context.result === undefined) {
+    throw new Error(
+      `Filter for '${context.interfaceName}.${context.methodName}' did not call context.invoke()`,
+    );
+  }
   return context.result;
 }

@@ -184,47 +184,40 @@ describe("DefaultCluster.Tests.General.MigrationTests", () => {
     "DefaultCluster.Tests.General.MigrationTests.FailDehydrationTest",
   );
 
-  // Framework bug: after a failed `onRehydrate` the target's directory entry
-  // still points at the (now-invalid) migrated activation. The next call routes
-  // there via the directory, finds it invalid, and re-registers — but the
-  // registration/dispatch loop between the directory and this same silo never
-  // converges on a fresh activation id, so repeated calls recurse without
-  // bound and OOM the process rather than settling on a plain reactivation.
-  // Same symptom as GAP-BUG-ACTIVATION-RETRY-STORM (repeated calls to an
-  // activation that never settles), triggered here via a failed migration
-  // rather than an always-throwing `onActivate`.
-  orleansTest.gap(
-    "GAP-BUG-ACTIVATION-RETRY-STORM",
-    "DefaultCluster.Tests.General.MigrationTests.FailRehydrationTest",
-    async () => {
-      const key = randomIntegerKey();
-      const grain = cluster.getGrain(IMigrationTestGrain, key);
-      const grainId = new GrainId(migrationGrainType, key);
-      const expectedState = Math.floor(Math.random() * 1_000_000);
+  // After a failed `onRehydrate` the target's directory entry still points at
+  // the (now-invalid) migrated activation. The next call routes there via the
+  // directory, finds it invalid, removes the stale pointer, and reactivates
+  // fresh on that same silo (without the carried state) — rather than recursing
+  // without bound between the directory and this silo. See the deliverLocal
+  // stale-pointer repair in packages/runtime/src/distributed-dispatcher.ts.
+  orleansTest("DefaultCluster.Tests.General.MigrationTests.FailRehydrationTest", async () => {
+    const key = randomIntegerKey();
+    const grain = cluster.getGrain(IMigrationTestGrain, key);
+    const grainId = new GrainId(migrationGrainType, key);
+    const expectedState = Math.floor(Math.random() * 1_000_000);
 
-      await grain.setState(expectedState);
-      const originalHost = hostOf(cluster, grainId);
-      const targetHost = cluster.silos.find((s) => s !== originalHost)!;
+    await grain.setState(expectedState);
+    const originalHost = hostOf(cluster, grainId);
+    const targetHost = cluster.silos.find((s) => s !== originalHost)!;
 
-      await grain.failNextRehydrate();
-      await grain.migrateOnIdle(targetHost.address);
-      await forceMigrationSweep(time);
+    await grain.failNextRehydrate();
+    await grain.migrateOnIdle(targetHost.address);
+    await forceMigrationSweep(time);
 
-      // Rehydration fails on the target, so the migrated activation is
-      // discarded there; the directory still points at the target, so the next
-      // call reactivates fresh (without the carried state) on that same silo.
-      await waitFor(async () => {
-        try {
-          await grain.getState();
-        } catch {
-          return false;
-        }
-        return hostOf(cluster, grainId) === targetHost;
-      });
+    // Rehydration fails on the target, so the migrated activation is
+    // discarded there; the directory still points at the target, so the next
+    // call reactivates fresh (without the carried state) on that same silo.
+    await waitFor(async () => {
+      try {
+        await grain.getState();
+      } catch {
+        return false;
+      }
+      return hostOf(cluster, grainId) === targetHost;
+    });
 
-      expect(hostOf(cluster, grainId)).toBe(targetHost);
-      // The grain lost its state during the failed migration.
-      expect(await grain.getState()).not.toBe(expectedState);
-    },
-  );
+    expect(hostOf(cluster, grainId)).toBe(targetHost);
+    // The grain lost its state during the failed migration.
+    expect(await grain.getState()).not.toBe(expectedState);
+  });
 });

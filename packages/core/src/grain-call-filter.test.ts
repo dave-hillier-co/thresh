@@ -51,7 +51,7 @@ describe("call-filter pipeline", () => {
     expect(result).toEqual([6, 8]);
   });
 
-  it("short-circuits when a filter does not call invoke()", async () => {
+  it("short-circuits when a filter sets a result without calling invoke()", async () => {
     let methodRan = false;
     const cache: GrainCallFilter = async (ctx) => {
       ctx.result = "cached"; // serve a value without proceeding
@@ -62,6 +62,21 @@ describe("call-filter pipeline", () => {
       return "fresh";
     });
     expect(result).toBe("cached");
+    expect(methodRan).toBe(false);
+  });
+
+  it("rejects when a filter neither calls invoke() nor sets a result", async () => {
+    let methodRan = false;
+    const broken: GrainCallFilter = async () => {
+      // returns without proceeding and without producing a result — an error
+    };
+    const ctx = context([]);
+    await expect(
+      runCallFilters([broken], ctx, async () => {
+        methodRan = true;
+        return "fresh";
+      }),
+    ).rejects.toThrow(/did not call context\.invoke\(\)/);
     expect(methodRan).toBe(false);
   });
 

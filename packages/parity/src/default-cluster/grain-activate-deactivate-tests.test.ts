@@ -221,8 +221,7 @@ describe("DefaultCluster.Tests.ActivationsLifeCycleTests.GrainActivateDeactivate
     },
   );
 
-  orleansTest.gap(
-    "GAP-BUG-ACTIVATION-FAILURE-MESSAGE",
+  orleansTest(
     "DefaultCluster.Tests.ActivationsLifeCycleTests.GrainActivateDeactivateTests.BadActivate_Await",
     async () => {
       const grain = cluster.getGrain(IBadActivateDeactivateTestGrain, freshId());
@@ -235,8 +234,7 @@ describe("DefaultCluster.Tests.ActivationsLifeCycleTests.GrainActivateDeactivate
     },
   );
 
-  orleansTest.gap(
-    "GAP-BUG-ACTIVATION-FAILURE-MESSAGE",
+  orleansTest(
     "DefaultCluster.Tests.ActivationsLifeCycleTests.GrainActivateDeactivateTests.BadActivate_GetValue",
     async () => {
       const grain = cluster.getGrain(IBadActivateDeactivateTestGrain, freshId());
@@ -252,8 +250,7 @@ describe("DefaultCluster.Tests.ActivationsLifeCycleTests.GrainActivateDeactivate
     },
   );
 
-  orleansTest.gap(
-    "GAP-BUG-ACTIVATION-FAILURE-MESSAGE",
+  orleansTest(
     "DefaultCluster.Tests.ActivationsLifeCycleTests.GrainActivateDeactivateTests.BadActivate_Await_ViaOtherGrain",
     async () => {
       const id = freshId();

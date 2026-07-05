@@ -93,8 +93,7 @@ describe("DefaultCluster.Tests.General.BasicActivationTests", () => {
     },
   );
 
-  orleansTest.gap(
-    "GAP-BUG-ACTIVATION-FAILURE-MESSAGE",
+  orleansTest(
     "DefaultCluster.Tests.General.BasicActivationTests.BasicActivation_Fail",
     async () => {
       // Key values of -2 are not allowed in this case.
@@ -111,8 +110,7 @@ describe("DefaultCluster.Tests.General.BasicActivationTests", () => {
     },
   );
 
-  orleansTest.gap(
-    "GAP-BUG-ACTIVATION-RETRY-STORM",
+  orleansTest(
     "DefaultCluster.Tests.General.BasicActivationTests.BasicActivation_BurstFail",
     async () => {
       let failed = false;

@@ -63,6 +63,20 @@ export class ActivationData implements GrainContext {
   runtime!: GrainRuntime;
   state: ActivationState = "creating";
 
+  /**
+   * The error thrown from pre-activation/`onActivate` when activation failed,
+   * captured so the first call that cannot proceed surfaces the ORIGINAL
+   * application error (Orleans parity) rather than a generic one. Undefined
+   * unless `onActivate` (or `preActivate`) threw.
+   */
+  private activationFailure: unknown;
+  private didFailActivation = false;
+
+  /** True when this activation failed to activate (its `onActivate` threw). */
+  get activationFailed(): boolean {
+    return this.didFailActivation;
+  }
+
   /** Runs once before `onActivate` (e.g. read persistent state); set by the catalog. */
   preActivate: (() => Promise<void>) | undefined;
 
@@ -105,14 +119,23 @@ export class ActivationData implements GrainContext {
         options: {},
         reentrancyId: this.activationId,
         run: async () => {
-          if (this.preActivate !== undefined) await this.preActivate();
-          await this.instance.onActivate(reason);
-          this.state = "valid";
+          try {
+            if (this.preActivate !== undefined) await this.preActivate();
+            await this.instance.onActivate(reason);
+            this.state = "valid";
+          } catch (err) {
+            // Activation failed: mark invalid and capture the error (set
+            // synchronously here, before this turn settles and the next queued
+            // call runs) so the first failing call can surface the original
+            // application error instead of a generic "activation unavailable".
+            this.state = "invalid";
+            this.activationFailure = err;
+            this.didFailActivation = true;
+            throw err;
+          }
         },
       })
-      .catch(() => {
-        this.state = "invalid";
-      });
+      .catch(() => undefined);
   }
 
   invoke(req: InvocationRequest): Promise<unknown> {
@@ -123,6 +146,10 @@ export class ActivationData implements GrainContext {
         reentrancyId: req.reentrancyId,
         run: () => {
           if (this.state === "invalid" || this.state === "deactivating") {
+            // A failed activation surfaces the original activation error to the
+            // caller; the ordinary deactivating/idle-invalid cases have none, so
+            // they fall back to the generic unavailable error.
+            if (this.didFailActivation) throw this.activationFailure;
             throw new GrainCallError(`activation unavailable: ${this.id.toString()}`);
           }
           // Dehydrated for migration: the directory now points at the new host, so

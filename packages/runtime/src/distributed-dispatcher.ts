@@ -86,17 +86,77 @@ export class DistributedDispatcher implements Dispatcher {
     });
     this.deps.cache.put(winner);
 
+    // We won the CAS: activate here.
     if (winner.silo.equals(this.deps.local) && winner.activationId === activationId) {
-      return this.deps.catalog.activateLocal(req.target, activationId).invoke(req);
+      return this.activateLocalAndInvoke(req, activationId);
     }
+
+    // The directory points back at this silo but at a different activation id.
+    if (winner.silo.equals(this.deps.local)) {
+      const act = this.deps.catalog.get(req.target);
+      // A concurrent activator won the race here and is coming up: defer to it.
+      if (
+        act !== undefined &&
+        act.state !== "invalid" &&
+        act.activationId === winner.activationId
+      ) {
+        return act.invoke(req);
+      }
+      // The entry points at a dead/absent local activation (a failed activation
+      // its owner has not yet unregistered, or a failed migration). Remove the
+      // stale pointer and re-resolve locally instead of forwarding to ourselves
+      // forever — which is what otherwise drives an always-failing activation
+      // into an unbounded self-forward loop (OOM).
+      await this.deps.directory.unregister(winner);
+      this.deps.cache.invalidate(req.target);
+      return this.deliverLocal(req);
+    }
+
     return this.deps.remote.send(winner.silo, req);
+  }
+
+  /**
+   * Activate the grain locally under the id we won and run the call. If the
+   * activation itself fails to come up (its constructor or `onActivate` threw),
+   * remove the directory registration we won so subsequent calls re-resolve to a
+   * fresh placement rather than looping against a dead entry — mirroring Orleans,
+   * which reports the activation failure to the caller and discards the
+   * activation (it is not retried within the call). The original error is
+   * rethrown so the caller sees it; an ordinary method error after a successful
+   * activation leaves the (still valid) activation and its registration intact.
+   */
+  private async activateLocalAndInvoke(
+    req: InvocationRequest,
+    activationId: string,
+  ): Promise<unknown> {
+    let act: ReturnType<Catalog["activateLocal"]> | undefined;
+    try {
+      act = this.deps.catalog.activateLocal(req.target, activationId);
+      return await act.invoke(req);
+    } catch (err) {
+      if (act === undefined || act.activationFailed) {
+        await this.deps.directory.unregister({
+          grainId: req.target,
+          silo: this.deps.local,
+          activationId,
+        });
+        this.deps.cache.invalidate(req.target);
+      }
+      throw err;
+    }
   }
 
   private async routeTo(addr: GrainAddress, req: InvocationRequest): Promise<unknown> {
     if (!addr.silo.equals(this.deps.local)) return this.deps.remote.send(addr.silo, req);
     const act = this.deps.catalog.get(req.target);
     if (act === undefined || act.state === "invalid" || act.activationId !== addr.activationId) {
-      throw new RejectionError(`no activation for ${req.target.toString()}`, "noActivation");
+      // The cache/directory points here but no live activation matches (a failed
+      // or collected activation, or a stale pointer). Rather than rejecting —
+      // which, when the caller is this same silo, has nothing to re-resolve
+      // against and loops forever against the dead entry — (re)activate locally.
+      // `deliverLocal` registers a fresh activation, repairs a stale self-pointer,
+      // or forwards if the grain in fact lives on another silo.
+      return this.deliverLocal(req);
     }
     return act.invoke(req);
   }

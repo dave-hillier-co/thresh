@@ -91,14 +91,6 @@ shows per-tag counts). One-line definitions live on the `GapTag` union. Grouped 
 
 ### Bugs found by the parity suite (`GAP-BUG-*`, fix then un-gap the tests)
 
-- [ ] **`GAP-BUG-ACTIVATION-FAILURE-MESSAGE`** — an `onActivate` failure surfaces as a generic
-      "activation unavailable" error; the application error type/message is discarded.
-      `packages/runtime/src/activation.ts`.
-- [ ] **`GAP-BUG-ACTIVATION-RETRY-STORM`** — on a multi-silo cluster, repeated calls to a grain
-      whose `onActivate` always throws never settle and can OOM the process (no fail-fast).
-- [ ] **`GAP-BUG-CALL-FILTER-NO-INVOKE`** — a call filter that never calls `context.invoke()`
-      silently resolves the call to `undefined`; Orleans throws to the caller.
-      `packages/core/src/grain-call-filter.ts` (`runCallFilters`).
 - [ ] **`GAP-BUG-CALL-FILTER-REQUEST-CONTEXT`** — header writes by incoming filters never reach
       the ambient request context seen by the grain method body. `packages/runtime/src/activation.ts`.
 - [ ] **`GAP-BUG-LOCAL-CALL-UNDEFINED`** — `LocalDispatcher` returns `undefined` unchanged while

@@ -212,12 +212,10 @@ describe("UnitTests.General.GrainCallFilterTests", () => {
     "UnitTests.General.GrainCallFilterTests.GrainCallFilter_Incoming_GenericInterface_ConcreteGrain_Test",
   );
 
-  // The framework does not treat "a filter never called invoke()" as an error:
-  // the call simply resolves with `undefined` instead of surfacing to the
-  // caller as a failure (Orleans throws InvalidOperationException here). See
-  // bugsFound.
-  orleansTest.gap(
-    "GAP-BUG-CALL-FILTER-NO-INVOKE",
+  // A filter that returns without calling invoke() is an error: the call
+  // surfaces to the caller as a failure (Orleans throws InvalidOperationException
+  // here).
+  orleansTest(
     "UnitTests.General.GrainCallFilterTests.GrainCallFilter_Incoming_SystemWideDoesNotCallContextInvoke_Test",
     async () => {
       const grain = cluster.getGrain(IGrainCallFilterTestGrain, randomIntegerKey());
@@ -225,8 +223,7 @@ describe("UnitTests.General.GrainCallFilterTests", () => {
     },
   );
 
-  orleansTest.gap(
-    "GAP-BUG-CALL-FILTER-NO-INVOKE",
+  orleansTest(
     "UnitTests.General.GrainCallFilterTests.GrainCallFilter_Incoming_GrainSpecificDoesNotCallContextInvoke_Test",
     async () => {
       const grain = cluster.getGrain(IGrainCallFilterTestGrain, randomIntegerKey());
@@ -234,8 +231,7 @@ describe("UnitTests.General.GrainCallFilterTests", () => {
     },
   );
 
-  orleansTest.gap(
-    "GAP-BUG-CALL-FILTER-NO-INVOKE",
+  orleansTest(
     "UnitTests.General.GrainCallFilterTests.GrainCallFilter_Outgoing_SystemWideDoesNotCallContextInvoke_Test",
     async () => {
       const grain = cluster.getGrain(IMethodInterceptionGrain, randomIntegerKey());
