@@ -13,7 +13,6 @@ export type GapTag =
   | "GAP-CANCELLATION" // no cancellation tokens or per-call response timeouts
   | "GAP-OBSERVERS" // no grain observers / client object references
   | "GAP-GRAIN-EXTENSION" // no IGrainExtension equivalent
-  | "GAP-MAY-INTERLEAVE" // no MayInterleave predicate
   | "GAP-MGMT-GRAIN" // no management grain / silo-control system targets
   | "GAP-SERIALIZER-POLYMORPHISM" // serializer lacks polymorphism/cycles
   | "GAP-STREAM-FAILURE-HANDLER" // streams lack IStreamFailureHandler

@@ -1,4 +1,5 @@
 import type { InvokeMethodOptions } from "@tsva/core/invoke-options";
+import type { MayInterleavePredicate } from "@tsva/core/grain-metadata";
 
 /**
  * One unit of work admitted to a grain's activation. A turn is the whole
@@ -9,12 +10,21 @@ export interface Turn<R> {
   readonly options: InvokeMethodOptions;
   /** Call-chain reentrancy id, propagated along a chain of grain calls. */
   readonly reentrancyId?: string;
+  /** The grain method this turn dispatches, if any (system turns have none). */
+  readonly method?: string;
+  readonly args?: readonly unknown[];
   run(): Promise<R>;
 }
 
 export interface TurnSchedulerOptions {
   /** A fully reentrant grain: every turn may interleave. */
   reentrant?: boolean;
+  /**
+   * The grain's `[MayInterleave]`-equivalent admission predicate, if it
+   * declared one via `@mayInterleave()`. `undefined` (the default) means the
+   * grain declared no predicate — admission ignores it entirely.
+   */
+  mayInterleave?: MayInterleavePredicate;
 }
 
 interface QueuedTurn {
@@ -37,16 +47,28 @@ interface RunningTurn {
  * - `alwaysInterleave`        -> admit
  * - `readOnly` and all running read-only -> admit
  * - reentrancy id is an active call-chain section -> admit
+ * - a configured `mayInterleave` predicate matches -> admit
  * - otherwise                 -> queue (FIFO for exclusive turns)
  */
 export class TurnScheduler {
   private readonly reentrant: boolean;
+  private mayInterleavePredicate: MayInterleavePredicate | undefined;
   private readonly queue: QueuedTurn[] = [];
   private readonly running = new Set<RunningTurn>();
   private readonly reentrantSections = new Map<string, number>();
 
   constructor(options: TurnSchedulerOptions = {}) {
     this.reentrant = options.reentrant ?? false;
+    this.mayInterleavePredicate = options.mayInterleave;
+  }
+
+  /**
+   * Late-bind (or clear) the grain's `mayInterleave` predicate. Exists because
+   * the predicate is resolved from the grain's own metadata, which is only
+   * known once its instance is constructed — after the scheduler itself.
+   */
+  setMayInterleave(predicate: MayInterleavePredicate | undefined): void {
+    this.mayInterleavePredicate = predicate;
   }
 
   /** True while any turn is running or queued. */
@@ -88,6 +110,9 @@ export class TurnScheduler {
     if (turn.reentrancyId !== undefined && this.reentrantSections.has(turn.reentrancyId)) {
       return true;
     }
+    if (this.mayInterleavePredicate !== undefined && this.matchesMayInterleave(turn)) {
+      return true;
+    }
     return false;
   }
 
@@ -96,6 +121,16 @@ export class TurnScheduler {
       if (!r.options.readOnly) return false;
     }
     return true;
+  }
+
+  /**
+   * True when the grain's `mayInterleave` predicate admits the *incoming* turn
+   * (Orleans evaluates `[MayInterleave]` on the arriving request only — the
+   * request itself declares whether it is safe to interleave with whatever is
+   * running, not the other way around).
+   */
+  private matchesMayInterleave(turn: Turn<unknown>): boolean {
+    return turn.method !== undefined && this.mayInterleavePredicate!(turn.method, turn.args ?? []);
   }
 
   private start(item: QueuedTurn): void {

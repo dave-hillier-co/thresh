@@ -14,6 +14,7 @@ import { GrainCallError, RejectionError } from "@tsva/core/errors";
 import type { Grain } from "@tsva/core/grain";
 import type { GrainContext } from "@tsva/core/grain-context";
 import type { GrainId } from "@tsva/core/grain-id";
+import { getGrainMetadata, type GrainConstructor } from "@tsva/core/grain-metadata";
 import { MigrationBag } from "@tsva/core/grain-migration-participant";
 import type { GrainRuntime } from "@tsva/core/grain-runtime";
 import type { GrainTimer } from "@tsva/core/grain-timer";
@@ -59,9 +60,27 @@ export class ActivationData implements GrainContext {
   readonly activationId: ActivationId;
   readonly scheduler: TurnScheduler;
 
-  instance!: Grain;
+  private _instance!: Grain;
   runtime!: GrainRuntime;
   state: ActivationState = "creating";
+
+  get instance(): Grain {
+    return this._instance;
+  }
+
+  /**
+   * Binds the grain instance and, in the same step, resolves its
+   * `mayInterleave` metadata (set by `@mayInterleave()`, absent by default)
+   * onto the scheduler. Metadata is only known once the instance exists —
+   * after the scheduler itself was constructed — so this late-binds it rather
+   * than threading it through the constructor like `reentrant`.
+   */
+  set instance(value: Grain) {
+    this._instance = value;
+    this.scheduler.setMayInterleave(
+      getGrainMetadata(value.constructor as GrainConstructor)?.mayInterleave,
+    );
+  }
 
   /**
    * The error thrown from pre-activation/`onActivate` when activation failed,
@@ -172,6 +191,8 @@ export class ActivationData implements GrainContext {
       .schedule({
         options: req.options,
         reentrancyId: req.reentrancyId,
+        method: req.method,
+        args: req.args,
         run: () => {
           if (this.state === "invalid" || this.state === "deactivating") {
             // A failed activation surfaces the original activation error to the
