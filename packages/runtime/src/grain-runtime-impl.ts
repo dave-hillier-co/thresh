@@ -2,7 +2,7 @@ import { durationToMs, type Duration } from "@tsva/core/duration";
 import type { GrainInterface } from "@tsva/core/grain-interface";
 import type { GrainKey } from "@tsva/core/grain-key";
 import type { GrainRuntime } from "@tsva/core/grain-runtime";
-import type { GrainTimer } from "@tsva/core/grain-timer";
+import type { GrainTimer, TimerOptions } from "@tsva/core/grain-timer";
 import type { GrainReminder, ReminderEntry, ReminderRegistry } from "@tsva/core/reminder";
 import type { DurableJob, DurableJobScheduler, ScheduleJobRequest } from "@tsva/core/durable-job";
 import type { SiloAddress } from "@tsva/core/silo-address";
@@ -34,8 +34,13 @@ export class GrainRuntimeImpl implements GrainRuntime {
     return this.factory.getGrain(def, key);
   }
 
-  registerTimer(callback: () => Promise<void>, due: Duration, period?: Duration): GrainTimer {
-    return this.activation.registerTimer(callback, due, period);
+  registerTimer(
+    callback: () => Promise<void>,
+    due: Duration,
+    period?: Duration,
+    options?: TimerOptions,
+  ): GrainTimer {
+    return this.activation.registerTimer(callback, due, period, options);
   }
 
   registerReminder(name: string, due: Duration, period: Duration): Promise<void> {

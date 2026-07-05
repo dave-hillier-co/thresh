@@ -43,10 +43,17 @@ export class TimerCallGrain extends Grain implements ITimerCallGrain {
 
   async runSelfDisposingTimer(): Promise<void> {
     await new Promise<void>((resolve) => {
-      const timer = this.runtime.registerTimer(async () => {
-        timer.dispose();
-        resolve();
-      }, period0);
+      // Interleave so this callback can run while the outer call awaits it on a
+      // non-reentrant grain (Orleans' GrainTimerCreationOptions.Interleave).
+      const timer = this.runtime.registerTimer(
+        async () => {
+          timer.dispose();
+          resolve();
+        },
+        period0,
+        undefined,
+        { interleave: true },
+      );
       this.timers.set("self-disposing", timer);
     });
   }

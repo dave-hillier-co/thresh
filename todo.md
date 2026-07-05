@@ -68,7 +68,7 @@ shows per-tag counts). One-line definitions live on the `GapTag` union. Grouped 
 - [ ] **Activation & lifecycle** — `GAP-LIFECYCLE-SUBJECT`, `GAP-GRAIN-SERVICE`, `GAP-STORAGE-FACET`.
 - [ ] **Request context** — `GAP-REQUEST-CONTEXT` (expose on `@tsva/core` public surface),
       `GAP-CLIENT-REQUEST-CONTEXT`, `GAP-CALL-FILTER-CLIENT-LAYER`, `GAP-CLIENT-SILO-SEPARATION`.
-- [ ] **Timers** — `GAP-TIMER-INTERLEAVE` (per-timer interleave option), `GAP-TIMER-VALIDATION`.
+- [ ] **Timers** — `GAP-TIMER-VALIDATION` (callback-initiated Change/dispose portions).
 - [ ] **Placement & rebalancing** — `GAP-PLACEMENT-FILTER-DIRECTORS`, `GAP-PLACEMENT-INTROSPECTION`,
       `GAP-REBALANCER-CONTROL`, `GAP-ACTIVATION-REPARTITIONING`, `GAP-LOAD-SHEDDING`.
 - [ ] **Streams** — `GAP-STREAM-IMPLICIT-MEMORY` (implicit subscriptions on the memory provider),

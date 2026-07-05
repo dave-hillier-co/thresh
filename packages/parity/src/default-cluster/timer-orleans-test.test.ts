@@ -128,9 +128,20 @@ describe("DefaultCluster.Tests.TimerTests.TimerOrleansTest", () => {
   // `registerTimer` has no per-timer interleave option (`GrainRuntime.registerTimer`
   // hard-codes `{}` invoke options for every timer turn), so the same pattern
   // deadlocks here instead.
-  orleansTest.gap(
-    "GAP-TIMER-INTERLEAVE",
+  orleansTest(
     "DefaultCluster.Tests.TimerTests.TimerOrleansTest.GrainTimer_DisposeFromCallback",
+    async () => {
+      // The grain registers an interleaving self-disposing timer and awaits its
+      // callback; on a non-reentrant grain the callback can only run (and let
+      // the outer call settle) because it interleaves. Start the call, fire the
+      // due timer, then confirm the outer call completes rather than deadlocks.
+      const grain = cluster.getGrain(ITimerCallGrain, randomIntegerKey());
+      const running = grain.runSelfDisposingTimer();
+      await flush();
+      time.advance(1);
+      await flush();
+      await running;
+    },
   );
 
   // Same placement-dependent undefined/null inconsistency as AsyncTimerTest_GrainCall.

@@ -17,7 +17,8 @@ import type { GrainId } from "@tsva/core/grain-id";
 import { getGrainMetadata, type GrainConstructor } from "@tsva/core/grain-metadata";
 import { MigrationBag } from "@tsva/core/grain-migration-participant";
 import type { GrainRuntime } from "@tsva/core/grain-runtime";
-import type { GrainTimer } from "@tsva/core/grain-timer";
+import type { GrainTimer, TimerOptions } from "@tsva/core/grain-timer";
+import type { InvokeMethodOptions } from "@tsva/core/invoke-options";
 import type { ActivationReason, DeactivationReason } from "@tsva/core/reasons";
 import type { SiloAddress } from "@tsva/core/silo-address";
 import { migrationParticipantsOf } from "@tsva/runtime/migration-participants";
@@ -276,10 +277,19 @@ export class ActivationData implements GrainContext {
   }
 
   /** Register a non-durable timer that fires as a turn; cancelled on deactivation. */
-  registerTimer(callback: () => Promise<void>, due: Duration, period?: Duration): GrainTimer {
+  registerTimer(
+    callback: () => Promise<void>,
+    due: Duration,
+    period?: Duration,
+    options?: TimerOptions,
+  ): GrainTimer {
+    // An interleaving timer's turns carry `alwaysInterleave` so the callback can
+    // run while a non-reentrant call awaits it (Orleans' Interleave option);
+    // otherwise the turn is exclusive like any grain call.
+    const turnOptions: InvokeMethodOptions = options?.interleave ? { alwaysInterleave: true } : {};
     const timer = new GrainTimerImpl(
       this.time,
-      (cb) => this.scheduler.schedule({ options: {}, run: cb }),
+      (cb) => this.scheduler.schedule({ options: turnOptions, run: cb }),
       callback,
       due,
       period,
