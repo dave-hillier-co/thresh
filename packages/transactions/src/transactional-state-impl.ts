@@ -13,6 +13,7 @@ import type {
 } from "@tsva/core/transactional-storage";
 import { requireTransaction } from "@tsva/runtime/invocation-context";
 import { systemTimeProvider, type TimeProvider } from "@tsva/core/time-provider";
+import { TransactionReadOnlyViolatedError } from "@tsva/core/errors";
 import { ReaderWriterLock } from "@tsva/transactions/reader-writer-lock";
 import { EMPTY_METADATA } from "@tsva/transactions/transactional-storage-apply";
 import {
@@ -118,6 +119,9 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
 
   async performUpdate<R>(update: (state: T) => R): Promise<R> {
     const tx = requireTransaction();
+    // A read-only transaction may never write, regardless of contention —
+    // reject before touching the lock (Orleans: OrleansReadOnlyViolatedException).
+    if (tx.readOnly) throw new TransactionReadOnlyViolatedError(tx.id);
     await this.lock.enter(tx.id, tx.timeStamp, "write", {
       timeoutMs: this.options.lockTimeoutMs,
     });

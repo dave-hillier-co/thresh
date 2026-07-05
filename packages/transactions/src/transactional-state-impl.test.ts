@@ -6,7 +6,7 @@ import type { TransactionInfo } from "@tsva/core/transaction-info";
 import { invocationContext } from "@tsva/runtime/invocation-context";
 import { systemTimeProvider } from "@tsva/runtime/time-provider";
 import { TransactionAgent } from "@tsva/runtime/transaction-agent";
-import { TransactionAbortedError } from "@tsva/core/errors";
+import { TransactionAbortedError, TransactionReadOnlyViolatedError } from "@tsva/core/errors";
 import { MemoryTransactionalStorage } from "@tsva/transactions/memory-transactional-storage";
 import { TransactionalStateImpl } from "@tsva/transactions/transactional-state-impl";
 
@@ -86,6 +86,26 @@ describe("TransactionalStateImpl (Slice 2)", () => {
     await agent.resolve(older);
     const t = agent.startTransaction();
     expect(await inTransaction(t, () => state.performRead((s) => s.cents))).toBe(1);
+  });
+
+  it("rejects a write attempted by a read-only transaction with a read-only-violation error", async () => {
+    const state = await newState();
+    const readOnly = agent.startTransaction(true);
+
+    await expect(
+      inTransaction(readOnly, () => state.performUpdate((s) => (s.cents = 500))),
+    ).rejects.toBeInstanceOf(TransactionReadOnlyViolatedError);
+    // The specific error is still a TransactionAbortedError (Orleans:
+    // OrleansReadOnlyViolatedException extends OrleansTransactionAbortedException).
+    await expect(
+      inTransaction(readOnly, () => state.performUpdate((s) => (s.cents = 500))),
+    ).rejects.toBeInstanceOf(TransactionAbortedError);
+
+    // No lock was taken and no state was staged: a later transaction reads
+    // straight through to the original committed value.
+    const t2 = agent.startTransaction();
+    expect(await inTransaction(t2, () => state.performRead((s) => s.cents))).toBe(100);
+    await agent.resolve(t2);
   });
 
   it("aborts a contending transaction whose lock-acquisition deadline elapses, cascading to its participants", async () => {

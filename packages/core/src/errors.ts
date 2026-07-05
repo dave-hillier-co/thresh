@@ -66,3 +66,17 @@ export class TransactionAbortedError extends Error {
     this.name = "TransactionAbortedError";
   }
 }
+
+/**
+ * Raised when a read-only transaction attempts to write to a grain's
+ * transactional state (Orleans `OrleansReadOnlyViolatedException`, a subtype
+ * of `OrleansTransactionAbortedException`). Thrown by
+ * `TransactionalStateImpl.performUpdate` (`@tsva/transactions`) before any
+ * lock is acquired, since the write is illegal regardless of contention.
+ */
+export class TransactionReadOnlyViolatedError extends TransactionAbortedError {
+  constructor(transactionId: string) {
+    super(transactionId, "attempted to write to a grain in a read-only transaction");
+    this.name = "TransactionReadOnlyViolatedError";
+  }
+}
