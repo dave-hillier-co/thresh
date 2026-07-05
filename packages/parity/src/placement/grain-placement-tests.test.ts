@@ -1,0 +1,111 @@
+// Ported from dotnet/orleans test/Orleans.Placement.Tests/General/GrainPlacementTests.cs @ v10.1.0 (MIT).
+//
+// Upstream observes placement via `GetRuntimeInstanceId()`/`GetEndpoint()`, a
+// grain reporting its own hosting silo address. Nothing here reaches that
+// address from inside a grain (GAP-PLACEMENT-INTROSPECTION below), so the
+// ported tests instead observe *which* silo holds the activation externally,
+// via `SiloHost.isActive` — the same fact the upstream assertions turn on
+// (same silo / different silos / more than one distinct silo), just read from
+// outside the grain rather than reported by it.
+import { afterAll, beforeAll, describe, expect } from "vitest";
+import { GrainId } from "@tsva/core/grain-id";
+import { getGrainMetadata } from "@tsva/core/grain-metadata";
+import { orleansTest } from "@tsva/testing/orleans-test";
+import { TestCluster, type TestSiloHandle } from "@tsva/testing/test-cluster";
+import {
+  IPreferLocalPlacementTestGrain,
+  IRandomPlacementTestGrain,
+  PreferLocalPlacementTestGrain,
+  RandomPlacementTestGrain,
+} from "@tsva/parity/grains/impl/placement-test-grain";
+import { randomGuidKey } from "@tsva/parity/support/keys";
+
+const randomGrainType = getGrainMetadata(RandomPlacementTestGrain)!.grainType;
+const preferLocalGrainType = getGrainMetadata(PreferLocalPlacementTestGrain)!.grainType;
+
+function hostOf(cluster: TestCluster, grainId: GrainId): TestSiloHandle | undefined {
+  return cluster.silos.find((s) => s.host.isActive(grainId));
+}
+
+describe("UnitTests.General.GrainPlacementTests", () => {
+  let cluster: TestCluster;
+
+  beforeAll(async () => {
+    cluster = await TestCluster.start({
+      initialSilos: 2,
+      grains: [
+        { ctor: RandomPlacementTestGrain, interfaces: [IRandomPlacementTestGrain] },
+        { ctor: PreferLocalPlacementTestGrain, interfaces: [IPreferLocalPlacementTestGrain] },
+      ],
+    });
+  });
+
+  afterAll(async () => {
+    await cluster.dispose();
+  });
+
+  orleansTest.gap(
+    "GAP-PLACEMENT-INTROSPECTION",
+    "UnitTests.General.GrainPlacementTests.VerifyDefaultPlacement",
+  );
+
+  orleansTest(
+    "UnitTests.General.GrainPlacementTests.RandomlyPlacedGrainShouldPlaceActivationsRandomly",
+    async () => {
+      const places = new Set<string>();
+      for (let i = 0; i < 20; i++) {
+        const key = randomGuidKey();
+        await cluster.getGrain(IRandomPlacementTestGrain, key).nop();
+        const host = hostOf(cluster, new GrainId(randomGrainType, key));
+        places.add(host?.address.podName ?? `unknown-${i}`);
+      }
+      // Consider: it seems like we should check that we get close to a 50/50
+      // split for placement. Will randomly fail one in a million times if the
+      // RNG is good :-)
+      expect(places.size).toBeGreaterThan(1);
+    },
+  );
+
+  // Upstream also has a commented-out PreferLocalPlacedGrainShouldPlaceActivationsLocally_OneHop
+  // ([Fact] itself commented out); it is dead code, not an active test method.
+
+  orleansTest(
+    "UnitTests.General.GrainPlacementTests.PreferLocalPlacedGrainShouldPlaceActivationsLocally_TwoHops",
+    async () => {
+      const numGrains = 20;
+      const randomKeys = Array.from({ length: numGrains }, () => randomGuidKey());
+
+      for (const key of randomKeys) {
+        await cluster.getGrain(IRandomPlacementTestGrain, key).nop();
+      }
+      const randomPlaces = randomKeys.map(
+        (key) => hostOf(cluster, new GrainId(randomGrainType, key))?.address.podName,
+      );
+
+      for (const key of randomKeys) {
+        // Upstream: `grain.StartPreferLocalGrain(grain.GetPrimaryKey())` — the
+        // random grain's own key doubles as the prefer-local grain's key.
+        await cluster.getGrain(IRandomPlacementTestGrain, key).startPreferLocalGrain(key);
+      }
+      const preferLocalPlaces = randomKeys.map(
+        (key) => hostOf(cluster, new GrainId(preferLocalGrainType, key))?.address.podName,
+      );
+
+      // Check that every "prefer local grain" was placed on the same silo with
+      // its requesting random grain.
+      for (let i = 0; i < numGrains; i++) {
+        expect(preferLocalPlaces[i]).toBe(randomPlaces[i]);
+      }
+    },
+  );
+
+  orleansTest.gap(
+    "GAP-STATELESS-WORKER",
+    "UnitTests.General.GrainPlacementTests.StatelessWorkerShouldCreateSpecifiedActivationCount",
+  );
+
+  orleansTest.gap(
+    "GAP-STATELESS-WORKER",
+    "UnitTests.General.GrainPlacementTests.StatelessWorkerGrainShouldCreateActivationsOnLocalSilo",
+  );
+});

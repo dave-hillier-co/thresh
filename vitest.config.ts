@@ -18,7 +18,26 @@ export default defineConfig({
     }),
   ],
   test: {
-    include: ["packages/*/src/**/*.test.ts", "examples/*/src/**/*.test.ts"],
     environment: "node",
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: "unit",
+          include: ["packages/*/src/**/*.test.ts", "examples/*/src/**/*.test.ts"],
+          exclude: ["packages/parity/**"],
+        },
+      },
+      {
+        // The Orleans parity suite (packages/parity): multi-silo functional
+        // tests, so a longer per-test budget than the unit project.
+        extends: true,
+        test: {
+          name: "parity",
+          include: ["packages/parity/src/**/*.test.ts"],
+          testTimeout: 30_000,
+        },
+      },
+    ],
   },
 });

@@ -1,0 +1,230 @@
+// Ported from dotnet/orleans test/Orleans.DefaultCluster.Tests/Migration/MigrationTests.cs @ v10.1.0 (MIT).
+//
+// Upstream loops each case up to 100 times (partly stress-testing the
+// migration path, partly retrying until an undirected migration happens to
+// land somewhere new). This framework's undirected migration always excludes
+// the local silo when choosing among the cluster (see `chooseMigrationTarget`),
+// so a single attempt is guaranteed to move the activation; loop counts are
+// reduced accordingly without weakening any assertion inside the loop.
+//
+// Migration only runs on the collection sweep once an activation goes stale
+// (see `ActivationData.isStale`), so every case sets a short per-grain
+// `collectionAgeSeconds` and drives a `FakeTimeProvider` past it plus the
+// default collection interval to force a sweep.
+import { afterAll, beforeAll, describe, expect } from "vitest";
+import { FakeTimeProvider } from "@tsva/core/test-support/fake-time-provider";
+import { GrainId } from "@tsva/core/grain-id";
+import { getGrainMetadata } from "@tsva/core/grain-metadata";
+import { orleansTest } from "@tsva/testing/orleans-test";
+import { TestCluster, type TestSiloHandle } from "@tsva/testing/test-cluster";
+import { waitFor } from "@tsva/testing/wait";
+import {
+  IMigrationTestGrain,
+  IMigrationTestGrainGrainOfT,
+  IMigrationTestGrainIPersistentStateOfT,
+  MigrationTestGrain,
+  MigrationTestGrainWithInjectedMemoryStorage,
+  MigrationTestGrainWithMemoryStorage,
+} from "@tsva/parity/grains/impl/migration-test-grain";
+import { randomIntegerKey } from "@tsva/parity/support/keys";
+
+const migrationGrainType = getGrainMetadata(MigrationTestGrain)!.grainType;
+const grainOfTGrainType = getGrainMetadata(MigrationTestGrainWithMemoryStorage)!.grainType;
+const persistentStateOfTGrainType = getGrainMetadata(
+  MigrationTestGrainWithInjectedMemoryStorage,
+)!.grainType;
+
+function hostOf(cluster: TestCluster, grainId: GrainId): TestSiloHandle | undefined {
+  return cluster.silos.find((s) => s.host.isActive(grainId));
+}
+
+// Fires the collection sweep (default interval 60s) well past the 1s
+// `collectionAgeSeconds` every migration-test grain is registered with.
+async function forceMigrationSweep(time: FakeTimeProvider): Promise<void> {
+  time.advance(65_000);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+describe("DefaultCluster.Tests.General.MigrationTests", () => {
+  let cluster: TestCluster;
+  let time: FakeTimeProvider;
+
+  beforeAll(async () => {
+    time = new FakeTimeProvider();
+    cluster = await TestCluster.start({
+      initialSilos: 2,
+      time,
+      grains: [
+        { ctor: MigrationTestGrain, interfaces: [IMigrationTestGrain] },
+        { ctor: MigrationTestGrainWithMemoryStorage, interfaces: [IMigrationTestGrainGrainOfT] },
+        {
+          ctor: MigrationTestGrainWithInjectedMemoryStorage,
+          interfaces: [IMigrationTestGrainIPersistentStateOfT],
+        },
+      ],
+    });
+  });
+
+  afterAll(async () => {
+    await cluster.dispose();
+  });
+
+  orleansTest("DefaultCluster.Tests.General.MigrationTests.BasicGrainMigrationTest", async () => {
+    for (let i = 0; i < 3; i++) {
+      const key = randomIntegerKey();
+      const grain = cluster.getGrain(IMigrationTestGrain, key);
+      const grainId = new GrainId(migrationGrainType, key);
+      const expectedState = Math.floor(Math.random() * 1_000_000);
+
+      // Force activation so there is an original host to move away from.
+      await grain.setState(0);
+      const originalHost = hostOf(cluster, grainId);
+
+      await grain.migrateOnIdle();
+      await grain.setState(expectedState);
+      await forceMigrationSweep(time);
+      await waitFor(() => {
+        const host = hostOf(cluster, grainId);
+        return host !== undefined && host !== originalHost;
+      });
+
+      expect(await grain.getState()).toBe(expectedState);
+    }
+  });
+
+  // The collector's `collectIdle` decides whether an activation "wants
+  // migration" *before* it invokes `onDeactivate` (see `catalog.ts`), so a
+  // `migrateOnIdle` call made from inside `onDeactivate` — as upstream's grain
+  // does to trigger migration from that hook — never takes effect for the
+  // sweep already in progress: the activation is deactivated in place instead.
+  orleansTest.gap(
+    "GAP-MIGRATE-FROM-DEACTIVATE",
+    "DefaultCluster.Tests.General.MigrationTests.InitiateMigrationFromOnDeactivateAsyncTest",
+  );
+
+  orleansTest(
+    "DefaultCluster.Tests.General.MigrationTests.DirectedGrainMigrationTest",
+    async () => {
+      for (let i = 0; i < 3; i++) {
+        const key = randomIntegerKey();
+        const grain = cluster.getGrain(IMigrationTestGrain, key);
+        const grainId = new GrainId(migrationGrainType, key);
+        const expectedState = Math.floor(Math.random() * 1_000_000);
+
+        await grain.setState(expectedState);
+        const originalHost = hostOf(cluster, grainId);
+        const targetHost = cluster.silos.find((s) => s !== originalHost)!;
+
+        await grain.migrateOnIdle(targetHost.address);
+        await forceMigrationSweep(time);
+        await waitFor(() => hostOf(cluster, grainId) === targetHost);
+
+        expect(hostOf(cluster, grainId)).toBe(targetHost);
+        expect(await grain.getState()).toBe(expectedState);
+      }
+    },
+  );
+
+  orleansTest.gap(
+    "GAP-REQUEST-CONTEXT",
+    "DefaultCluster.Tests.General.MigrationTests.MultiGrainDirectedMigrationTest",
+  );
+
+  orleansTest(
+    "DefaultCluster.Tests.General.MigrationTests.DirectedGrainMigrationTest_GrainOfT",
+    async () => {
+      for (let i = 0; i < 3; i++) {
+        const key = randomIntegerKey();
+        const grain = cluster.getGrain(IMigrationTestGrainGrainOfT, key);
+        const grainId = new GrainId(grainOfTGrainType, key);
+        const expectedState = Math.floor(Math.random() * 1_000_000);
+
+        await grain.setState(expectedState);
+        const originalHost = hostOf(cluster, grainId);
+        const targetHost = cluster.silos.find((s) => s !== originalHost)!;
+
+        await grain.migrateOnIdle(targetHost.address);
+        await forceMigrationSweep(time);
+        await waitFor(() => hostOf(cluster, grainId) === targetHost);
+
+        expect(hostOf(cluster, grainId)).toBe(targetHost);
+        expect(await grain.getState()).toBe(expectedState);
+      }
+    },
+  );
+
+  orleansTest(
+    "DefaultCluster.Tests.General.MigrationTests.DirectedGrainMigrationTest_IPersistentStateOfT",
+    async () => {
+      for (let i = 0; i < 3; i++) {
+        const key = randomIntegerKey();
+        const grain = cluster.getGrain(IMigrationTestGrainIPersistentStateOfT, key);
+        const grainId = new GrainId(persistentStateOfTGrainType, key);
+        const expectedA = Math.floor(Math.random() * 1_000_000);
+        const expectedB = Math.floor(Math.random() * 1_000_000);
+
+        await grain.setState(expectedA, expectedB);
+        const originalHost = hostOf(cluster, grainId);
+        const targetHost = cluster.silos.find((s) => s !== originalHost)!;
+
+        await grain.migrateOnIdle(targetHost.address);
+        await forceMigrationSweep(time);
+        await waitFor(() => hostOf(cluster, grainId) === targetHost);
+
+        expect(hostOf(cluster, grainId)).toBe(targetHost);
+        const [actualA, actualB] = await grain.getState();
+        expect(actualA).toBe(expectedA);
+        expect(actualB).toBe(expectedB);
+      }
+    },
+  );
+
+  orleansTest.gap(
+    "GAP-REQUEST-CONTEXT",
+    "DefaultCluster.Tests.General.MigrationTests.FailDehydrationTest",
+  );
+
+  // Framework bug: after a failed `onRehydrate` the target's directory entry
+  // still points at the (now-invalid) migrated activation. The next call routes
+  // there via the directory, finds it invalid, and re-registers — but the
+  // registration/dispatch loop between the directory and this same silo never
+  // converges on a fresh activation id, so repeated calls recurse without
+  // bound and OOM the process rather than settling on a plain reactivation.
+  // Same symptom as GAP-BUG-ACTIVATION-RETRY-STORM (repeated calls to an
+  // activation that never settles), triggered here via a failed migration
+  // rather than an always-throwing `onActivate`.
+  orleansTest.gap(
+    "GAP-BUG-ACTIVATION-RETRY-STORM",
+    "DefaultCluster.Tests.General.MigrationTests.FailRehydrationTest",
+    async () => {
+      const key = randomIntegerKey();
+      const grain = cluster.getGrain(IMigrationTestGrain, key);
+      const grainId = new GrainId(migrationGrainType, key);
+      const expectedState = Math.floor(Math.random() * 1_000_000);
+
+      await grain.setState(expectedState);
+      const originalHost = hostOf(cluster, grainId);
+      const targetHost = cluster.silos.find((s) => s !== originalHost)!;
+
+      await grain.failNextRehydrate();
+      await grain.migrateOnIdle(targetHost.address);
+      await forceMigrationSweep(time);
+
+      // Rehydration fails on the target, so the migrated activation is
+      // discarded there; the directory still points at the target, so the next
+      // call reactivates fresh (without the carried state) on that same silo.
+      await waitFor(async () => {
+        try {
+          await grain.getState();
+        } catch {
+          return false;
+        }
+        return hostOf(cluster, grainId) === targetHost;
+      });
+
+      expect(hostOf(cluster, grainId)).toBe(targetHost);
+      // The grain lost its state during the failed migration.
+      expect(await grain.getState()).not.toBe(expectedState);
+    },
+  );
+});
