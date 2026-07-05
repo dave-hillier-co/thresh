@@ -11,7 +11,7 @@ import { isActivationBound, type StreamProvider } from "@tsva/core/stream";
 import type { ActivationData } from "@tsva/runtime/activation";
 import { ActivationStreamProvider } from "@tsva/runtime/activation-stream-provider";
 import type { GrainFactory } from "@tsva/runtime/grain-factory";
-import { requestContext } from "@tsva/runtime/invocation-context";
+import { currentTransaction, requestContext } from "@tsva/runtime/invocation-context";
 
 export interface GrainRuntimeServices {
   reminders?: () => ReminderRegistry | undefined;
@@ -114,6 +114,14 @@ export class GrainRuntimeImpl implements GrainRuntime {
 
   setRequestContext(key: string, value: string): void {
     requestContext.set(key, value);
+  }
+
+  getTransactionId(): string | undefined {
+    return currentTransaction()?.id;
+  }
+
+  isInTransaction(): boolean {
+    return currentTransaction() !== undefined;
   }
 
   private requireReminders(): ReminderRegistry {

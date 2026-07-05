@@ -59,4 +59,14 @@ export interface GrainRuntime {
    * same turn; does not affect the caller's own context.
    */
   setRequestContext(key: string, value: string): void;
+  /**
+   * The id of the transaction this turn runs inside, or `undefined` outside
+   * any transaction (Orleans `TransactionContext.GetTransactionInfo()?.Id`).
+   * Whether one is present is decided by the invoked method's
+   * `TransactionOption` (see `InvokeMethodOptions.transaction`), not by this
+   * accessor — it only reports the outcome of that boundary resolution.
+   */
+  getTransactionId(): string | undefined;
+  /** Whether this turn runs inside a transaction, ambient or just begun. */
+  isInTransaction(): boolean;
 }
