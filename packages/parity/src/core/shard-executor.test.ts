@@ -20,8 +20,21 @@ import { ConcurrencyLimiter, ShardExecutor, type RunJob } from "@tsva/durable-jo
 const OPTIONS = {
   shardDurationMs: 3_600_000,
   maxConcurrentJobsPerSilo: 10,
-  slowStartInitialConcurrency: 1,
+  // Equal to maxConcurrentJobsPerSilo: none of these tests exercise slow-start
+  // itself (that's RunShardAsync_WithSlowStart_GraduallyIncreasesConcurrency
+  // below, which overrides this), so the ceiling should never be the thing
+  // that throttles admission here — several tests enqueue multiple
+  // simultaneously-due jobs against a FakeTimeProvider and expect them all to
+  // run out within a single `advance()` + flush, which a low ceiling (now
+  // checked against jobs actually in flight, not just admitted-this-cycle)
+  // would stall on since FakeTimeProvider never yields to the completions
+  // that would otherwise free it up mid-`advance()`.
+  slowStartInitialConcurrency: 10,
   slowStartGrowthFactor: 2,
+  // Large enough that none of these tests' brief FakeTimeProvider advances (or
+  // short real-clock waits) cross an interval boundary — slow-start growth is
+  // exercised specifically by RunShardAsync_WithSlowStart_GraduallyIncreasesConcurrency below.
+  slowStartIntervalMs: 1_000_000,
   overloadBackoffMs: 50,
   shouldRetry: defaultShouldRetry,
 };
@@ -357,50 +370,46 @@ describe("NonSilo.Tests.ScheduledJobs.ShardExecutorTests", () => {
   );
 
   // Orleans' slow-start ramps the concurrency ceiling on a real-time interval
-  // (`slowStartInterval`, e.g. every 100ms). This framework's ShardExecutor grows
-  // the ceiling on every poll cycle that did real work (`ShardExecutorOptions`
-  // has no interval field at all — see shard-executor.ts's `poll()`), with no
-  // minimum elapsed-time gate between cycles. Under a large backlog, requeued
-  // jobs are rescheduled at the *same* due time, so the poll loop cycles (and
-  // the ceiling grows 2 → 4 → 8 → 16) within a handful of same-tick 0ms timers —
-  // real elapsed wall-clock milliseconds, not "gradually" as Orleans intends.
-  // Faithfully porting the upstream assertion (only the initial concurrency runs
-  // in the first few milliseconds) fails because ramp-up is not time-gated here.
-  orleansTest.gap(
-    "GAP-BUG-DURABLE-JOBS-QUEUE",
-    `${NS}.RunShardAsync_WithSlowStart_GraduallyIncreasesConcurrency`,
-    async () => {
-      const store = new MemoryJobShardStore();
-      const limiter = new ConcurrencyLimiter(16);
-      let current = 0;
-      let maxObserved = 0;
-      const run: RunJob = async () => {
-        current += 1;
-        maxObserved = Math.max(maxObserved, current);
-        await new Promise((r) => setTimeout(r, 20));
-        current -= 1;
-        return completed;
-      };
-      for (let i = 0; i < 20; i++) await store.persistAdd(job(`job-${i}`, 0));
-      const exec = new ShardExecutor(0, store, systemTimeProvider, limiter, run, () => false, {
-        ...OPTIONS,
-        maxConcurrentJobsPerSilo: 16,
-        slowStartInitialConcurrency: 2,
-        slowStartGrowthFactor: 2,
-      });
-      await exec.load();
+  // (`slowStartInterval`, e.g. every 100ms). This framework's ShardExecutor
+  // options carry the equivalent `slowStartIntervalMs`, and the ceiling only
+  // grows once that much wall-clock time (per the injected TimeProvider) has
+  // elapsed since the shard started — a large backlog cannot ramp straight to
+  // max concurrency within a handful of same-tick poll cycles.
+  orleansTest(`${NS}.RunShardAsync_WithSlowStart_GraduallyIncreasesConcurrency`, async () => {
+    const store = new MemoryJobShardStore();
+    const limiter = new ConcurrencyLimiter(16);
+    let current = 0;
+    let maxObserved = 0;
+    const run: RunJob = async () => {
+      current += 1;
+      maxObserved = Math.max(maxObserved, current);
+      await new Promise((r) => setTimeout(r, 20));
+      current -= 1;
+      return completed;
+    };
+    for (let i = 0; i < 20; i++) await store.persistAdd(job(`job-${i}`, 0));
+    const exec = new ShardExecutor(0, store, systemTimeProvider, limiter, run, () => false, {
+      ...OPTIONS,
+      maxConcurrentJobsPerSilo: 16,
+      slowStartInitialConcurrency: 2,
+      slowStartGrowthFactor: 2,
+      slowStartIntervalMs: 100,
+    });
+    await exec.load();
 
-      // First cycle: only the slow-start initial concurrency (2) runs at once.
-      await new Promise((r) => setTimeout(r, 5));
-      expect(maxObserved).toBeLessThanOrEqual(2);
+    // Well before the first job's own 20ms run completes (and far short of the
+    // 100ms slowStartIntervalMs), only the slow-start initial concurrency (2)
+    // has run — a backlog of same-instant due jobs re-polls on a tight loop,
+    // but must not ramp the ceiling past its initial value in that time.
+    await new Promise((r) => setTimeout(r, 15));
+    expect(maxObserved).toBeLessThanOrEqual(2);
 
-      await new Promise((r) => setTimeout(r, 500));
-      exec.stop();
+    await new Promise((r) => setTimeout(r, 500));
+    exec.stop();
 
-      // Across the whole run the ceiling ramped above the initial concurrency.
-      expect(maxObserved).toBeGreaterThan(2);
-    },
-  );
+    // Across the whole run the ceiling ramped above the initial concurrency.
+    expect(maxObserved).toBeGreaterThan(2);
+  });
 
   orleansTest(
     `${NS}.RunShardAsync_WithSlowStartDisabled_UsesFullConcurrencyImmediately`,

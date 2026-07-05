@@ -71,7 +71,6 @@ export type GapTag =
   // Confirmed framework defects exposed by ported tests: fix the bug, then
   // un-gap the test. Each has a todo.md entry under "Bugs found by the parity suite".
   | "GAP-BUG-CALL-FILTER-REQUEST-CONTEXT" // filter header writes never reach the grain's requestContext
-  | "GAP-BUG-DURABLE-JOBS-QUEUE" // retryLater without existence guard; slow-start not time-gated
   | "GAP-BUG-LOCAL-CALL-UNDEFINED"; // local calls return undefined where remote calls yield null
 
 type TestBody = () => void | Promise<void>;

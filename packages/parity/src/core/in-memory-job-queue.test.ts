@@ -137,13 +137,15 @@ describe("NonSilo.Tests.DurableJobs.InMemoryJobQueueTests", () => {
     expect(requeued?.id).toBe("job1");
   });
 
-  // Upstream expects RetryJobLater on a job never enqueued to be a silent no-op
-  // (queue.Count stays 0). This framework's retryLater unconditionally inserts
-  // the entry it is given — it has no existence check, because in production it
-  // is only ever called with a job this same queue just dequeued (the
-  // ShardExecutor's own bookkeeping guarantees that). Faithfully porting the
-  // upstream assertion against a job id never added exposes the difference.
-  orleansTest.gap("GAP-BUG-DURABLE-JOBS-QUEUE", `${NS}.RetryJobLater_NonExistentJob_DoesNotThrow`);
+  orleansTest(`${NS}.RetryJobLater_NonExistentJob_DoesNotThrow`, () => {
+    const queue = new InMemoryJobQueue();
+    const now = Date.now();
+    const job = { id: "job1", dueMs: now + 1000, dequeueCount: 1, payload: "job1" };
+
+    queue.retryLater(job, { seconds: 10 }, now);
+
+    expect(queue.size).toBe(0);
+  });
 
   orleansTest(`${NS}.GetAsyncEnumerator_RespectsEmptyBuckets`, () => {
     const queue = new InMemoryJobQueue();

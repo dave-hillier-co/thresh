@@ -17,6 +17,7 @@ export interface ResolvedDurableJobsOptions {
   maxConcurrentJobsPerSilo: number;
   slowStartInitialConcurrency: number;
   slowStartGrowthFactor: number;
+  slowStartIntervalMs: number;
   overloadBackoffMs: number;
   shouldRetry: ShouldRetry;
   maxAdoptedCount: number;
@@ -181,6 +182,7 @@ export class LocalDurableJobManager {
         maxConcurrentJobsPerSilo: this.options.maxConcurrentJobsPerSilo,
         slowStartInitialConcurrency: this.options.slowStartInitialConcurrency,
         slowStartGrowthFactor: this.options.slowStartGrowthFactor,
+        slowStartIntervalMs: this.options.slowStartIntervalMs,
         overloadBackoffMs: this.options.overloadBackoffMs,
         shouldRetry: this.options.shouldRetry,
       },
@@ -207,6 +209,7 @@ export function resolveOptions(options: {
   maxConcurrentJobsPerSilo?: number;
   slowStartInitialConcurrency?: number;
   slowStartGrowthFactor?: number;
+  slowStartInterval?: Duration;
   overloadBackoff?: Duration;
   shouldRetry?: ShouldRetry;
   maxAdoptedCount?: number;
@@ -223,6 +226,8 @@ export function resolveOptions(options: {
     maxConcurrentJobsPerSilo: options.maxConcurrentJobsPerSilo ?? 100,
     slowStartInitialConcurrency: options.slowStartInitialConcurrency ?? 1,
     slowStartGrowthFactor: options.slowStartGrowthFactor ?? 2,
+    slowStartIntervalMs:
+      options.slowStartInterval !== undefined ? durationToMs(options.slowStartInterval) : 10_000,
     overloadBackoffMs:
       options.overloadBackoff !== undefined ? durationToMs(options.overloadBackoff) : 1000,
     shouldRetry: options.shouldRetry ?? defaultShouldRetry,

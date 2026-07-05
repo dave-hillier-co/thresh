@@ -86,4 +86,20 @@ describe("InMemoryJobQueue", () => {
     expect(requeued?.dueMs).toBe(3000);
     expect(requeued?.dequeueCount).toBe(1);
   });
+
+  it("retryLater is a no-op for an id the queue does not consider live", () => {
+    const q = new InMemoryJobQueue();
+
+    // Never added.
+    q.retryLater({ id: "ghost", dueMs: 0, dequeueCount: 0, payload: null }, { seconds: 1 }, 0);
+    expect(q.size).toBe(0);
+    expect(q.has("ghost")).toBe(false);
+
+    // Added then explicitly cancelled.
+    q.add({ id: "a", dueMs: 0, dequeueCount: 0, payload: 1 });
+    q.cancel("a");
+    q.retryLater({ id: "a", dueMs: 0, dequeueCount: 0, payload: 1 }, { seconds: 1 }, 0);
+    expect(q.size).toBe(0);
+    expect(q.has("a")).toBe(false);
+  });
 });

@@ -95,8 +95,6 @@ shows per-tag counts). One-line definitions live on the `GapTag` union. Grouped 
       the ambient request context seen by the grain method body. `packages/runtime/src/activation.ts`.
 - [ ] **`GAP-BUG-LOCAL-CALL-UNDEFINED`** — `LocalDispatcher` returns `undefined` unchanged while
       cross-silo calls serialize it to `null`, so a value's shape depends on placement.
-- [ ] **`GAP-BUG-DURABLE-JOBS-QUEUE`** — `InMemoryJobQueue.retryLater` lacks an existence guard;
-      `ShardExecutor` slow-start ramp is not time-gated. `packages/durable-jobs/src/`.
 - [ ] **TestCluster teardown flakiness** — `dispose()` on a 2-silo cluster intermittently races
       (seen in `grain-activate-deactivate-tests`); harden shutdown ordering in
       `packages/testing/src/test-cluster.ts`.
