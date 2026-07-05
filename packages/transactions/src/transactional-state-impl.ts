@@ -1,5 +1,5 @@
 import type { GrainId } from "@tsva/core/grain-id";
-import type { TransactionalState } from "@tsva/core/transactional-state";
+import type { PerformReadOptions, TransactionalState } from "@tsva/core/transactional-state";
 import type {
   ParticipantId,
   TransactionInfo,
@@ -107,9 +107,14 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
     if (response.pendingStates.length > 0) await this.recover(response.pendingStates);
   }
 
-  async performRead<R>(read: (state: T) => R): Promise<R> {
+  async performRead<R>(read: (state: T) => R, options?: PerformReadOptions): Promise<R> {
     const tx = requireTransaction();
-    await this.lock.enter(tx.id, tx.timeStamp, "read", {
+    // `UseExclusiveLock` (Orleans): take a write lock up front instead of a
+    // shared read lock, so a later read-then-write on this same grain in this
+    // transaction serializes with contenders rather than racing a read-to-write
+    // upgrade against them.
+    const mode = options?.exclusive === true ? "write" : "read";
+    await this.lock.enter(tx.id, tx.timeStamp, mode, {
       timeoutMs: this.options.lockTimeoutMs,
     });
     this.enlist(tx, 1, 0);

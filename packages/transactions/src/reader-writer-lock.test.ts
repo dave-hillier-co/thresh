@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { TimeProvider, TimerHandle } from "@tsva/core/time-provider";
 import { ReaderWriterLock } from "@tsva/transactions/reader-writer-lock";
-import { TransactionAbortedError } from "@tsva/core/errors";
+import { TransactionAbortedError, TransactionLockUpgradeError } from "@tsva/core/errors";
 
 /**
  * A controllable clock for sociable tests: tracks "now", and fires any timer
@@ -104,6 +104,52 @@ describe("ReaderWriterLock (wait-die)", () => {
     await expect(lock.enter("younger", YOUNGER, "read")).rejects.toBeInstanceOf(
       TransactionAbortedError,
     );
+  });
+
+  it("dies with TransactionLockUpgradeError when a younger holder's read-to-write upgrade conflicts with an older reader", async () => {
+    const lock = new ReaderWriterLock();
+    // Both share the read lock (no conflict between two readers).
+    await lock.enter("older", OLDER, "read");
+    await lock.enter("younger", YOUNGER, "read");
+
+    // The younger holder tries to upgrade to write; it conflicts with the
+    // older reader and, being younger, must die under wait-die — but on this
+    // specific read-to-write upgrade path it dies with the more specific
+    // TransactionLockUpgradeError (Orleans OrleansTransactionLockUpgradeException),
+    // not the generic wait-die abort.
+    await expect(lock.enter("younger", YOUNGER, "write")).rejects.toBeInstanceOf(
+      TransactionLockUpgradeError,
+    );
+    // Still an instance of the base type, matching Orleans'
+    // OrleansTransactionLockUpgradeException : OrleansTransactionTransientFailureException
+    // : OrleansTransactionAbortedException hierarchy.
+    await expect(lock.enter("younger", YOUNGER, "write")).rejects.toBeInstanceOf(
+      TransactionAbortedError,
+    );
+
+    // The older holder's own upgrade is unaffected: no other write-conflicting
+    // holder exists once it is the only reader/writer under consideration, so
+    // it upgrades cleanly.
+    lock.release("younger");
+    await expect(lock.enter("older", OLDER, "write")).resolves.toBeUndefined();
+  });
+
+  it("does not die with TransactionLockUpgradeError on an ordinary (non-upgrade) wait-die death", async () => {
+    // Sanity check for Part A's "ONLY on the upgrade-conflict path" boundary:
+    // a plain first-acquisition wait-die death (no prior read held) must keep
+    // rejecting with the generic TransactionAbortedError, not the upgrade
+    // subtype, even though the subtype also passes an instanceof
+    // TransactionAbortedError check.
+    const lock = new ReaderWriterLock();
+    await lock.enter("older", OLDER, "write");
+    let rejection: unknown;
+    try {
+      await lock.enter("younger", YOUNGER, "write");
+    } catch (err) {
+      rejection = err;
+    }
+    expect(rejection).toBeInstanceOf(TransactionAbortedError);
+    expect(rejection).not.toBeInstanceOf(TransactionLockUpgradeError);
   });
 
   it("aborts a waiter whose lock-acquisition deadline elapses", async () => {

@@ -300,7 +300,7 @@ export function useTransactionalState<TState>(
     return facet;
   };
   return {
-    performRead: (read) => bound().performRead(read),
+    performRead: (read, readOptions) => bound().performRead(read, readOptions),
     performUpdate: (update) => bound().performUpdate(update),
   };
 }

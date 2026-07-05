@@ -97,3 +97,24 @@ export class TransactionReadOnlyViolatedError extends TransactionAbortedError {
     this.name = "TransactionReadOnlyViolatedError";
   }
 }
+
+/**
+ * Raised when a transaction cannot upgrade a shared (read) lock it already
+ * holds to a write lock because a higher-priority (older) transaction is
+ * concurrently holding or waiting on the same resource (Orleans
+ * `OrleansTransactionLockUpgradeException`, a subtype of
+ * `OrleansTransactionTransientFailureException`). Thrown by
+ * `ReaderWriterLock.enter` (`@tsva/transactions`) specifically on the
+ * read-to-write upgrade path — never on an ordinary first-acquisition
+ * wait-die death, which keeps raising the generic
+ * {@link TransactionAbortedError}.
+ */
+export class TransactionLockUpgradeError extends TransactionAbortedError {
+  constructor(transactionId: string) {
+    super(
+      transactionId,
+      "could not upgrade a lock, because of a higher-priority conflicting transaction",
+    );
+    this.name = "TransactionLockUpgradeError";
+  }
+}

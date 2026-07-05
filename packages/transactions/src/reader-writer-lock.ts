@@ -1,4 +1,4 @@
-import { TransactionAbortedError } from "@tsva/core/errors";
+import { TransactionAbortedError, TransactionLockUpgradeError } from "@tsva/core/errors";
 import { systemTimeProvider, type TimeProvider, type TimerHandle } from "@tsva/core/time-provider";
 
 type LockMode = "read" | "write";
@@ -38,6 +38,13 @@ export interface AcquireDeadline {
  * promise rejects with {@link TransactionAbortedError} (`deadline exceeded`),
  * which the caller propagates as a cascading abort to its other participants.
  * This mirrors Orleans' `TransactionalStateOptions.LockTimeout`.
+ *
+ * A holder re-entering with `"write"` while it only holds `"read"` upgrades
+ * in place if no conflict, and otherwise follows the same wait-die rule —
+ * except a death on that specific read-to-write upgrade path rejects with the
+ * more specific {@link TransactionLockUpgradeError} (Orleans
+ * `OrleansTransactionLockUpgradeException`) rather than the generic
+ * {@link TransactionAbortedError}.
  */
 export class ReaderWriterLock {
   private readonly holders = new Map<string, Holder>();
@@ -61,7 +68,7 @@ export class ReaderWriterLock {
       // Re-entrant. Upgrade read -> write if no other holder conflicts.
       if (mode === "write" && held.mode === "read") {
         if (this.conflictingHolders(transactionId, "write").length > 0) {
-          return this.blockOrDie(transactionId, priority, "write", deadline);
+          return this.blockOrDie(transactionId, priority, "write", deadline, /* isUpgrade */ true);
         }
         held.mode = "write";
       }
@@ -92,14 +99,20 @@ export class ReaderWriterLock {
     priority: number,
     mode: LockMode,
     deadline?: AcquireDeadline,
+    isUpgrade = false,
   ): Promise<void> {
     const conflicts = this.conflictingHolders(transactionId, mode);
     // Wait-die: wait only if older (strictly lower timestamp) than every
     // conflicting holder; otherwise die.
     const olderThanAll = conflicts.every((h) => priority < h.priority);
     if (!olderThanAll) {
+      // A read-to-write upgrade that dies gets the upgrade-specific typed
+      // error (Orleans OrleansTransactionLockUpgradeException); an ordinary
+      // first-acquisition death keeps the generic wait-die reason.
       return Promise.reject(
-        new TransactionAbortedError(transactionId, "wait-die: younger than a lock holder"),
+        isUpgrade
+          ? new TransactionLockUpgradeError(transactionId)
+          : new TransactionAbortedError(transactionId, "wait-die: younger than a lock holder"),
       );
     }
     return new Promise<void>((resolve, reject) => {
