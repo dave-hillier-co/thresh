@@ -2,7 +2,7 @@
 import { afterAll, beforeAll, describe, expect } from "vitest";
 import { orleansTest } from "@tsva/testing/orleans-test";
 import { TestCluster } from "@tsva/testing/test-cluster";
-import { durationToMs } from "@tsva/core/duration";
+import { durationToMs, type Duration } from "@tsva/core/duration";
 import { FakeTimeProvider } from "@tsva/core/test-support/fake-time-provider";
 import {
   NonReentrantTimerCallGrain,
@@ -139,16 +139,52 @@ describe("DefaultCluster.Tests.TimerTests.TimerOrleansTest", () => {
     "DefaultCluster.Tests.TimerTests.TimerOrleansTest.NonReentrantGrainTimer_Test",
   );
 
-  // This framework's GrainTimer.change() (packages/runtime/src/grain-timer-impl.ts)
-  // performs no due-time/period range validation — Change() with a negative or
-  // out-of-range TimeSpan never throws, unlike Orleans' TimerQueueTimer.Change(). The
-  // test's central assertions are exactly that invalid values throw
-  // ArgumentOutOfRangeException, so it cannot be faithfully ported until that
-  // validation exists.
-  orleansTest.gap(
-    "GAP-TIMER-VALIDATION",
-    "DefaultCluster.Tests.TimerTests.TimerOrleansTest.GrainTimer_Change",
-  );
+  // Ports the due-time/period range-validation portion of upstream's
+  // GrainTimer_Change (invalid values now throw, matching Orleans'
+  // TimerQueueTimer.ValidateArguments — see packages/runtime/src/grain-timer-impl.ts).
+  // Upstream's `grain2`/`grain3` sections (callback-initiated Change()/dispose() via
+  // the `operationType` argument) are not ported: `TimerCallGrain.startTimer`'s
+  // `operationType` is accepted for wire fidelity but not interpreted (see
+  // packages/parity/src/grains/impl/timer-call-grain.ts), which is a separate,
+  // still-open limitation unrelated to range validation.
+  orleansTest("DefaultCluster.Tests.TimerTests.TimerOrleansTest.GrainTimer_Change", async () => {
+    const testName = "GrainTimer_Change";
+    const delay: Duration = { seconds: 5 };
+    const grain = cluster.getGrain(ITimerCallGrain, randomIntegerKey());
+
+    await grain.startTimer(testName, delay);
+    time.advance(durationToMs(delay) * 2);
+    await flush();
+    expect(await grain.getTickCount()).toBe(1);
+
+    await grain.restartTimer(testName, delay);
+    time.advance(durationToMs(delay) * 2);
+    await flush();
+    expect(await grain.getTickCount()).toBe(2);
+
+    // Zero and sub-ms timeouts should be valid (truncated toward zero, as the
+    // `(long)` cast in Orleans' ValidateArguments does).
+    await grain.restartTimer(testName, { ms: 0 });
+    await grain.restartTimer(testName, { ms: 0.01 });
+    await grain.restartTimer(testName, { ms: 0 }, { ms: 0 });
+    await grain.restartTimer(testName, { ms: 0.01 }, { ms: 0.01 });
+    await grain.restartTimer(testName, { ms: -0.4 });
+    await grain.restartTimer(testName, { seconds: 1 }, { ms: -0.5 });
+
+    // Invalid values.
+    await expect(grain.restartTimer(testName, { seconds: -5 })).rejects.toThrow();
+    await expect(grain.restartTimer(testName, { days: 100_000 })).rejects.toThrow();
+    await expect(grain.restartTimer(testName, { seconds: 1 }, { seconds: -5 })).rejects.toThrow();
+    await expect(grain.restartTimer(testName, { seconds: 1 }, { days: 100_000 })).rejects.toThrow();
+
+    // Same placement-dependent undefined/null inconsistency noted on
+    // AsyncTimerTest_GrainCall above (GAP-BUG-LOCAL-CALL-UNDEFINED): accept either
+    // for "no exception" rather than pinning down which silo owns the grain.
+    const err = await grain.getException();
+    expect(err == null, `expected no exception, got ${String(err)}`).toBe(true);
+
+    await grain.stopTimer(testName);
+  });
 
   orleansTest.excluded(
     "POCO-grain variant: this framework has one grain model (no separate POCO-vs-" +
