@@ -6,14 +6,6 @@ import { IPersonGrain, PersonGrain } from "@tsva/parity/grains/impl/person-grain
 import { Guid } from "@tsva/core/guid";
 import { randomGuidKey } from "@tsva/parity/support/keys";
 
-// Already reported (default-cluster/grain-reference-test.test.ts): `grainReferenceIdentity`
-// (packages/core/src/grain-reference.ts) tests `GRAIN_REF in value`, but the `in`
-// operator invokes a Proxy's `has` trap and the grain-reference proxy
-// (packages/runtime/src/grain-factory.ts `buildProxy`) defines only a `get`
-// trap, so the check always falls through to the (empty) proxy target and
-// returns `false` — a grain reference passed as a call argument (`leia.marry(han)`)
-// is never recognized and serializes as a plain empty object.
-
 describe("Tester.EventSourcingTests.PersonGrainTests", () => {
   let cluster: TestCluster;
 
@@ -58,8 +50,7 @@ describe("Tester.EventSourcingTests.PersonGrainTests", () => {
     },
   );
 
-  orleansTest.gap(
-    "GAP-BUG-GRAIN-REF-IDENTITY",
+  orleansTest(
     "Tester.EventSourcingTests.PersonGrainTests.JournaledGrainTests_AppendMoreEvents",
     async () => {
       const leia = cluster.getGrain(IPersonGrain, randomGuidKey());

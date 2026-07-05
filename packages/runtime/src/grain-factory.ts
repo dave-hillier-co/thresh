@@ -51,6 +51,15 @@ export class GrainFactory {
     return new Proxy(
       {},
       {
+        // The proxy target is an empty object, so without this trap
+        // `GRAIN_REF in ref` would always be false (identity lookups and the
+        // wire codec's "is this a grain ref?" check rely on `in`).
+        has: (_t, prop): boolean => {
+          if (prop === GRAIN_REF) return true;
+          // Keep `"then" in ref` false too, for the same reason `get` hides it.
+          if (prop === "then") return false;
+          return typeof prop === "string";
+        },
         get: (_t, prop): unknown => {
           if (prop === GRAIN_REF) return { grainId: target, interfaceId: def.id };
           if (typeof prop !== "string") return undefined;

@@ -1,28 +1,41 @@
 // Ported from dotnet/orleans test/Orleans.DefaultCluster.Tests/GrainReferenceTest.cs @ v10.1.0 (MIT).
 //
 // GrainReferenceComparison_DifferentReference and the three GrainReference_Pass_*
-// tests were faithfully ported against ISimpleGrain/IChainedGrain (see
-// chained-grain.ts, added for this file), then pulled below to GAP-BUG once
-// they exposed the `grainReferenceIdentity` defect described there: they need
-// no cluster/grain fixtures while gapped, so those are elided rather than left
-// unused.
-import { describe } from "vitest";
+// tests are ported against ISimpleGrain/IChainedGrain (see chained-grain.ts,
+// added for this file), now that `grainReferenceIdentity`
+// (packages/core/src/grain-reference.ts) reads the `GRAIN_REF` property
+// directly instead of testing `GRAIN_REF in value` — the `in` operator invokes
+// a Proxy's `has` trap, and grain-reference proxies
+// (packages/runtime/src/grain-factory.ts `buildProxy`) previously defined only
+// a `get` trap, so the check always fell through to the (empty) Proxy target
+// and returned `false`/`undefined` even though `value[GRAIN_REF]` (a `get`)
+// returned the identity correctly. `buildProxy` now also implements a `has`
+// trap for good measure, so `in` works too.
+import { afterAll, beforeAll, describe, expect } from "vitest";
 import { orleansTest } from "@tsva/testing/orleans-test";
-
-// See bugsFound: `grainReferenceIdentity` (packages/core/src/grain-reference.ts)
-// tests `GRAIN_REF in value`, but the `in` operator invokes a Proxy's `has`
-// trap, and grain-reference proxies (packages/runtime/src/grain-factory.ts
-// `buildProxy`) define only a `get` trap — so the check always falls through to
-// the (empty) Proxy target and returns `false`/`undefined`, even though
-// `value[GRAIN_REF]` (a `get`) returns the identity correctly. Every consumer
-// of `grainReferenceIdentity` — including the production wire codec
-// (`packages/core/src/value-codec.ts`), which uses it to detect and reduce a
-// grain reference before serializing a method argument — is affected: a grain
-// reference passed as (or nested in) a call argument is never recognized as
-// one, so it serializes as a plain empty object and never resolves back into
-// a callable reference on the receiving side.
+import { TestCluster } from "@tsva/testing/test-cluster";
+import { grainReferenceIdentity } from "@tsva/core/grain-reference";
+import { ISimpleGrain, SimpleGrain } from "@tsva/parity/grains/impl/simple-grain";
+import { ChainedGrain, IChainedGrain } from "@tsva/parity/grains/impl/chained-grain";
+import { randomIntegerKey } from "@tsva/parity/support/keys";
 
 describe("DefaultCluster.Tests.General.GrainReferenceTest", () => {
+  let cluster: TestCluster;
+
+  beforeAll(async () => {
+    cluster = await TestCluster.start({
+      initialSilos: 2,
+      grains: [
+        { ctor: SimpleGrain, interfaces: [ISimpleGrain] },
+        { ctor: ChainedGrain, interfaces: [IChainedGrain] },
+      ],
+    });
+  });
+
+  afterAll(async () => {
+    await cluster.dispose();
+  });
+
   // Upstream hard-codes 3643965955u, the output of Orleans' own uniform-hash
   // implementation (a specific hash algorithm over its own grain-id wire
   // encoding) applied to a `GrainReference` cast. This framework's uniform hash
@@ -35,29 +48,53 @@ describe("DefaultCluster.Tests.General.GrainReferenceTest", () => {
     "DefaultCluster.Tests.General.GrainReferenceTest.GrainReferenceComparison_ShouldProduceUniformHashCode",
   );
 
-  // TS has no operator overloading, so `!=`/`==`/`Equals` would be ported as
-  // the underlying identity comparison (`GrainId.equals`) they delegate to in
-  // Orleans' `GrainReference` implementation — but see the GAP-BUG comment
-  // above: `grainReferenceIdentity` cannot see through the grain-reference
-  // proxy at all right now.
-  orleansTest.gap(
-    "GAP-BUG-GRAIN-REF-IDENTITY",
+  // TS has no operator overloading, so `!=`/`==`/`Equals` are ported as the
+  // underlying identity comparison (`GrainId.equals`) they delegate to in
+  // Orleans' `GrainReference` implementation.
+  orleansTest(
     "DefaultCluster.Tests.General.GrainReferenceTest.GrainReferenceComparison_DifferentReference",
+    () => {
+      const ref1 = cluster.getGrain(ISimpleGrain, randomIntegerKey());
+      const ref2 = cluster.getGrain(ISimpleGrain, randomIntegerKey());
+      const id1 = grainReferenceIdentity(ref1)!.grainId;
+      const id2 = grainReferenceIdentity(ref2)!.grainId;
+      expect(id1.equals(id2)).toBe(false);
+      expect(id2.equals(id1)).toBe(false);
+    },
   );
 
-  orleansTest.gap(
-    "GAP-BUG-GRAIN-REF-IDENTITY",
+  orleansTest(
     "DefaultCluster.Tests.General.GrainReferenceTest.GrainReference_Pass_this",
+    async () => {
+      const g1 = cluster.getGrain(IChainedGrain, randomIntegerKey());
+      const g2 = cluster.getGrain(IChainedGrain, randomIntegerKey());
+
+      await g1.passThis(g2);
+    },
   );
 
-  orleansTest.gap(
-    "GAP-BUG-GRAIN-REF-IDENTITY",
+  orleansTest(
     "DefaultCluster.Tests.General.GrainReferenceTest.GrainReference_Pass_this_Nested",
+    async () => {
+      const g1 = cluster.getGrain(IChainedGrain, randomIntegerKey());
+      const g2 = cluster.getGrain(IChainedGrain, randomIntegerKey());
+
+      await g1.passThisNested({ next: g2 });
+    },
   );
 
-  orleansTest.gap(
-    "GAP-BUG-GRAIN-REF-IDENTITY",
+  orleansTest(
     "DefaultCluster.Tests.General.GrainReferenceTest.GrainReference_Pass_Null",
+    async () => {
+      const g1 = cluster.getGrain(IChainedGrain, randomIntegerKey());
+      const g2 = cluster.getGrain(IChainedGrain, randomIntegerKey());
+
+      // g1 will pass a null reference to g2
+      await g1.passNullNested({ next: g2 });
+      expect(await g2.getNext()).toBeNull();
+      await g1.passNull(g2);
+      expect(await g2.getNext()).toBeNull();
+    },
   );
 
   const jsonSerializationReason =

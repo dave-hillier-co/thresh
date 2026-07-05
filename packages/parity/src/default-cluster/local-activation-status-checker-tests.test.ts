@@ -2,7 +2,7 @@
 import { afterAll, beforeAll, describe, expect } from "vitest";
 import { orleansTest } from "@tsva/testing/orleans-test";
 import { TestCluster } from "@tsva/testing/test-cluster";
-import { GRAIN_REF } from "@tsva/core/grain-reference";
+import { grainReferenceIdentity } from "@tsva/core/grain-reference";
 import type { GrainId } from "@tsva/core/grain-id";
 import { ISimpleGrain, SimpleGrain } from "@tsva/parity/grains/impl/simple-grain";
 import { randomIntegerKey } from "@tsva/parity/support/keys";
@@ -30,12 +30,7 @@ describe("DefaultCluster.Tests.LocalActivationStatusCheckerTests", () => {
     await cluster.dispose();
   });
 
-  // `grainReferenceIdentity` cannot see through the grain-reference proxy (see
-  // GAP-BUG-GRAIN-REF-IDENTITY in grain-reference-test.test.ts); read the
-  // identity directly off the `GRAIN_REF` property instead of going through
-  // that helper, which sidesteps the `in`-operator defect entirely.
-  const grainIdOf = (ref: unknown): GrainId =>
-    (ref as Record<symbol, { grainId: GrainId }>)[GRAIN_REF]!.grainId;
+  const grainIdOf = (ref: unknown): GrainId => grainReferenceIdentity(ref)!.grainId;
 
   orleansTest(
     "DefaultCluster.Tests.LocalActivationStatusCheckerTests.ShouldReturnTrueForLocallyActivatedGrain",

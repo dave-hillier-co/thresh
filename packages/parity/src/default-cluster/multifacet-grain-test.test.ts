@@ -6,26 +6,34 @@
 // `grain-reference-cast-tests.test.ts` file already carries under
 // GAP-GRAIN-REF-CAST, so they are gapped under the same tag rather than a new
 // one.
-//
-// MultifacetFactory / Multifacet_InterfacesAsArguments faithfully port to a
-// grain call that passes a grain reference as an argument and gets one back
-// as a result (`packages/parity/src/grains/impl/multifacet-grain.ts`) — and
-// both hit the pre-existing `grainReferenceIdentity` defect
-// (packages/core/src/grain-reference.ts, also described in
-// grain-reference-test.test.ts): it tests `GRAIN_REF in value` against a grain
-// reference `Proxy`, but the proxy only defines a `get` trap, so the default
-// `has` trap forwards to the (empty) proxy target and the check always misses.
-// A grain reference that crosses a call boundary as an argument or return
-// value is therefore never recognised as one, gets reduced to plain data by
-// the wire codec, and arrives with none of its methods — so calling
-// `writer.setValue(...)` on the result throws `TypeError: writer.setValue is
-// not a function`. Gapped rather than excluded per the framework-bug rule;
-// there is no live cluster fixture here since every case in this file is a
-// gap.
-import { describe } from "vitest";
+import { afterAll, beforeAll, describe, expect } from "vitest";
 import { orleansTest } from "@tsva/testing/orleans-test";
+import { TestCluster } from "@tsva/testing/test-cluster";
+import {
+  IMultifacetFactoryTestGrain,
+  IMultifacetTestGrain,
+  MultifacetFactoryTestGrain,
+  MultifacetTestGrain,
+} from "@tsva/parity/grains/impl/multifacet-grain";
+import { randomIntegerKey } from "@tsva/parity/support/keys";
 
 describe("DefaultCluster.Tests.General.MultifacetGrainTest", () => {
+  let cluster: TestCluster;
+
+  beforeAll(async () => {
+    cluster = await TestCluster.start({
+      initialSilos: 2,
+      grains: [
+        { ctor: MultifacetTestGrain, interfaces: [IMultifacetTestGrain] },
+        { ctor: MultifacetFactoryTestGrain, interfaces: [IMultifacetFactoryTestGrain] },
+      ],
+    });
+  });
+
+  afterAll(async () => {
+    await cluster.dispose();
+  });
+
   orleansTest.gap(
     "GAP-GRAIN-REF-CAST",
     "DefaultCluster.Tests.General.MultifacetGrainTest.RWReferences",
@@ -36,13 +44,28 @@ describe("DefaultCluster.Tests.General.MultifacetGrainTest", () => {
     "DefaultCluster.Tests.General.MultifacetGrainTest.RWReferencesInvalidCastException",
   );
 
-  orleansTest.gap(
-    "GAP-BUG-GRAIN-REF-IDENTITY",
-    "DefaultCluster.Tests.General.MultifacetGrainTest.MultifacetFactory",
-  );
+  orleansTest("DefaultCluster.Tests.General.MultifacetGrainTest.MultifacetFactory", async () => {
+    const factory = cluster.getGrain(IMultifacetFactoryTestGrain, randomIntegerKey());
+    const grain = cluster.getGrain(IMultifacetTestGrain, randomIntegerKey());
+    const writer = await factory.getWriterOf(grain);
+    const reader = await factory.getReaderOf(grain);
+    await writer.setValue(5);
+    const v = await reader.getValue();
+    expect(v).toBe(5);
+  });
 
-  orleansTest.gap(
-    "GAP-BUG-GRAIN-REF-IDENTITY",
+  orleansTest(
     "DefaultCluster.Tests.General.MultifacetGrainTest.Multifacet_InterfacesAsArguments",
+    async () => {
+      const factory = cluster.getGrain(IMultifacetFactoryTestGrain, randomIntegerKey());
+      const grain = cluster.getGrain(IMultifacetTestGrain, randomIntegerKey());
+      await factory.setReader(grain);
+      await factory.setWriter(grain);
+      const writer = await factory.getWriter();
+      const reader = await factory.getReader();
+      await writer!.setValue(10);
+      const v = await reader!.getValue();
+      expect(v).toBe(10);
+    },
   );
 });

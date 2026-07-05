@@ -12,8 +12,10 @@ export interface GrainReferenceIdentity {
 }
 
 export function grainReferenceIdentity(value: unknown): GrainReferenceIdentity | undefined {
-  if (typeof value === "object" && value !== null && GRAIN_REF in value) {
-    return (value as Record<symbol, unknown>)[GRAIN_REF] as GrainReferenceIdentity;
-  }
-  return undefined;
+  if (typeof value !== "object" || value === null) return undefined;
+  // Read the property directly rather than `GRAIN_REF in value`: grain
+  // references are Proxies with only a `get` trap, so `in` falls back to the
+  // (empty) target's default `has` and always reports false.
+  const identity = (value as Record<symbol, unknown>)[GRAIN_REF];
+  return identity === undefined ? undefined : (identity as GrainReferenceIdentity);
 }

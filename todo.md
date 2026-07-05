@@ -91,9 +91,6 @@ shows per-tag counts). One-line definitions live on the `GapTag` union. Grouped 
 
 ### Bugs found by the parity suite (`GAP-BUG-*`, fix then un-gap the tests)
 
-- [ ] **`GAP-BUG-GRAIN-REF-IDENTITY`** — `grainReferenceIdentity` uses `GRAIN_REF in value`, but
-      grain-reference proxies define only a `get` trap, so references are never recognised
-      (breaks passing references as arguments/results). `packages/core/src/grain-reference.ts`.
 - [ ] **`GAP-BUG-ACTIVATION-FAILURE-MESSAGE`** — an `onActivate` failure surfaces as a generic
       "activation unavailable" error; the application error type/message is discarded.
       `packages/runtime/src/activation.ts`.

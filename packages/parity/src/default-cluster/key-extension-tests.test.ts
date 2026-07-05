@@ -4,19 +4,26 @@
 // (`GrainKeyFor<T>`, packages/core/src/key-kinds.ts) has only the three plain key
 // kinds (string/integer/guid) with no compound-key variant, so
 // `GetGrain<T>(guid, keyExtension, observer)` cannot be expressed at all yet.
-import { describe } from "vitest";
+import { afterAll, beforeAll, describe, expect } from "vitest";
 import { orleansTest } from "@tsva/testing/orleans-test";
-
-// GetPrimaryKeyStringOnGrainReference (upstream casts the grain reference to
-// the concrete `GrainReference` and calls `GetPrimaryKeyString()`) was
-// faithfully ported against IStringGrain via `grainReferenceIdentity`, then
-// pulled below to GAP-BUG-GRAIN-REF-IDENTITY (see grain-reference-test.test.ts
-// for the full defect writeup: `grainReferenceIdentity` uses the `in` operator
-// against a Proxy that defines only a `get` trap, so it always returns
-// `undefined`) — the cluster/grain fixture it needed is elided rather than
-// left unused.
+import { TestCluster } from "@tsva/testing/test-cluster";
+import { grainReferenceIdentity } from "@tsva/core/grain-reference";
+import { IStringGrain, StringGrain } from "@tsva/parity/grains/impl/get-grain-grains";
 
 describe("DefaultCluster.Tests.General.KeyExtensionTests", () => {
+  let cluster: TestCluster;
+
+  beforeAll(async () => {
+    cluster = await TestCluster.start({
+      initialSilos: 2,
+      grains: [{ ctor: StringGrain, interfaces: [IStringGrain] }],
+    });
+  });
+
+  afterAll(async () => {
+    await cluster.dispose();
+  });
+
   orleansTest.gap(
     "GAP-COMPOUND-KEY",
     "DefaultCluster.Tests.General.KeyExtensionTests.PrimaryKeyExtensionsShouldDifferentiateGrainsUsingTheSameBasePrimaryKey",
@@ -42,8 +49,17 @@ describe("DefaultCluster.Tests.General.KeyExtensionTests", () => {
     "DefaultCluster.Tests.General.KeyExtensionTests.PrimaryKeyExtensionsShouldPermitStringsLongerThan127BytesLong",
   );
 
-  orleansTest.gap(
-    "GAP-BUG-GRAIN-REF-IDENTITY",
+  // Upstream casts the grain reference to the concrete `GrainReference` and
+  // calls `GetPrimaryKeyString()`; ported against `grainReferenceIdentity`.
+  orleansTest(
     "DefaultCluster.Tests.General.KeyExtensionTests.GetPrimaryKeyStringOnGrainReference",
+    () => {
+      const key = "foo";
+
+      const grain = cluster.getGrain(IStringGrain, key);
+      const key2 = grainReferenceIdentity(grain)!.grainId.key;
+
+      expect(key2).toBe(key);
+    },
   );
 });
