@@ -65,7 +65,7 @@ import { MessagePackSerializer } from "@tsva/messaging/msgpack-serializer";
 import type { Serializer } from "@tsva/messaging/serializer";
 import type { Listener, Transport } from "@tsva/messaging/transport";
 import { ActivationCollector } from "@tsva/runtime/activation-collector";
-import { Catalog, type RegisteredGrain } from "@tsva/runtime/catalog";
+import { Catalog, type GrainActivator, type RegisteredGrain } from "@tsva/runtime/catalog";
 import type { ActivationData } from "@tsva/runtime/activation";
 import { DistributedDispatcher } from "@tsva/runtime/distributed-dispatcher";
 import { BroadcastChannelProviderImpl } from "@tsva/runtime/broadcast-channel-provider";
@@ -142,6 +142,19 @@ export interface ClusterNodeOptions {
   versionSelector?: VersionSelectorKind;
   /** Static metadata the local silo advertises (e.g. `{ role: "worker" }`), for metadata-aware placement. */
   metadata?: Readonly<Record<string, string>>;
+  /**
+   * Whether this silo has transaction support configured. Defaults to `true`.
+   * When `false`, no `TransactionAgent` is wired, so any `[Transaction]`-style
+   * grain call (a method whose `TransactionOption` isn't
+   * `"suppress"`/`"notAllowed"`/`undefined`) throws
+   * `TransactionsDisabledError` (Orleans parity: transactions are opt-in).
+   */
+  transactionsEnabled?: boolean;
+  /**
+   * Optional hook to construct/dispose grain instances instead of `new ctor()` —
+   * e.g. object pooling or non-DI construction. Defaults to `new ctor()` when unset.
+   */
+  grainActivator?: GrainActivator;
 }
 
 interface RejectionPayload {
@@ -286,6 +299,7 @@ export class ClusterNode {
       defaultCollectionAgeSeconds: options.defaultCollectionAgeSeconds ?? 900,
       onDeactivated: (a) => this.onDeactivated(a),
       migrate: (a) => this.migrateActivation(a),
+      localSilo: () => this.options.local,
       ...(options.stateBinder !== undefined ? { activateState: options.stateBinder } : {}),
       ...(options.reminderRegistry !== undefined
         ? { reminderRegistry: options.reminderRegistry }
@@ -300,6 +314,7 @@ export class ClusterNode {
       ...(options.incomingCallFilters !== undefined
         ? { incomingCallFilters: options.incomingCallFilters }
         : {}),
+      ...(options.grainActivator !== undefined ? { grainActivator: options.grainActivator } : {}),
     });
     this.dispatcher = new DistributedDispatcher({
       local: options.local,
@@ -314,9 +329,11 @@ export class ClusterNode {
       versionFilter: (req, candidates) => this.applyVersionFilter(req, candidates),
     });
     this.factory.setDispatcher(this.dispatcher);
-    const transactionAgent = new TransactionAgent(time);
-    transactionAgent.setDispatcher(this.dispatcher);
-    this.factory.setTransactionAgent(transactionAgent);
+    if (options.transactionsEnabled ?? true) {
+      const transactionAgent = new TransactionAgent(time);
+      transactionAgent.setDispatcher(this.dispatcher);
+      this.factory.setTransactionAgent(transactionAgent);
+    }
     if (options.outgoingCallFilters !== undefined) {
       this.factory.setOutgoingCallFilters(options.outgoingCallFilters);
     }

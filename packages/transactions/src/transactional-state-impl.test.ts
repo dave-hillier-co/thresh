@@ -6,7 +6,11 @@ import type { TransactionInfo } from "@tsva/core/transaction-info";
 import { invocationContext } from "@tsva/runtime/invocation-context";
 import { systemTimeProvider } from "@tsva/runtime/time-provider";
 import { TransactionAgent } from "@tsva/runtime/transaction-agent";
-import { TransactionAbortedError } from "@tsva/core/errors";
+import {
+  TransactionAbortedError,
+  TransactionLockUpgradeError,
+  TransactionReadOnlyViolatedError,
+} from "@tsva/core/errors";
 import { MemoryTransactionalStorage } from "@tsva/transactions/memory-transactional-storage";
 import { TransactionalStateImpl } from "@tsva/transactions/transactional-state-impl";
 
@@ -86,6 +90,26 @@ describe("TransactionalStateImpl (Slice 2)", () => {
     await agent.resolve(older);
     const t = agent.startTransaction();
     expect(await inTransaction(t, () => state.performRead((s) => s.cents))).toBe(1);
+  });
+
+  it("rejects a write attempted by a read-only transaction with a read-only-violation error", async () => {
+    const state = await newState();
+    const readOnly = agent.startTransaction(true);
+
+    await expect(
+      inTransaction(readOnly, () => state.performUpdate((s) => (s.cents = 500))),
+    ).rejects.toBeInstanceOf(TransactionReadOnlyViolatedError);
+    // The specific error is still a TransactionAbortedError (Orleans:
+    // OrleansReadOnlyViolatedException extends OrleansTransactionAbortedException).
+    await expect(
+      inTransaction(readOnly, () => state.performUpdate((s) => (s.cents = 500))),
+    ).rejects.toBeInstanceOf(TransactionAbortedError);
+
+    // No lock was taken and no state was staged: a later transaction reads
+    // straight through to the original committed value.
+    const t2 = agent.startTransaction();
+    expect(await inTransaction(t2, () => state.performRead((s) => s.cents))).toBe(100);
+    await agent.resolve(t2);
   });
 
   it("aborts a contending transaction whose lock-acquisition deadline elapses, cascading to its participants", async () => {
@@ -182,5 +206,70 @@ describe("TransactionalStateImpl (Slice 2)", () => {
     const observer = localAgent.startTransaction();
     expect(await inTransaction(observer, () => other.performRead((s) => s.cents))).toBe(0);
     await localAgent.resolve(observer);
+  });
+
+  it("a plain (non-exclusive) read-then-write race can die with a lock-upgrade error", async () => {
+    // Deterministic, unit-level reproduction of the Orleans
+    // ExclusiveLockTransactionTestRunner scenario, without a cluster: two
+    // transactions share a read lock on the same grain state, then the
+    // younger one tries to upgrade to write and — because it conflicts with
+    // the older reader — dies with TransactionLockUpgradeError (Orleans
+    // OrleansTransactionLockUpgradeException), exactly the failure
+    // [UseExclusiveLock] exists to avoid.
+    const state = await newState();
+    const older = agent.startTransaction();
+    const younger = agent.startTransaction();
+
+    await inTransaction(older, () => state.performRead((s) => s.cents));
+    await inTransaction(younger, () => state.performRead((s) => s.cents));
+
+    await expect(
+      inTransaction(younger, () => state.performUpdate((s) => (s.cents += 5))),
+    ).rejects.toBeInstanceOf(TransactionLockUpgradeError);
+
+    await agent.abort(younger);
+    await inTransaction(older, () => state.performUpdate((s) => (s.cents += 5)));
+    await agent.resolve(older);
+
+    const check = agent.startTransaction();
+    expect(await inTransaction(check, () => state.performRead((s) => s.cents))).toBe(105);
+    await agent.resolve(check);
+  });
+
+  it("UseExclusiveLock (performRead exclusive:true) serializes a read-then-write instead of racing the upgrade", async () => {
+    // Same shape as the previous test, but the read is marked exclusive
+    // (Orleans [UseExclusiveLock]): it takes the write lock up front, so the
+    // second (younger) transaction's read never shares the lock in the first
+    // place — it waits/dies at the *read* step under ordinary wait-die, and
+    // the surviving transaction's later write never needs to upgrade at all,
+    // so no TransactionLockUpgradeError is ever raised.
+    const state = await newState();
+    const older = agent.startTransaction();
+    const younger = agent.startTransaction();
+
+    await inTransaction(older, () => state.performRead((s) => s.cents, { exclusive: true }));
+
+    // The younger transaction's exclusive read now conflicts with the older
+    // holder's write lock and dies under plain wait-die — never as an
+    // upgrade conflict, because it never got to hold a shared read lock to
+    // upgrade from.
+    let youngerError: unknown;
+    try {
+      await inTransaction(younger, () => state.performRead((s) => s.cents, { exclusive: true }));
+    } catch (err) {
+      youngerError = err;
+    }
+    expect(youngerError).toBeInstanceOf(TransactionAbortedError);
+    expect(youngerError).not.toBeInstanceOf(TransactionLockUpgradeError);
+
+    // The older transaction's later write is a pure re-entrant hold (already
+    // "write"), never an upgrade, so it always succeeds.
+    await inTransaction(older, () => state.performUpdate((s) => (s.cents += 5)));
+    await agent.resolve(older);
+    await agent.abort(younger);
+
+    const check = agent.startTransaction();
+    expect(await inTransaction(check, () => state.performRead((s) => s.cents))).toBe(105);
+    await agent.resolve(check);
   });
 });

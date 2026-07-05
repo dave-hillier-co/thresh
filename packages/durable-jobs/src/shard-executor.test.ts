@@ -11,6 +11,9 @@ const OPTIONS = {
   maxConcurrentJobsPerSilo: 2,
   slowStartInitialConcurrency: 1,
   slowStartGrowthFactor: 2,
+  // Large enough that none of these tests' brief FakeTimeProvider advances
+  // cross an interval boundary — slow-start growth is not under test here.
+  slowStartIntervalMs: 1_000_000,
   overloadBackoffMs: 1000,
   shouldRetry: defaultShouldRetry,
 };

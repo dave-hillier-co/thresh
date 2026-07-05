@@ -21,6 +21,13 @@ export interface ShardExecutorOptions {
   maxConcurrentJobsPerSilo: number;
   slowStartInitialConcurrency: number;
   slowStartGrowthFactor: number;
+  /**
+   * How often (in ms of elapsed wall-clock time since the shard started) the
+   * slow-start ceiling is allowed to grow by `slowStartGrowthFactor` (Orleans'
+   * `SlowStartInterval`). Gates the ramp on real elapsed time rather than on
+   * poll cycles, so a large backlog cannot jump straight to full concurrency.
+   */
+  slowStartIntervalMs: number;
   overloadBackoffMs: number;
   shouldRetry: ShouldRetry;
 }
@@ -70,6 +77,8 @@ export class ShardExecutor {
   private pollHandle: TimerHandle | undefined;
   private stopped = false;
   private running = 0;
+  /** Wall-clock time (per the injected `TimeProvider`) this shard started ramping from. */
+  private readonly startedAtMs: number;
 
   constructor(
     readonly shardKey: number,
@@ -81,6 +90,7 @@ export class ShardExecutor {
     private readonly options: ShardExecutorOptions,
   ) {
     this.concurrency = Math.max(1, options.slowStartInitialConcurrency);
+    this.startedAtMs = this.time.now();
   }
 
   /** Number of jobs in this shard's working set (queued, not yet completed). */
@@ -156,10 +166,35 @@ export class ShardExecutor {
   }
 
   /**
+   * The slow-start ceiling for the given elapsed time since the shard started:
+   * `initial * growthFactor^n`, where `n` is the number of whole
+   * `slowStartIntervalMs` periods that have elapsed, capped at the silo max.
+   * Time-gated (Orleans' `SlowStartInterval`) so a backlog of due jobs cannot
+   * ramp concurrency to the max within a handful of same-tick poll cycles —
+   * the ceiling only grows once real wall-clock time has passed.
+   */
+  private slowStartCeiling(now: number): number {
+    const {
+      slowStartInitialConcurrency,
+      slowStartGrowthFactor,
+      slowStartIntervalMs,
+      maxConcurrentJobsPerSilo,
+    } = this.options;
+    if (slowStartIntervalMs <= 0) return maxConcurrentJobsPerSilo;
+    const elapsedIntervals = Math.max(
+      0,
+      Math.floor((now - this.startedAtMs) / slowStartIntervalMs),
+    );
+    const grown = slowStartInitialConcurrency * slowStartGrowthFactor ** elapsedIntervals;
+    return Math.min(maxConcurrentJobsPerSilo, Math.max(1, Math.ceil(grown)));
+  }
+
+  /**
    * One poll cycle: when the silo is overloaded, back off and try again later
    * without running anything; otherwise dequeue the jobs due now (capped by the
-   * slow-start ceiling and the shared limiter) and run each. Grows the slow-start
-   * ceiling after a cycle that did real work, then re-arms for the next due job.
+   * slow-start ceiling and the shared limiter) and run each. The slow-start
+   * ceiling itself only grows once enough wall-clock time has elapsed since
+   * the shard started (see `slowStartCeiling`), then re-arms for the next due job.
    */
   private async poll(): Promise<void> {
     if (this.stopped) return;
@@ -173,31 +208,67 @@ export class ShardExecutor {
     }
 
     const now = this.time.now();
+    // Slow-start: the ceiling only rises with elapsed wall-clock time, never on
+    // its own regresses (Math.max guards against clock skew between reads).
+    this.concurrency = Math.max(this.concurrency, this.slowStartCeiling(now));
     const due = this.queue.dequeueDue(now);
-    let started = 0;
     const settled: Array<Promise<void>> = [];
+    let admitted = 0;
+    let blocked = false;
     for (const job of due) {
-      // Respect both the per-shard slow-start ceiling and the silo-wide limiter.
-      if (started >= this.concurrency || !this.limiter.tryAcquire()) {
-        // Could not run now: re-enqueue at the same due time to retry next cycle.
+      // Respect both the per-shard slow-start ceiling — checked against jobs
+      // actually in flight for this shard (`this.running`, incremented
+      // synchronously by `runOne` before its first await, so it already counts
+      // this cycle's admissions) — and the silo-wide limiter.
+      if (this.running >= this.concurrency || !this.limiter.tryAcquire()) {
+        // Could not run now: re-enqueue at the same due time to retry.
         this.queue.add({ ...job, dueMs: now });
+        blocked = true;
         continue;
       }
-      started += 1;
+      admitted += 1;
       settled.push(this.runOne(job, now));
     }
 
-    if (started > 0) {
-      // Slow-start: grow the ceiling toward the silo cap after a working cycle.
-      this.concurrency = Math.min(
-        this.options.maxConcurrentJobsPerSilo,
-        Math.max(1, Math.ceil(this.concurrency * this.options.slowStartGrowthFactor)),
-      );
+    // Re-arm before awaiting in-flight runs so a job due during this cycle is
+    // picked up. If we admitted nothing yet still have due jobs (saturated by
+    // the slow-start ceiling or the shared limiter), a 0-delay re-poll — the
+    // re-enqueued jobs are due *now* — would busy-loop under a real clock until
+    // an in-flight job completes (which re-polls via `runOne`'s `finally`) or
+    // the ceiling grows. Back off to the next ceiling-growth boundary instead of
+    // spinning; a completion still re-polls immediately on the fast path.
+    if (admitted === 0 && blocked) {
+      this.scheduleSaturatedPoll(now);
+    } else {
+      this.schedulePoll();
     }
-
-    // Re-arm before awaiting in-flight runs so a job due during this cycle is picked up.
-    this.schedulePoll();
     await Promise.all(settled);
+  }
+
+  /**
+   * Re-arm the poll after a cycle that could admit nothing because the shard is
+   * saturated. Waits until the slow-start ceiling can next grow (so the ramp
+   * makes progress on real elapsed time), or a bounded fallback when the ceiling
+   * is already at the silo cap — in both cases an in-flight job completing
+   * re-polls sooner via `runOne`, so this only bounds the idle-wait, never the
+   * throughput.
+   */
+  private scheduleSaturatedPoll(now: number): void {
+    if (this.stopped) return;
+    this.clearPoll();
+    const { slowStartIntervalMs, maxConcurrentJobsPerSilo, overloadBackoffMs } = this.options;
+    let delay: number;
+    if (this.concurrency < maxConcurrentJobsPerSilo && slowStartIntervalMs > 0) {
+      const elapsedIntervals = Math.max(0, Math.floor((now - this.startedAtMs) / slowStartIntervalMs));
+      const nextBoundaryMs = this.startedAtMs + (elapsedIntervals + 1) * slowStartIntervalMs;
+      delay = Math.max(1, nextBoundaryMs - now);
+    } else {
+      delay = Math.max(1, overloadBackoffMs);
+    }
+    this.pollHandle = this.time.setTimer(() => {
+      this.pollHandle = undefined;
+      void this.poll();
+    }, delay);
   }
 
   /** Run one dequeued job, apply its result, and release the concurrency slot. */

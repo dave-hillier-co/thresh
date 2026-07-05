@@ -36,6 +36,11 @@ export interface SiloHostParts {
   >;
   /** Run after the node drains — e.g. disconnect durable provider clients. */
   onStop?: ReadonlyArray<() => Promise<void>>;
+  /**
+   * Run after the node starts but before the silo is marked ready — e.g. call
+   * grains from application startup code (Orleans `IStartupTask`).
+   */
+  startupTasks?: ReadonlyArray<() => Promise<void>>;
 }
 
 /**
@@ -83,9 +88,11 @@ export class SiloHost {
       rebalancerWorker,
       onStart,
       onOwnershipChange,
+      startupTasks,
     } = this.parts;
     await this.runHooks(onStart);
     await node.start();
+    await this.runHooks(startupTasks);
     health.update({ transportReady: true });
     if (healthServer !== undefined && healthPort !== undefined) {
       await healthServer.listen(healthPort);

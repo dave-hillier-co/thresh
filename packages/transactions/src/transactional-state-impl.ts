@@ -1,5 +1,5 @@
 import type { GrainId } from "@tsva/core/grain-id";
-import type { TransactionalState } from "@tsva/core/transactional-state";
+import type { PerformReadOptions, TransactionalState } from "@tsva/core/transactional-state";
 import type {
   ParticipantId,
   TransactionInfo,
@@ -13,6 +13,7 @@ import type {
 } from "@tsva/core/transactional-storage";
 import { requireTransaction } from "@tsva/runtime/invocation-context";
 import { systemTimeProvider, type TimeProvider } from "@tsva/core/time-provider";
+import { TransactionReadOnlyViolatedError } from "@tsva/core/errors";
 import { ReaderWriterLock } from "@tsva/transactions/reader-writer-lock";
 import { EMPTY_METADATA } from "@tsva/transactions/transactional-storage-apply";
 import {
@@ -106,9 +107,14 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
     if (response.pendingStates.length > 0) await this.recover(response.pendingStates);
   }
 
-  async performRead<R>(read: (state: T) => R): Promise<R> {
+  async performRead<R>(read: (state: T) => R, options?: PerformReadOptions): Promise<R> {
     const tx = requireTransaction();
-    await this.lock.enter(tx.id, tx.timeStamp, "read", {
+    // `UseExclusiveLock` (Orleans): take a write lock up front instead of a
+    // shared read lock, so a later read-then-write on this same grain in this
+    // transaction serializes with contenders rather than racing a read-to-write
+    // upgrade against them.
+    const mode = options?.exclusive === true ? "write" : "read";
+    await this.lock.enter(tx.id, tx.timeStamp, mode, {
       timeoutMs: this.options.lockTimeoutMs,
     });
     this.enlist(tx, 1, 0);
@@ -118,6 +124,9 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
 
   async performUpdate<R>(update: (state: T) => R): Promise<R> {
     const tx = requireTransaction();
+    // A read-only transaction may never write, regardless of contention —
+    // reject before touching the lock (Orleans: OrleansReadOnlyViolatedException).
+    if (tx.readOnly) throw new TransactionReadOnlyViolatedError(tx.id);
     await this.lock.enter(tx.id, tx.timeStamp, "write", {
       timeoutMs: this.options.lockTimeoutMs,
     });

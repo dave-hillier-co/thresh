@@ -16,6 +16,23 @@ const ICounter = defineGrainInterface<ICounter>("ICounter.lifecycle", {
   options: { get: { readOnly: true } },
 });
 
+interface IBadActivate extends GrainWithStringKey {
+  ping(): Promise<string>;
+}
+
+const IBadActivate = defineGrainInterface<IBadActivate>("IBadActivate.lifecycle");
+
+@grain()
+class BadActivateGrain extends Grain implements IBadActivate {
+  override async onActivate(): Promise<void> {
+    throw new Error("boom");
+  }
+
+  async ping(): Promise<string> {
+    return "pong";
+  }
+}
+
 // Module-scoped sink the in-process grain writes lifecycle events to.
 let events: string[] = [];
 
@@ -96,5 +113,36 @@ describe("activation lifecycle (sociable)", () => {
     await b.increment(1);
     expect(await a.get()).toBe(10);
     expect(await b.get()).toBe(1);
+  });
+});
+
+describe("failed activation surfaces the original error", () => {
+  let silo: Silo;
+
+  beforeEach(() => {
+    silo = new Silo({
+      time: new FakeTimeProvider(),
+      defaultCollectionAgeSeconds: 30,
+      collectionIntervalSeconds: 10,
+    });
+    silo.registerGrain(BadActivateGrain, { interfaces: [IBadActivate] });
+    silo.start();
+  });
+
+  it("rejects a call to an onActivate that throws with the original message", async () => {
+    const grain = silo.getGrain(IBadActivate, "x");
+    await expect(grain.ping()).rejects.toThrow("boom");
+    // Not the generic fallback.
+    await expect(grain.ping()).rejects.not.toThrow("activation unavailable");
+  });
+
+  it("settles every one of many concurrent calls to a failing activation", async () => {
+    const grain = silo.getGrain(IBadActivate, "y");
+    const results = await Promise.allSettled(Array.from({ length: 50 }, () => grain.ping()));
+    expect(results).toHaveLength(50);
+    for (const r of results) {
+      expect(r.status).toBe("rejected");
+      expect((r as PromiseRejectedResult).reason).toHaveProperty("message", "boom");
+    }
   });
 });

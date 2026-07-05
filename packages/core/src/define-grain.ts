@@ -300,7 +300,7 @@ export function useTransactionalState<TState>(
     return facet;
   };
   return {
-    performRead: (read) => bound().performRead(read),
+    performRead: (read, readOptions) => bound().performRead(read, readOptions),
     performUpdate: (update) => bound().performUpdate(update),
   };
 }
@@ -424,10 +424,13 @@ export function useDurableList<T>(
     },
     get: (index) => bound().get(index),
     toArray: () => bound().toArray(),
+    contains: (value) => bound().contains(value),
     [Symbol.iterator]: () => bound()[Symbol.iterator](),
     add: (value) => bound().add(value),
     set: (index, value) => bound().set(index, value),
+    insert: (index, value) => bound().insert(index, value),
     removeAt: (index) => bound().removeAt(index),
+    remove: (value) => bound().remove(value),
     clear: () => bound().clear(),
   };
 }
@@ -454,10 +457,12 @@ export function useDurableQueue<T>(
       return bound().size;
     },
     peek: () => bound().peek(),
+    peekOrThrow: () => bound().peekOrThrow(),
     toArray: () => bound().toArray(),
     [Symbol.iterator]: () => bound()[Symbol.iterator](),
     enqueue: (value) => bound().enqueue(value),
     dequeue: () => bound().dequeue(),
+    dequeueOrThrow: () => bound().dequeueOrThrow(),
     clear: () => bound().clear(),
   };
 }

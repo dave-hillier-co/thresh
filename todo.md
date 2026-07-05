@@ -42,6 +42,63 @@ vertical slices (see [`CLAUDE.md`](CLAUDE.md)).
       snapshots are expired when a successor crashes pre-pull; add retry-with-backoff on recovery
       pulls and gate concurrent registers on a `recoveryMembershipVersion`.
 
+## Orleans test-suite port (parity suite)
+
+The functional test suites of Orleans `v10.1.0` are ported 1:1 into `packages/parity` (see its
+README for conventions); `pnpm parity:scorecard [--run]` reports the current standing. All ten
+in-scope upstream projects are enumerated — every upstream test is ported (passing), gap-tagged
+(skipped pending a feature below), or excluded with a reason. Gap-tagged skips (`GAP-*` in
+`@tsva/testing/orleans-test`) map onto the backlog below; implementing a feature un-gaps its
+tests, which is how the scorecard measures parity progress. Notes: Orleans has no separate
+Reminders test project at v10.1.0 (reminder coverage lives in DefaultCluster/Runtime suites),
+and upstream itself skips its golden-path transaction runner (dotnet/orleans#9553), so
+transaction behaviour here remains covered by `packages/hosting`'s transactions-cluster tests.
+
+- [ ] **Migrate the ad-hoc `buildCluster` helpers** in `packages/runtime`/`hosting` tests onto
+      `@tsva/testing`'s `TestCluster` (optional follow-up).
+
+### Gap backlog from the port (tags in `@tsva/testing/orleans-test`)
+
+Each `GAP-*` tag below skips ported tests; implementing the feature un-gaps them (the scorecard
+shows per-tag counts). One-line definitions live on the `GapTag` union. Grouped by area:
+
+- [ ] **Grain identity & references** — `GAP-COMPOUND-KEY` (guid+string compound keys),
+      `GAP-GRAIN-REF-CAST` (`AsReference<T>()` re-typing), `GAP-GENERIC-GRAINS` (closed-generic
+      grain interface story).
+- [ ] **Activation & lifecycle** — `GAP-LIFECYCLE-SUBJECT`, `GAP-GRAIN-SERVICE`, `GAP-STORAGE-FACET`.
+- [ ] **Request context** — `GAP-REQUEST-CONTEXT` (expose on `@tsva/core` public surface),
+      `GAP-CLIENT-REQUEST-CONTEXT`, `GAP-CALL-FILTER-CLIENT-LAYER`, `GAP-CLIENT-SILO-SEPARATION`.
+- [ ] **Timers** — `GAP-TIMER-VALIDATION` (callback-initiated Change/dispose portions).
+- [ ] **Placement & rebalancing** — `GAP-PLACEMENT-FILTER-DIRECTORS`, `GAP-PLACEMENT-INTROSPECTION`,
+      `GAP-REBALANCER-CONTROL`, `GAP-ACTIVATION-REPARTITIONING`, `GAP-LOAD-SHEDDING`.
+- [ ] **Streams** — `GAP-STREAM-IMPLICIT-MEMORY` (implicit subscriptions on the memory provider),
+      `GAP-STREAM-BATCHING`, `GAP-STREAM-FILTER`, `GAP-STREAM-SUBSCRIPTION-MANAGER`,
+      `GAP-STREAM-PROVIDER-WIRING` (TestCluster/client surface), `GAP-STREAM-PROVIDER-CONFIG`,
+      `GAP-STREAM-CACHE-DIAGNOSTICS`, `GAP-STREAM-GENERATOR-ADAPTER`,
+      `GAP-BROADCAST-CHANNEL-CLIENT`, `GAP-CHANNEL-NAMESPACE-PREDICATE`.
+- [ ] **Transactions** — `GAP-TRANSACTION-EXCEPTION-TYPES` (typed abort hierarchy),
+      `GAP-TRANSACTION-CONTEXT-INTROSPECTION`, `GAP-TRANSACTION-EXCLUSIVE-LOCK`,
+      `GAP-TRANSACTION-OVERLOAD-DETECTOR`,
+      `GAP-TRANSACTION-CONSISTENCY-HARNESS` (randomized workload + serializability checker).
+- [ ] **Journaling & event sourcing** — `GAP-EVENT-SOURCING` (`JournaledGrain` equivalent),
+      `GAP-DURABLE-COLLECTION-API`.
+- [ ] **Durable jobs** — `GAP-JOB-SHARD-MANAGER-API`, `GAP-CLAIM-BUDGET-RAMPUP`.
+- [ ] **Misc primitives** — `GAP-GRAIN-DIRECTORY-API`, `GAP-SERVICE-ID`, `GAP-TRACING`.
+
+### Bugs found by the parity suite (`GAP-BUG-*`, fix then un-gap the tests)
+
+- [ ] **`GAP-BUG-LOCAL-CALL-UNDEFINED`** — `LocalDispatcher` returns `undefined` unchanged while
+      cross-silo calls serialize it to `null`, so a value's shape depends on placement.
+- [ ] **TestCluster teardown flakiness** — `dispose()` on a 2-silo cluster intermittently races
+      (seen in `grain-activate-deactivate-tests`); harden shutdown ordering in
+      `packages/testing/src/test-cluster.ts`.
+- [ ] **Migration rehydration failure leaves a stale directory entry** — when a migrated
+      activation's `onRehydrate` throws on the target silo, the directory keeps pointing at the
+      invalid activation (found by the ported `FailRehydrationTest` scenario). `packages/runtime`.
+- [ ] **Durable jobs cross-silo delivery** — `scheduleJob()` only claims on the scheduling silo;
+      with a shared store on a multi-silo cluster, jobs scheduled for grains owned by another
+      silo may never start. `packages/hosting` durable-jobs wiring (verify then fix).
+
 ## Parity follow-ups (from in-flight slices)
 
 - [ ] **Reminders — surface `getReminder`/`getReminders` through `GrainRuntime`** so grains can

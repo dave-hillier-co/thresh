@@ -59,6 +59,14 @@ export interface QueuedJob {
  */
 export class InMemoryJobQueue {
   private readonly jobs = new Map<string, QueuedJob>();
+  /**
+   * Ids known to this queue: added by `add`, cleared by `cancel`. Unlike
+   * `jobs`, this is *not* cleared by `dequeueDue` — a job stays "live" while
+   * it is out for execution (dequeued, not yet completed or retried), so
+   * `retryLater` can still re-enqueue it. It distinguishes a legitimate retry
+   * of an in-flight job from a stale/foreign/cancelled id.
+   */
+  private readonly liveIds = new Set<string>();
 
   get size(): number {
     return this.jobs.size;
@@ -75,10 +83,12 @@ export class InMemoryJobQueue {
   /** Add (or replace) a job at its due time. */
   add(job: QueuedJob): void {
     this.jobs.set(job.id, { ...job });
+    this.liveIds.add(job.id);
   }
 
   /** Remove a job by id; returns whether it was present (a best-effort cancel). */
   cancel(id: string): boolean {
+    this.liveIds.delete(id);
     return this.jobs.delete(id);
   }
 
@@ -108,9 +118,12 @@ export class InMemoryJobQueue {
   /**
    * Re-enqueue a previously dequeued job to run again after `delay` from `nowMs`,
    * with the `dequeueCount` the caller sets on `job`. Used for both retry (the
-   * executor having bumped the count) and `pollAfter` (count preserved).
+   * executor having bumped the count) and `pollAfter` (count preserved). A
+   * no-op for an id this queue does not consider live (never added, or
+   * explicitly cancelled) — it must not resurrect a dead id.
    */
   retryLater(job: QueuedJob, delay: Duration, nowMs: number): void {
+    if (!this.liveIds.has(job.id)) return;
     this.jobs.set(job.id, { ...job, dueMs: nowMs + durationToMs(delay) });
   }
 }

@@ -104,4 +104,198 @@ describe("StateMachineManagerImpl", () => {
     await expect(bv.set(99)).rejects.toBeInstanceOf(InconsistentStateError);
     expect(bv.value).toBeUndefined(); // append-before-apply: B's memory unchanged
   });
+
+  describe("retirement of unregistered structures", () => {
+    it("keeps an unregistered structure's data through one compaction, purging it on the next", async () => {
+      const storage = new MemoryJournalStorage();
+
+      // Two structures registered; "retire" will stop being registered from
+      // the next activation onward (simulating a field removed across a deploy).
+      const gen1 = new StateMachineManagerImpl("journal", id, storage);
+      const keep1 = new DurableDictionaryImpl<string, number>("keep", gen1);
+      const retire1 = new DurableDictionaryImpl<string, number>("retire", gen1);
+      gen1.register(keep1);
+      gen1.register(retire1);
+      await gen1.replay();
+      await keep1.set("a", 1);
+      await retire1.set("b", 1);
+
+      // Next activation: only "keep" is registered. "retire" becomes an orphan.
+      const gen2 = new StateMachineManagerImpl("journal", id, storage);
+      const keep2 = new DurableDictionaryImpl<string, number>("keep", gen2);
+      gen2.register(keep2);
+      await gen2.replay();
+      expect(keep2.get("a")).toBe(1);
+
+      await keep2.set("a", 10);
+      await gen2.compact(); // 1st compaction while orphaned: within the default grace of 2, kept
+
+      const gen3 = new StateMachineManagerImpl("journal", id, storage);
+      const keep3 = new DurableDictionaryImpl<string, number>("keep", gen3);
+      const retire3 = new DurableDictionaryImpl<string, number>("retire", gen3);
+      gen3.register(keep3);
+      gen3.register(retire3);
+      await gen3.replay();
+      // Proves "retire"'s data survived gen2's compaction even though gen2
+      // never had it registered.
+      expect(retire3.get("b")).toBe(1);
+      expect(keep3.get("a")).toBe(10);
+    });
+
+    it("purges an unregistered structure for good once its grace period elapses", async () => {
+      const storage = new MemoryJournalStorage();
+
+      const gen1 = new StateMachineManagerImpl("journal", id, storage);
+      const keep1 = new DurableDictionaryImpl<string, number>("keep", gen1);
+      const retire1 = new DurableDictionaryImpl<string, number>("retire", gen1);
+      gen1.register(keep1);
+      gen1.register(retire1);
+      await gen1.replay();
+      await retire1.set("b", 1);
+
+      // Two activations in a row without "retire" registered, each compacting
+      // once: 1st compaction keeps it (grace = 2), 2nd purges it for good.
+      for (let i = 0; i < 2; i += 1) {
+        const gen = new StateMachineManagerImpl("journal", id, storage);
+        const keep = new DurableDictionaryImpl<string, number>("keep", gen);
+        gen.register(keep);
+        await gen.replay();
+        await keep.set("a", i);
+        await gen.compact();
+      }
+
+      const genFinal = new StateMachineManagerImpl("journal", id, storage);
+      const keepFinal = new DurableDictionaryImpl<string, number>("keep", genFinal);
+      const retireFinal = new DurableDictionaryImpl<string, number>("retire", genFinal);
+      genFinal.register(keepFinal);
+      genFinal.register(retireFinal);
+      await genFinal.replay();
+
+      expect(keepFinal.get("a")).toBe(1);
+      // "retire" comes back empty: its data was purged, not resurrected.
+      expect(retireFinal.has("b")).toBe(false);
+    });
+
+    it("resurrects a re-registered structure immediately, before its grace period elapses", async () => {
+      const storage = new MemoryJournalStorage();
+
+      const gen1 = new StateMachineManagerImpl("journal", id, storage);
+      const keep1 = new DurableDictionaryImpl<string, number>("keep", gen1);
+      const retire1 = new DurableDictionaryImpl<string, number>("retire", gen1);
+      gen1.register(keep1);
+      gen1.register(retire1);
+      await gen1.replay();
+      await retire1.set("b", 1);
+
+      // "retire" goes unregistered for one activation and one compaction...
+      const gen2 = new StateMachineManagerImpl("journal", id, storage);
+      const keep2 = new DurableDictionaryImpl<string, number>("keep", gen2);
+      gen2.register(keep2);
+      await gen2.replay();
+      await keep2.set("a", 1);
+      await gen2.compact();
+
+      // ...then comes back before the grace period (2 compactions) elapses.
+      const gen3 = new StateMachineManagerImpl("journal", id, storage);
+      const keep3 = new DurableDictionaryImpl<string, number>("keep", gen3);
+      const retire3 = new DurableDictionaryImpl<string, number>("retire", gen3);
+      gen3.register(keep3);
+      gen3.register(retire3);
+      await gen3.replay();
+      expect(retire3.get("b")).toBe(1); // resurrected with its original data
+
+      // Even after another compaction here, it is registered so nothing purges it.
+      await gen3.compact();
+
+      const gen4 = new StateMachineManagerImpl("journal", id, storage);
+      const keep4 = new DurableDictionaryImpl<string, number>("keep", gen4);
+      const retire4 = new DurableDictionaryImpl<string, number>("retire", gen4);
+      gen4.register(keep4);
+      gen4.register(retire4);
+      await gen4.replay();
+      expect(retire4.get("b")).toBe(1); // still there: it was never purged
+    });
+
+    it("resets the grace period if a resurrected structure is removed again", async () => {
+      const storage = new MemoryJournalStorage();
+
+      const gen1 = new StateMachineManagerImpl("journal", id, storage);
+      const keep1 = new DurableDictionaryImpl<string, number>("keep", gen1);
+      const retire1 = new DurableDictionaryImpl<string, number>("retire", gen1);
+      gen1.register(keep1);
+      gen1.register(retire1);
+      await gen1.replay();
+      await retire1.set("b", 1);
+
+      // Orphaned for one compaction (grace = 2, so 1 of 2 spent)...
+      const gen2 = new StateMachineManagerImpl("journal", id, storage);
+      const keep2 = new DurableDictionaryImpl<string, number>("keep", gen2);
+      gen2.register(keep2);
+      await gen2.replay();
+      await keep2.set("a", 1);
+      await gen2.compact();
+
+      // ...resurrected (writes a normal snapshot for it, clearing the tracker)...
+      const gen3 = new StateMachineManagerImpl("journal", id, storage);
+      const keep3 = new DurableDictionaryImpl<string, number>("keep", gen3);
+      const retire3 = new DurableDictionaryImpl<string, number>("retire", gen3);
+      gen3.register(keep3);
+      gen3.register(retire3);
+      await gen3.replay();
+      await keep3.set("a", 2);
+      await gen3.compact();
+
+      // ...then orphaned again. If the grace period had carried over from
+      // before the resurrection, a single further compaction would purge it;
+      // it should instead take a fresh 2-compaction grace period.
+      const gen4 = new StateMachineManagerImpl("journal", id, storage);
+      const keep4 = new DurableDictionaryImpl<string, number>("keep", gen4);
+      gen4.register(keep4);
+      await gen4.replay();
+      await keep4.set("a", 3);
+      await gen4.compact(); // 1st compaction of the fresh grace period: kept
+
+      const gen5 = new StateMachineManagerImpl("journal", id, storage);
+      const keep5 = new DurableDictionaryImpl<string, number>("keep", gen5);
+      const retire5 = new DurableDictionaryImpl<string, number>("retire", gen5);
+      gen5.register(keep5);
+      gen5.register(retire5);
+      await gen5.replay();
+      expect(retire5.get("b")).toBe(1); // still alive: only 1 of 2 compactions spent
+    });
+
+    it("supports a configurable grace period", async () => {
+      const storage = new MemoryJournalStorage();
+
+      const gen1 = new StateMachineManagerImpl("journal", id, storage, {
+        retirementGraceCompactions: 1,
+      });
+      const keep1 = new DurableDictionaryImpl<string, number>("keep", gen1);
+      const retire1 = new DurableDictionaryImpl<string, number>("retire", gen1);
+      gen1.register(keep1);
+      gen1.register(retire1);
+      await gen1.replay();
+      await retire1.set("b", 1);
+
+      // A grace period of 1 means the very first compaction while unregistered purges it.
+      const gen2 = new StateMachineManagerImpl("journal", id, storage, {
+        retirementGraceCompactions: 1,
+      });
+      const keep2 = new DurableDictionaryImpl<string, number>("keep", gen2);
+      gen2.register(keep2);
+      await gen2.replay();
+      await keep2.set("a", 1);
+      await gen2.compact();
+
+      const gen3 = new StateMachineManagerImpl("journal", id, storage, {
+        retirementGraceCompactions: 1,
+      });
+      const keep3 = new DurableDictionaryImpl<string, number>("keep", gen3);
+      const retire3 = new DurableDictionaryImpl<string, number>("retire", gen3);
+      gen3.register(keep3);
+      gen3.register(retire3);
+      await gen3.replay();
+      expect(retire3.has("b")).toBe(false);
+    });
+  });
 });

@@ -2,10 +2,12 @@ import {
   defaultGrainType,
   markBroadcastSubscription,
   markImplicitSubscription,
+  markMayInterleave,
   markReentrant,
   setGrainOptions,
   type GrainConstructor,
   type GrainOptions,
+  type MayInterleavePredicate,
 } from "./grain-metadata";
 import { registerPersistentField } from "./persistent-state-metadata";
 import { registerReducerField } from "./reducer-state-metadata";
@@ -33,6 +35,20 @@ export function grain(options: GrainOptions = {}) {
 export function reentrant() {
   return function <T extends GrainConstructor>(value: T, _context: ClassDecoratorContext): T {
     markReentrant(value);
+    return value;
+  };
+}
+
+/**
+ * Marks a grain class with an admission predicate for calls that would
+ * otherwise queue behind the currently-running turn (Orleans' `[MayInterleave]`).
+ * Given the incoming call's method name and arguments, `predicate` returns
+ * whether that call may interleave with the running turn — a finer-grained
+ * alternative to `@reentrant()` (which admits every call unconditionally).
+ */
+export function mayInterleave(predicate: MayInterleavePredicate) {
+  return function <T extends GrainConstructor>(value: T, _context: ClassDecoratorContext): T {
+    markMayInterleave(value, predicate);
     return value;
   };
 }

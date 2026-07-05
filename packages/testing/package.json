@@ -1,0 +1,23 @@
+{
+  "name": "@tsva/testing",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./*": "./src/*.ts"
+  },
+  "dependencies": {
+    "@tsva/core": "workspace:*",
+    "@tsva/durable-jobs": "workspace:*",
+    "@tsva/hosting": "workspace:*",
+    "@tsva/journaling": "workspace:*",
+    "@tsva/messaging": "workspace:*",
+    "@tsva/persistence": "workspace:*",
+    "@tsva/reminders": "workspace:*",
+    "@tsva/runtime": "workspace:*",
+    "@tsva/transactions": "workspace:*"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.7"
+  }
+}

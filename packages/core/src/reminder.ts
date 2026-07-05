@@ -52,6 +52,18 @@ export interface ReminderTable {
 }
 
 /**
+ * A grain-facing view of a reminder (Orleans `IGrainReminder`, widened with the
+ * fields a grain can usefully introspect). Returned by `GrainRuntime.getReminder`/
+ * `getReminders` — it omits `grainId`/`etag`, which are internal to the reminder
+ * table and never needed by grain code reading back its own reminders.
+ */
+export interface GrainReminder {
+  name: string;
+  startAt: Date;
+  period: Duration;
+}
+
+/**
  * The runtime-facing handle a grain's `registerReminder` delegates to. The
  * reminder service implements it; the hosting layer injects it into the runtime.
  */

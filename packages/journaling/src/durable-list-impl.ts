@@ -5,6 +5,7 @@ type ListOp<T> =
   | { t: "add"; v: T }
   | { t: "set"; i: number; v: T }
   | { t: "removeAt"; i: number }
+  | { t: "insert"; i: number; v: T }
   | { t: "clear" }
   | { t: "load"; items: T[] };
 
@@ -34,6 +35,11 @@ export class DurableListImpl<T> implements DurableList<T>, DurableStateMachine {
     return [...this.items];
   }
 
+  /** Whether `value` is present, compared by `Array.prototype.includes` semantics. */
+  contains(value: T): boolean {
+    return this.items.includes(value);
+  }
+
   [Symbol.iterator](): IterableIterator<T> {
     return this.items[Symbol.iterator]();
   }
@@ -49,6 +55,22 @@ export class DurableListImpl<T> implements DurableList<T>, DurableStateMachine {
 
   async removeAt(index: number): Promise<void> {
     await this.manager.append(this.name, { t: "removeAt", i: index } satisfies ListOp<T>);
+  }
+
+  /** Journal an insert-at-index, shifting later items back, and update memory. */
+  async insert(index: number, value: T): Promise<void> {
+    await this.manager.append(this.name, { t: "insert", i: index, v: value } satisfies ListOp<T>);
+  }
+
+  /**
+   * Journal a remove of the first occurrence of `value` and update memory.
+   * Resolves to whether a matching item was found and removed.
+   */
+  async remove(value: T): Promise<boolean> {
+    const index = this.items.indexOf(value);
+    if (index === -1) return false;
+    await this.removeAt(index);
+    return true;
   }
 
   async clear(): Promise<void> {
@@ -70,6 +92,9 @@ export class DurableListImpl<T> implements DurableList<T>, DurableStateMachine {
         break;
       case "removeAt":
         this.items.splice(op.i, 1);
+        break;
+      case "insert":
+        this.items.splice(op.i, 0, op.v);
         break;
       case "clear":
         this.items = [];

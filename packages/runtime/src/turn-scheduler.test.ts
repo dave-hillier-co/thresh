@@ -190,4 +190,90 @@ describe("TurnScheduler", () => {
     expect(log).toEqual(["a:start", "b:start"]);
     a.resolve();
   });
+
+  describe("mayInterleave predicate (Orleans' [MayInterleave])", () => {
+    it("admits an incoming turn whose method matches the predicate while another turn runs", async () => {
+      const sched = new TurnScheduler({ mayInterleave: (method) => method === "goFast" });
+      const log: string[] = [];
+      const w = deferred();
+      void sched.schedule({
+        options: {},
+        method: "goSlow",
+        run: async () => {
+          log.push("slow:start");
+          await w.promise;
+        },
+      });
+      void sched.schedule({
+        options: {},
+        method: "goFast",
+        run: async () => {
+          log.push("fast:start");
+        },
+      });
+      await flush();
+      // The predicate matches the incoming "goFast" call, so it interleaves with
+      // the running "goSlow" call rather than queueing behind it.
+      expect(log).toEqual(["slow:start", "fast:start"]);
+      w.resolve();
+    });
+
+    it("queues an incoming turn whose method does not match the predicate", async () => {
+      const sched = new TurnScheduler({ mayInterleave: (method) => method === "goFast" });
+      const log: string[] = [];
+      const w = deferred();
+      void sched.schedule({
+        options: {},
+        method: "goSlow",
+        run: async () => {
+          log.push("slow1:start");
+          await w.promise;
+          log.push("slow1:end");
+        },
+      });
+      void sched.schedule({
+        options: {},
+        method: "goSlow",
+        run: async () => {
+          log.push("slow2:start");
+        },
+      });
+      await flush();
+      // Neither the incoming nor the running call matches the predicate, so the
+      // second "goSlow" queues behind the first exactly like the no-predicate case.
+      expect(log).toEqual(["slow1:start"]);
+      w.resolve();
+      await flush();
+      expect(log).toEqual(["slow1:start", "slow1:end", "slow2:start"]);
+    });
+
+    it("leaves a scheduler with no configured predicate unaffected (existing behavior)", async () => {
+      const sched = new TurnScheduler();
+      const log: string[] = [];
+      const w = deferred();
+      void sched.schedule({
+        options: {},
+        method: "goSlow",
+        run: async () => {
+          log.push("w:start");
+          await w.promise;
+          log.push("w:end");
+        },
+      });
+      void sched.schedule({
+        options: {},
+        method: "goFast",
+        run: async () => {
+          log.push("fast:start");
+        },
+      });
+      await flush();
+      // No predicate configured: the method name is irrelevant — same FIFO
+      // exclusive-turn behavior as every other test in this file.
+      expect(log).toEqual(["w:start"]);
+      w.resolve();
+      await flush();
+      expect(log).toEqual(["w:start", "w:end", "fast:start"]);
+    });
+  });
 });

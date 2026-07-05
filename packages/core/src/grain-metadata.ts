@@ -40,9 +40,19 @@ export interface GrainMetadata {
    * distinct subsystems in Orleans.
    */
   broadcastSubscriptions: readonly string[];
+  /** `[MayInterleave]`-equivalent predicate, if this grain type declared one. */
+  mayInterleave?: MayInterleavePredicate;
 }
 
 export type GrainConstructor = abstract new (...args: never[]) => object;
+
+/**
+ * Orleans' `[MayInterleave]` predicate: given the incoming call's method name
+ * (and its arguments), decides whether that call may interleave with the
+ * currently-running turn on the same activation — even though the grain is
+ * not fully `@reentrant()`. Mirrors `IMayInterleavePredicate`/`MayInterleave`.
+ */
+export type MayInterleavePredicate = (methodName: string, args: readonly unknown[]) => boolean;
 
 // Decorator order is irrelevant: options, the reentrant flag and implicit
 // stream subscriptions are tracked separately and composed on read.
@@ -53,6 +63,7 @@ const optionsRegistry = new WeakMap<
 const reentrantRegistry = new WeakSet<GrainConstructor>();
 const implicitSubscriptionRegistry = new WeakMap<GrainConstructor, Set<string>>();
 const broadcastSubscriptionRegistry = new WeakMap<GrainConstructor, Set<string>>();
+const mayInterleaveRegistry = new WeakMap<GrainConstructor, MayInterleavePredicate>();
 
 export function setGrainOptions(
   ctor: GrainConstructor,
@@ -64,6 +75,11 @@ export function setGrainOptions(
 
 export function markReentrant(ctor: GrainConstructor): void {
   reentrantRegistry.add(ctor);
+}
+
+/** Record this grain type's `[MayInterleave]`-equivalent admission predicate. */
+export function markMayInterleave(ctor: GrainConstructor, predicate: MayInterleavePredicate): void {
+  mayInterleaveRegistry.set(ctor, predicate);
 }
 
 function markSubscription(
@@ -94,12 +110,14 @@ export function getGrainMetadata(ctor: GrainConstructor): GrainMetadata | undefi
   if (entry === undefined) return undefined;
   const implicit = implicitSubscriptionRegistry.get(ctor);
   const broadcast = broadcastSubscriptionRegistry.get(ctor);
+  const mayInterleave = mayInterleaveRegistry.get(ctor);
   return {
     grainType: entry.grainType,
     options: entry.options,
     reentrant: reentrantRegistry.has(ctor),
     implicitSubscriptions: implicit === undefined ? [] : [...implicit],
     broadcastSubscriptions: broadcast === undefined ? [] : [...broadcast],
+    ...(mayInterleave !== undefined ? { mayInterleave } : {}),
   };
 }
 

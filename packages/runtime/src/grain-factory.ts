@@ -4,14 +4,15 @@ import {
   type OutgoingGrainCallFilter,
 } from "@tsva/core/grain-call-filter";
 import { GrainId } from "@tsva/core/grain-id";
-import type { GrainInterface } from "@tsva/core/grain-interface";
+import { getGrainInterface, type GrainInterface } from "@tsva/core/grain-interface";
 import type { GrainKey } from "@tsva/core/grain-key";
-import { GRAIN_REF } from "@tsva/core/grain-reference";
+import { GRAIN_REF, GRAIN_REF_CAST } from "@tsva/core/grain-reference";
 import type { GrainType } from "@tsva/core/grain-type";
 import { Guid } from "@tsva/core/guid";
 import type { InvokeMethodOptions } from "@tsva/core/invoke-options";
 import type { InvocationRequest } from "@tsva/core/request";
 import type { TransactionInfo } from "@tsva/core/transaction-info";
+import { TransactionsDisabledError } from "@tsva/core/errors";
 import type { Dispatcher } from "@tsva/runtime/dispatcher";
 import { invocationContext } from "@tsva/runtime/invocation-context";
 import type { TransactionAgent } from "@tsva/runtime/transaction-agent";
@@ -51,8 +52,18 @@ export class GrainFactory {
     return new Proxy(
       {},
       {
-        get: (_t, prop): unknown => {
+        // The proxy target is an empty object, so without this trap
+        // `GRAIN_REF in ref` would always be false (identity lookups and the
+        // wire codec's "is this a grain ref?" check rely on `in`).
+        has: (_t, prop): boolean => {
+          if (prop === GRAIN_REF) return true;
+          // Keep `"then" in ref` false too, for the same reason `get` hides it.
+          if (prop === "then") return false;
+          return typeof prop === "string";
+        },
+        get: (_t, prop, receiver): unknown => {
           if (prop === GRAIN_REF) return { grainId: target, interfaceId: def.id };
+          if (prop === GRAIN_REF_CAST) return this.castTo(def, target, receiver);
           if (typeof prop !== "string") return undefined;
           // Never appear thenable: a grain ref must not resolve `.then` to a
           // dispatcher, or awaiting/Promise.resolve-ing one would invoke it.
@@ -116,6 +127,40 @@ export class GrainFactory {
   }
 
   /**
+   * Build the `GRAIN_REF_CAST` handler for a reference currently typed as
+   * `sourceDef` over `target`: re-type it to `newDef`, same grain id (Orleans'
+   * `AsReference<T>`/`Cast`).
+   *
+   * A same-interface cast is a no-op that returns the identical proxy
+   * (`Assert.Same` in Orleans' `CastInternalCastFromMyType`/
+   * `CastInternalCastUpFromChild`-style tests). Casting to anything that
+   * isn't even a registered `GrainInterface` fails eagerly here (Orleans'
+   * `Cast(grain, typeof(bool))` throws `ArgumentException` synchronously);
+   * casting to an interface the concrete grain type doesn't actually
+   * implement still succeeds — that mismatch only surfaces once a call for a
+   * method the grain lacks reaches the activation (Orleans parity: casts are
+   * validated optimistically, calls are validated for real).
+   */
+  private castTo(
+    sourceDef: GrainInterface<unknown>,
+    target: GrainId,
+    sourceRef: unknown,
+  ): (newDef: GrainInterface<unknown>) => unknown {
+    return (newDef) => {
+      if (
+        typeof newDef !== "object" ||
+        newDef === null ||
+        typeof newDef.id !== "number" ||
+        getGrainInterface(newDef.id) === undefined
+      ) {
+        throw new TypeError("cast target is not a registered grain interface");
+      }
+      if (newDef.id === sourceDef.id) return sourceRef;
+      return this.buildProxy(newDef, target);
+    };
+  }
+
+  /**
    * Apply the method's `TransactionOption` against the ambient transaction,
    * mirroring Orleans' boundaries. Returns the transaction to propagate and
    * whether this call is the root that begins (and must resolve) it.
@@ -167,9 +212,15 @@ export class GrainFactory {
     }
   }
 
+  /**
+   * Resolve the transaction agent, or raise the Orleans-parity
+   * "transactions disabled" error when this silo was built without one — a
+   * silo built via `SiloBuilder` only wires an agent when transactional
+   * storage is configured (transactions are opt-in).
+   */
   private requireAgent(): TransactionAgent {
     if (this.transactionAgent === undefined) {
-      throw new Error("grain factory has no transaction agent");
+      throw new TransactionsDisabledError();
     }
     return this.transactionAgent;
   }

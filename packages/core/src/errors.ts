@@ -51,6 +51,23 @@ export class InconsistentStateError extends Error {
 }
 
 /**
+ * Raised when a `[Transaction]`-style grain call (a method with a
+ * `TransactionOption` other than `"suppress"`/`"notAllowed"`/`undefined`) is
+ * invoked on a silo that was built without transaction support (Orleans
+ * `OrleansTransactionsDisabledException`). Transactions are opt-in — a silo
+ * must configure transactional storage (e.g. `useMemoryTransactionalStorage`)
+ * for `[Transaction]` calls to work.
+ */
+export class TransactionsDisabledError extends Error {
+  constructor() {
+    super(
+      "Orleans transactions have not been enabled. Transactions are disabled by default and must be configured to be used.",
+    );
+    this.name = "TransactionsDisabledError";
+  }
+}
+
+/**
  * Raised when a transaction is aborted by the concurrency-control or commit
  * protocol — for example a younger transaction "dies" under wait-die when it
  * conflicts with an older holder, or a participant fails to prepare.
@@ -64,5 +81,40 @@ export class TransactionAbortedError extends Error {
   ) {
     super(`transaction ${transactionId} aborted: ${reason}`);
     this.name = "TransactionAbortedError";
+  }
+}
+
+/**
+ * Raised when a read-only transaction attempts to write to a grain's
+ * transactional state (Orleans `OrleansReadOnlyViolatedException`, a subtype
+ * of `OrleansTransactionAbortedException`). Thrown by
+ * `TransactionalStateImpl.performUpdate` (`@tsva/transactions`) before any
+ * lock is acquired, since the write is illegal regardless of contention.
+ */
+export class TransactionReadOnlyViolatedError extends TransactionAbortedError {
+  constructor(transactionId: string) {
+    super(transactionId, "attempted to write to a grain in a read-only transaction");
+    this.name = "TransactionReadOnlyViolatedError";
+  }
+}
+
+/**
+ * Raised when a transaction cannot upgrade a shared (read) lock it already
+ * holds to a write lock because a higher-priority (older) transaction is
+ * concurrently holding or waiting on the same resource (Orleans
+ * `OrleansTransactionLockUpgradeException`, a subtype of
+ * `OrleansTransactionTransientFailureException`). Thrown by
+ * `ReaderWriterLock.enter` (`@tsva/transactions`) specifically on the
+ * read-to-write upgrade path — never on an ordinary first-acquisition
+ * wait-die death, which keeps raising the generic
+ * {@link TransactionAbortedError}.
+ */
+export class TransactionLockUpgradeError extends TransactionAbortedError {
+  constructor(transactionId: string) {
+    super(
+      transactionId,
+      "could not upgrade a lock, because of a higher-priority conflicting transaction",
+    );
+    this.name = "TransactionLockUpgradeError";
   }
 }

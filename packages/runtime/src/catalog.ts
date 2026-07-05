@@ -8,6 +8,7 @@ import type { GrainType } from "@tsva/core/grain-type";
 import type { DeactivationReason } from "@tsva/core/reasons";
 import type { ReminderRegistry } from "@tsva/core/reminder";
 import type { DurableJobScheduler } from "@tsva/core/durable-job";
+import type { SiloAddress } from "@tsva/core/silo-address";
 import type { StreamProvider } from "@tsva/core/stream";
 import { ActivationData } from "@tsva/runtime/activation";
 import type { GrainFactory } from "@tsva/runtime/grain-factory";
@@ -19,11 +20,27 @@ export interface RegisteredGrain {
   metadata: GrainMetadata;
 }
 
+/**
+ * Optional hook to construct/dispose grain instances instead of `new ctor()`
+ * (Orleans `IGrainActivator`) — e.g. object pooling or non-DI construction.
+ */
+export interface GrainActivator {
+  /** Construct a grain instance instead of `new ctor()`. */
+  createInstance(ctor: new () => Grain, id: GrainId): Grain;
+  /** Called when an activation using this activator is deactivated (idle collection or explicit). */
+  disposeInstance?(instance: Grain, id: GrainId): void | Promise<void>;
+}
+
 export interface CatalogOptions {
   grainTypes: ReadonlyMap<GrainType, RegisteredGrain>;
   factory: GrainFactory;
   time: TimeProvider;
   defaultCollectionAgeSeconds: number;
+  /**
+   * Optional hook to construct/dispose grain instances instead of `new ctor()` —
+   * e.g. object pooling or non-DI construction. Defaults to `new ctor()` when unset.
+   */
+  grainActivator?: GrainActivator;
   /** Called after an activation has been deactivated (idle collection or shutdown). */
   onDeactivated?: (activation: ActivationData) => void;
   /**
@@ -46,6 +63,8 @@ export interface CatalogOptions {
   streamProvider?: (name?: string) => StreamProvider | undefined;
   /** Resolves the broadcast-channel provider a grain's `getBroadcastChannelProvider` returns. */
   broadcastProvider?: (name?: string) => BroadcastChannelProvider | undefined;
+  /** Resolves this silo's own address, for a grain's `runtime.localSiloAddress()`. */
+  localSilo?: () => SiloAddress | undefined;
   /** Incoming call filters wrapping each grain-method dispatch (silo-wide). */
   incomingCallFilters?: readonly IncomingGrainCallFilter[];
 }
@@ -146,8 +165,12 @@ export class Catalog {
       ...(this.options.durableJobScheduler !== undefined
         ? { durableJobs: this.options.durableJobScheduler }
         : {}),
+      ...(this.options.localSilo !== undefined ? { localSilo: this.options.localSilo } : {}),
     });
-    const instance = new reg.ctor();
+    const instance =
+      this.options.grainActivator !== undefined
+        ? this.options.grainActivator.createInstance(reg.ctor, id)
+        : new reg.ctor();
     instance.setContext(activation);
     activation.instance = instance;
     if (this.options.incomingCallFilters !== undefined) {
@@ -173,21 +196,33 @@ export class Catalog {
   async collectIdle(): Promise<void> {
     for (const [key, activation] of this.activations) {
       if (activation.isStale()) {
-        // A grain that asked to migrate moves to another silo first (flipping the
-        // directory); then the local activation is deactivated either way — its
-        // address-matched directory unregister is a no-op once the entry moved.
-        const moved =
-          activation.wantsMigration && this.options.migrate !== undefined
-            ? await this.options.migrate(activation)
-            : false;
-        await activation.deactivate(
-          moved
-            ? { code: "migrating", description: "migrated to another silo" }
-            : { code: "idle", description: "idle collection" },
-        );
+        if (activation.wantsMigration && this.options.migrate !== undefined) {
+          // Migration was requested before this sweep: dehydrate the grain's
+          // state and hand it off first (so `onDeactivate` — which may clear
+          // state — runs only after the state has been captured), then run the
+          // deactivate hook with the "migrating" reason.
+          const moved = await this.options.migrate(activation);
+          await activation.deactivate(
+            moved
+              ? { code: "migrating", description: "migrated to another silo" }
+              : { code: "idle", description: "idle collection" },
+          );
+        } else {
+          // No migration requested yet: run `onDeactivate` first, since a grain
+          // may call `migrateOnIdle()` from within it; honour a migration it
+          // asks for during the hook, then finalize.
+          await activation.runDeactivateHook({ code: "idle", description: "idle collection" });
+          if (activation.wantsMigration && this.options.migrate !== undefined) {
+            await this.options.migrate(activation);
+          }
+          activation.finalizeDeactivation();
+        }
       }
       if (activation.state === "invalid") {
         this.activations.delete(key);
+        if (this.options.grainActivator?.disposeInstance !== undefined) {
+          await this.options.grainActivator.disposeInstance(activation.instance, activation.id);
+        }
         this.options.onDeactivated?.(activation);
       }
     }
@@ -197,6 +232,11 @@ export class Catalog {
     const all = [...this.activations.values()];
     await Promise.all(all.map((a) => a.deactivate(reason)));
     this.activations.clear();
-    for (const a of all) this.options.onDeactivated?.(a);
+    for (const a of all) {
+      if (this.options.grainActivator?.disposeInstance !== undefined) {
+        await this.options.grainActivator.disposeInstance(a.instance, a.id);
+      }
+      this.options.onDeactivated?.(a);
+    }
   }
 }
