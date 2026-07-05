@@ -18,7 +18,6 @@ export type GapTag =
   | "GAP-MIGRATE-FROM-DEACTIVATE" // migrateOnIdle from onDeactivate misses the in-progress sweep
   | "GAP-SERIALIZER-POLYMORPHISM" // serializer lacks polymorphism/cycles
   | "GAP-STREAM-FAILURE-HANDLER" // streams lack IStreamFailureHandler
-  | "GAP-GET-REMINDERS" // no GetReminder(s) on the grain runtime surface
   | "GAP-GENERIC-GRAINS" // open generic grain interfaces are unrepresentable
   | "GAP-ACTIVATION-REPARTITIONING" // no activation-repartitioning subsystem (communication-graph driven)
   | "GAP-BROADCAST-CHANNEL-CLIENT" // no client-side broadcast-channel writer/diagnostics/regex namespaces

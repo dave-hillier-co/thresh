@@ -5,6 +5,7 @@ import type { GrainKeyFor } from "./key-kinds";
 import type { SiloAddress } from "./silo-address";
 import type { BroadcastChannelProvider } from "./broadcast-channel";
 import type { DurableJob, ScheduleJobRequest } from "./durable-job";
+import type { GrainReminder } from "./reminder";
 import type { StreamProvider } from "./stream";
 
 /**
@@ -16,6 +17,10 @@ export interface GrainRuntime {
   registerTimer(callback: () => Promise<void>, due: Duration, period?: Duration): GrainTimer;
   registerReminder(name: string, due: Duration, period: Duration): Promise<void>;
   unregisterReminder(name: string): Promise<void>;
+  /** Look up a reminder registered to this grain (Orleans `IReminderRegistry.GetReminder`). */
+  getReminder(name: string): Promise<GrainReminder | undefined>;
+  /** All reminders registered to this grain (Orleans `IReminderRegistry.GetReminders`). */
+  getReminders(): Promise<GrainReminder[]>;
   /**
    * Schedule a durable job: one invocation of a target grain's
    * `DURABLE_JOB_HANDLER` at a due time, made durable, retried and failed-over

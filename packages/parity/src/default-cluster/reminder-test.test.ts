@@ -1,11 +1,35 @@
 // Ported from dotnet/orleans test/Orleans.DefaultCluster.Tests/ReminderTest.cs @ v10.1.0 (MIT).
-import { describe } from "vitest";
+import { afterAll, beforeAll, describe, expect } from "vitest";
 import { orleansTest } from "@tsva/testing/orleans-test";
+import { TestCluster } from "@tsva/testing/test-cluster";
+import { randomIntegerKey } from "@tsva/parity/support/keys";
+import {
+  IReminderTestGrain,
+  ReminderTestGrain,
+} from "@tsva/parity/grains/impl/reminder-test-grain";
 
-// IsReminderExists needs to read back a single named reminder registered to the
-// calling grain (Orleans `IRemindable`/`this.GetReminder(name)`). This framework's
-// `GrainRuntime` only exposes registerReminder/unregisterReminder — no way for a
-// grain to query whether one of its own reminders exists (GAP-GET-REMINDERS).
 describe("DefaultCluster.Tests.ReminderTest", () => {
-  orleansTest.gap("GAP-GET-REMINDERS", "DefaultCluster.Tests.ReminderTest.SimpleGrainGetGrain");
+  let cluster: TestCluster;
+
+  beforeAll(async () => {
+    cluster = await TestCluster.start({
+      grains: [{ ctor: ReminderTestGrain, interfaces: [IReminderTestGrain] }],
+    });
+  });
+
+  afterAll(async () => {
+    await cluster.dispose();
+  });
+
+  orleansTest("DefaultCluster.Tests.ReminderTest.SimpleGrainGetGrain", async () => {
+    const grain = cluster.getGrain(IReminderTestGrain, randomIntegerKey());
+    const notExists = await grain.isReminderExists("not exists");
+    expect(notExists).toBe(false);
+
+    await grain.addReminder("dummy");
+    expect(await grain.isReminderExists("dummy")).toBe(true);
+
+    await grain.removeReminder("dummy");
+    expect(await grain.isReminderExists("dummy")).toBe(false);
+  });
 });

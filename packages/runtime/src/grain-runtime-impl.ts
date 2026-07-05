@@ -3,7 +3,7 @@ import type { GrainInterface } from "@tsva/core/grain-interface";
 import type { GrainKey } from "@tsva/core/grain-key";
 import type { GrainRuntime } from "@tsva/core/grain-runtime";
 import type { GrainTimer } from "@tsva/core/grain-timer";
-import type { ReminderRegistry } from "@tsva/core/reminder";
+import type { GrainReminder, ReminderEntry, ReminderRegistry } from "@tsva/core/reminder";
 import type { DurableJob, DurableJobScheduler, ScheduleJobRequest } from "@tsva/core/durable-job";
 import type { SiloAddress } from "@tsva/core/silo-address";
 import type { BroadcastChannelProvider } from "@tsva/core/broadcast-channel";
@@ -43,6 +43,16 @@ export class GrainRuntimeImpl implements GrainRuntime {
 
   unregisterReminder(name: string): Promise<void> {
     return this.requireReminders().unregister(this.activation.id, name);
+  }
+
+  async getReminder(name: string): Promise<GrainReminder | undefined> {
+    const entry = await this.requireReminders().getReminder(this.activation.id, name);
+    return entry === undefined ? undefined : toGrainReminder(entry);
+  }
+
+  async getReminders(): Promise<GrainReminder[]> {
+    const entries = await this.requireReminders().getReminders(this.activation.id);
+    return entries.map(toGrainReminder);
   }
 
   scheduleJob(request: ScheduleJobRequest): Promise<DurableJob> {
@@ -108,4 +118,9 @@ export class GrainRuntimeImpl implements GrainRuntime {
     if (scheduler === undefined) throw new Error("durable jobs are not configured on this silo");
     return scheduler;
   }
+}
+
+/** Projects a durable `ReminderEntry` to the grain-facing shape, dropping `grainId`/`etag`. */
+function toGrainReminder(entry: ReminderEntry): GrainReminder {
+  return { name: entry.name, startAt: entry.startAt, period: entry.period };
 }
