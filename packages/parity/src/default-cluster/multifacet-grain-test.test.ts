@@ -1,17 +1,28 @@
 // Ported from dotnet/orleans test/Orleans.DefaultCluster.Tests/MultifacetGrainTest.cs @ v10.1.0 (MIT).
 //
-// RWReferences / RWReferencesInvalidCastException turn on
-// `GrainReference.AsReference<T>()` re-typing an already-obtained reference to
-// a sibling interface it wasn't fetched through — the same gap the sibling
-// `grain-reference-cast-tests.test.ts` file already carries under
-// GAP-GRAIN-REF-CAST, so they are gapped under the same tag rather than a new
-// one.
+// RWReferences ports onto `castGrainReference` (`packages/core/src/grain-reference.ts`),
+// the same `AsReference<T>` re-typing feature the sibling
+// `grain-reference-cast-tests.test.ts` un-gaps under GAP-GRAIN-REF-CAST.
+//
+// RWReferencesInvalidCastException is excluded, not ported: upstream casts with
+// a bare C# `(IMultifacetWriter)reader` — no `AsReference`/`Cast` call at all —
+// which throws `InvalidCastException` synchronously because .NET's codegen
+// builds a distinct concrete reference class per interface and the CLR
+// validates the cast against that class's actual runtime type. TypeScript has
+// no equivalent: a bare `as IMultifacetWriter` is a compile-time-only
+// annotation with zero runtime effect, so there is nothing to assert without
+// going through the explicit `castGrainReference` API this framework
+// provides — and that API validates lazily by design (Orleans parity for
+// `AsReference`/`Cast`, exercised by the sibling file's FailSideCast* tests).
 import { afterAll, beforeAll, describe, expect } from "vitest";
 import { orleansTest } from "@tsva/testing/orleans-test";
 import { TestCluster } from "@tsva/testing/test-cluster";
+import { castGrainReference } from "@tsva/core/grain-reference";
 import {
   IMultifacetFactoryTestGrain,
+  IMultifacetReader,
   IMultifacetTestGrain,
+  IMultifacetWriter,
   MultifacetFactoryTestGrain,
   MultifacetTestGrain,
 } from "@tsva/parity/grains/impl/multifacet-grain";
@@ -24,7 +35,10 @@ describe("DefaultCluster.Tests.General.MultifacetGrainTest", () => {
     cluster = await TestCluster.start({
       initialSilos: 2,
       grains: [
-        { ctor: MultifacetTestGrain, interfaces: [IMultifacetTestGrain] },
+        {
+          ctor: MultifacetTestGrain,
+          interfaces: [IMultifacetTestGrain, IMultifacetReader, IMultifacetWriter],
+        },
         { ctor: MultifacetFactoryTestGrain, interfaces: [IMultifacetFactoryTestGrain] },
       ],
     });
@@ -34,13 +48,18 @@ describe("DefaultCluster.Tests.General.MultifacetGrainTest", () => {
     await cluster.dispose();
   });
 
-  orleansTest.gap(
-    "GAP-GRAIN-REF-CAST",
-    "DefaultCluster.Tests.General.MultifacetGrainTest.RWReferences",
-  );
+  orleansTest("DefaultCluster.Tests.General.MultifacetGrainTest.RWReferences", async () => {
+    const writer = cluster.getGrain(IMultifacetWriter, randomIntegerKey());
+    const reader = castGrainReference(writer, IMultifacetReader);
 
-  orleansTest.gap(
-    "GAP-GRAIN-REF-CAST",
+    const x = 1234;
+    await writer.setValue(x);
+    const y = await reader.getValue();
+    expect(y).toBe(x);
+  });
+
+  orleansTest.excluded(
+    "no runtime interface-cast mechanism in TS outside the explicit castGrainReference API",
     "DefaultCluster.Tests.General.MultifacetGrainTest.RWReferencesInvalidCastException",
   );
 
