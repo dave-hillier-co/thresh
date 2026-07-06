@@ -63,9 +63,10 @@ import {
 } from "@tsva/messaging/message";
 import { MessagePackSerializer } from "@tsva/messaging/msgpack-serializer";
 import type { Serializer } from "@tsva/messaging/serializer";
-import type { Listener, Transport } from "@tsva/messaging/transport";
+import type { Connection, ConnectionPreamble, Listener, Transport } from "@tsva/messaging/transport";
 import { ActivationCollector } from "@tsva/runtime/activation-collector";
 import { Catalog, type GrainActivator, type RegisteredGrain } from "@tsva/runtime/catalog";
+import { ClientDirectory } from "@tsva/runtime/client-directory";
 import type { ActivationData } from "@tsva/runtime/activation";
 import { DistributedDispatcher } from "@tsva/runtime/distributed-dispatcher";
 import { BroadcastChannelProviderImpl } from "@tsva/runtime/broadcast-channel-provider";
@@ -197,6 +198,20 @@ interface MigrationPayload {
   bag: Record<string, unknown>;
 }
 
+/**
+ * A gossiped update to the cluster-wide client directory: `register` on
+ * accepting a client connection, `unregister` on it disconnecting. Sent
+ * `oneWay` to every other active silo so each silo's `ClientDirectory` learns
+ * which gateway(s) a client is reachable through (GrainId/SiloAddress round-trip
+ * through the serializer as class instances via the value codec's tagging, so
+ * no manual (de)serialization to primitives is needed here).
+ */
+interface ClientGossip {
+  op: "register" | "unregister";
+  clientId: GrainId;
+  gateway: SiloAddress;
+}
+
 const newChainId = () => Guid.newGuid().toString();
 const randomPlacement = new RandomPlacement();
 
@@ -235,6 +250,10 @@ export class ClusterNode {
   private readonly dispatcher: DistributedDispatcher;
   private readonly directory: DistributedGrainDirectory;
   private readonly callTimeoutMs: number;
+  /** Per-silo view of which gateway(s) each connected client is reachable through, kept current by gossip. */
+  private readonly clientDirectory = new ClientDirectory();
+  /** Connections held open to clients accepted on this silo, keyed by `clientId.toString()`. */
+  private readonly clientConnections = new Map<string, Connection>();
   private ring: ConsistentHashRing;
   private listener: Listener | undefined;
 
@@ -437,6 +456,11 @@ export class ClusterNode {
     return this.catalog.isActive(id);
   }
 
+  /** The gateway `clientId` is reachable through, per this silo's gossiped client directory. */
+  clientGatewayFor(clientId: GrainId): SiloAddress | undefined {
+    return this.clientDirectory.lookup(clientId, this.options.local);
+  }
+
   /** This silo's grain manifest: the interface versions it implements. */
   manifest(): SiloManifest {
     return { silo: this.options.local, entries: this.localManifestEntries() };
@@ -537,8 +561,10 @@ export class ClusterNode {
   }
 
   async start(): Promise<void> {
-    this.listener = await this.options.transport.listen(this.options.local, (message) =>
-      this.onMessage(message),
+    this.listener = await this.options.transport.listen(
+      this.options.local,
+      (message) => this.onMessage(message),
+      (preamble, connection) => this.onClientAccept(preamble, connection),
     );
     this.collector.start();
     // Join recovery: when joining an already-running cluster, pull the live entries
@@ -578,6 +604,7 @@ export class ClusterNode {
       if (!live.has(member.ringKey)) {
         this.cache.invalidateSilo(member);
         void this.connections.drop(member);
+        this.clientDirectory.unregisterSilo(member);
       }
     }
     // Peer manifests may have shifted with the view (a silo upgraded/left);
@@ -927,6 +954,53 @@ export class ClusterNode {
     return true;
   }
 
+  // --- client directory ---
+
+  /**
+   * Fires when the transport accepts an inbound connection. A plain silo peer
+   * carries no `clientId` in its preamble — ignore it (silo-to-silo traffic
+   * uses `onMessage` directly, not this hook). A client connection is held so
+   * this silo could reach it (Orleans' gateway learning a connected client),
+   * recorded in the local `ClientDirectory`, and gossiped to every other
+   * active silo so the whole cluster learns which gateway the client is on.
+   */
+  private onClientAccept(preamble: ConnectionPreamble, connection: Connection): void {
+    const clientId = preamble.clientId;
+    if (clientId === undefined) return;
+    this.clientConnections.set(clientId.toString(), connection);
+    this.clientDirectory.register(clientId, this.options.local);
+    this.broadcastClientGossip({ op: "register", clientId, gateway: this.options.local });
+  }
+
+  /** Fire-and-forget a `system: "client"` gossip message to every other active silo. */
+  private broadcastClientGossip(gossip: ClientGossip): void {
+    const body = this.serializer.serialize(gossip);
+    for (const peer of this.otherActiveSilos()) {
+      this.connections
+        .get(peer)
+        .then((conn) => {
+          conn.send({
+            correlationId: nextCorrelationId(),
+            direction: "oneWay",
+            system: "client",
+            targetGrain: gossip.clientId,
+            sendingSilo: this.options.local,
+            interfaceId: 0,
+            method: "",
+            body,
+          });
+        })
+        .catch(() => undefined); // best-effort: an unreachable peer just misses this update
+    }
+  }
+
+  /** Apply an inbound client-directory gossip update (oneWay; never replies). */
+  private handleClientGossip(message: Message): void {
+    const gossip = this.serializer.deserialize<ClientGossip>(message.body);
+    if (gossip.op === "register") this.clientDirectory.register(gossip.clientId, gossip.gateway);
+    else this.clientDirectory.unregister(gossip.clientId, gossip.gateway);
+  }
+
   // --- transport ---
 
   private async sendRemote(silo: SiloAddress, req: InvocationRequest): Promise<unknown> {
@@ -1019,6 +1093,10 @@ export class ClusterNode {
     }
     if (message.system === "rebalance") {
       void this.handleRebalanceRequest(message);
+      return;
+    }
+    if (message.system === "client") {
+      this.handleClientGossip(message);
       return;
     }
     void this.receiveRequest(message);

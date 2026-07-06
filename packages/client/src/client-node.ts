@@ -99,7 +99,13 @@ export class ClientNode implements Dispatcher {
 
   constructor(private readonly config: ClientConfig) {
     this.callTimeoutMs = config.callTimeoutMs ?? 30_000;
-    this.connections = new ConnectionManager(config.transport, config.local, config.clusterId);
+    this.clientId = config.clientId ?? createClientId();
+    this.connections = new ConnectionManager(
+      config.transport,
+      config.local,
+      config.clusterId,
+      this.clientId,
+    );
     this.serializer =
       config.serializer ??
       new MessagePackSerializer({ resolveGrainReference: (id) => this.rehydrate(id) });
@@ -113,7 +119,6 @@ export class ClientNode implements Dispatcher {
     }
     this.gateways = new GatewayManager(provider);
     this.delay = config.delay ?? defaultDelay;
-    this.clientId = config.clientId ?? createClientId();
   }
 
   /**
@@ -141,6 +146,12 @@ export class ClientNode implements Dispatcher {
   async connect(): Promise<this> {
     this.listener = await this.config.transport.listen(this.config.local, (m) => this.onMessage(m));
     await this.gateways.refresh();
+    // Eagerly open a connection to a gateway so its `onAccept` fires and the
+    // client-directory gossip runs immediately, rather than waiting for the
+    // first real call. Best-effort: a temporarily unreachable gateway doesn't
+    // fail connect() — the normal invoke() path retries and fails over.
+    const gateway = this.gateways.next();
+    if (gateway !== undefined) await this.connections.get(gateway).catch(() => undefined);
     return this;
   }
 

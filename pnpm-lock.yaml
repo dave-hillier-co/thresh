@@ -176,6 +176,10 @@ importers:
       '@tsva/runtime':
         specifier: workspace:*
         version: link:../runtime
+    devDependencies:
+      '@tsva/testing':
+        specifier: workspace:*
+        version: link:../testing
 
   packages/clustering-k8s:
     dependencies:

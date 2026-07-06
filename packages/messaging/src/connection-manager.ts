@@ -1,3 +1,4 @@
+import type { GrainId } from "@tsva/core/grain-id";
 import type { SiloAddress } from "@tsva/core/silo-address";
 import type { Connection, Transport } from "@tsva/messaging/transport";
 
@@ -14,6 +15,8 @@ export class ConnectionManager {
     private readonly transport: Transport,
     private readonly self: SiloAddress,
     private readonly clusterId: string,
+    /** When set, advertised in the preamble so the accepting silo learns this is a client connection. */
+    private readonly clientId?: GrainId,
   ) {}
 
   get(to: SiloAddress): Promise<Connection> {
@@ -21,7 +24,12 @@ export class ConnectionManager {
     let conn = this.connections.get(key);
     if (conn === undefined) {
       conn = this.transport
-        .connect(to, { protocolVersion: 1, siloAddress: this.self, clusterId: this.clusterId })
+        .connect(to, {
+          protocolVersion: 1,
+          siloAddress: this.self,
+          clusterId: this.clusterId,
+          ...(this.clientId ? { clientId: this.clientId } : {}),
+        })
         .catch((err: unknown) => {
           this.connections.delete(key); // don't cache a failed connect
           throw err;
