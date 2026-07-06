@@ -291,6 +291,9 @@ importers:
 
   packages/parity:
     dependencies:
+      '@tsva/client':
+        specifier: workspace:*
+        version: link:../client
       '@tsva/core':
         specifier: workspace:*
         version: link:../core
@@ -300,6 +303,9 @@ importers:
       '@tsva/hosting':
         specifier: workspace:*
         version: link:../hosting
+      '@tsva/messaging':
+        specifier: workspace:*
+        version: link:../messaging
       '@tsva/runtime':
         specifier: workspace:*
         version: link:../runtime

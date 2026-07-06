@@ -11,9 +11,11 @@
     "tag": "v10.1.0"
   },
   "dependencies": {
+    "@tsva/client": "workspace:*",
     "@tsva/core": "workspace:*",
     "@tsva/durable-jobs": "workspace:*",
     "@tsva/hosting": "workspace:*",
+    "@tsva/messaging": "workspace:*",
     "@tsva/runtime": "workspace:*",
     "@tsva/testing": "workspace:*"
   },

@@ -167,6 +167,9 @@ export class ClientNode implements Dispatcher {
    * the serializer reduces it to `{grainId, interfaceId}` on the wire.
    */
   createObjectReference<T>(def: GrainInterface<T>, obj: object): T {
+    if (grainReferenceIdentity(obj) !== undefined) {
+      throw new TypeError("createObjectReference: obj is already a grain reference");
+    }
     const observer = createObserverId(this.clientId);
     this.localObjects.set(observer.toString(), {
       object: obj as Record<string, (...args: unknown[]) => unknown>,

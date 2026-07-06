@@ -108,6 +108,11 @@ export class TestCluster {
     return first;
   }
 
+  /** The cluster id every silo (and any client joining it) shares. */
+  get clusterId(): string {
+    return this.options.clusterId ?? "test-cluster";
+  }
+
   getGrain<T>(def: GrainInterface<T>, key: GrainKeyFor<T>): T {
     return this.primary.host.getGrain(def, key);
   }
