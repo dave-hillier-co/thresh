@@ -1,31 +1,84 @@
 // Ported from dotnet/orleans test/Orleans.DefaultCluster.Tests/ProviderTests.cs @ v10.1.0 (MIT).
 //
-// Every case here turns on `IGrainExtension` / `AsReference<TExtension>()` /
-// `AddGrainExtension` — dynamically installing an additional interface onto an
-// already-registered grain instance and casting a reference to it. This
-// framework has no grain-extension mechanism at all (already tracked as
-// GAP-GRAIN-EXTENSION), so all four are gaps.
-import { describe } from "vitest";
+// Grain extensions (Orleans `IGrainExtension` / `AsReference<TExtension>()` /
+// `AddGrainExtension`) let a grain expose an additional, dynamically-installed
+// interface, dispatched independently of the grain's own methods. Two of the
+// four upstream cases are ported here; the other two need generic-grain
+// support (GAP-GENERIC-GRAINS) — the extension mechanism itself is no longer
+// the blocker.
+import { afterAll, beforeAll, describe, expect } from "vitest";
 import { orleansTest } from "@tsva/testing/orleans-test";
+import { TestCluster } from "@tsva/testing/test-cluster";
+import { castGrainReference } from "@tsva/core/grain-reference";
+import { GrainExtensionNotInstalledException } from "@tsva/core/errors";
+import {
+  ExtensionTestGrain,
+  NoOpTestGrain,
+  AutoExtension,
+} from "@tsva/parity/grains/impl/extension-test-grain";
+import {
+  IExtensionTestGrain,
+  INoOpTestGrain,
+  ITestExtension,
+  ISimpleExtension,
+  IAutoExtension,
+} from "@tsva/parity/grains/interfaces/extension-test-interfaces";
+import { TestGrain, ITestGrain } from "@tsva/parity/grains/impl/test-grain";
+import { randomIntegerKey } from "@tsva/parity/support/keys";
 
 describe("DefaultCluster.Tests.ProviderTests", () => {
-  orleansTest.gap(
-    "GAP-GRAIN-EXTENSION",
-    "DefaultCluster.Tests.ProviderTests.Providers_TestExtensions",
-  );
+  let cluster: TestCluster;
+
+  beforeAll(async () => {
+    cluster = await TestCluster.start({
+      initialSilos: 1,
+      grains: [
+        { ctor: ExtensionTestGrain, interfaces: [IExtensionTestGrain] },
+        { ctor: NoOpTestGrain, interfaces: [INoOpTestGrain] },
+        { ctor: TestGrain, interfaces: [ITestGrain] },
+      ],
+      configureSilo: (builder) => {
+        builder.addGrainExtension(IAutoExtension, () => new AutoExtension());
+      },
+    });
+  });
+
+  afterAll(async () => {
+    await cluster.dispose();
+  });
+
+  orleansTest("DefaultCluster.Tests.ProviderTests.Providers_TestExtensions", async () => {
+    const grain = cluster.getGrain(IExtensionTestGrain, randomIntegerKey());
+    const extension = castGrainReference(grain, ITestExtension);
+
+    await expect(extension.checkExtension_1()).rejects.toBeInstanceOf(
+      GrainExtensionNotInstalledException,
+    );
+
+    await grain.installExtension("test");
+
+    expect(await extension.checkExtension_1()).toBe("test");
+    expect(await extension.checkExtension_2()).toBe("23");
+  });
 
   orleansTest.gap(
-    "GAP-GRAIN-EXTENSION",
+    "GAP-GENERIC-GRAINS",
     "DefaultCluster.Tests.ProviderTests.Providers_ActivateNonGenericExtensionOfGenericInterface",
   );
 
   orleansTest.gap(
-    "GAP-GRAIN-EXTENSION",
+    "GAP-GENERIC-GRAINS",
     "DefaultCluster.Tests.ProviderTests.Providers_ReferenceNonGenericExtensionOfGenericInterface",
   );
 
-  orleansTest.gap(
-    "GAP-GRAIN-EXTENSION",
-    "DefaultCluster.Tests.ProviderTests.Providers_AutoInstallExtensionTest",
-  );
+  orleansTest("DefaultCluster.Tests.ProviderTests.Providers_AutoInstallExtensionTest", async () => {
+    const grain = cluster.getGrain(INoOpTestGrain, randomIntegerKey());
+    const uninstalled = castGrainReference(grain, ISimpleExtension);
+    const autoInstalled = castGrainReference(grain, IAutoExtension);
+
+    await expect(uninstalled.checkExtension_1()).rejects.toBeInstanceOf(
+      GrainExtensionNotInstalledException,
+    );
+    await expect(autoInstalled.checkExtension()).resolves.toBe("whoot!");
+  });
 });

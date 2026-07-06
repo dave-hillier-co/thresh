@@ -137,6 +137,8 @@ export interface ClusterNodeOptions {
   broadcastProviders?: readonly string[];
   /** Incoming grain-call filters wrapping each grain-method dispatch (silo-wide). */
   incomingCallFilters?: readonly IncomingGrainCallFilter[];
+  /** Auto-install factories for `GrainExtension` interfaces, keyed by interface id (Orleans `AddGrainExtension`). */
+  grainExtensionFactories?: ReadonlyMap<number, () => object>;
   /** Outgoing grain-call filters wrapping each outbound call at the proxy (silo-wide). */
   outgoingCallFilters?: readonly OutgoingGrainCallFilter[];
   /** Injectable RNG for deterministic placement in tests. */
@@ -346,6 +348,9 @@ export class ClusterNode {
         ? { incomingCallFilters: options.incomingCallFilters }
         : {}),
       ...(options.grainActivator !== undefined ? { grainActivator: options.grainActivator } : {}),
+      ...(options.grainExtensionFactories !== undefined
+        ? { grainExtensionFactories: options.grainExtensionFactories }
+        : {}),
     });
     this.dispatcher = new DistributedDispatcher({
       local: options.local,

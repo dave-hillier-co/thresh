@@ -139,6 +139,7 @@ export class SiloBuilder {
   private grainActivator: GrainActivator | undefined;
   private metricsEnabled = false;
   private readonly registrations: Registration[] = [];
+  private readonly grainExtensions = new Map<number, () => object>();
   private versioning:
     | { compatibility?: CompatibilityKind; selector?: VersionSelectorKind }
     | undefined;
@@ -576,6 +577,19 @@ export class SiloBuilder {
   }
 
   /**
+   * Register an auto-install factory for a `GrainExtension` interface (Orleans
+   * `ISiloBuilder.AddGrainExtension<TExtensionInterface, TExtension>`): any
+   * activation on this silo that receives a call for `iface` and has not
+   * already bound one itself (via `GrainRuntime.getOrSetExtension`) gets one
+   * built by `factory` on first use, instead of throwing
+   * `GrainExtensionNotInstalledException`.
+   */
+  addGrainExtension<T>(iface: GrainInterface<T>, factory: () => object): this {
+    this.grainExtensions.set(iface.id, factory);
+    return this;
+  }
+
+  /**
    * Register a startup task (Orleans `ISiloBuilder.AddStartupTask` / `IStartupTask`):
    * runs after the silo's node has started — so it can call grains — but before
    * the silo is marked ready. Tasks run in registration order.
@@ -642,6 +656,7 @@ export class SiloBuilder {
         ? { outgoingCallFilters: this.outgoingCallFilters }
         : {}),
       ...(this.grainActivator !== undefined ? { grainActivator: this.grainActivator } : {}),
+      ...(this.grainExtensions.size > 0 ? { grainExtensionFactories: this.grainExtensions } : {}),
       // Transactional facets need no storage provider in this slice, so the
       // binder always runs; persistent/reducer facets bind only when storage is
       // configured.

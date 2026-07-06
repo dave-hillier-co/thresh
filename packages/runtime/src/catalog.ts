@@ -67,13 +67,33 @@ export interface CatalogOptions {
   localSilo?: () => SiloAddress | undefined;
   /** Incoming call filters wrapping each grain-method dispatch (silo-wide). */
   incomingCallFilters?: readonly IncomingGrainCallFilter[];
+  /**
+   * Auto-install factories for `GrainExtension` interfaces, keyed by interface
+   * id (Orleans `AddGrainExtension`) — set on the silo builder and shared
+   * unmodified across every activation. Absent means no auto-install: an
+   * un-bound extension call always throws `GrainExtensionNotInstalledException`.
+   */
+  grainExtensionFactories?: ReadonlyMap<number, () => object>;
 }
 
 /** Registry of live activations on this silo, keyed by grain id. */
 export class Catalog {
   private readonly activations = new Map<string, ActivationData>();
+  /**
+   * `options.grainExtensionFactories` adapted once to the `(activation) =>
+   * object` signature `ActivationData.setExtensionFactories` expects (the
+   * user-facing factory ignores the activation argument); built once here
+   * and shared, unmodified, by every activation this catalog creates.
+   */
+  private readonly extensionFactories?: Map<number, (activation: ActivationData) => object>;
 
-  constructor(private readonly options: CatalogOptions) {}
+  constructor(private readonly options: CatalogOptions) {
+    if (options.grainExtensionFactories !== undefined) {
+      this.extensionFactories = new Map(
+        [...options.grainExtensionFactories].map(([id, factory]) => [id, () => factory()]),
+      );
+    }
+  }
 
   /** Single-silo path (Phase 1): create with a fresh activation id if absent. */
   getOrCreate(id: GrainId): ActivationData {
@@ -175,6 +195,9 @@ export class Catalog {
     activation.instance = instance;
     if (this.options.incomingCallFilters !== undefined) {
       activation.incomingCallFilters = this.options.incomingCallFilters;
+    }
+    if (this.extensionFactories !== undefined) {
+      activation.setExtensionFactories(this.extensionFactories);
     }
     const activateState = this.options.activateState;
     if (rehydrationBag !== undefined) {
