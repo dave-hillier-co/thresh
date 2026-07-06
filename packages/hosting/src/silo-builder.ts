@@ -1,3 +1,4 @@
+import { durationToMs, type Duration } from "@tsva/core/duration";
 import type { Grain } from "@tsva/core/grain";
 import type {
   IncomingGrainCallFilter,
@@ -88,6 +89,13 @@ export interface SiloConfig {
   metadata?: Readonly<Record<string, string>>;
   /** Durable-journal snapshot threshold: snapshot + truncate past this many log entries (default 100). */
   snapshotThreshold?: number;
+  /**
+   * Silo-wide default per-method response timeout (Orleans `[ResponseTimeout]`
+   * default), applied to any grain call whose interface doesn't set its own
+   * `responseTimeout`. Off by default: no call races a deadline unless one is
+   * configured here or on the method itself.
+   */
+  defaultResponseTimeout?: Duration;
 }
 
 interface Registration {
@@ -609,6 +617,9 @@ export class SiloBuilder {
         : {}),
       ...(this.config.collectionIntervalSeconds !== undefined
         ? { collectionIntervalSeconds: this.config.collectionIntervalSeconds }
+        : {}),
+      ...(this.config.defaultResponseTimeout !== undefined
+        ? { defaultResponseTimeoutMs: durationToMs(this.config.defaultResponseTimeout) }
         : {}),
       ...(this.config.random !== undefined ? { random: this.config.random } : {}),
       // Calling useVersioning() enables versioning with resolved defaults, so the

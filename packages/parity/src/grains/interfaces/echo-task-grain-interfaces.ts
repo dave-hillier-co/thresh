@@ -11,20 +11,25 @@ export interface IEchoGrain extends GrainWithGuidKey {
 
 export const IEchoGrain = defineGrainInterface<IEchoGrain>("UnitTests.GrainInterfaces.IEchoGrain");
 
-// Upstream also declares BlockingCallTimeout*/PingLocalSilo*/PingRemoteSilo*
-// methods; they need per-call response timeouts and silo-control system
-// targets (GAP-CANCELLATION / GAP-MGMT-GRAIN) and are omitted until those
-// features exist.
+// Upstream also declares PingLocalSilo*/PingRemoteSilo* methods; they need
+// silo-control system targets (GAP-MGMT-GRAIN) and are omitted until that
+// feature exists.
 export interface IEchoTaskGrain extends GrainWithGuidKey {
   getMyIdAsync(): Promise<number>;
   getLastEchoAsync(): Promise<string>;
   echoAsync(data: string): Promise<string>;
   echoErrorAsync(data: string): Promise<string>;
   pingAsync(): Promise<void>;
+  /**
+   * Blocks well past its response deadline; the caller should observe
+   * `GrainCallTimeoutError` (Orleans `[ResponseTimeout("00:00:05")]`).
+   */
+  blockingCallTimeoutAsync(delaySeconds: number): Promise<number>;
 }
 
 export const IEchoTaskGrain = defineGrainInterface<IEchoTaskGrain>(
   "UnitTests.GrainInterfaces.IEchoTaskGrain",
+  { options: { blockingCallTimeoutAsync: { responseTimeout: { seconds: 5 } } } },
 );
 
 export interface IBlockingEchoTaskGrain extends GrainWithIntegerKey {

@@ -1,3 +1,4 @@
+import { durationToMs } from "@tsva/core/duration";
 import {
   runCallFilters,
   type GrainCallContext,
@@ -12,9 +13,10 @@ import { Guid } from "@tsva/core/guid";
 import type { InvokeMethodOptions } from "@tsva/core/invoke-options";
 import type { InvocationRequest } from "@tsva/core/request";
 import type { TransactionInfo } from "@tsva/core/transaction-info";
-import { TransactionsDisabledError } from "@tsva/core/errors";
+import { GrainCallTimeoutError, TransactionsDisabledError } from "@tsva/core/errors";
 import type { Dispatcher } from "@tsva/runtime/dispatcher";
 import { invocationContext } from "@tsva/runtime/invocation-context";
+import { systemTimeProvider, type TimeProvider } from "@tsva/runtime/time-provider";
 import type { TransactionAgent } from "@tsva/runtime/transaction-agent";
 
 const newChainId = () => Guid.newGuid().toString();
@@ -29,7 +31,16 @@ export class GrainFactory {
   private transactionAgent: TransactionAgent | undefined;
   private outgoingCallFilters: readonly OutgoingGrainCallFilter[] = [];
 
-  constructor(private readonly resolveGrainType: (interfaceId: number) => GrainType) {}
+  constructor(
+    private readonly resolveGrainType: (interfaceId: number) => GrainType,
+    private readonly time: TimeProvider = systemTimeProvider,
+    /**
+     * Silo-wide default response timeout (ms), applied when a method has no
+     * `options.responseTimeout` of its own. Off by default (`undefined`): no
+     * silo behaves differently unless this is explicitly configured.
+     */
+    private readonly defaultResponseTimeoutMs?: number,
+  ) {}
 
   setDispatcher(dispatcher: Dispatcher): void {
     this.dispatcher = dispatcher;
@@ -104,22 +115,29 @@ export class GrainFactory {
                 : this.dispatcher!.invoke(req);
             };
             const baseHeaders = ambient?.headers !== undefined ? { ...ambient.headers } : {};
-            if (this.outgoingCallFilters.length === 0) return await dispatch(args, baseHeaders);
-            // Run the outgoing call-filter pipeline (caller side, Orleans parity).
-            const context: GrainCallContext = {
-              target,
-              source: ambient?.senderId,
-              interfaceId: def.id,
-              interfaceName: def.name,
-              methodName: prop,
-              args: [...args],
-              result: undefined,
-              headers: baseHeaders,
-              invoke: () => Promise.resolve(),
+            // The terminal call, filters included — a plain function so the
+            // deadline race below can wrap it without duplicating either branch.
+            const invokeCall = (): Promise<unknown> => {
+              if (this.outgoingCallFilters.length === 0) return dispatch(args, baseHeaders);
+              // Run the outgoing call-filter pipeline (caller side, Orleans parity).
+              const context: GrainCallContext = {
+                target,
+                source: ambient?.senderId,
+                interfaceId: def.id,
+                interfaceName: def.name,
+                methodName: prop,
+                args: [...args],
+                result: undefined,
+                headers: baseHeaders,
+                invoke: () => Promise.resolve(),
+              };
+              return runCallFilters(this.outgoingCallFilters, context, () =>
+                dispatch(context.args, context.headers),
+              );
             };
-            return await runCallFilters(this.outgoingCallFilters, context, () =>
-              dispatch(context.args, context.headers),
-            );
+            const timeoutMs = this.resolveResponseTimeout(options);
+            if (timeoutMs === undefined) return await invokeCall();
+            return await this.raceResponseDeadline(invokeCall(), timeoutMs, prop);
           };
         },
       },
@@ -194,6 +212,63 @@ export class GrainFactory {
       default:
         return { transaction: ambient, beginsHere: false };
     }
+  }
+
+  /**
+   * The effective response timeout (ms) for this call: the per-method
+   * `options.responseTimeout` if set, else the silo-wide default, else no
+   * deadline at all. A `oneWay` call never races a deadline — the caller
+   * doesn't wait for a response in the first place.
+   */
+  private resolveResponseTimeout(options: InvokeMethodOptions): number | undefined {
+    if (options.oneWay) return undefined;
+    if (options.responseTimeout !== undefined) return durationToMs(options.responseTimeout);
+    return this.defaultResponseTimeoutMs;
+  }
+
+  /**
+   * Race `call` against a `timeoutMs` timer (Orleans `ResponseTimeout`): if
+   * the timer wins, reject with {@link GrainCallTimeoutError}. The callee is
+   * never interrupted — JS has no cooperative cancellation for an in-flight
+   * turn — so `call` may still be running when the deadline fires; its
+   * eventual settlement is swallowed (not surfaced as an unhandled
+   * rejection) once the deadline has already decided the outcome. When
+   * `call` settles first, the timer is cleared so it never fires.
+   */
+  private raceResponseDeadline(
+    call: Promise<unknown>,
+    timeoutMs: number,
+    method: string,
+  ): Promise<unknown> {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const timer = this.time.setTimer(() => {
+        if (settled) return;
+        settled = true;
+        reject(
+          new GrainCallTimeoutError(
+            `grain call ${method} exceeded its ${timeoutMs}ms response deadline`,
+          ),
+        );
+        // The call is still running; consume its eventual settlement so a
+        // later rejection doesn't surface as an unhandled promise rejection.
+        call.catch(() => {});
+      }, timeoutMs);
+      call.then(
+        (value) => {
+          if (settled) return;
+          settled = true;
+          this.time.clearTimer(timer);
+          resolve(value);
+        },
+        (error: unknown) => {
+          if (settled) return;
+          settled = true;
+          this.time.clearTimer(timer);
+          reject(error);
+        },
+      );
+    });
   }
 
   /** Dispatch the boundary call, then commit on success or abort on failure. */

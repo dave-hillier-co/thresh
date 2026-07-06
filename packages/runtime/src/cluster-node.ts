@@ -102,6 +102,13 @@ export interface ClusterNodeOptions {
   serializer?: Serializer;
   time?: TimeProvider;
   callTimeoutMs?: number;
+  /**
+   * Silo-wide default per-method response timeout (ms), applied to any call
+   * whose interface doesn't set its own `options.responseTimeout` (Orleans
+   * `[ResponseTimeout]`). Off by default (`undefined`): no deadline races the
+   * call unless one is explicitly configured, here or per-method.
+   */
+  defaultResponseTimeoutMs?: number;
   defaultCollectionAgeSeconds?: number;
   /** How often the idle-collection sweep runs (defaults to 60s). */
   collectionIntervalSeconds?: number;
@@ -280,7 +287,11 @@ export class ClusterNode {
       activeSilos(options.membership.current()).some((s) => s.equals(silo)),
     );
     this.connections = new ConnectionManager(options.transport, options.local, options.clusterId);
-    this.factory = new GrainFactory((interfaceId) => this.resolveGrainType(interfaceId));
+    this.factory = new GrainFactory(
+      (interfaceId) => this.resolveGrainType(interfaceId),
+      time,
+      options.defaultResponseTimeoutMs,
+    );
     this.serializer =
       options.serializer ??
       new MessagePackSerializer({ resolveGrainReference: (id) => this.rehydrate(id) });

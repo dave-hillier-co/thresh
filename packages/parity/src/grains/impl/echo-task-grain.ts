@@ -70,6 +70,27 @@ export class EchoTaskGrain extends Grain implements IEchoTaskGrain {
   async pingAsync(): Promise<void> {
     return undefined;
   }
+
+  // Upstream: Thread.Sleep(delay) then throw — the callee is never
+  // interrupted by the caller's response deadline, so this is only ever
+  // observed by the caller timing out first (GrainCallTimeoutError). The
+  // timer interleaves so this turn can still complete (and free the
+  // activation) once its delay elapses, rather than wedging it forever.
+  async blockingCallTimeoutAsync(delaySeconds: number): Promise<number> {
+    await new Promise<void>((resolve) => {
+      this.runtime.registerTimer(
+        async () => {
+          resolve();
+        },
+        { seconds: delaySeconds },
+        undefined,
+        { interleave: true },
+      );
+    });
+    throw new Error(
+      `BlockingCallTimeout should not have completed successfully after ${delaySeconds}s`,
+    );
+  }
 }
 
 @grain({ name: "UnitTests.Grains.BlockingEchoTaskGrain" })

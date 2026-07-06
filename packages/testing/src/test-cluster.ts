@@ -1,3 +1,4 @@
+import type { Duration } from "@tsva/core/duration";
 import type { Grain } from "@tsva/core/grain";
 import type { GrainInterface } from "@tsva/core/grain-interface";
 import type { GrainKeyFor } from "@tsva/core/key-kinds";
@@ -47,6 +48,12 @@ export interface TestClusterOptions {
     index: number;
     address: SiloAddress;
   }) => Readonly<Record<string, string>> | undefined;
+  /**
+   * Silo-wide default per-method response timeout, forwarded to every silo
+   * (Orleans `[ResponseTimeout]` default). Off by default: pass a
+   * `FakeTimeProvider` via `time` to drive it deterministically in tests.
+   */
+  defaultResponseTimeout?: Duration;
 }
 
 export interface TestSiloHandle {
@@ -174,6 +181,9 @@ export class TestCluster {
       local: address,
       ...(this.options.time !== undefined ? { time: this.options.time } : {}),
       ...(metadata !== undefined ? { metadata } : {}),
+      ...(this.options.defaultResponseTimeout !== undefined
+        ? { defaultResponseTimeout: this.options.defaultResponseTimeout }
+        : {}),
     })
       .useMembership(membership)
       .useInProcessTransport(this.network)
