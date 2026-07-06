@@ -112,3 +112,47 @@ describe("in-process transport + correlation table", () => {
     expect(table.complete(request(9999n, "request", ser.serialize(1)))).toBe(false);
   });
 });
+
+describe("in-process transport onAccept hook", () => {
+  it("does not error on connect when the listener registers no onAccept", async () => {
+    const net = new InProcessNetwork();
+    const transportA = new InProcessTransport(net, CLUSTER);
+    const transportB = new InProcessTransport(net, CLUSTER);
+    await transportB.listen(B, () => undefined);
+
+    await expect(transportA.connect(B, preamble(A))).resolves.toBeDefined();
+  });
+
+  it("fires onAccept with the preamble (including clientId) and the held connection can reach the connecting peer", async () => {
+    const net = new InProcessNetwork();
+    const gatewayTransport = new InProcessTransport(net, CLUSTER);
+    const clientTransport = new InProcessTransport(net, CLUSTER);
+    const client = new SiloAddress("client", "u-client", "client:1");
+    const clientId = new GrainId("Client", "1");
+
+    let receivedPreamble: ConnectionPreamble | undefined;
+    let heldConnection: Awaited<ReturnType<InProcessTransport["connect"]>> | undefined;
+    let clientReceived: number | undefined;
+
+    await gatewayTransport.listen(
+      B,
+      () => undefined,
+      (preambleIn, connection) => {
+        receivedPreamble = preambleIn;
+        heldConnection = connection;
+      },
+    );
+    await clientTransport.listen(client, (msg) => {
+      clientReceived = ser.deserialize<number>(msg.body);
+    });
+
+    await clientTransport.connect(B, { ...preamble(client), clientId });
+
+    expect(receivedPreamble?.clientId).toEqual(clientId);
+    expect(heldConnection).toBeDefined();
+
+    heldConnection?.send(request(nextCorrelationId(), "oneWay", ser.serialize(99)));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(clientReceived).toBe(99);
+  });
+});

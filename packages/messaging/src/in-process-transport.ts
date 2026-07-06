@@ -3,6 +3,7 @@ import type { SiloAddress } from "@tsva/core/silo-address";
 import type { Message } from "@tsva/messaging/message";
 import type {
   Connection,
+  ConnectionAcceptHandler,
   ConnectionPreamble,
   Listener,
   MessageHandler,
@@ -13,6 +14,7 @@ interface Endpoint {
   onMessage: MessageHandler;
   clusterId: string;
   address: SiloAddress;
+  onAccept?: ConnectionAcceptHandler;
 }
 
 /**
@@ -49,8 +51,17 @@ export class InProcessTransport implements Transport {
     private readonly clusterId: string,
   ) {}
 
-  async listen(address: SiloAddress, onMessage: MessageHandler): Promise<Listener> {
-    this.network.register({ onMessage, clusterId: this.clusterId, address });
+  async listen(
+    address: SiloAddress,
+    onMessage: MessageHandler,
+    onAccept?: ConnectionAcceptHandler,
+  ): Promise<Listener> {
+    this.network.register({
+      onMessage,
+      clusterId: this.clusterId,
+      address,
+      ...(onAccept && { onAccept }),
+    });
     return {
       address,
       close: async () => this.network.unregister(address),
@@ -70,6 +81,13 @@ export class InProcessTransport implements Transport {
     }
     const network = this.network;
     const from = preamble.siloAddress;
+    if (endpoint.onAccept !== undefined) {
+      const reverseConnection: Connection = {
+        send: (message) => network.deliver(from, message, to),
+        close: async () => undefined,
+      };
+      endpoint.onAccept(preamble, reverseConnection);
+    }
     return {
       send: (message) => network.deliver(to, message, from),
       close: async () => undefined,

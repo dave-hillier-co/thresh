@@ -1,9 +1,12 @@
+import { once } from "node:events";
 import { afterEach, describe, expect, it } from "vitest";
+import { WebSocket } from "ws";
 import { RejectionError } from "@tsva/core/errors";
 import { GrainId } from "@tsva/core/grain-id";
 import { SiloAddress } from "@tsva/core/silo-address";
 import { CorrelationTable } from "@tsva/messaging/correlation-table";
 import { JsonSerializer } from "@tsva/messaging/json-serializer";
+import { MessagePackSerializer } from "@tsva/messaging/msgpack-serializer";
 import { nextCorrelationId, responseTo, type Message } from "@tsva/messaging/message";
 import type { ConnectionPreamble, Listener } from "@tsva/messaging/transport";
 import { WebSocketTransport } from "@tsva/messaging/web-socket-transport";
@@ -85,5 +88,55 @@ describe("WebSocketTransport", () => {
     await expect(
       transportA.connect(listenerB.address, preamble(loopback("A"), "other")),
     ).rejects.toBeInstanceOf(RejectionError);
+  });
+
+  it("fires the onAccept hook with the preamble (including clientId) and the held connection can push a message the connecting peer receives", async () => {
+    const transportB = new WebSocketTransport(CLUSTER);
+    const clientAddress = loopback("client");
+    const clientId = new GrainId("Client", "1");
+    const msgpack = new MessagePackSerializer();
+    let acceptedPreamble: ConnectionPreamble | undefined;
+    let heldConnection: Parameters<
+      NonNullable<Parameters<WebSocketTransport["listen"]>[2]>
+    >[1] | undefined;
+
+    const listenerB = await transportB.listen(
+      loopback("B"),
+      () => undefined,
+      (preambleIn, connection) => {
+        acceptedPreamble = preambleIn;
+        heldConnection = connection;
+      },
+    );
+    openListeners.push(listenerB);
+
+    const [host, port] = listenerB.address.endpoint.split(":");
+    const socket = new WebSocket(`ws://${host}:${port}`);
+    socket.binaryType = "arraybuffer";
+    await once(socket, "open");
+    socket.send(
+      msgpack.serialize({
+        protocolVersion: 1,
+        siloAddress: clientAddress,
+        clusterId: CLUSTER,
+        clientId,
+      } satisfies ConnectionPreamble),
+    );
+    await once(socket, "message"); // ACK
+
+    await expect.poll(() => heldConnection).toBeDefined();
+    expect(acceptedPreamble?.siloAddress).toEqual(clientAddress);
+    expect(acceptedPreamble?.clientId).toEqual(clientId);
+
+    const pushed = new Promise<number>((resolve) => {
+      socket.once("message", (data: ArrayBuffer) => {
+        const msg = msgpack.deserialize<Message>(new Uint8Array(data));
+        resolve(body.deserialize<number>(msg.body));
+      });
+    });
+    heldConnection?.send(request(nextCorrelationId(), "oneWay", 13));
+
+    await expect(pushed).resolves.toBe(13);
+    socket.close();
   });
 });
