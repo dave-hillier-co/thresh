@@ -1,6 +1,7 @@
 import { newActivationId } from "@tsva/core/activation-id";
 import { RejectionError } from "@tsva/core/errors";
 import type { GrainAddress } from "@tsva/core/grain-address";
+import type { GrainId } from "@tsva/core/grain-id";
 import type { GrainType } from "@tsva/core/grain-type";
 import type { InvocationRequest } from "@tsva/core/request";
 import type { SiloAddress } from "@tsva/core/silo-address";
@@ -41,6 +42,16 @@ export interface DistributedDispatcherDeps {
     req: InvocationRequest,
     candidates: readonly SiloAddress[],
   ) => Promise<readonly SiloAddress[]>;
+  /**
+   * Optional diversion for calls targeting a client-hosted observer
+   * (`$client` grain type): routed to the client's gateway instead of the
+   * grain-directory/placement funnel below. Absent for dispatchers with no
+   * client-routing concept.
+   */
+  clientRouter?: {
+    isClientTarget(target: GrainId): boolean;
+    route(req: InvocationRequest): Promise<unknown>;
+  };
 }
 
 /**
@@ -54,6 +65,8 @@ export class DistributedDispatcher implements Dispatcher {
   constructor(private readonly deps: DistributedDispatcherDeps) {}
 
   async invoke(req: InvocationRequest): Promise<unknown> {
+    if (this.deps.clientRouter?.isClientTarget(req.target)) return this.deps.clientRouter.route(req);
+
     const cached = this.deps.cache.get(req.target);
     if (cached !== undefined) {
       try {

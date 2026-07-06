@@ -1,4 +1,5 @@
 import { newActivationId } from "@tsva/core/activation-id";
+import { clientIdOf, isClient } from "@tsva/core/client-grain-id";
 import { GrainCallError, RejectionError } from "@tsva/core/errors";
 import type { Grain } from "@tsva/core/grain";
 import { grainAddressEquals, type GrainAddress } from "@tsva/core/grain-address";
@@ -357,6 +358,10 @@ export class ClusterNode {
       filtersFor: (grainType) => this.filtersFor(grainType),
       placementContext: () => this.placementContext(),
       versionFilter: (req, candidates) => this.applyVersionFilter(req, candidates),
+      clientRouter: {
+        isClientTarget: (t) => isClient(t),
+        route: (req) => this.routeToClient(req),
+      },
     });
     this.factory.setDispatcher(this.dispatcher);
     if (options.transactionsEnabled ?? true) {
@@ -1001,6 +1006,111 @@ export class ClusterNode {
     else this.clientDirectory.unregister(gossip.clientId, gossip.gateway);
   }
 
+  // --- client routing (dispatcher divert for observer calls) ---
+
+  /**
+   * Route a call targeting a client-hosted observer: resolve the client's
+   * gateway from the (gossiped) client directory, then either forward it
+   * directly to the held connection if the client is connected here, or hop
+   * to the gateway silo (whose `receiveRequest` proxies it on, and relays the
+   * client's reply back to us).
+   */
+  private async routeToClient(req: InvocationRequest): Promise<unknown> {
+    const client = clientIdOf(req.target);
+    const gateway = this.clientDirectory.lookup(client, this.options.local);
+    if (gateway === undefined) {
+      throw new RejectionError(`no gateway for client ${client.toString()}`, "unknownTarget");
+    }
+    if (gateway.equals(this.options.local)) return this.deliverToProxy(req);
+    return this.sendRemote(gateway, req);
+  }
+
+  /** The client is connected here: forward the call over the held connection and await its reply. */
+  private async deliverToProxy(req: InvocationRequest): Promise<unknown> {
+    const conn = this.clientConnections.get(clientIdOf(req.target).toString());
+    if (conn === undefined) {
+      throw new RejectionError(
+        `client not connected here: ${clientIdOf(req.target).toString()}`,
+        "unknownTarget",
+      );
+    }
+    const correlationId = nextCorrelationId();
+    const message: Message = {
+      correlationId,
+      direction: req.options.oneWay ? "oneWay" : "request",
+      targetGrain: req.target,
+      sendingSilo: this.options.local,
+      sendingGrain: req.sender,
+      interfaceId: req.interfaceId,
+      ...(req.interfaceVersion !== undefined ? { interfaceVersion: req.interfaceVersion } : {}),
+      method: req.method,
+      requestContext: {
+        reentrancyId: req.reentrancyId,
+        ...(req.headers !== undefined ? { headers: req.headers } : {}),
+      },
+      body: this.serializer.serialize(req.args),
+    };
+    if (req.options.oneWay) {
+      conn.send(message);
+      return undefined;
+    }
+    const pending = this.correlation.register(correlationId, this.callTimeoutMs);
+    conn.send(message);
+    return this.interpretResponse(await pending);
+  }
+
+  /**
+   * A request arrived here targeting a client-hosted observer (this silo is
+   * the gateway): proxy it to the held client connection and relay the
+   * client's reply to the original caller under the original correlation id.
+   */
+  private async proxyRequestToClient(message: Message): Promise<void> {
+    const conn = this.clientConnections.get(clientIdOf(message.targetGrain).toString());
+    const replyTo = message.sendingSilo;
+    if (conn === undefined) {
+      if (message.direction === "oneWay" || replyTo === undefined) return;
+      await this.reply(
+        replyTo,
+        responseTo(
+          message,
+          "rejection",
+          this.serializer.serialize({
+            message: `client not connected: ${clientIdOf(message.targetGrain).toString()}`,
+            kind: "unknownTarget",
+          }),
+          this.options.local,
+        ),
+      );
+      return;
+    }
+    const forward: Message = {
+      ...message,
+      correlationId: nextCorrelationId(),
+      sendingSilo: this.options.local,
+    };
+    if (message.direction === "oneWay") {
+      conn.send(forward);
+      return;
+    }
+    try {
+      const pending = this.correlation.register(forward.correlationId, this.callTimeoutMs);
+      conn.send(forward);
+      const clientResponse = await pending;
+      if (replyTo === undefined) return;
+      const relayed = responseTo(
+        message,
+        clientResponse.responseKind ?? "error",
+        clientResponse.body,
+        this.options.local,
+      );
+      await this.reply(replyTo, relayed);
+    } catch (err) {
+      if (replyTo === undefined) return;
+      const { kind, body } = this.serializeError(err);
+      await this.reply(replyTo, responseTo(message, kind, body, this.options.local));
+    }
+  }
+
   // --- transport ---
 
   private async sendRemote(silo: SiloAddress, req: InvocationRequest): Promise<unknown> {
@@ -1331,6 +1441,7 @@ export class ClusterNode {
   }
 
   private async receiveRequest(message: Message): Promise<void> {
+    if (isClient(message.targetGrain)) return this.proxyRequestToClient(message);
     const replyTo = message.sendingSilo;
     // Reconstruct the transaction context (fresh participant set: resources on
     // this silo enlist into it, and we send those back on the reply).

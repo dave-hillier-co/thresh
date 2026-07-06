@@ -1,0 +1,171 @@
+import { describe, expect, it } from "vitest";
+import { grain } from "@tsva/core/decorators";
+import { Grain } from "@tsva/core/grain";
+import { defineGrainInterface } from "@tsva/core/grain-interface";
+import type { GrainWithStringKey } from "@tsva/core/key-kinds";
+import { SiloAddress } from "@tsva/core/silo-address";
+import { InProcessNetwork, InProcessTransport } from "@tsva/messaging/in-process-transport";
+import { ClusterNode } from "@tsva/runtime/cluster-node";
+import { StaticMembershipService } from "@tsva/runtime/static-membership";
+import { createClient } from "@tsva/client/client-node";
+
+interface IEventObserver extends GrainWithStringKey {
+  onEvent(text: string): Promise<string>;
+}
+const IEventObserver = defineGrainInterface<IEventObserver>("test.IEventObserver");
+
+interface ISubscriberGrain extends GrainWithStringKey {
+  subscribe(observer: IEventObserver): Promise<void>;
+  poke(text: string): Promise<string>;
+}
+const ISubscriberGrain = defineGrainInterface<ISubscriberGrain>("test.ISubscriberGrain");
+
+@grain()
+class SubscriberGrain extends Grain implements ISubscriberGrain {
+  private observer: IEventObserver | undefined;
+
+  async subscribe(observer: IEventObserver): Promise<void> {
+    this.observer = observer;
+  }
+
+  async poke(text: string): Promise<string> {
+    if (this.observer === undefined) throw new Error("no observer subscribed");
+    return this.observer.onEvent(text);
+  }
+}
+
+const CLUSTER = "c1";
+
+function buildSilo(
+  local: SiloAddress,
+  network: InProcessNetwork,
+  membershipAddrs: SiloAddress[],
+  random: () => number = () => 0,
+) {
+  const silo = new ClusterNode({
+    local,
+    clusterId: CLUSTER,
+    membership: new StaticMembershipService(local, membershipAddrs),
+    transport: new InProcessTransport(network, CLUSTER),
+    random,
+  });
+  silo.registerGrain(SubscriberGrain, { interfaces: [ISubscriberGrain] });
+  return silo;
+}
+
+describe("grain -> observer callback routing (dispatcher client-locator + deliver-to-proxy)", () => {
+  it("routes a grain call to a client-hosted observer on the same-silo gateway and returns its result", async () => {
+    const network = new InProcessNetwork();
+    const siloAddr = new SiloAddress("silo-1", "uid-1", "silo-1:11111");
+    const clientAddr = new SiloAddress("client", "uid-c", "client:22222");
+    const silo = buildSilo(siloAddr, network, [siloAddr]);
+    await silo.start();
+
+    const client = createClient({
+      clusterId: CLUSTER,
+      local: clientAddr,
+      transport: new InProcessTransport(network, CLUSTER),
+      gateway: siloAddr,
+    }).registerGrain(SubscriberGrain, { interfaces: [ISubscriberGrain] });
+    await client.connect();
+
+    try {
+      const received: string[] = [];
+      const ref = client.createObjectReference(IEventObserver, {
+        onEvent: async (text: string) => {
+          received.push(text);
+          return `ack:${text}`;
+        },
+      });
+
+      const grainRef = client.getGrain(ISubscriberGrain, "sub-1");
+      await grainRef.subscribe(ref);
+      const result = await grainRef.poke("hello");
+
+      expect(received).toEqual(["hello"]);
+      expect(result).toBe("ack:hello");
+    } finally {
+      await client.close();
+      await silo.stop();
+    }
+  });
+
+  it("routes through a gateway silo other than the one hosting the subscriber grain", async () => {
+    const network = new InProcessNetwork();
+    const silo1Addr = new SiloAddress("silo-1", "uid-1", "silo-1:11111");
+    const silo2Addr = new SiloAddress("silo-2", "uid-2", "silo-2:11112");
+    const clientAddr = new SiloAddress("client", "uid-c", "client:22222");
+    const addrs = [silo1Addr, silo2Addr];
+    const silo1 = buildSilo(silo1Addr, network, addrs);
+    // Bias placement to the second candidate (silo2) so the subscriber grain
+    // activates away from the client's gateway (silo1), forcing the observer
+    // call to hop silo2 -> silo1 (gateway) -> client.
+    const silo2 = buildSilo(silo2Addr, network, addrs, () => 0.99);
+    await silo1.start();
+    await silo2.start();
+
+    // Client connects to silo1 as its gateway.
+    const client = createClient({
+      clusterId: CLUSTER,
+      local: clientAddr,
+      transport: new InProcessTransport(network, CLUSTER),
+      gateway: silo1Addr,
+    }).registerGrain(SubscriberGrain, { interfaces: [ISubscriberGrain] });
+    await client.connect();
+
+    try {
+      const received: string[] = [];
+      const ref = client.createObjectReference(IEventObserver, {
+        onEvent: async (text: string) => {
+          received.push(text);
+          return `ack:${text}`;
+        },
+      });
+
+      // Call through silo2 directly (not the client's gateway) so the
+      // subscriber grain activates there, forcing the call to the observer
+      // to hop silo2 -> silo1 (gateway) -> client and the reply to relay back.
+      const grainOnSilo2 = silo2.getGrain(ISubscriberGrain, "sub-2");
+      await grainOnSilo2.subscribe(ref);
+      const result = await grainOnSilo2.poke("cross-silo");
+
+      expect(received).toEqual(["cross-silo"]);
+      expect(result).toBe("ack:cross-silo");
+    } finally {
+      await client.close();
+      await silo1.stop();
+      await silo2.stop();
+    }
+  });
+
+  it("propagates an error thrown by the hosted observer back to the calling grain", async () => {
+    const network = new InProcessNetwork();
+    const siloAddr = new SiloAddress("silo-1", "uid-1", "silo-1:11111");
+    const clientAddr = new SiloAddress("client", "uid-c", "client:22222");
+    const silo = buildSilo(siloAddr, network, [siloAddr]);
+    await silo.start();
+
+    const client = createClient({
+      clusterId: CLUSTER,
+      local: clientAddr,
+      transport: new InProcessTransport(network, CLUSTER),
+      gateway: siloAddr,
+    }).registerGrain(SubscriberGrain, { interfaces: [ISubscriberGrain] });
+    await client.connect();
+
+    try {
+      const ref = client.createObjectReference(IEventObserver, {
+        onEvent: async () => {
+          throw new Error("observer boom");
+        },
+      });
+
+      const grainRef = client.getGrain(ISubscriberGrain, "sub-3");
+      await grainRef.subscribe(ref);
+      await expect(grainRef.poke("x")).rejects.toThrow("observer boom");
+    } finally {
+      await client.close();
+      await silo.stop();
+    }
+  });
+});
