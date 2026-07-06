@@ -85,6 +85,10 @@ Read [`deviations.md`](deviations.md) for what stays Orleans-faithful and what i
 
 **Open questions.** How does an extension survive activation migration — re-bound on rehydrate, or torn down? Does the gateway need a reverse-direction routing table or do clients open a duplex connection? (Recommend duplex; the WebSocket transport already supports it.)
 
+**Chosen design (observer half of option A, kept faithful to Orleans).** An observer is a client-hosted callback addressed by a client-typed `GrainId`: reserved type `$client`, key `clientKey + "+" + scope` (`packages/core/src/client-grain-id.ts`). `clientIdOf` strips the scope so any observer routes back to its owning client, while distinct observers still hash distinctly. Reference reduction/rehydration reuse the existing `GRAIN_REF` marker + serializer callback; rehydrate must build the reference from the wire `GrainId` as-is (`GrainFactory.getReference`) rather than re-resolving the type from the interface, so the `$client` type survives. The subscriber-set bookkeeping is `ObserverManager` (`packages/core/src/observer-manager.ts`).
+
+Routing is faithful to Orleans rather than shortcutting on this codebase's directly-addressable client listeners: a client opens a **duplex** connection to its gateway and is reachable **only** through it. This requires a transport **accept hook** — `listen(address, onMessage, onAccept?)` surfacing the accepted duplex `Connection`, and an optional `clientId` on `ConnectionPreamble`. A gateway records `clientId → held connection` on accept (Orleans `RecordOpenedConnection`); a gossiped **client directory** maps `clientId → [gateway silos]`; a grain's silo resolves an observer's client to a gateway and forwards; the gateway's **deliver-to-proxy** sends over the held connection, with a reply-routing cache for client→observer request/response. The change to the core `Transport` abstraction is strictly additive — silo↔silo messaging keeps its reverse-connection replies; only clients use the held connection.
+
 ---
 
 ## 5. `StatelessWorker` enforcement
