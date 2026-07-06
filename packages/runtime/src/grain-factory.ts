@@ -59,6 +59,18 @@ export class GrainFactory {
     return this.buildProxy(def, target);
   }
 
+  /**
+   * Build a reference to an explicit `GrainId`, bypassing type resolution
+   * from the interface. Used to rehydrate a wire identity as-is (a normal
+   * grain reference's `grainId.type` already matches what `getGrain` would
+   * resolve; an observer reference's reserved `$client` type and `+scope`
+   * key must survive unchanged, which `getGrain` cannot do since it derives
+   * the type from the interface).
+   */
+  getReference<T>(def: GrainInterface<T>, grainId: GrainId): T {
+    return this.buildProxy(def, grainId);
+  }
+
   private buildProxy<T>(def: GrainInterface<T>, target: GrainId): T {
     return new Proxy(
       {},

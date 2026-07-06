@@ -1,16 +1,21 @@
 import { GrainCallError, RejectionError } from "@tsva/core/errors";
+import { createClientId, createObserverId, isObserverGrainId } from "@tsva/core/client-grain-id";
 import type { Grain } from "@tsva/core/grain";
+import type { GrainId } from "@tsva/core/grain-id";
 import type { GrainInterface } from "@tsva/core/grain-interface";
 import { getGrainInterface } from "@tsva/core/grain-interface";
 import { getGrainMetadata } from "@tsva/core/grain-metadata";
-import type { GrainReferenceIdentity } from "@tsva/core/grain-reference";
+import {
+  grainReferenceIdentity,
+  type GrainReferenceIdentity,
+} from "@tsva/core/grain-reference";
 import type { GrainType } from "@tsva/core/grain-type";
 import type { GrainKeyFor } from "@tsva/core/key-kinds";
 import type { InvocationRequest } from "@tsva/core/request";
 import type { SiloAddress } from "@tsva/core/silo-address";
 import { ConnectionManager } from "@tsva/messaging/connection-manager";
 import { CorrelationTable } from "@tsva/messaging/correlation-table";
-import { nextCorrelationId, type Message } from "@tsva/messaging/message";
+import { nextCorrelationId, responseTo, type Message, type ResponseKind } from "@tsva/messaging/message";
 import { MessagePackSerializer } from "@tsva/messaging/msgpack-serializer";
 import type { Serializer } from "@tsva/messaging/serializer";
 import type { Listener, Transport } from "@tsva/messaging/transport";
@@ -43,6 +48,12 @@ export interface ClientConfig {
    * keep the loop deterministic.
    */
   delay?: (ms: number) => Promise<void>;
+  /**
+   * The client's own identity, used to mint observer references
+   * (`createObjectReference`). Defaults to a fresh random client id; tests
+   * override it for deterministic assertions.
+   */
+  clientId?: GrainId;
 }
 
 /** Orleans `ClientMessageCenter.MINIMUM_INTERCONNECT_DELAY`. */
@@ -61,6 +72,12 @@ interface GrainRegistration {
   interfaces: GrainInterface<unknown>[];
 }
 
+/** A client-hosted callback object registered under an observer `GrainId`. */
+interface LocalObjectEntry {
+  object: Record<string, (...args: unknown[]) => unknown>;
+  interfaceId: number;
+}
+
 /**
  * An external client (docs/11). It is not a silo — it hosts no grains — but it
  * uses the same `getGrain` proxy mechanism, forwarding every call to a gateway
@@ -76,6 +93,8 @@ export class ClientNode implements Dispatcher {
   private readonly callTimeoutMs: number;
   private readonly gateways: GatewayManager;
   private readonly delay: (ms: number) => Promise<void>;
+  private readonly clientId: GrainId;
+  private readonly localObjects = new Map<string, LocalObjectEntry>();
   private listener: Listener | undefined;
 
   constructor(private readonly config: ClientConfig) {
@@ -94,6 +113,7 @@ export class ClientNode implements Dispatcher {
     }
     this.gateways = new GatewayManager(provider);
     this.delay = config.delay ?? defaultDelay;
+    this.clientId = config.clientId ?? createClientId();
   }
 
   /**
@@ -126,6 +146,29 @@ export class ClientNode implements Dispatcher {
 
   getGrain<T>(def: GrainInterface<T>, key: GrainKeyFor<T>): T {
     return this.factory.getGrain(def, key);
+  }
+
+  /**
+   * Host `obj` as a callback object a grain can invoke (Orleans'
+   * `CreateObjectReference`): mint a fresh observer identity scoped to this
+   * client, register it locally, and return a grain-reference proxy carrying
+   * that identity — pass it as a method argument like any other grain ref;
+   * the serializer reduces it to `{grainId, interfaceId}` on the wire.
+   */
+  createObjectReference<T>(def: GrainInterface<T>, obj: object): T {
+    const observer = createObserverId(this.clientId);
+    this.localObjects.set(observer.toString(), {
+      object: obj as Record<string, (...args: unknown[]) => unknown>,
+      interfaceId: def.id,
+    });
+    return this.factory.getReference(def, observer);
+  }
+
+  /** Stop hosting a reference previously returned by `createObjectReference`. */
+  deleteObjectReference(ref: object): void {
+    const identity = grainReferenceIdentity(ref);
+    if (identity === undefined) return;
+    this.localObjects.delete(identity.grainId.toString());
   }
 
   async close(): Promise<void> {
@@ -202,8 +245,85 @@ export class ClientNode implements Dispatcher {
   }
 
   private onMessage(message: Message): void {
-    // A client only ever receives responses to its own requests.
-    if (message.direction === "response") this.correlation.complete(message);
+    if (message.direction === "response") {
+      this.correlation.complete(message);
+      return;
+    }
+    // The only other traffic a client receives is a grain calling back into
+    // one of its hosted observer objects (`createObjectReference`).
+    if (isObserverGrainId(message.targetGrain)) {
+      void this.dispatchToLocalObject(message);
+    }
+    // Any other inbound request/oneWay targets a real grain — a client hosts
+    // none, so there is nothing to do with it.
+  }
+
+  /**
+   * Invoke a hosted callback object for an inbound `request`/`oneWay`
+   * targeting one of its observer references, and reply in kind (mirroring
+   * the silo's own request/response construction convention). Async so it
+   * runs fire-and-forget from the sync `onMessage`; every failure path here
+   * is turned into an error response rather than an unhandled rejection.
+   */
+  private async dispatchToLocalObject(message: Message): Promise<void> {
+    const entry = this.localObjects.get(message.targetGrain.toString());
+    if (entry === undefined) {
+      if (message.direction === "oneWay") return; // nothing to reply to; drop silently
+      await this.replyToCaller(
+        message,
+        responseTo(
+          message,
+          "rejection",
+          this.serializer.serialize({
+            message: `no object hosted for observer ${message.targetGrain.toString()}`,
+            kind: "unknownTarget",
+          }),
+          this.config.local,
+        ),
+      );
+      return;
+    }
+    try {
+      const args = this.serializer.deserialize<unknown[]>(message.body);
+      const method = entry.object[message.method];
+      if (typeof method !== "function") {
+        throw new GrainCallError(`hosted object has no method ${message.method}`);
+      }
+      const result = await Promise.resolve(method.apply(entry.object, args));
+      if (message.direction === "oneWay") return;
+      await this.replyToCaller(
+        message,
+        responseTo(message, "success", this.serializer.serialize(result), this.config.local),
+      );
+    } catch (err) {
+      if (message.direction === "oneWay") return;
+      const { kind, body } = this.serializeError(err);
+      await this.replyToCaller(message, responseTo(message, kind, body, this.config.local));
+    }
+  }
+
+  /** Send a reply for a hosted-object dispatch back to the calling silo. */
+  private async replyToCaller(request: Message, response: Message): Promise<void> {
+    if (request.sendingSilo === undefined) return;
+    try {
+      const conn = await this.connections.get(request.sendingSilo);
+      conn.send(response);
+    } catch {
+      // The caller has gone; dropping the reply is fine, matching the silo's
+      // own best-effort reply behaviour.
+    }
+  }
+
+  /** Map a thrown error to the `(kind, body)` of an error/rejection response. */
+  private serializeError(err: unknown): { kind: ResponseKind; body: Uint8Array } {
+    return err instanceof RejectionError
+      ? { kind: "rejection", body: this.serializer.serialize({ message: err.message, kind: err.kind }) }
+      : {
+          kind: "error",
+          body: this.serializer.serialize({
+            message: err instanceof Error ? err.message : String(err),
+          }),
+        };
   }
 
   private interpretResponse(response: Message): unknown {
@@ -227,7 +347,11 @@ export class ClientNode implements Dispatcher {
   private rehydrate(id: GrainReferenceIdentity): unknown {
     const iface = getGrainInterface(id.interfaceId);
     if (iface === undefined) throw new GrainCallError(`unknown interface ${id.interfaceId}`);
-    return this.factory.getGrain(iface, id.grainId.key);
+    // Use the wire `grainId` as-is rather than re-resolving a type from the
+    // interface: for a normal grain reference it is the same type `getGrain`
+    // would produce, but for an observer reference it preserves the reserved
+    // `$client` type + `+scope` key, which re-resolution would discard.
+    return this.factory.getReference(iface, id.grainId);
   }
 }
 

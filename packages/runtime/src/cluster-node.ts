@@ -776,7 +776,11 @@ export class ClusterNode {
   private rehydrate(id: GrainReferenceIdentity): unknown {
     const iface = getGrainInterface(id.interfaceId);
     if (iface === undefined) throw new GrainCallError(`unknown interface ${id.interfaceId}`);
-    return this.factory.getGrain(iface, id.grainId.key);
+    // Use the wire `grainId` as-is rather than re-resolving a type from the
+    // interface: for a normal grain reference it is the same type `getGrain`
+    // would produce, but for an observer reference it preserves the reserved
+    // `$client` type + `+scope` key, which re-resolution would discard.
+    return this.factory.getReference(iface, id.grainId);
   }
 
   private onDeactivated(activation: ActivationData): void {
