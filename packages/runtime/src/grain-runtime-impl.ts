@@ -129,6 +129,10 @@ export class GrainRuntimeImpl implements GrainRuntime {
     return currentTransaction() !== undefined;
   }
 
+  getOrSetExtension<T extends object>(iface: GrainInterface<T>, factory: () => T): T {
+    return this.activation.getOrSetExtension(iface.id, factory);
+  }
+
   private requireReminders(): ReminderRegistry {
     const registry = this.services.reminders?.();
     if (registry === undefined) throw new Error("reminders are not configured on this silo");

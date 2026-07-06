@@ -35,6 +35,21 @@ export class GrainCallTimeoutError extends Error {
 }
 
 /**
+ * Raised when a call targets a `GrainExtension` interface that has not been
+ * bound (via `GrainRuntime.getOrSetExtension`) on the receiving activation,
+ * and no auto-install factory is configured for it either (Orleans
+ * `GrainExtensionNotInstalledException`). Distinct from `GrainCallError`'s
+ * generic "no method" case: the interface is a recognised extension, it's
+ * just not installed on this particular activation.
+ */
+export class GrainExtensionNotInstalledException extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GrainExtensionNotInstalledException";
+  }
+}
+
+/**
  * Raised when a persistent write/clear loses an optimistic-concurrency check:
  * the stored etag no longer matches the one the grain last read, so another
  * incarnation has written in between.

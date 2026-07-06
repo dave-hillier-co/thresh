@@ -10,7 +10,11 @@ import {
   durableJobHandler,
   type JobRunContext,
 } from "@tsva/core/durable-job";
-import { GrainCallError, RejectionError } from "@tsva/core/errors";
+import {
+  GrainCallError,
+  GrainExtensionNotInstalledException,
+  RejectionError,
+} from "@tsva/core/errors";
 import type { Grain } from "@tsva/core/grain";
 import type { GrainContext } from "@tsva/core/grain-context";
 import type { GrainId } from "@tsva/core/grain-id";
@@ -125,6 +129,15 @@ export class ActivationData implements GrainContext {
   /** Handlers for pulling-agent stream delivery, keyed by `namespace/key`. */
   private readonly streamHandlers = new Map<string, StreamHandler<unknown>>();
   private readonly broadcastHandlers = new Map<string, BroadcastChannelHandler<unknown>>();
+  /** Bound `GrainExtension` instances, keyed by interface id; see `getOrSetExtension`. */
+  private readonly extensions = new Map<number, object>();
+  /**
+   * Auto-install factories for extension interfaces not yet bound, keyed by
+   * interface id — set by the catalog (later task); unset here means an
+   * un-bound extension call always throws
+   * `GrainExtensionNotInstalledException` rather than auto-installing.
+   */
+  private extensionFactories?: Map<number, (activation: ActivationData) => object>;
 
   constructor(
     id: GrainId,
@@ -257,6 +270,31 @@ export class ActivationData implements GrainContext {
     const handler = observe(namespace, key);
     this.broadcastHandlers.set(channelKey, handler);
     return handler;
+  }
+
+  /**
+   * Get this activation's bound `GrainExtension` instance for `interfaceId`,
+   * lazily creating it via `factory` on first use. Idempotent: a second call
+   * for the same interface id returns the SAME instance and never re-runs
+   * `factory` (see `GrainRuntime.getOrSetExtension`).
+   */
+  getOrSetExtension<T extends object>(interfaceId: number, factory: () => T): T {
+    const existing = this.extensions.get(interfaceId);
+    if (existing !== undefined) return existing as T;
+    const created = factory();
+    this.extensions.set(interfaceId, created);
+    return created;
+  }
+
+  /**
+   * Set the catalog's per-interface auto-install factories, used by
+   * `callMethod` to bind an extension on first call rather than requiring the
+   * grain to have called `getOrSetExtension` beforehand. Unset by default
+   * (wired by a later silo-builder task); an un-bound extension call with no
+   * factory configured throws `GrainExtensionNotInstalledException`.
+   */
+  setExtensionFactories(factories: Map<number, (activation: ActivationData) => object>): void {
+    this.extensionFactories = factories;
   }
 
   /** Bind a pulling-agent stream handler so a delivered `StreamConsumer` turn reaches it. */
@@ -425,6 +463,16 @@ export class ActivationData implements GrainContext {
     if (req.interfaceId === TransactionResourceInterface.id) {
       return await this.invokeTransactionResource(req);
     }
+    // GrainExtension dispatch: an interface marked `extension` in the registry
+    // routes to a per-activation object bound via `getOrSetExtension`
+    // (auto-installed from `extensionFactories` if not yet bound), NOT to
+    // `this.instance` — an orthogonal method surface, dispatched by interface.
+    // Runs directly on this turn, bypassing the grain's incoming call-filter
+    // pipeline (unlike the instance fallthrough below); see report for why.
+    const iface = getGrainInterface(req.interfaceId);
+    if (iface?.extension === true) {
+      return await this.invokeExtension(req, iface.name);
+    }
     const fn = (this.instance as unknown as Record<string, unknown>)[req.method];
     if (typeof fn !== "function") {
       throw new GrainCallError(`grain ${this.id.toString()} has no method ${req.method}`);
@@ -460,6 +508,33 @@ export class ActivationData implements GrainContext {
     return await runCallFilters(filters, context, () =>
       Promise.resolve(method.apply(this.instance, context.args)),
     );
+  }
+
+  /**
+   * Route a call targeting an extension interface to its bound instance,
+   * auto-installing from `extensionFactories` if not yet bound (see
+   * `setExtensionFactories`). Throws `GrainExtensionNotInstalledException`
+   * when neither a bound instance nor a factory exists.
+   */
+  private async invokeExtension(req: InvocationRequest, interfaceName: string): Promise<unknown> {
+    let ext = this.extensions.get(req.interfaceId);
+    if (ext === undefined) {
+      const factory = this.extensionFactories?.get(req.interfaceId);
+      if (factory !== undefined) {
+        ext = factory(this);
+        this.extensions.set(req.interfaceId, ext);
+      }
+    }
+    if (ext === undefined) {
+      throw new GrainExtensionNotInstalledException(
+        `extension ${interfaceName} is not installed on ${this.id.toString()}`,
+      );
+    }
+    const fn = (ext as Record<string, unknown>)[req.method];
+    if (typeof fn !== "function") {
+      throw new GrainCallError(`extension ${interfaceName} has no method ${req.method}`);
+    }
+    return await (fn as (...args: unknown[]) => unknown).apply(ext, req.args);
   }
 
   /** Route a `TransactionResource` system call to the named transactional state. */

@@ -21,6 +21,13 @@ export interface GrainInterface<T> {
    */
   readonly version: number;
   readonly options: Readonly<Record<string, InvokeMethodOptions>>;
+  /**
+   * Marks this as a `GrainExtension` interface (Orleans `IGrainExtension`): an
+   * orthogonal method surface dispatched by interface rather than on the
+   * grain instance, bound per-activation via `GrainRuntime.getOrSetExtension`.
+   * Defaults to `false` for an ordinary grain interface.
+   */
+  readonly extension?: boolean;
   /** Phantom marker so a `GrainInterface<T>` carries its interface type. */
   readonly __t?: T;
 }
@@ -30,6 +37,8 @@ export interface GrainInterfaceDefinition<T> {
   options?: Partial<Record<keyof T & string, InvokeMethodOptions>>;
   /** Interface version for rolling upgrades (defaults to 1). */
   version?: number;
+  /** See `GrainInterface.extension`. Defaults to `false`. */
+  extension?: boolean;
 }
 
 // Process-wide registry so a receiving silo can resolve an interfaceId back to
@@ -45,6 +54,7 @@ export function defineGrainInterface<T>(
     name,
     version: def.version ?? 1,
     options: { ...(def.options ?? {}) } as Record<string, InvokeMethodOptions>,
+    ...(def.extension !== undefined ? { extension: def.extension } : {}),
   };
   registry.set(result.id, result as GrainInterface<unknown>);
   return result;

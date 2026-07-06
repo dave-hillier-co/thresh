@@ -74,4 +74,14 @@ export interface GrainRuntime {
   getTransactionId(): string | undefined;
   /** Whether this turn runs inside a transaction, ambient or just begun. */
   isInTransaction(): boolean;
+  /**
+   * Get this activation's bound instance of a `GrainExtension` interface
+   * (Orleans `IGrainExtension`/`IGrainContext.GetGrainExtension`), lazily
+   * creating and binding one via `factory` on first use. Idempotent: once
+   * bound, later calls return the SAME instance and never re-run `factory`.
+   * The extension object becomes the dispatch target for calls made against
+   * `iface` (a grain reference cast to `iface` via `castGrainReference`),
+   * routed by the activation instead of the grain instance's own methods.
+   */
+  getOrSetExtension<T extends object>(iface: GrainInterface<T>, factory: () => T): T;
 }
