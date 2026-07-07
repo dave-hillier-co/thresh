@@ -462,6 +462,18 @@ export class ClusterNode {
     return this.factory.getGrain(def, key);
   }
 
+  /**
+   * Build a reference to an explicit `GrainId` under an arbitrary interface
+   * (typically a `GrainExtension`), bypassing key-type resolution from `def`.
+   * Used to reach a target grain's auto-installed extension (e.g.
+   * `ICancellationSourcesExtension`) whose grain id is only known as a
+   * `GrainId` — the dispatcher routes the call to wherever that grain
+   * actually lives, same as an ordinary `getGrain` reference.
+   */
+  getExtensionReference<T>(def: GrainInterface<T>, grainId: GrainId): T {
+    return this.factory.getReference(def, grainId);
+  }
+
   isActive(id: GrainId): boolean {
     return this.catalog.isActive(id);
   }

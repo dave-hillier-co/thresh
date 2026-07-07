@@ -39,6 +39,16 @@ export function encodeValue(value: unknown): unknown {
   if (value instanceof GrainCancellationToken) {
     return { [T]: "cancellationToken", tokenId: value.tokenId, cancelled: value.isCancellationRequested };
   }
+  // A placeholder re-entering `encodeValue` (e.g. a call re-forwarded to
+  // another silo, over a stale directory cache, before this silo ever bound
+  // it to a live `GrainCancellationToken`) must re-tag with its wire shape —
+  // without this, the generic plain-object branch below strips the `$tsva`
+  // tag (only `tokenId`/`cancelled` survive as bare own properties), and the
+  // next hop's `decodeValue` can no longer recognise it as a cancellation
+  // token, leaving the eventual callee with a signal-less plain object.
+  if (value instanceof CancellationTokenPlaceholder) {
+    return { [T]: "cancellationToken", tokenId: value.tokenId, cancelled: value.cancelled };
+  }
   if (value instanceof SiloAddress) {
     return { [T]: "silo", podName: value.podName, podUid: value.podUid, endpoint: value.endpoint };
   }
