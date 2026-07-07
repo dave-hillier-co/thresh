@@ -70,4 +70,29 @@ export class LongRunningTaskGrain extends Grain implements ILongRunningTaskGrain
   async wasCancelled(callId: string): Promise<boolean> {
     return this.cancelledCallIds.has(callId);
   }
+
+  // "Plain CancellationToken" surface, ported from `CancellationTokenTests.cs`.
+  // JS has only one cancellation-token type (`GrainCancellationToken` wrapping
+  // `AbortSignal`), so these bodies are identical to their
+  // `...GrainCancellation` counterparts above.
+  async longWait(token: GrainCancellationToken, delayMs: number, callId: string): Promise<void> {
+    return this.longWaitGrainCancellation(token, delayMs, callId);
+  }
+
+  async longWaitInterleaving(
+    token: GrainCancellationToken,
+    delayMs: number,
+    callId: string,
+  ): Promise<void> {
+    return this.longWait(token, delayMs, callId);
+  }
+
+  async callOtherLongRunningTask(
+    target: ILongRunningTaskGrain,
+    token: GrainCancellationToken,
+    delayMs: number,
+    callId: string,
+  ): Promise<void> {
+    await target.longWait(token, delayMs, callId);
+  }
 }
