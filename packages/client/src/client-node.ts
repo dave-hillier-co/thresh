@@ -1,6 +1,10 @@
 import { GrainCallError, RejectionError } from "@tsva/core/errors";
 import { createClientId, createObserverId, isObserverGrainId } from "@tsva/core/client-grain-id";
 import type { Grain } from "@tsva/core/grain";
+import {
+  CancellationTokenPlaceholder,
+  GrainCancellationToken,
+} from "@tsva/core/grain-cancellation-token";
 import type { GrainId } from "@tsva/core/grain-id";
 import type { GrainInterface } from "@tsva/core/grain-interface";
 import { getGrainInterface } from "@tsva/core/grain-interface";
@@ -19,6 +23,7 @@ import { nextCorrelationId, responseTo, type Message, type ResponseKind } from "
 import { MessagePackSerializer } from "@tsva/messaging/msgpack-serializer";
 import type { Serializer } from "@tsva/messaging/serializer";
 import type { Listener, Transport } from "@tsva/messaging/transport";
+import { ICancellationSourcesExtension } from "@tsva/runtime/cancellation-extension";
 import type { Dispatcher } from "@tsva/runtime/dispatcher";
 import { GrainFactory } from "@tsva/runtime/grain-factory";
 import { GatewayManager } from "@tsva/client/gateway-manager";
@@ -95,6 +100,14 @@ export class ClientNode implements Dispatcher {
   private readonly delay: (ms: number) => Promise<void>;
   private readonly clientId: GrainId;
   private readonly localObjects = new Map<string, LocalObjectEntry>();
+  /**
+   * Per-client store of `AbortController`s for cancellation tokens bound on
+   * this client's hosted-object dispatch path, keyed by `tokenId` — the
+   * client-side mirror of `ActivationData`'s per-activation extension store
+   * (`CancellationSourcesExtension`), since a client hosts objects rather than
+   * grain activations and so has no `getOrSetExtension` to lean on.
+   */
+  private readonly cancellationControllers = new Map<string, AbortController>();
   private listener: Listener | undefined;
 
   constructor(private readonly config: ClientConfig) {
@@ -280,6 +293,22 @@ export class ClientNode implements Dispatcher {
    * is turned into an error response rather than an unhandled rejection.
    */
   private async dispatchToLocalObject(message: Message): Promise<void> {
+    // A cancellation notification for a token this client bound while
+    // dispatching a call to one of its hosted objects — not a hosted-object
+    // call itself (the `ICancellationSourcesExtension` interface has no
+    // entry in `localObjects`), so this must be checked before the
+    // `localObjects` lookup below, which would otherwise reject it as
+    // "no object hosted".
+    if (message.interfaceId === ICancellationSourcesExtension.id) {
+      const [tokenId] = this.serializer.deserialize<[string]>(message.body);
+      this.getOrCreateCancellationController(tokenId).abort();
+      if (message.direction === "oneWay") return;
+      await this.replyToCaller(
+        message,
+        responseTo(message, "success", this.serializer.serialize(undefined), this.config.local),
+      );
+      return;
+    }
     const entry = this.localObjects.get(message.targetGrain.toString());
     if (entry === undefined) {
       if (message.direction === "oneWay") return; // nothing to reply to; drop silently
@@ -299,6 +328,10 @@ export class ClientNode implements Dispatcher {
     }
     try {
       const args = this.serializer.deserialize<unknown[]>(message.body);
+      // Bind any wire-arrived cancellation-token placeholders to live tokens
+      // controlled by this client, BEFORE the hosted object's method runs
+      // (mirrors `ActivationData.bindCancellationTokens` on the grain side).
+      this.bindCancellationTokens(args);
       const method = entry.object[message.method];
       if (typeof method !== "function") {
         throw new GrainCallError(`hosted object has no method ${message.method}`);
@@ -313,6 +346,34 @@ export class ClientNode implements Dispatcher {
       if (message.direction === "oneWay") return;
       const { kind, body } = this.serializeError(err);
       await this.replyToCaller(message, responseTo(message, kind, body, this.config.local));
+    }
+  }
+
+  /** Get (or lazily create) this client's `AbortController` for `tokenId`. */
+  private getOrCreateCancellationController(tokenId: string): AbortController {
+    const existing = this.cancellationControllers.get(tokenId);
+    if (existing !== undefined) return existing;
+    const created = new AbortController();
+    this.cancellationControllers.set(tokenId, created);
+    return created;
+  }
+
+  /**
+   * Replace each `CancellationTokenPlaceholder` in `args` (produced by
+   * `decodeValue` for a wire-arrived `GrainCancellationToken` argument, which
+   * has no client context to bind a live signal) with a real
+   * `GrainCancellationToken` bound to this client's own controller for that
+   * `tokenId` — so a later `cancelRemoteToken(tokenId)` notification (handled
+   * above) fires it. A placeholder that arrived already-cancelled pre-aborts
+   * the controller, mirroring `ActivationData.bindCancellationTokens`.
+   */
+  private bindCancellationTokens(args: unknown[]): void {
+    for (let i = 0; i < args.length; i++) {
+      const arg = args[i];
+      if (!(arg instanceof CancellationTokenPlaceholder)) continue;
+      const controller = this.getOrCreateCancellationController(arg.tokenId);
+      if (arg.cancelled) controller.abort();
+      args[i] = new GrainCancellationToken({ tokenId: arg.tokenId, signal: controller.signal });
     }
   }
 

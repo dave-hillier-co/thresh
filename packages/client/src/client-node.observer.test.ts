@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { clientIdOf, isObserverGrainId } from "@tsva/core/client-grain-id";
+import { GrainTaskCanceledError } from "@tsva/core/errors";
+import { GrainCancellationToken } from "@tsva/core/grain-cancellation-token";
 import { defineGrainInterface } from "@tsva/core/grain-interface";
 import { GrainId } from "@tsva/core/grain-id";
 import { grainReferenceIdentity } from "@tsva/core/grain-reference";
@@ -8,6 +10,8 @@ import { SiloAddress } from "@tsva/core/silo-address";
 import { InProcessNetwork, InProcessTransport } from "@tsva/messaging/in-process-transport";
 import { nextCorrelationId, type Message } from "@tsva/messaging/message";
 import { MessagePackSerializer } from "@tsva/messaging/msgpack-serializer";
+import { ICancellationSourcesExtension } from "@tsva/runtime/cancellation-extension";
+import { waitFor } from "@tsva/testing/wait";
 import { createClient } from "@tsva/client/client-node";
 
 interface IObserver extends GrainWithStringKey {
@@ -238,6 +242,108 @@ describe("client object hosting (createObjectReference)", () => {
       const reply = await silo.waitForReply();
       expect(reply.responseKind).toBe("rejection");
       expect(handler.onEvent).not.toHaveBeenCalled();
+    } finally {
+      await client.close();
+      await silo.listener.close();
+    }
+  });
+});
+
+describe("client-side cancellation binding for hosted objects", () => {
+  /** Awaits `delayMs`, honouring `token` — same shape as the runtime-side helper. */
+  function cancellableDelay(token: GrainCancellationToken, delayMs: number): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      if (token.isCancellationRequested) {
+        reject(new GrainTaskCanceledError());
+        return;
+      }
+      const timer = setTimeout(resolve, delayMs);
+      token.signal.addEventListener(
+        "abort",
+        () => {
+          clearTimeout(timer);
+          reject(new GrainTaskCanceledError());
+        },
+        { once: true },
+      );
+    });
+  }
+
+  it("aborts a hosted object's in-flight call when a matching cancelRemoteToken request arrives", async () => {
+    const network = new InProcessNetwork();
+    const clientId = new GrainId("$client", "c-cancel");
+    const client = createClient({
+      clusterId: CLUSTER,
+      local: clientAddr,
+      transport: new InProcessTransport(network, CLUSTER),
+      gateway: siloAddr,
+      clientId,
+    });
+    await client.connect();
+    const silo = await startFakeSilo(network);
+    try {
+      const started: string[] = [];
+      const cancelled: string[] = [];
+      const handler = {
+        longWait: async (delayMs: number, callId: string, token: GrainCancellationToken) => {
+          started.push(callId);
+          try {
+            await cancellableDelay(token, delayMs);
+          } catch (err) {
+            cancelled.push(callId);
+            throw err;
+          }
+        },
+      };
+      const ref = client.createObjectReference(IObserver, handler as never);
+      const identity = grainReferenceIdentity(ref)!;
+
+      const tokenId = "token-1";
+      const callId = "call-1";
+      // The wire-arrived token, exactly as a caller's `GrainCancellationToken`
+      // would encode: never fired yet.
+      const wireToken = new GrainCancellationToken({
+        tokenId,
+        signal: new AbortController().signal,
+      });
+
+      const longWaitCorrelation = nextCorrelationId();
+      silo.send(
+        baseMessage({
+          correlationId: longWaitCorrelation,
+          targetGrain: identity.grainId,
+          method: "longWait",
+          body: silo.serializer.serialize([10_000, callId, wireToken]),
+        }),
+      );
+
+      // Let the hosted call actually start before cancelling.
+      await waitFor(() => started.includes(callId));
+
+      // A `cancelRemoteToken(tokenId)` request targeting the SAME observer id
+      // (mirroring how the silo's dispatcher addresses the extension call).
+      const cancelCorrelation = nextCorrelationId();
+      silo.send(
+        baseMessage({
+          correlationId: cancelCorrelation,
+          targetGrain: identity.grainId,
+          interfaceId: ICancellationSourcesExtension.id,
+          method: "cancelRemoteToken",
+          body: silo.serializer.serialize([tokenId]),
+        }),
+      );
+
+      await waitFor(() => cancelled.includes(callId));
+
+      const responses = new Map(
+        silo.replies
+          .filter((m): m is Message & { direction: "response" } => m.direction === "response")
+          .map((m) => [m.correlationId, m]),
+      );
+      const longWaitReply = responses.get(longWaitCorrelation);
+      const cancelReply = responses.get(cancelCorrelation);
+      expect(cancelReply?.responseKind).toBe("success");
+      expect(longWaitReply?.responseKind).toBe("error");
     } finally {
       await client.close();
       await silo.listener.close();
