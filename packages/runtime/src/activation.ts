@@ -15,6 +15,10 @@ import {
   GrainExtensionNotInstalledException,
   RejectionError,
 } from "@tsva/core/errors";
+import {
+  CancellationTokenPlaceholder,
+  GrainCancellationToken,
+} from "@tsva/core/grain-cancellation-token";
 import type { Grain } from "@tsva/core/grain";
 import type { GrainContext } from "@tsva/core/grain-context";
 import type { GrainId } from "@tsva/core/grain-id";
@@ -27,6 +31,11 @@ import type { ActivationReason, DeactivationReason } from "@tsva/core/reasons";
 import type { SiloAddress } from "@tsva/core/silo-address";
 import { migrationParticipantsOf } from "@tsva/runtime/migration-participants";
 import { getGrainInterface } from "@tsva/core/grain-interface";
+import type { CancellationSourcesExtension } from "@tsva/runtime/cancellation-extension";
+import {
+  cancellationExtensionFactory,
+  ICancellationSourcesExtension,
+} from "@tsva/runtime/cancellation-extension";
 import {
   grainIncomingFilter,
   runCallFilters,
@@ -478,6 +487,11 @@ export class ActivationData implements GrainContext {
       throw new GrainCallError(`grain ${this.id.toString()} has no method ${req.method}`);
     }
     const method = fn as (...args: unknown[]) => unknown;
+    // Bind any wire-arrived cancellation-token placeholders to live tokens,
+    // in place on `req.args`, BEFORE the method runs — once, here, so both the
+    // no-filter and filtered dispatch paths below see the bound arguments
+    // (`context.args` is a copy of `req.args` taken after this call).
+    this.bindCancellationTokens(req.args);
     // The grain's own filter (if it declares one) runs innermost — after the
     // silo-wide filters, just before the method (Orleans parity).
     const own = grainIncomingFilter(this.instance);
@@ -508,6 +522,31 @@ export class ActivationData implements GrainContext {
     return await runCallFilters(filters, context, () =>
       Promise.resolve(method.apply(this.instance, context.args)),
     );
+  }
+
+  /**
+   * Replace each `CancellationTokenPlaceholder` in `args` (produced by
+   * `decodeValue`, which has no activation context to bind a live signal) with
+   * a real `GrainCancellationToken` whose `signal` is this activation's own
+   * cancellation extension's controller for that `tokenId` — so a later
+   * `cancelRemoteToken(tokenId)` call (routed to the SAME extension instance
+   * via `getOrSetExtension`'s idempotent binding) fires it. A placeholder that
+   * arrived already-cancelled (`cancelled: true`, set when `cancel()` ran
+   * before the call was even sent) pre-aborts the controller here, so the
+   * grain method sees an already-fired signal instead of racing one.
+   */
+  private bindCancellationTokens(args: unknown[]): void {
+    for (let i = 0; i < args.length; i++) {
+      const arg = args[i];
+      if (!(arg instanceof CancellationTokenPlaceholder)) continue;
+      const ext = this.getOrSetExtension(
+        ICancellationSourcesExtension.id,
+        cancellationExtensionFactory,
+      ) as CancellationSourcesExtension;
+      const controller = ext.getOrCreateController(arg.tokenId);
+      if (arg.cancelled) controller.abort();
+      args[i] = new GrainCancellationToken({ tokenId: arg.tokenId, signal: controller.signal });
+    }
   }
 
   /**

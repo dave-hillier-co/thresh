@@ -11,6 +11,10 @@ import type { DurableJobScheduler } from "@tsva/core/durable-job";
 import type { SiloAddress } from "@tsva/core/silo-address";
 import type { StreamProvider } from "@tsva/core/stream";
 import { ActivationData } from "@tsva/runtime/activation";
+import {
+  cancellationExtensionFactory,
+  ICancellationSourcesExtension,
+} from "@tsva/runtime/cancellation-extension";
 import type { GrainFactory } from "@tsva/runtime/grain-factory";
 import { GrainRuntimeImpl } from "@tsva/runtime/grain-runtime-impl";
 import type { TimeProvider } from "@tsva/runtime/time-provider";
@@ -82,17 +86,22 @@ export class Catalog {
   /**
    * `options.grainExtensionFactories` adapted once to the `(activation) =>
    * object` signature `ActivationData.setExtensionFactories` expects (the
-   * user-facing factory ignores the activation argument); built once here
-   * and shared, unmodified, by every activation this catalog creates.
+   * user-facing factory ignores the activation argument), merged with the
+   * built-in cancellation extension — which every activation gets
+   * regardless of user config, so `cancelRemoteToken` auto-installs on any
+   * activation rather than throwing `GrainExtensionNotInstalledException`
+   * (see `cancellation-extension.ts`). Built once here and shared,
+   * unmodified, by every activation this catalog creates.
    */
-  private readonly extensionFactories?: Map<number, (activation: ActivationData) => object>;
+  private readonly extensionFactories: Map<number, (activation: ActivationData) => object>;
 
   constructor(private readonly options: CatalogOptions) {
-    if (options.grainExtensionFactories !== undefined) {
-      this.extensionFactories = new Map(
-        [...options.grainExtensionFactories].map(([id, factory]) => [id, () => factory()]),
-      );
-    }
+    this.extensionFactories = new Map(
+      [...(options.grainExtensionFactories ?? [])].map(
+        ([id, factory]) => [id, () => factory()] as const,
+      ),
+    );
+    this.extensionFactories.set(ICancellationSourcesExtension.id, cancellationExtensionFactory);
   }
 
   /** Single-silo path (Phase 1): create with a fresh activation id if absent. */
@@ -196,9 +205,7 @@ export class Catalog {
     if (this.options.incomingCallFilters !== undefined) {
       activation.incomingCallFilters = this.options.incomingCallFilters;
     }
-    if (this.extensionFactories !== undefined) {
-      activation.setExtensionFactories(this.extensionFactories);
-    }
+    activation.setExtensionFactories(this.extensionFactories);
     const activateState = this.options.activateState;
     if (rehydrationBag !== undefined) {
       activation.rehydrationBag = rehydrationBag;

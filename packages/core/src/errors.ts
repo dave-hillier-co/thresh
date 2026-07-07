@@ -83,6 +83,21 @@ export class TransactionsDisabledError extends Error {
 }
 
 /**
+ * Raised when a cooperatively-cancelled grain call observes its
+ * `GrainCancellationToken` aborted and stops itself (Orleans
+ * `TaskCanceledException`). JS has no thread interruption, so this is thrown
+ * by application code (typically via `GrainCancellationToken
+ * .throwIfCancellationRequested()` or a cancellable await) rather than by the
+ * runtime tearing down the call.
+ */
+export class GrainTaskCanceledError extends Error {
+  constructor(message = "the operation was cancelled via a GrainCancellationToken") {
+    super(message);
+    this.name = "GrainTaskCanceledError";
+  }
+}
+
+/**
  * Raised when a transaction is aborted by the concurrency-control or commit
  * protocol — for example a younger transaction "dies" under wait-die when it
  * conflicts with an older holder, or a participant fails to prepare.
