@@ -120,15 +120,29 @@ describe(testClass, () => {
     `${testClass}.CancellationTokenCallbacksTaskSchedulerContext`,
   );
 
-  // Needs token-callback registration (Orleans `GrainCancellationToken
-  // .CancellationToken.Register(...)`, i.e. a callback fired when the token
-  // is cancelled, whose thrown exception propagates back out of `cancel()`).
-  // `GrainCancellationToken` here exposes only `signal`/`isCancellationRequested`
-  // /`throwIfCancellationRequested` — no callback-registration API — so this
-  // is a genuine feature gap, not a .NET-only mechanism.
-  orleansTest.gap(
-    "GAP-CANCELLATION",
+  // A `GrainCancellationToken.register` callback that throws when the token is
+  // cancelled propagates its exception back through `cts.cancel()` (Orleans:
+  // the callback's exception flows to `GrainCancellationTokenSource.Cancel()`).
+  // The grain call itself is fire-and-forget (upstream `.Ignore()`); its own
+  // cooperative-cancellation rejection is caught so it does not surface as an
+  // unhandled rejection. Asserting on the message rather than the error class
+  // keeps this indifferent to whether the grain activated on a peer silo (a
+  // rejection crossing the wire degrades to a generic error carrying the same
+  // message — see `expectCancelled`).
+  orleansTest(
     `${testClass}.CancellationTokenCallbacksThrow_ExceptionShouldBePropagated`,
+    async () => {
+      const grain = cluster.getGrain(ILongRunningTaskGrain, randomGuidKey());
+      const cts = cluster.newCancellationTokenSource();
+      const callId = Guid.newGuid().toString();
+      const grainTask = grain.grainCancellationTokenCallbackThrow(cts.token, callId);
+      grainTask.catch(() => {});
+      // Ensure the callback is registered before cancelling (deterministic
+      // stand-in for upstream's `await Task.Delay(100)`).
+      await waitFor(() => grain.wasStarted(callId));
+      await expect(cts.cancel()).rejects.toThrow(/From cancellation token callback/i);
+      await waitFor(() => grain.wasCancelled(callId));
+    },
   );
 
   orleansTest.each([0, 10, 300])(`${testClass}.InSiloGrainCancellation`, async (delay) => {

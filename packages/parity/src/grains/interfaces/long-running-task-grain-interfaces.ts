@@ -38,6 +38,25 @@ export interface ILongRunningTaskGrain extends GrainWithGuidKey {
   ): Promise<void>;
   /** Whether `callId` was recorded cancelled. */
   wasCancelled(callId: string): Promise<boolean>;
+  /** Whether `callId`'s call has started (registered its cancellation callback). */
+  wasStarted(callId: string): Promise<boolean>;
+
+  /**
+   * Registers a cancellation callback that records `callId` then throws, and
+   * awaits a cancellable delay. The thrown callback exception propagates back
+   * to the caller of `GrainCancellationTokenSource.cancel()` (Orleans
+   * `GrainCancellationTokenTests.CancellationTokenCallbacksThrow_ExceptionShouldBePropagated`).
+   */
+  grainCancellationTokenCallbackThrow(token: GrainCancellationToken, callId: string): Promise<void>;
+  /**
+   * Registers a cancellation callback that records `callId` then throws, and
+   * awaits a cancellable delay. Unlike `grainCancellationTokenCallbackThrow`,
+   * the callback's exception is contained and does NOT propagate to the
+   * canceller (Orleans `CancellationTokenTests
+   * .CancellationTokenCallbacksThrow_ExceptionDoesNotPropagate`, where a plain
+   * `CancellationToken` callback runs fire-and-forget).
+   */
+  cancellationTokenCallbackThrow(token: GrainCancellationToken, callId: string): Promise<void>;
 
   // "Plain CancellationToken" surface, ported from `CancellationTokenTests.cs`.
   // .NET distinguishes a plain `CancellationToken` from a `GrainCancellationToken`;
@@ -66,8 +85,9 @@ export const ILongRunningTaskGrain = defineGrainInterface<ILongRunningTaskGrain>
       longWaitInterleaving: { alwaysInterleave: true },
       // Orleans' cancellation-state observer (WatchCancellations) is
       // [AlwaysInterleave] so it can be read while a call still occupies the
-      // grain's turn; this read-only query mirrors that.
+      // grain's turn; these read-only queries mirror that.
       wasCancelled: { alwaysInterleave: true },
+      wasStarted: { alwaysInterleave: true },
     },
   },
 );

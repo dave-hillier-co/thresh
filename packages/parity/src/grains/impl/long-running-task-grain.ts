@@ -36,6 +36,7 @@ function cancellableDelay(token: GrainCancellationToken, delayMs: number): Promi
 @grain({ name: "UnitTests.Grains.LongRunningTaskGrain" })
 export class LongRunningTaskGrain extends Grain implements ILongRunningTaskGrain {
   private readonly cancelledCallIds = new Set<string>();
+  private readonly startedCallIds = new Set<string>();
 
   async longWaitGrainCancellation(
     token: GrainCancellationToken,
@@ -69,6 +70,62 @@ export class LongRunningTaskGrain extends Grain implements ILongRunningTaskGrain
 
   async wasCancelled(callId: string): Promise<boolean> {
     return this.cancelledCallIds.has(callId);
+  }
+
+  async wasStarted(callId: string): Promise<boolean> {
+    return this.startedCallIds.has(callId);
+  }
+
+  /**
+   * Upstream `GrainCancellationTokenCallbackThrow`: register a callback that
+   * records `callId` then throws, then await a cancellable delay. The token's
+   * source is a `GrainCancellationTokenSource`, so when it fires the callback's
+   * exception propagates back through `cancel()` (see
+   * `CancellationSourcesExtension.cancelRemoteToken`).
+   */
+  async grainCancellationTokenCallbackThrow(
+    token: GrainCancellationToken,
+    callId: string,
+  ): Promise<void> {
+    const registration = token.register(() => {
+      this.cancelledCallIds.add(callId);
+      throw new Error("From cancellation token callback");
+    });
+    this.startedCallIds.add(callId);
+    try {
+      await cancellableDelay(token, 10_000);
+    } finally {
+      registration.dispose();
+    }
+  }
+
+  /**
+   * Upstream `CancellationTokenCallbackThrow`: same shape as
+   * `grainCancellationTokenCallbackThrow`, but the callback's throw is
+   * contained within the callback so it never reaches the canceller — modelling
+   * .NET's plain `CancellationToken` callbacks, which run fire-and-forget and
+   * discard exceptions (JS has no separate plain-token type; see the interface
+   * note). `callId` is still recorded, so the call is observably cancelled.
+   */
+  async cancellationTokenCallbackThrow(
+    token: GrainCancellationToken,
+    callId: string,
+  ): Promise<void> {
+    const registration = token.register(() => {
+      this.cancelledCallIds.add(callId);
+      try {
+        throw new Error("From cancellation token callback");
+      } catch {
+        // Cooperative cancellation: a plain-token callback's exception is
+        // discarded rather than propagated to the canceller.
+      }
+    });
+    this.startedCallIds.add(callId);
+    try {
+      await cancellableDelay(token, 10_000);
+    } finally {
+      registration.dispose();
+    }
   }
 
   // "Plain CancellationToken" surface, ported from `CancellationTokenTests.cs`.

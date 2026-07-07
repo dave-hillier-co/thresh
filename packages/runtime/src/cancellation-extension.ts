@@ -1,3 +1,4 @@
+import { drainCancellationCallbackErrors } from "@tsva/core/grain-cancellation-token";
 import { defineGrainInterface } from "@tsva/core/grain-interface";
 
 /**
@@ -49,7 +50,19 @@ export class CancellationSourcesExtension implements ICancellationSourcesExtensi
   }
 
   async cancelRemoteToken(tokenId: string): Promise<void> {
-    this.getOrCreateController(tokenId).abort();
+    const controller = this.getOrCreateController(tokenId);
+    controller.abort();
+    // Aborting fires this activation's `GrainCancellationToken.register`
+    // callbacks synchronously (they share the controller's signal). A callback
+    // that threw was captured rather than allowed to crash the worker; surface
+    // it here so it propagates back through `cancel()` to the canceller —
+    // Orleans' "a GrainCancellationToken callback's exception flows to
+    // Cancel()". The first captured error is thrown (the ported tests register
+    // a single callback); any others would be swallowed, matching the fact
+    // that the canceller only observes one failure.
+    const errors = drainCancellationCallbackErrors(controller.signal);
+    const first = errors[0];
+    if (first !== undefined) throw first;
   }
 }
 

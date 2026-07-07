@@ -140,15 +140,27 @@ describe("UnitTests.CancellationTests.CancellationTokenTests", () => {
       `${testClass}.CancellationTokenCallbacksTaskSchedulerContext`,
     );
 
-    // Needs token-callback registration (.NET `CancellationToken.Register(...)`,
-    // i.e. a callback fired when the token is cancelled, whose thrown
-    // exception is swallowed rather than propagated). `GrainCancellationToken`
-    // here exposes only `signal`/`isCancellationRequested`/
-    // `throwIfCancellationRequested` — no callback-registration API — so this
-    // is a genuine feature gap, not a .NET-only mechanism.
-    orleansTest.gap(
-      "GAP-CANCELLATION",
+    // A cancellation callback that throws when fired is cooperative: unlike a
+    // `GrainCancellationToken` callback (sibling `GrainCancellationTokenTests`
+    // suite), a plain-token callback's exception is contained and does NOT
+    // propagate to the canceller — `cancelUntilSettled` drives `cts.cancel()`
+    // to completion without observing any failure. The call is still
+    // observably cancelled (its `callId` is recorded). The grain call is
+    // fire-and-forget (upstream `.Ignore()`); its own cooperative-cancellation
+    // rejection is passed to `cancelUntilSettled` (and pre-caught) so it never
+    // surfaces as an unhandled rejection.
+    orleansTest(
       `${testClass}.CancellationTokenCallbacksThrow_ExceptionDoesNotPropagate`,
+      async () => {
+        const grain = cluster.getGrain(ILongRunningTaskGrain, randomGuidKey());
+        const cts = cluster.newCancellationTokenSource();
+        const callId = Guid.newGuid().toString();
+        const grainTask = grain.cancellationTokenCallbackThrow(cts.token, callId);
+        grainTask.catch(() => {});
+        await waitFor(() => grain.wasStarted(callId));
+        await cancelUntilSettled([{ cts, task: grainTask }]);
+        await waitFor(() => grain.wasCancelled(callId));
+      },
     );
 
     orleansTest.each([0, 10, 300])(`${testClass}.InSiloCancellation`, async (delay) => {

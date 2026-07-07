@@ -183,7 +183,7 @@ describe("UnitTests.CancellationTests.ObserverCancellationTokenTests", () => {
     );
 
     orleansTest.excluded(
-      "exercises .NET's ExecutionContext flowing through a CancellationToken callback registered inside the observer method; JS has no ExecutionContext equivalent, and this runtime's GrainCancellationToken has no callback-registration API (see GAP-CANCELLATION on the sibling CancellationTokenTests suite).",
+      "exercises .NET's ExecutionContext flowing through a CancellationToken callback registered inside the observer method; the callback's whole purpose here is to assert it runs on the grain's TaskScheduler/ExecutionContext, of which JS has no equivalent (the observable resolve is only meaningful paired with that context check). GrainCancellationToken.register now exists, but there is nothing context-specific left to assert.",
       `${testClass}.CancellationTokenCallbacksExecutionContext`,
     );
 

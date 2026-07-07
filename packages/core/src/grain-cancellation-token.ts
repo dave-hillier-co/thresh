@@ -28,6 +28,40 @@ export class CancellationTokenPlaceholder {
  */
 const SOURCE: unique symbol = Symbol("tsva.cancellationTokenSource");
 
+/**
+ * Per-`AbortSignal` sink of exceptions thrown by `register` callbacks when
+ * the signal fires. A callback registered via `signal.addEventListener`
+ * cannot let its exception escape the dispatch: Node re-throws a listener's
+ * exception as an *uncaught* error on a later tick (`process.nextTick`),
+ * which would crash the worker rather than surface anywhere catchable — so
+ * `register` wraps each callback, captures any throw here, and the code that
+ * fired the cancellation (`CancellationSourcesExtension.cancelRemoteToken`)
+ * drains the sink to decide whether to propagate. Mirrors Orleans, where a
+ * `GrainCancellationToken` callback's exception flows back to the caller of
+ * `GrainCancellationTokenSource.Cancel()`.
+ */
+const CALLBACK_ERRORS: unique symbol = Symbol("tsva.cancellationCallbackErrors");
+
+type ErrorSink = { [CALLBACK_ERRORS]?: unknown[] };
+
+function pushCallbackError(signal: AbortSignal, error: unknown): void {
+  const holder = signal as unknown as ErrorSink;
+  (holder[CALLBACK_ERRORS] ??= []).push(error);
+}
+
+/**
+ * Take and clear the exceptions thrown by `register` callbacks that fired on
+ * `signal`. Returns `[]` when no callback threw (the common case — no
+ * behaviour change for callers that never registered a throwing callback).
+ */
+export function drainCancellationCallbackErrors(signal: AbortSignal): unknown[] {
+  const holder = signal as unknown as ErrorSink;
+  const errors = holder[CALLBACK_ERRORS];
+  if (errors === undefined) return [];
+  delete holder[CALLBACK_ERRORS];
+  return errors;
+}
+
 export interface GrainCancellationTokenInit {
   tokenId: string;
   signal: AbortSignal;
@@ -69,6 +103,43 @@ export class GrainCancellationToken {
   /** Throw `GrainTaskCanceledError` if this token's signal has fired. */
   throwIfCancellationRequested(): void {
     if (this._signal.aborted) throw new GrainTaskCanceledError();
+  }
+
+  /**
+   * Register `callback` to run when this token is cancelled (Orleans
+   * `GrainCancellationToken.CancellationToken.Register`). If the token has
+   * already fired, `callback` runs synchronously right now and any exception
+   * it throws propagates to this caller, mirroring `.NET`'s
+   * `CancellationToken.Register` on an already-cancelled token. Otherwise it
+   * fires once, on the underlying `AbortSignal`'s `abort` event; the returned
+   * handle's `dispose()` removes the listener so a completed call can stop
+   * observing.
+   *
+   * A callback that throws when fired via the signal cannot let its exception
+   * escape the event dispatch (Node would turn it into an uncaught error and
+   * crash the worker), so the throw is captured into a per-signal sink
+   * (`drainCancellationCallbackErrors`); the code that fired the cancellation
+   * decides whether to propagate it.
+   */
+  register(callback: () => void): { dispose(): void } {
+    if (this._signal.aborted) {
+      callback();
+      return { dispose(): void {} };
+    }
+    const signal = this._signal;
+    const listener = (): void => {
+      try {
+        callback();
+      } catch (error) {
+        pushCallbackError(signal, error);
+      }
+    };
+    signal.addEventListener("abort", listener, { once: true });
+    return {
+      dispose(): void {
+        signal.removeEventListener("abort", listener);
+      },
+    };
   }
 }
 
@@ -134,8 +205,20 @@ export class GrainCancellationTokenSource {
    */
   async cancel(): Promise<void> {
     this.controller.abort();
+    // Aborting fires callbacks registered on this source's own signal — the
+    // in-process case, where the token reached the callee without a wire round
+    // trip and so is still bound to this controller's signal (the cross-silo
+    // case binds it to the remote activation's controller, drained by
+    // `cancelRemoteToken`). A callback that threw was captured, not allowed to
+    // escape the event dispatch; surface it so it propagates to this caller,
+    // matching Orleans' "a GrainCancellationToken callback's exception flows to
+    // Cancel()". Draining before notifying remote targets keeps ordering
+    // simple; only one of the two sites ever holds an error for a given token.
+    const localErrors = drainCancellationCallbackErrors(this.controller.signal);
     await Promise.all(
       [...this.targets.values()].map((target) => this.canceller(target, this._tokenId)),
     );
+    const first = localErrors[0];
+    if (first !== undefined) throw first;
   }
 }
