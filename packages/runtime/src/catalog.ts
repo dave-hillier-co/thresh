@@ -78,6 +78,15 @@ export interface CatalogOptions {
    * un-bound extension call always throws `GrainExtensionNotInstalledException`.
    */
   grainExtensionFactories?: ReadonlyMap<number, () => object>;
+  /**
+   * How a cascading `cancelRemoteToken` reaches a FORWARDED target's own
+   * activation (see `CancellationSourcesExtension.recordForwardTarget`),
+   * cluster-wide — set by `ClusterNode` to route over the dispatcher.
+   * Defaults to a no-op: a standalone catalog with no cluster to route to
+   * still gets single-hop cancellation (the original, un-cascaded
+   * behaviour), it just can't cascade past this silo.
+   */
+  cancellationCanceller?: (target: GrainId, tokenId: string) => Promise<void>;
 }
 
 /** Registry of live activations on this silo, keyed by grain id. */
@@ -101,7 +110,10 @@ export class Catalog {
         ([id, factory]) => [id, () => factory()] as const,
       ),
     );
-    this.extensionFactories.set(ICancellationSourcesExtension.id, cancellationExtensionFactory);
+    const canceller = options.cancellationCanceller ?? (async () => {});
+    this.extensionFactories.set(ICancellationSourcesExtension.id, () =>
+      cancellationExtensionFactory(canceller),
+    );
   }
 
   /** Single-silo path (Phase 1): create with a fresh activation id if absent. */

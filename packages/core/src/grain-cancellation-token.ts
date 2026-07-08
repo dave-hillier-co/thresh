@@ -29,6 +29,16 @@ export class CancellationTokenPlaceholder {
 const SOURCE: unique symbol = Symbol("tsva.cancellationTokenSource");
 
 /**
+ * Non-enumerable, module-internal back-reference from a callee-side
+ * `GrainCancellationToken` (bound by `ActivationData.bindCancellationTokens`)
+ * to the callback that records a grain this token was forwarded to onto the
+ * binding activation's own `CancellationSourcesExtension`. Mutually exclusive
+ * with `SOURCE` in practice: a token either was minted by a source
+ * (caller-side) or bound from the wire with this hook (callee-side).
+ */
+const ON_DISPATCH: unique symbol = Symbol("tsva.cancellationTokenOnDispatch");
+
+/**
  * Per-`AbortSignal` sink of exceptions thrown by `register` callbacks when
  * the signal fires. A callback registered via `signal.addEventListener`
  * cannot let its exception escape the dispatch: Node re-throws a listener's
@@ -67,6 +77,14 @@ export interface GrainCancellationTokenInit {
   signal: AbortSignal;
   /** Caller-side only: the source that minted this token, for `recordTarget`. */
   source?: GrainCancellationTokenSource;
+  /**
+   * Callee-side only: called when THIS token is forwarded as an argument to
+   * another grain call, so the activation that bound this token (via
+   * `bindCancellationTokens`) can record the forwarded target on its own
+   * `CancellationSourcesExtension` — the hop that makes cascading
+   * cancellation possible (see `recordCancellationTarget`).
+   */
+  onDispatchToTarget?: (target: GrainId) => void;
 }
 
 /**
@@ -85,6 +103,12 @@ export class GrainCancellationToken {
     this._signal = init.signal;
     if (init.source !== undefined) {
       Object.defineProperty(this, SOURCE, { value: init.source, enumerable: false });
+    }
+    if (init.onDispatchToTarget !== undefined) {
+      Object.defineProperty(this, ON_DISPATCH, {
+        value: init.onDispatchToTarget,
+        enumerable: false,
+      });
     }
   }
 
@@ -153,6 +177,35 @@ export function cancellationTokenSourceOf(
   token: GrainCancellationToken,
 ): GrainCancellationTokenSource | undefined {
   return (token as unknown as Record<symbol, GrainCancellationTokenSource | undefined>)[SOURCE];
+}
+
+/**
+ * Record that `token` was just dispatched to `target` — the single place the
+ * grain-factory's outgoing-call hook calls, covering BOTH shapes a
+ * `GrainCancellationToken` can be in on the sending side:
+ *
+ * - Caller-side (minted by a `GrainCancellationTokenSource`, still carries its
+ *   `source` back-reference): records `target` on the source, so a later
+ *   `source.cancel()` notifies it directly.
+ * - Callee-side (rebuilt from a wire `CancellationTokenPlaceholder`, no
+ *   source, but bound with an `onDispatchToTarget` hook by the activation
+ *   that owns it): records `target` as a FORWARDED target on that
+ *   activation's own `CancellationSourcesExtension`, so a `cancelRemoteToken`
+ *   reaching this activation cascades on to `target` too — the mechanism that
+ *   lets a client-originated cancellation reach a second grain hop.
+ *
+ * A token with neither (freshly bound, never forwarded) is a no-op here.
+ */
+export function recordCancellationTarget(token: GrainCancellationToken, target: GrainId): void {
+  const source = cancellationTokenSourceOf(token);
+  if (source !== undefined) {
+    source.recordTarget(target);
+    return;
+  }
+  const onDispatch = (token as unknown as Record<symbol, ((target: GrainId) => void) | undefined>)[
+    ON_DISPATCH
+  ];
+  onDispatch?.(target);
 }
 
 /**

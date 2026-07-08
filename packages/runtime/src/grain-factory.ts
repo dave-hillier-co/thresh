@@ -5,8 +5,8 @@ import {
   type OutgoingGrainCallFilter,
 } from "@tsva/core/grain-call-filter";
 import {
-  cancellationTokenSourceOf,
   GrainCancellationToken,
+  recordCancellationTarget,
 } from "@tsva/core/grain-cancellation-token";
 import { GrainId } from "@tsva/core/grain-id";
 import { getGrainInterface, type GrainInterface } from "@tsva/core/grain-interface";
@@ -101,14 +101,17 @@ export class GrainFactory {
           // promise, like every other grain-call error.
           return async (...args: unknown[]): Promise<unknown> => {
             if (this.dispatcher === undefined) throw new Error("grain factory has no dispatcher");
-            // A caller-side `GrainCancellationToken` argument means this call is
-            // sending that token to `target` — record it on the token's source so
-            // a later `source.cancel()` knows to notify this activation too (a
-            // callee-side token, bound from the wire, has no source and is a
-            // cheap no-op here).
+            // A `GrainCancellationToken` argument means this call is sending that
+            // token to `target`: a caller-side token (still carrying its
+            // `GrainCancellationTokenSource`) records it there, so a later
+            // `source.cancel()` notifies this activation too; a callee-side token
+            // (rebuilt from the wire, forwarded to a second hop) records it as a
+            // FORWARDED target on the binding activation's own extension, so a
+            // `cancelRemoteToken` reaching that activation cascades on to `target`
+            // (see `recordCancellationTarget`).
             for (const arg of args) {
               if (arg instanceof GrainCancellationToken) {
-                cancellationTokenSourceOf(arg)?.recordTarget(target);
+                recordCancellationTarget(arg, target);
               }
             }
             const ambient = invocationContext.getStore();

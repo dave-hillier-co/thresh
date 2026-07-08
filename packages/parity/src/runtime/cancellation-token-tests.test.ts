@@ -15,6 +15,7 @@
 // distinguishes it, so both fixtures below exercise identical behaviour.
 import { afterAll, beforeAll, describe, expect } from "vitest";
 import { Guid } from "@tsva/core/guid";
+import type { ClientNode } from "@tsva/client/client-node";
 import { orleansTest } from "@tsva/testing/orleans-test";
 import { TestCluster } from "@tsva/testing/test-cluster";
 import { waitFor } from "@tsva/testing/wait";
@@ -23,7 +24,13 @@ import {
   LongRunningTaskGrain,
 } from "@tsva/parity/grains/impl/long-running-task-grain";
 import { randomGuidKey } from "@tsva/parity/support/keys";
-import { cancelUntilSettled, flushPerDelay, twoGrains } from "@tsva/parity/support/cancellation";
+import {
+  cancelUntilSettled,
+  clientTwoGrains,
+  flushPerDelay,
+  twoGrains,
+} from "@tsva/parity/support/cancellation";
+import { createClusterClient } from "@tsva/parity/support/client";
 
 /** Same cross-silo caveat as the sibling suite: assert on the rejection
  * message, not the error class/instance, since a rejection crossing a silo
@@ -36,6 +43,7 @@ async function expectCancelled(task: Promise<unknown>): Promise<void> {
 
 describe("UnitTests.CancellationTests.CancellationTokenTests", () => {
   let cluster: TestCluster;
+  let client: ClientNode;
 
   // Upstream runs against a cluster with at least one secondary silo (for
   // InterSiloCancellation); TestCluster defaults to 2.
@@ -43,9 +51,13 @@ describe("UnitTests.CancellationTests.CancellationTokenTests", () => {
     cluster = await TestCluster.start({
       grains: [{ ctor: LongRunningTaskGrain, interfaces: [ILongRunningTaskGrain] }],
     });
+    client = await createClusterClient(cluster, [
+      { ctor: LongRunningTaskGrain, interfaces: [ILongRunningTaskGrain] },
+    ]);
   });
 
   afterAll(async () => {
+    await client.close();
     await cluster.dispose();
   });
 
@@ -192,25 +204,45 @@ describe("UnitTests.CancellationTests.CancellationTokenTests", () => {
     // Upstream forwards the client's token through a SECOND grain hop
     // (`grain.CallOtherLongRunningTask(target, cts.Token, ...)` forwards to
     // `target`), and asserts `target` observes the cancellation.
-    // `ClientNode.newCancellationTokenSource()` (added alongside this suite,
-    // see `client-node.test.ts`) makes a direct client -> grain call
-    // cancellable, but a client call always crosses the wire (unlike a
-    // silo-to-silo test call, which can stay in-process — see `twoGrains`'s
-    // "pin `a` to primary" comment in `support/cancellation.ts`), so the
-    // first-hop grain's token is always rebuilt from a wire
-    // `CancellationTokenPlaceholder` with no `source`
-    // (`bindCancellationTokens`/`cancellationTokenSourceOf`). Forwarding that
-    // sourceless token to `target` gives `recordTarget` nothing to record
-    // onto, so the client's source can only ever reach the first-hop grain,
-    // never `target` — confirmed empirically: driving this exact two-hop
-    // call from a client hangs until the grain's own 10s delay/test timeout.
-    // Faithfully porting this needs transitive target-recording on the
-    // callee side (an intermediate grain that forwards a bound token
-    // registering its own downstream targets so a later `cancelRemoteToken`
-    // cascades) — a mechanism extension beyond this task's additive scope,
-    // not a placement-determinism issue.
-    orleansTest.gap("GAP-CANCELLATION", `${testClass}.InterSiloClientCancellationTokenPassing`);
-    orleansTest.gap("GAP-CANCELLATION", `${testClass}.InSiloClientCancellationTokenPassing`);
+    // `ClientNode.newCancellationTokenSource()` makes a direct client -> grain
+    // call cancellable; the client call always crosses the wire, so the
+    // first-hop grain's token is rebuilt from a wire
+    // `CancellationTokenPlaceholder` with no `source` — but the activation
+    // that binds it also binds an `onDispatchToTarget` hook
+    // (`ActivationData.bindCancellationTokens`), so when the first-hop grain
+    // forwards the token on to `target`, the forward is recorded on that
+    // activation's own `CancellationSourcesExtension` instead
+    // (`recordCancellationTarget`). The client's `cts.cancel()` reaches the
+    // first-hop grain (a direct, recorded target of the client's source),
+    // and that grain's `cancelRemoteToken` cascades on to `target` (its own
+    // recorded forward), so `target` observes the cancellation.
+    orleansTest.each([0, 10, 300])(
+      `${testClass}.InSiloClientCancellationTokenPassing`,
+      async (delay) => {
+        const { a: grain, b: target } = await clientTwoGrains(cluster, client, true);
+        const cts = client.newCancellationTokenSource();
+        const callId = Guid.newGuid().toString();
+        const grainTask = grain.callOtherLongRunningTask(target, cts.token, 10_000, callId);
+        await flushPerDelay(delay);
+        await cancelUntilSettled([{ cts, task: grainTask }]);
+        await expectCancelled(grainTask);
+        await waitFor(() => target.wasCancelled(callId));
+      },
+    );
+
+    orleansTest.each([0, 10, 300])(
+      `${testClass}.InterSiloClientCancellationTokenPassing`,
+      async (delay) => {
+        const { a: grain, b: target } = await clientTwoGrains(cluster, client, false);
+        const cts = client.newCancellationTokenSource();
+        const callId = Guid.newGuid().toString();
+        const grainTask = grain.callOtherLongRunningTask(target, cts.token, 10_000, callId);
+        await flushPerDelay(delay);
+        await cancelUntilSettled([{ cts, task: grainTask }]);
+        await expectCancelled(grainTask);
+        await waitFor(() => target.wasCancelled(callId));
+      },
+    );
 
     orleansTest.each([0, 10, 300])(
       `${testClass}.InterleavingGrainTaskCancellation`,

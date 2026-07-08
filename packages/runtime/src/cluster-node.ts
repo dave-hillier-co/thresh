@@ -66,6 +66,7 @@ import { MessagePackSerializer } from "@tsva/messaging/msgpack-serializer";
 import type { Serializer } from "@tsva/messaging/serializer";
 import type { Connection, ConnectionPreamble, Listener, Transport } from "@tsva/messaging/transport";
 import { ActivationCollector } from "@tsva/runtime/activation-collector";
+import { ICancellationSourcesExtension } from "@tsva/runtime/cancellation-extension";
 import { Catalog, type GrainActivator, type RegisteredGrain } from "@tsva/runtime/catalog";
 import { ClientDirectory } from "@tsva/runtime/client-directory";
 import type { ActivationData } from "@tsva/runtime/activation";
@@ -333,6 +334,13 @@ export class ClusterNode {
       onDeactivated: (a) => this.onDeactivated(a),
       migrate: (a) => this.migrateActivation(a),
       localSilo: () => this.options.local,
+      // Cascade a cancellation to a token's forwarded target wherever it
+      // lives, cluster-wide, via the same extension-reference substrate
+      // `getExtensionReference` exposes for a caller's own cascade canceller.
+      cancellationCanceller: (target, tokenId) =>
+        this.getExtensionReference(ICancellationSourcesExtension, target).cancelRemoteToken(
+          tokenId,
+        ),
       ...(options.stateBinder !== undefined ? { activateState: options.stateBinder } : {}),
       ...(options.reminderRegistry !== undefined
         ? { reminderRegistry: options.reminderRegistry }

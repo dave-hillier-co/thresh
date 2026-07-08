@@ -1,4 +1,5 @@
 import { drainCancellationCallbackErrors } from "@tsva/core/grain-cancellation-token";
+import type { GrainId } from "@tsva/core/grain-id";
 import { defineGrainInterface } from "@tsva/core/grain-interface";
 
 /**
@@ -40,6 +41,20 @@ export const ICancellationSourcesExtension = defineGrainInterface<ICancellationS
  */
 export class CancellationSourcesExtension implements ICancellationSourcesExtension {
   private readonly controllers = new Map<string, AbortController>();
+  /**
+   * Grains THIS activation forwarded a token on to, keyed by `tokenId` then
+   * `grainId.toString()` (dedupe, same shape as
+   * `GrainCancellationTokenSource.targets`). Populated by
+   * `recordForwardTarget` when the activation's own `GrainCancellationToken`
+   * (bound in `bindCancellationTokens`) is passed as an argument to a further
+   * outgoing call — the hop that makes cancellation cascade past this
+   * activation to whichever grain it forwarded the token to.
+   */
+  private readonly forwardedTargets = new Map<string, Map<string, GrainId>>();
+  /** `tokenId`s already cancelled here, so a re-delivered/looping cancel is a no-op (idempotent, cycle-safe). */
+  private readonly cancelled = new Set<string>();
+
+  constructor(private readonly canceller: (target: GrainId, tokenId: string) => Promise<void>) {}
 
   getOrCreateController(tokenId: string): AbortController {
     const existing = this.controllers.get(tokenId);
@@ -49,7 +64,27 @@ export class CancellationSourcesExtension implements ICancellationSourcesExtensi
     return created;
   }
 
+  /** Record that this activation forwarded `tokenId` on to `target`, so `cancelRemoteToken` cascades there too. */
+  recordForwardTarget(tokenId: string, target: GrainId): void {
+    let targets = this.forwardedTargets.get(tokenId);
+    if (targets === undefined) {
+      targets = new Map();
+      this.forwardedTargets.set(tokenId, targets);
+    }
+    targets.set(target.toString(), target);
+  }
+
+  /**
+   * Abort this activation's own bound copy of `tokenId`, then cascade to
+   * every grain this activation forwarded it to — the mechanism that lets a
+   * cancellation reach a token forwarded through a second (or further) hop.
+   * Idempotent (`cancelled` guards re-entry): a token already cancelled here
+   * returns immediately without re-cascading, which also makes a forwarding
+   * cycle (A forwards to B, B forwards back to A) terminate rather than loop.
+   */
   async cancelRemoteToken(tokenId: string): Promise<void> {
+    if (this.cancelled.has(tokenId)) return;
+    this.cancelled.add(tokenId);
     const controller = this.getOrCreateController(tokenId);
     controller.abort();
     // Aborting fires this activation's `GrainCancellationToken.register`
@@ -61,11 +96,16 @@ export class CancellationSourcesExtension implements ICancellationSourcesExtensi
     // a single callback); any others would be swallowed, matching the fact
     // that the canceller only observes one failure.
     const errors = drainCancellationCallbackErrors(controller.signal);
+    const targets = this.forwardedTargets.get(tokenId);
+    await Promise.all(
+      targets === undefined ? [] : [...targets.values()].map((t) => this.canceller(t, tokenId)),
+    );
     const first = errors[0];
     if (first !== undefined) throw first;
   }
 }
 
 /** Auto-install factory, always registered by the catalog (see `catalog.ts`). */
-export const cancellationExtensionFactory = (): CancellationSourcesExtension =>
-  new CancellationSourcesExtension();
+export const cancellationExtensionFactory = (
+  canceller: (target: GrainId, tokenId: string) => Promise<void>,
+): CancellationSourcesExtension => new CancellationSourcesExtension(canceller);

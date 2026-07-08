@@ -5,6 +5,7 @@
 import type { GrainCancellationTokenSource } from "@tsva/core/grain-cancellation-token";
 import { GrainId } from "@tsva/core/grain-id";
 import { getGrainMetadata } from "@tsva/core/grain-metadata";
+import type { ClientNode } from "@tsva/client/client-node";
 import type { TestCluster, TestSiloHandle } from "@tsva/testing/test-cluster";
 import { waitFor } from "@tsva/testing/wait";
 import {
@@ -100,5 +101,41 @@ export async function twoGrains(
     if ((hostA === hostB) !== sameSilo) continue;
     if (!sameSilo && hostA !== cluster.primary) continue;
     return { a, b };
+  }
+}
+
+/**
+ * `twoGrains`'s client-driven counterpart. `a` is reached via `client.getGrain`
+ * so the client -> `a` hop (the first of the two forwarded hops under test) is
+ * actually exercised, wire and all; a client-originated call always activates
+ * on its gateway silo (`ClusterNode.receiveRequest` delivers locally with no
+ * cross-silo placement choice — unlike an ordinary `invoke()`, which does
+ * consult the directory/placement strategy), so `a` deterministically lands on
+ * `cluster.primary` every time, no retry needed. `b` therefore must be warmed
+ * up through an ORDINARY (non-client) call — `cluster.getGrain`'s call runs
+ * real placement — retried with fresh keys until it lands where `sameSilo`
+ * wants relative to `a`'s fixed gateway host; warming `b` up through the
+ * client too would activate it on the very same gateway silo as `a` every
+ * time, making an inter-silo split unreachable. Cascading cancellation
+ * (`CancellationSourcesExtension` forwarding, see `cancellation-extension.ts`)
+ * is what lets the client's `cts.cancel()` reach `b` regardless of how many
+ * silo boundaries the client -> `a` -> `b` chain crosses.
+ */
+export async function clientTwoGrains(
+  cluster: TestCluster,
+  client: ClientNode,
+  sameSilo: boolean,
+): Promise<{ a: ILongRunningTaskGrain; b: ILongRunningTaskGrain }> {
+  const aKey = randomGuidKey();
+  const a = client.getGrain(ILongRunningTaskGrain, aKey);
+  await a.wasCancelled("warmup");
+  const hostA = hostOf(cluster, new GrainId(grainType, aKey));
+  for (;;) {
+    const bKey = randomGuidKey();
+    await cluster.getGrain(ILongRunningTaskGrain, bKey).wasCancelled("warmup");
+    const hostB = hostOf(cluster, new GrainId(grainType, bKey));
+    if (hostA === undefined || hostB === undefined) continue;
+    if ((hostA === hostB) !== sameSilo) continue;
+    return { a, b: client.getGrain(ILongRunningTaskGrain, bKey) };
   }
 }

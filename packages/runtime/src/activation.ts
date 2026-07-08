@@ -539,13 +539,29 @@ export class ActivationData implements GrainContext {
     for (let i = 0; i < args.length; i++) {
       const arg = args[i];
       if (!(arg instanceof CancellationTokenPlaceholder)) continue;
+      // Auto-install through the catalog's registered factory (which wires
+      // this silo's real cascade canceller — see `Catalog`/`ClusterNode`)
+      // rather than calling `cancellationExtensionFactory` bare; a standalone
+      // activation with no catalog-set factories falls back to a no-op
+      // canceller, matching the pre-cascade single-hop behaviour.
       const ext = this.getOrSetExtension(
         ICancellationSourcesExtension.id,
-        cancellationExtensionFactory,
-      ) as CancellationSourcesExtension;
+        () =>
+          (this.extensionFactories?.get(ICancellationSourcesExtension.id)?.(this) ??
+            cancellationExtensionFactory(async () => {})) as CancellationSourcesExtension,
+      );
       const controller = ext.getOrCreateController(arg.tokenId);
       if (arg.cancelled) controller.abort();
-      args[i] = new GrainCancellationToken({ tokenId: arg.tokenId, signal: controller.signal });
+      const tokenId = arg.tokenId;
+      args[i] = new GrainCancellationToken({
+        tokenId,
+        signal: controller.signal,
+        // If the grain forwards this token on to another grain call, the
+        // grain-factory dispatch hook (`recordCancellationTarget`) calls this
+        // so a later `cancelRemoteToken(tokenId)` reaching THIS activation
+        // cascades on to that further target too.
+        onDispatchToTarget: (target) => ext.recordForwardTarget(tokenId, target),
+      });
     }
   }
 
