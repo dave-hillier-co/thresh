@@ -5,10 +5,16 @@ import { INCOMING_CALL_FILTER, type IncomingGrainCallContext } from "@tsva/core/
 import {
   IGrainCallFilterTestGrain,
   IMethodInterceptionGrain,
+  IMyGrainExtension,
   IOutgoingMethodInterceptionGrain,
 } from "@tsva/parity/grains/interfaces/method-interception-grain-interfaces";
 
-export { IGrainCallFilterTestGrain, IMethodInterceptionGrain, IOutgoingMethodInterceptionGrain };
+export {
+  IGrainCallFilterTestGrain,
+  IMethodInterceptionGrain,
+  IMyGrainExtension,
+  IOutgoingMethodInterceptionGrain,
+};
 
 /** Upstream `MethodInterceptionGrain.MyDomainSpecificException`. */
 export class MyDomainSpecificException extends Error {
@@ -161,3 +167,20 @@ export class GrainCallFilterTestGrain extends Grain implements IGrainCallFilterT
 
 /** Upstream `GrainCallFilterTestConstants.Key`. */
 export const GRAIN_CALL_FILTER_TEST_KEY = "GrainInfo";
+
+/**
+ * Upstream `MyGrainExtension`: bound onto an `IMethodInterceptionGrain`
+ * activation via `SiloBuilder.addGrainExtension` for
+ * `GrainCallFilter_GrainExtension`.
+ */
+export class MyGrainExtension implements IMyGrainExtension {
+  private value = 0;
+
+  async setExtensionValue(value: number): Promise<void> {
+    this.value = value;
+  }
+
+  async getExtensionValue(): Promise<number> {
+    return this.value;
+  }
+}

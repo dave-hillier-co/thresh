@@ -476,8 +476,8 @@ export class ActivationData implements GrainContext {
     // routes to a per-activation object bound via `getOrSetExtension`
     // (auto-installed from `extensionFactories` if not yet bound), NOT to
     // `this.instance` — an orthogonal method surface, dispatched by interface.
-    // Runs directly on this turn, bypassing the grain's incoming call-filter
-    // pipeline (unlike the instance fallthrough below); see report for why.
+    // Runs through the SAME incoming call-filter pipeline as the grain-method
+    // path below (Orleans parity: filters wrap extension calls too).
     const iface = getGrainInterface(req.interfaceId);
     if (iface?.extension === true) {
       return await this.invokeExtension(req, iface.name);
@@ -554,6 +554,12 @@ export class ActivationData implements GrainContext {
    * auto-installing from `extensionFactories` if not yet bound (see
    * `setExtensionFactories`). Throws `GrainExtensionNotInstalledException`
    * when neither a bound instance nor a factory exists.
+   *
+   * Runs through the same incoming call-filter pipeline as an ordinary
+   * grain-method call (Orleans parity: `GrainCallFilter_GrainExtension`) —
+   * additive: with no silo-wide filters and no grain-level filter, this stays
+   * a direct invoke of the extension method, same as before filters wrapped
+   * extension calls at all.
    */
   private async invokeExtension(req: InvocationRequest, interfaceName: string): Promise<unknown> {
     let ext = this.extensions.get(req.interfaceId);
@@ -573,7 +579,33 @@ export class ActivationData implements GrainContext {
     if (typeof fn !== "function") {
       throw new GrainCallError(`extension ${interfaceName} has no method ${req.method}`);
     }
-    return await (fn as (...args: unknown[]) => unknown).apply(ext, req.args);
+    const method = fn as (...args: unknown[]) => unknown;
+    const own = grainIncomingFilter(this.instance);
+    const filters =
+      own === undefined ? this.incomingCallFilters : [...this.incomingCallFilters, own];
+    if (filters.length === 0) {
+      return await method.apply(ext, req.args);
+    }
+    const context: IncomingGrainCallContext = {
+      target: this.id,
+      source: req.sender,
+      interfaceId: req.interfaceId,
+      interfaceName,
+      methodName: req.method,
+      args: [...req.args],
+      result: undefined,
+      headers: invocationContext.getStore()?.headers ?? {},
+      // Orleans parity: `IGrainCallContext.Grain` is always the grain instance
+      // (`GrainMethodInvoker.Grain => grainContext.GrainInstance`), never the
+      // extension component itself, even when the call targets an extension
+      // interface — so the grain's own `INCOMING_CALL_FILTER` (looked up via
+      // `this.instance` above, not the extension) applies here too.
+      grain: this.instance,
+      invoke: () => Promise.resolve(),
+    };
+    return await runCallFilters(filters, context, () =>
+      Promise.resolve(method.apply(ext, context.args)),
+    );
   }
 
   /** Route a `TransactionResource` system call to the named transactional state. */

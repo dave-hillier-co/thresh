@@ -63,3 +63,25 @@ export interface IGrainCallFilterTestGrain extends GrainWithIntegerKey {
 export const IGrainCallFilterTestGrain = defineGrainInterface<IGrainCallFilterTestGrain>(
   "UnitTests.GrainInterfaces.IGrainCallFilterTestGrain",
 );
+
+/**
+ * Upstream `IMyGrainExtension`: a `GrainExtension` cast onto an
+ * `IMethodInterceptionGrain` reference (`GrainCallFilter_GrainExtension`),
+ * proving filters wrap extension calls too. Upstream folds together
+ * `IMyRegularInterface`/`IMyOtherInterface` — two interfaces the extension
+ * implements explicitly with different `GetExtensionValue` bodies — to prove
+ * interface-qua-`MethodInfo` resolution; there is no analogous explicit
+ * interface implementation in TS (a single object exposes one method per
+ * name), so this is flattened to the one `getExtensionValue` the observable
+ * test behaviour (the silo-wide filter negating `setExtensionValue`'s
+ * argument) actually needs.
+ */
+export interface IMyGrainExtension extends GrainWithIntegerKey {
+  setExtensionValue(value: number): Promise<void>;
+  getExtensionValue(): Promise<number>;
+}
+
+export const IMyGrainExtension = defineGrainInterface<IMyGrainExtension>(
+  "UnitTests.GrainInterfaces.IMyGrainExtension",
+  { extension: true },
+);

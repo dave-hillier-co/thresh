@@ -6,13 +6,16 @@ import type {
   IncomingGrainCallFilter,
   OutgoingGrainCallFilter,
 } from "@tsva/core/grain-call-filter";
+import { castGrainReference } from "@tsva/core/grain-reference";
 import {
   GRAIN_CALL_FILTER_TEST_KEY,
   GrainCallFilterTestGrain,
   IGrainCallFilterTestGrain,
   IMethodInterceptionGrain,
+  IMyGrainExtension,
   IOutgoingMethodInterceptionGrain,
   MethodInterceptionGrain,
+  MyGrainExtension,
   OutgoingMethodInterceptionGrain,
 } from "@tsva/parity/grains/impl/method-interception-grain";
 import { randomIntegerKey } from "@tsva/parity/support/keys";
@@ -33,6 +36,14 @@ const systemWideIncoming: IncomingGrainCallFilter = async (ctx) => {
   if (ctx.methodName === "systemWideCallFilterMarker") {
     // explicitly do not continue calling invoke()
     return;
+  }
+  // Request manipulation reaching through an extension call
+  // (`GrainCallFilter_GrainExtension`): negate the value argument before it
+  // reaches `MyGrainExtension.setExtensionValue`, proving a silo-wide filter
+  // sees and can rewrite an extension method's args exactly like an ordinary
+  // grain method's.
+  if (ctx.methodName === "setExtensionValue") {
+    ctx.args[0] = (ctx.args[0] as number) * -1;
   }
   await ctx.invoke();
 };
@@ -101,6 +112,7 @@ describe("UnitTests.General.GrainCallFilterTests", () => {
         builder.addIncomingCallFilter(systemWideIncoming);
         builder.addIncomingCallFilter(requestContextContinuation);
         builder.addOutgoingCallFilter(systemWideOutgoing);
+        builder.addGrainExtension(IMyGrainExtension, () => new MyGrainExtension());
       },
     });
   });
@@ -231,9 +243,21 @@ describe("UnitTests.General.GrainCallFilterTests", () => {
     "UnitTests.General.GrainCallFilterTests.GrainCallFilter_Incoming_SetIncorrectResultType_Test",
   );
 
-  orleansTest.gap(
-    "GAP-GRAIN-EXTENSION",
+  // Filters run for extension calls too (Orleans parity): the silo-wide
+  // `systemWideIncoming` filter negates `setExtensionValue`'s argument before
+  // it reaches `MyGrainExtension`, exactly like it would for an ordinary
+  // grain method.
+  orleansTest(
     "UnitTests.General.GrainCallFilterTests.GrainCallFilter_GrainExtension",
+    async () => {
+      const grain = cluster.getGrain(IMethodInterceptionGrain, randomIntegerKey());
+      const extension = castGrainReference(grain, IMyGrainExtension);
+
+      await extension.setExtensionValue(42);
+      const result = await extension.getExtensionValue();
+
+      expect(result).toBe(-42);
+    },
   );
 
   orleansTest.gap(
