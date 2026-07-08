@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { grain } from "@tsva/core/decorators";
 import { Grain } from "@tsva/core/grain";
+import type { GrainCancellationToken } from "@tsva/core/grain-cancellation-token";
 import { GrainId } from "@tsva/core/grain-id";
 import { defineGrainInterface } from "@tsva/core/grain-interface";
 import type { GrainWithStringKey } from "@tsva/core/key-kinds";
@@ -21,6 +22,29 @@ interface IUnregistered extends GrainWithStringKey {
   ping(): Promise<void>;
 }
 const IUnregistered = defineGrainInterface<IUnregistered>("IUnregistered.client");
+
+interface IWaiter extends GrainWithStringKey {
+  wait(token: GrainCancellationToken): Promise<void>;
+}
+const IWaiter = defineGrainInterface<IWaiter>("IWaiter.client");
+
+@grain()
+class WaiterGrain extends Grain implements IWaiter {
+  async wait(token: GrainCancellationToken): Promise<void> {
+    if (token.isCancellationRequested) throw new Error("cancelled");
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(resolve, 10_000);
+      token.signal.addEventListener(
+        "abort",
+        () => {
+          clearTimeout(timer);
+          reject(new Error("cancelled"));
+        },
+        { once: true },
+      );
+    });
+  }
+}
 
 @grain()
 class CounterGrain extends Grain implements ICounter {
@@ -123,6 +147,38 @@ describe("external client", () => {
     expect(delays[1]).toBe(200);
     expect(delays[2]).toBe(400);
     for (const d of delays) expect(d).toBeLessThanOrEqual(2000);
+  });
+
+  it("cancels a grain call via a client-created GrainCancellationTokenSource", async () => {
+    const network = new InProcessNetwork();
+    const gateway = new ClusterNode({
+      local: gatewayAddr,
+      clusterId: CLUSTER,
+      membership: new StaticMembershipService(gatewayAddr, [gatewayAddr]),
+      transport: new InProcessTransport(network, CLUSTER),
+      random: () => 0,
+    });
+    gateway.registerGrain(WaiterGrain, { interfaces: [IWaiter] });
+    await gateway.start();
+    const client = createClient({
+      clusterId: CLUSTER,
+      local: clientAddr,
+      transport: new InProcessTransport(network, CLUSTER),
+      gateway: gatewayAddr,
+    }).registerGrain(WaiterGrain, { interfaces: [IWaiter] });
+    await client.connect();
+    try {
+      // Recording happens on the client's own outgoing dispatch, before this
+      // call ever crosses the wire — so the source knows to notify the grain
+      // even though the client (unlike a silo) always serializes the call.
+      const cts = client.newCancellationTokenSource();
+      const task = client.getGrain(IWaiter, "w").wait(cts.token);
+      await cts.cancel();
+      await expect(task).rejects.toThrow(/cancelled/);
+    } finally {
+      await client.close();
+      await gateway.stop();
+    }
   });
 
   it("rejects getGrain for an interface the client did not register", async () => {

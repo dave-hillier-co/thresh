@@ -189,11 +189,26 @@ describe("UnitTests.CancellationTests.CancellationTokenTests", () => {
       }
     });
 
-    // Needs a client process hosting the `GrainCancellationTokenSource` itself
-    // (Orleans: the test's own client is the source, not a grain) — this
-    // harness's `TestCluster` has no separate client distinct from a silo
-    // (GAP-CLIENT-SILO-SEPARATION); the grain-driven cancellation core is
-    // proven above (InSilo/InterSiloCancellation, GrainTaskCancellation).
+    // Upstream forwards the client's token through a SECOND grain hop
+    // (`grain.CallOtherLongRunningTask(target, cts.Token, ...)` forwards to
+    // `target`), and asserts `target` observes the cancellation.
+    // `ClientNode.newCancellationTokenSource()` (added alongside this suite,
+    // see `client-node.test.ts`) makes a direct client -> grain call
+    // cancellable, but a client call always crosses the wire (unlike a
+    // silo-to-silo test call, which can stay in-process — see `twoGrains`'s
+    // "pin `a` to primary" comment in `support/cancellation.ts`), so the
+    // first-hop grain's token is always rebuilt from a wire
+    // `CancellationTokenPlaceholder` with no `source`
+    // (`bindCancellationTokens`/`cancellationTokenSourceOf`). Forwarding that
+    // sourceless token to `target` gives `recordTarget` nothing to record
+    // onto, so the client's source can only ever reach the first-hop grain,
+    // never `target` — confirmed empirically: driving this exact two-hop
+    // call from a client hangs until the grain's own 10s delay/test timeout.
+    // Faithfully porting this needs transitive target-recording on the
+    // callee side (an intermediate grain that forwards a bound token
+    // registering its own downstream targets so a later `cancelRemoteToken`
+    // cascades) — a mechanism extension beyond this task's additive scope,
+    // not a placement-determinism issue.
     orleansTest.gap("GAP-CANCELLATION", `${testClass}.InterSiloClientCancellationTokenPassing`);
     orleansTest.gap("GAP-CANCELLATION", `${testClass}.InSiloClientCancellationTokenPassing`);
 

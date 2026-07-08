@@ -4,6 +4,7 @@ import type { Grain } from "@tsva/core/grain";
 import {
   CancellationTokenPlaceholder,
   GrainCancellationToken,
+  GrainCancellationTokenSource,
 } from "@tsva/core/grain-cancellation-token";
 import type { GrainId } from "@tsva/core/grain-id";
 import type { GrainInterface } from "@tsva/core/grain-interface";
@@ -170,6 +171,25 @@ export class ClientNode implements Dispatcher {
 
   getGrain<T>(def: GrainInterface<T>, key: GrainKeyFor<T>): T {
     return this.factory.getGrain(def, key);
+  }
+
+  /**
+   * A `GrainCancellationTokenSource` whose `canceller` reaches any recorded
+   * target grain's `ICancellationSourcesExtension`, wherever it lives
+   * (`TestCluster.newCancellationTokenSource`'s client-side counterpart): the
+   * client is itself a `Dispatcher`, so an extension reference built from its
+   * own factory routes `cancelRemoteToken` the same way any other client call
+   * does — via a gateway to the target's activation. Recording happens on
+   * `GrainFactory`'s outgoing dispatch (`recordTarget`, run before this
+   * client's own `invoke()` serializes the call), so passing `token` as an
+   * argument to a grain method reaches the grain in time to be recorded, even
+   * though the client's own call always crosses the wire.
+   */
+  newCancellationTokenSource(): GrainCancellationTokenSource {
+    return new GrainCancellationTokenSource(async (target: GrainId, tokenId: string) => {
+      const ext = this.factory.getReference(ICancellationSourcesExtension, target);
+      await ext.cancelRemoteToken(tokenId);
+    });
   }
 
   /**

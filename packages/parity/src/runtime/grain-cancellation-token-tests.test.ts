@@ -181,11 +181,28 @@ describe(testClass, () => {
     }
   });
 
-  // Needs a client process hosting the `GrainCancellationTokenSource` itself
-  // (Orleans: the test's own client is the source, not a grain) — this
-  // harness's `TestCluster` has no separate client distinct from a silo
-  // (GAP-CLIENT-SILO-SEPARATION); the grain-driven cancellation core is
-  // proven above (InSilo/InterSiloGrainCancellation, GrainTaskCancellation).
+  // Upstream forwards the client's token through a SECOND grain hop
+  // (`grain.CallOtherLongRunningTaskGrainCancellation(target, cts.Token, ...)`
+  // forwards to `target`), and asserts `target` observes the cancellation.
+  // `ClientNode.newCancellationTokenSource()` (added alongside this suite,
+  // see `client-node.test.ts`) makes a direct client -> grain call
+  // cancellable — `recordTarget` runs on the client's own outgoing dispatch,
+  // before that call's `invoke()` ever serializes it. But a client call
+  // *always* crosses the wire (unlike a silo-to-silo test call, which can
+  // stay in-process — see `twoGrains`'s "pin `a` to primary" comment in
+  // `support/cancellation.ts`), so the token the first-hop grain (`grain`)
+  // receives is always rebuilt from a wire `CancellationTokenPlaceholder`
+  // with no `source` (`bindCancellationTokens`/`cancellationTokenSourceOf`).
+  // When `grain` forwards that sourceless token on to `target`, there is
+  // nothing for `recordTarget` to record onto: the client's source never
+  // learns about `target`, so `cts.cancel()` can only ever reach `grain`,
+  // not `target`. Confirmed empirically: driving this exact two-hop call
+  // from a client hangs until the grain's own 10s delay/test timeout, never
+  // observing `target`'s cancellation. Faithfully porting this needs
+  // transitive target-recording on the callee side (an intermediate grain
+  // that forwards a bound token registering its own downstream targets so a
+  // later `cancelRemoteToken` cascades) — a mechanism extension beyond this
+  // task's additive scope, not a placement-determinism issue.
   orleansTest.gap(
     "GAP-CANCELLATION",
     `${testClass}.InterSiloClientCancellationTokenPassing`,
