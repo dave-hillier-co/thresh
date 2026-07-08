@@ -214,17 +214,25 @@ describe("DefaultCluster.Tests.General.ObserverTests", () => {
     expect(count).toBe(1);
   });
 
-  // GAP-OBSERVERS: our surface has no distinct "raw object vs. grain reference"
-  // type check at the subscribe() call site — `grain.subscribe(rawObject)`
-  // would only fail once the runtime tried to serialize `rawObject` as a
-  // method argument, which does not happen synchronously the way upstream's
-  // `NotSupportedException` does, and our serializer's behaviour for an
-  // arbitrary plain object with a `stateChanged` method is not a deliberate,
-  // documented contract. Forcing an assertion here would pin an accident of
-  // the current serializer rather than a real invariant.
-  orleansTest.gap(
-    "GAP-OBSERVERS",
+  orleansTest(
     "DefaultCluster.Tests.General.ObserverTests.ObserverTest_SubscriberMustBeGrainReference",
+    async () => {
+      const grain = getGrain();
+
+      // Upstream subscribes a raw `SimpleGrainObserver` (never turned into a
+      // reference via CreateObjectReference) and expects `subscribe` to throw.
+      // The invariant is enforced here by SimpleObserverableGrain.subscribe,
+      // whose `keyOf` rejects any argument that is not a grain reference
+      // (`grainReferenceIdentity(observer) === undefined`). A plain data object
+      // exercises exactly that deliberate guard; a callback-bearing raw object
+      // would instead fail even earlier at argument serialization (functions
+      // don't cross the wire), which is a serializer accident rather than the
+      // documented grain-reference contract, so we assert the deliberate guard.
+      // The rejection crosses the client -> silo boundary and so degrades to a
+      // generic error with the message preserved — assert on the message.
+      const notAReference = { notARef: 1 } as unknown as ISimpleGrainObserver;
+      await expect(grain.subscribe(notAReference)).rejects.toThrow(/grain reference/i);
+    },
   );
 
   orleansTest(
