@@ -6,9 +6,9 @@
 // that ordinary grains look up and call into, and which can itself expose
 // `IGrainExtension`s (`AddGrainExtension<IEchoExtension, EchoExtension>`).
 // This framework has no per-silo grain-service registration/lifecycle
-// mechanism at all (distinct from, and a precondition for, the
-// already-tracked GAP-GRAIN-EXTENSION gap on grain extensions themselves) —
-// GAP-GRAIN-SERVICE.
+// mechanism at all (distinct from ordinary grain extensions, which DO have an
+// equivalent now — see `@tsva/runtime/grain-management-extension` and the
+// closed GAP-GRAIN-EXTENSION) — GAP-GRAIN-SERVICE.
 import { describe } from "vitest";
 import { orleansTest } from "@tsva/testing/orleans-test";
 

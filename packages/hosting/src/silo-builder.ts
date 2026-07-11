@@ -1,3 +1,4 @@
+import { durationToMs, type Duration } from "@tsva/core/duration";
 import type { Grain } from "@tsva/core/grain";
 import type {
   IncomingGrainCallFilter,
@@ -88,6 +89,13 @@ export interface SiloConfig {
   metadata?: Readonly<Record<string, string>>;
   /** Durable-journal snapshot threshold: snapshot + truncate past this many log entries (default 100). */
   snapshotThreshold?: number;
+  /**
+   * Silo-wide default per-method response timeout (Orleans `[ResponseTimeout]`
+   * default), applied to any grain call whose interface doesn't set its own
+   * `responseTimeout`. Off by default: no call races a deadline unless one is
+   * configured here or on the method itself.
+   */
+  defaultResponseTimeout?: Duration;
 }
 
 interface Registration {
@@ -131,6 +139,7 @@ export class SiloBuilder {
   private grainActivator: GrainActivator | undefined;
   private metricsEnabled = false;
   private readonly registrations: Registration[] = [];
+  private readonly grainExtensions = new Map<number, () => object>();
   private versioning:
     | { compatibility?: CompatibilityKind; selector?: VersionSelectorKind }
     | undefined;
@@ -568,6 +577,19 @@ export class SiloBuilder {
   }
 
   /**
+   * Register an auto-install factory for a `GrainExtension` interface (Orleans
+   * `ISiloBuilder.AddGrainExtension<TExtensionInterface, TExtension>`): any
+   * activation on this silo that receives a call for `iface` and has not
+   * already bound one itself (via `GrainRuntime.getOrSetExtension`) gets one
+   * built by `factory` on first use, instead of throwing
+   * `GrainExtensionNotInstalledException`.
+   */
+  addGrainExtension<T>(iface: GrainInterface<T>, factory: () => object): this {
+    this.grainExtensions.set(iface.id, factory);
+    return this;
+  }
+
+  /**
    * Register a startup task (Orleans `ISiloBuilder.AddStartupTask` / `IStartupTask`):
    * runs after the silo's node has started — so it can call grains — but before
    * the silo is marked ready. Tasks run in registration order.
@@ -610,6 +632,9 @@ export class SiloBuilder {
       ...(this.config.collectionIntervalSeconds !== undefined
         ? { collectionIntervalSeconds: this.config.collectionIntervalSeconds }
         : {}),
+      ...(this.config.defaultResponseTimeout !== undefined
+        ? { defaultResponseTimeoutMs: durationToMs(this.config.defaultResponseTimeout) }
+        : {}),
       ...(this.config.random !== undefined ? { random: this.config.random } : {}),
       // Calling useVersioning() enables versioning with resolved defaults, so the
       // node activates version-aware placement even when no policy is overridden.
@@ -631,6 +656,7 @@ export class SiloBuilder {
         ? { outgoingCallFilters: this.outgoingCallFilters }
         : {}),
       ...(this.grainActivator !== undefined ? { grainActivator: this.grainActivator } : {}),
+      ...(this.grainExtensions.size > 0 ? { grainExtensionFactories: this.grainExtensions } : {}),
       // Transactional facets need no storage provider in this slice, so the
       // binder always runs; persistent/reducer facets bind only when storage is
       // configured.

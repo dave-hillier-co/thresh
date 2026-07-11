@@ -32,7 +32,7 @@ export class Silo {
 
   constructor(options: SiloOptions = {}) {
     const time = options.time ?? systemTimeProvider;
-    this.factory = new GrainFactory((interfaceId) => this.resolveGrainType(interfaceId));
+    this.factory = new GrainFactory((interfaceId) => this.resolveGrainType(interfaceId), time);
     this.catalog = new Catalog({
       grainTypes: this.grainTypes,
       factory: this.factory,

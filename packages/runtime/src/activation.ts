@@ -10,7 +10,15 @@ import {
   durableJobHandler,
   type JobRunContext,
 } from "@tsva/core/durable-job";
-import { GrainCallError, RejectionError } from "@tsva/core/errors";
+import {
+  GrainCallError,
+  GrainExtensionNotInstalledException,
+  RejectionError,
+} from "@tsva/core/errors";
+import {
+  CancellationTokenPlaceholder,
+  GrainCancellationToken,
+} from "@tsva/core/grain-cancellation-token";
 import type { Grain } from "@tsva/core/grain";
 import type { GrainContext } from "@tsva/core/grain-context";
 import type { GrainId } from "@tsva/core/grain-id";
@@ -23,6 +31,11 @@ import type { ActivationReason, DeactivationReason } from "@tsva/core/reasons";
 import type { SiloAddress } from "@tsva/core/silo-address";
 import { migrationParticipantsOf } from "@tsva/runtime/migration-participants";
 import { getGrainInterface } from "@tsva/core/grain-interface";
+import type { CancellationSourcesExtension } from "@tsva/runtime/cancellation-extension";
+import {
+  cancellationExtensionFactory,
+  ICancellationSourcesExtension,
+} from "@tsva/runtime/cancellation-extension";
 import {
   grainIncomingFilter,
   runCallFilters,
@@ -125,6 +138,15 @@ export class ActivationData implements GrainContext {
   /** Handlers for pulling-agent stream delivery, keyed by `namespace/key`. */
   private readonly streamHandlers = new Map<string, StreamHandler<unknown>>();
   private readonly broadcastHandlers = new Map<string, BroadcastChannelHandler<unknown>>();
+  /** Bound `GrainExtension` instances, keyed by interface id; see `getOrSetExtension`. */
+  private readonly extensions = new Map<number, object>();
+  /**
+   * Auto-install factories for extension interfaces not yet bound, keyed by
+   * interface id — set by the catalog (later task); unset here means an
+   * un-bound extension call always throws
+   * `GrainExtensionNotInstalledException` rather than auto-installing.
+   */
+  private extensionFactories?: Map<number, (activation: ActivationData) => object>;
 
   constructor(
     id: GrainId,
@@ -259,6 +281,31 @@ export class ActivationData implements GrainContext {
     return handler;
   }
 
+  /**
+   * Get this activation's bound `GrainExtension` instance for `interfaceId`,
+   * lazily creating it via `factory` on first use. Idempotent: a second call
+   * for the same interface id returns the SAME instance and never re-runs
+   * `factory` (see `GrainRuntime.getOrSetExtension`).
+   */
+  getOrSetExtension<T extends object>(interfaceId: number, factory: () => T): T {
+    const existing = this.extensions.get(interfaceId);
+    if (existing !== undefined) return existing as T;
+    const created = factory();
+    this.extensions.set(interfaceId, created);
+    return created;
+  }
+
+  /**
+   * Set the catalog's per-interface auto-install factories, used by
+   * `callMethod` to bind an extension on first call rather than requiring the
+   * grain to have called `getOrSetExtension` beforehand. Unset by default
+   * (wired by a later silo-builder task); an un-bound extension call with no
+   * factory configured throws `GrainExtensionNotInstalledException`.
+   */
+  setExtensionFactories(factories: Map<number, (activation: ActivationData) => object>): void {
+    this.extensionFactories = factories;
+  }
+
   /** Bind a pulling-agent stream handler so a delivered `StreamConsumer` turn reaches it. */
   setStreamHandler(streamKey: string, handler: StreamHandler<unknown>): void {
     this.streamHandlers.set(streamKey, handler);
@@ -386,6 +433,23 @@ export class ActivationData implements GrainContext {
     return now - this.lastActiveMs >= this.collectionAgeMs;
   }
 
+  /**
+   * True when a caller (e.g. `IGrainManagementExtension.deactivateOnIdle()`)
+   * has flagged this activation to go away and it is idle right now (not
+   * mid-turn). Unlike `isStale()`, this ignores `keepAliveUntilMs` and the
+   * age-based idle threshold — it exists solely so `Catalog.getOrActivate`
+   * can notice a PENDING explicit deactivation request lazily, on the very
+   * next lookup for this grain id, and finalize the old activation before
+   * handing out a fresh one (see `grain-management-extension.ts` for why the
+   * finalization can't happen synchronously inside `deactivateOnIdle()`
+   * itself). `delayDeactivation` deliberately does not suppress this: an
+   * explicit deactivateOnIdle() request should not be overridden by an
+   * unrelated keep-alive.
+   */
+  get deactivationRequestedAndIdle(): boolean {
+    return this.state === "valid" && !this.scheduler.busy && this.deactivateRequested;
+  }
+
   private touch(): void {
     this.lastActiveMs = this.time.now();
   }
@@ -425,11 +489,26 @@ export class ActivationData implements GrainContext {
     if (req.interfaceId === TransactionResourceInterface.id) {
       return await this.invokeTransactionResource(req);
     }
+    // GrainExtension dispatch: an interface marked `extension` in the registry
+    // routes to a per-activation object bound via `getOrSetExtension`
+    // (auto-installed from `extensionFactories` if not yet bound), NOT to
+    // `this.instance` — an orthogonal method surface, dispatched by interface.
+    // Runs through the SAME incoming call-filter pipeline as the grain-method
+    // path below (Orleans parity: filters wrap extension calls too).
+    const iface = getGrainInterface(req.interfaceId);
+    if (iface?.extension === true) {
+      return await this.invokeExtension(req, iface.name);
+    }
     const fn = (this.instance as unknown as Record<string, unknown>)[req.method];
     if (typeof fn !== "function") {
       throw new GrainCallError(`grain ${this.id.toString()} has no method ${req.method}`);
     }
     const method = fn as (...args: unknown[]) => unknown;
+    // Bind any wire-arrived cancellation-token placeholders to live tokens,
+    // in place on `req.args`, BEFORE the method runs — once, here, so both the
+    // no-filter and filtered dispatch paths below see the bound arguments
+    // (`context.args` is a copy of `req.args` taken after this call).
+    this.bindCancellationTokens(req.args);
     // The grain's own filter (if it declares one) runs innermost — after the
     // silo-wide filters, just before the method (Orleans parity).
     const own = grainIncomingFilter(this.instance);
@@ -459,6 +538,106 @@ export class ActivationData implements GrainContext {
     };
     return await runCallFilters(filters, context, () =>
       Promise.resolve(method.apply(this.instance, context.args)),
+    );
+  }
+
+  /**
+   * Replace each `CancellationTokenPlaceholder` in `args` (produced by
+   * `decodeValue`, which has no activation context to bind a live signal) with
+   * a real `GrainCancellationToken` whose `signal` is this activation's own
+   * cancellation extension's controller for that `tokenId` — so a later
+   * `cancelRemoteToken(tokenId)` call (routed to the SAME extension instance
+   * via `getOrSetExtension`'s idempotent binding) fires it. A placeholder that
+   * arrived already-cancelled (`cancelled: true`, set when `cancel()` ran
+   * before the call was even sent) pre-aborts the controller here, so the
+   * grain method sees an already-fired signal instead of racing one.
+   */
+  private bindCancellationTokens(args: unknown[]): void {
+    for (let i = 0; i < args.length; i++) {
+      const arg = args[i];
+      if (!(arg instanceof CancellationTokenPlaceholder)) continue;
+      // Auto-install through the catalog's registered factory (which wires
+      // this silo's real cascade canceller — see `Catalog`/`ClusterNode`)
+      // rather than calling `cancellationExtensionFactory` bare; a standalone
+      // activation with no catalog-set factories falls back to a no-op
+      // canceller, matching the pre-cascade single-hop behaviour.
+      const ext = this.getOrSetExtension(
+        ICancellationSourcesExtension.id,
+        () =>
+          (this.extensionFactories?.get(ICancellationSourcesExtension.id)?.(this) ??
+            cancellationExtensionFactory(async () => {})) as CancellationSourcesExtension,
+      );
+      const controller = ext.getOrCreateController(arg.tokenId);
+      if (arg.cancelled) controller.abort();
+      const tokenId = arg.tokenId;
+      args[i] = new GrainCancellationToken({
+        tokenId,
+        signal: controller.signal,
+        // If the grain forwards this token on to another grain call, the
+        // grain-factory dispatch hook (`recordCancellationTarget`) calls this
+        // so a later `cancelRemoteToken(tokenId)` reaching THIS activation
+        // cascades on to that further target too.
+        onDispatchToTarget: (target) => ext.recordForwardTarget(tokenId, target),
+      });
+    }
+  }
+
+  /**
+   * Route a call targeting an extension interface to its bound instance,
+   * auto-installing from `extensionFactories` if not yet bound (see
+   * `setExtensionFactories`). Throws `GrainExtensionNotInstalledException`
+   * when neither a bound instance nor a factory exists.
+   *
+   * Runs through the same incoming call-filter pipeline as an ordinary
+   * grain-method call (Orleans parity: `GrainCallFilter_GrainExtension`) —
+   * additive: with no silo-wide filters and no grain-level filter, this stays
+   * a direct invoke of the extension method, same as before filters wrapped
+   * extension calls at all.
+   */
+  private async invokeExtension(req: InvocationRequest, interfaceName: string): Promise<unknown> {
+    let ext = this.extensions.get(req.interfaceId);
+    if (ext === undefined) {
+      const factory = this.extensionFactories?.get(req.interfaceId);
+      if (factory !== undefined) {
+        ext = factory(this);
+        this.extensions.set(req.interfaceId, ext);
+      }
+    }
+    if (ext === undefined) {
+      throw new GrainExtensionNotInstalledException(
+        `extension ${interfaceName} is not installed on ${this.id.toString()}`,
+      );
+    }
+    const fn = (ext as Record<string, unknown>)[req.method];
+    if (typeof fn !== "function") {
+      throw new GrainCallError(`extension ${interfaceName} has no method ${req.method}`);
+    }
+    const method = fn as (...args: unknown[]) => unknown;
+    const own = grainIncomingFilter(this.instance);
+    const filters =
+      own === undefined ? this.incomingCallFilters : [...this.incomingCallFilters, own];
+    if (filters.length === 0) {
+      return await method.apply(ext, req.args);
+    }
+    const context: IncomingGrainCallContext = {
+      target: this.id,
+      source: req.sender,
+      interfaceId: req.interfaceId,
+      interfaceName,
+      methodName: req.method,
+      args: [...req.args],
+      result: undefined,
+      headers: invocationContext.getStore()?.headers ?? {},
+      // Orleans parity: `IGrainCallContext.Grain` is always the grain instance
+      // (`GrainMethodInvoker.Grain => grainContext.GrainInstance`), never the
+      // extension component itself, even when the call targets an extension
+      // interface — so the grain's own `INCOMING_CALL_FILTER` (looked up via
+      // `this.instance` above, not the extension) applies here too.
+      grain: this.instance,
+      invoke: () => Promise.resolve(),
+    };
+    return await runCallFilters(filters, context, () =>
+      Promise.resolve(method.apply(ext, context.args)),
     );
   }
 

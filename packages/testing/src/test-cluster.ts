@@ -1,10 +1,14 @@
+import type { Duration } from "@tsva/core/duration";
+import { GrainCancellationTokenSource } from "@tsva/core/grain-cancellation-token";
 import type { Grain } from "@tsva/core/grain";
+import type { GrainId } from "@tsva/core/grain-id";
 import type { GrainInterface } from "@tsva/core/grain-interface";
 import type { GrainKeyFor } from "@tsva/core/key-kinds";
 import type { MembershipService, MembershipSnapshot } from "@tsva/core/membership";
 import { SiloAddress } from "@tsva/core/silo-address";
 import type { TimeProvider } from "@tsva/core/time-provider";
 import { InProcessNetwork } from "@tsva/messaging/in-process-transport";
+import { ICancellationSourcesExtension } from "@tsva/runtime/cancellation-extension";
 import { MemoryJobShardStore } from "@tsva/durable-jobs/memory-job-shard-store";
 import { MemoryJournalStorage } from "@tsva/journaling/memory-journal-storage";
 import { MemoryGrainStorage } from "@tsva/persistence/memory-grain-storage";
@@ -47,6 +51,12 @@ export interface TestClusterOptions {
     index: number;
     address: SiloAddress;
   }) => Readonly<Record<string, string>> | undefined;
+  /**
+   * Silo-wide default per-method response timeout, forwarded to every silo
+   * (Orleans `[ResponseTimeout]` default). Off by default: pass a
+   * `FakeTimeProvider` via `time` to drive it deterministically in tests.
+   */
+  defaultResponseTimeout?: Duration;
 }
 
 export interface TestSiloHandle {
@@ -101,8 +111,27 @@ export class TestCluster {
     return first;
   }
 
+  /** The cluster id every silo (and any client joining it) shares. */
+  get clusterId(): string {
+    return this.options.clusterId ?? "test-cluster";
+  }
+
   getGrain<T>(def: GrainInterface<T>, key: GrainKeyFor<T>): T {
     return this.primary.host.getGrain(def, key);
+  }
+
+  /**
+   * A `GrainCancellationTokenSource` whose `canceller` reaches any recorded
+   * target grain's `ICancellationSourcesExtension`, wherever it lives: the
+   * dispatcher routes the extension call to the hosting silo the same way it
+   * routes an ordinary grain call, so this works whether the target
+   * activated on the primary silo or a peer.
+   */
+  newCancellationTokenSource(): GrainCancellationTokenSource {
+    return new GrainCancellationTokenSource(async (target: GrainId, tokenId: string) => {
+      const ext = this.primary.host.getExtensionReference(ICancellationSourcesExtension, target);
+      await ext.cancelRemoteToken(tokenId);
+    });
   }
 
   async startAdditionalSilo(): Promise<TestSiloHandle> {
@@ -174,6 +203,9 @@ export class TestCluster {
       local: address,
       ...(this.options.time !== undefined ? { time: this.options.time } : {}),
       ...(metadata !== undefined ? { metadata } : {}),
+      ...(this.options.defaultResponseTimeout !== undefined
+        ? { defaultResponseTimeout: this.options.defaultResponseTimeout }
+        : {}),
     })
       .useMembership(membership)
       .useInProcessTransport(this.network)

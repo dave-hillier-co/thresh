@@ -1,5 +1,7 @@
 // Ported from dotnet/orleans test/Orleans.DefaultCluster.Tests/EchoTaskGrainTests.cs @ v10.1.0 (MIT).
 import { afterAll, beforeAll, describe, expect } from "vitest";
+import { GrainCallTimeoutError } from "@tsva/core/errors";
+import { FakeTimeProvider } from "@tsva/core/test-support/fake-time-provider";
 import { orleansTest } from "@tsva/testing/orleans-test";
 import { TestCluster } from "@tsva/testing/test-cluster";
 import {
@@ -51,21 +53,6 @@ describe("DefaultCluster.Tests.General.EchoTaskGrainTests", () => {
     const grain = cluster.getGrain(IEchoTaskGrain, randomGuidKey());
     await expect(grain.echoErrorAsync(expectedEchoError)).rejects.toThrow(expectedEchoError);
   });
-
-  orleansTest.gap(
-    "GAP-CANCELLATION",
-    "DefaultCluster.Tests.General.EchoTaskGrainTests.EchoGrain_Timeout_ContinueWith",
-  );
-
-  orleansTest.gap(
-    "GAP-CANCELLATION",
-    "DefaultCluster.Tests.General.EchoTaskGrainTests.EchoGrain_Timeout_Await",
-  );
-
-  orleansTest.gap(
-    "GAP-CANCELLATION",
-    "DefaultCluster.Tests.General.EchoTaskGrainTests.EchoGrain_Timeout_Result",
-  );
 
   orleansTest("DefaultCluster.Tests.General.EchoTaskGrainTests.EchoGrain_LastEcho", async () => {
     const grain = cluster.getGrain(IEchoTaskGrain, randomGuidKey());
@@ -132,5 +119,74 @@ describe("DefaultCluster.Tests.General.EchoTaskGrainTests", () => {
 
       expect(await grain.echoNullable(null)).toBeNull();
     },
+  );
+});
+
+// Upstream drives these with a real 5s [ResponseTimeout] and Thread.Sleep,
+// asserting the elapsed time falls within bounds. Here a FakeTimeProvider
+// makes the deadline race deterministic: the caller's promise rejects with
+// GrainCallTimeoutError the instant the fake clock crosses the 5s deadline,
+// while the callee's turn is left running (never interrupted). All three
+// upstream variants (ContinueWith/.Result/async-await) collapse to the same
+// await/rejects assertion shape in JS, which has no equivalent of a
+// synchronous blocking `.Result` wait.
+describe("DefaultCluster.Tests.General.EchoTaskGrainTests.Timeout", () => {
+  let cluster: TestCluster;
+  let time: FakeTimeProvider;
+
+  // Single silo: the response deadline is enforced caller-side, so a second
+  // silo adds nothing but a teardown race.
+  beforeAll(async () => {
+    time = new FakeTimeProvider();
+    cluster = await TestCluster.start({
+      initialSilos: 1,
+      time,
+      grains: [{ ctor: EchoTaskGrain, interfaces: [IEchoTaskGrain] }],
+    });
+  });
+
+  // Safety net: advance well past any callee timer and drain so no suspended
+  // turn lingers into dispose, where deactivation disposes the callee's timer
+  // and would wedge the still-suspended turn behind the exclusive deactivate turn.
+  afterAll(async () => {
+    time.advance(60_000);
+    await flush();
+    await cluster.dispose();
+  });
+
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  // A blocking call whose 6s delay outlasts its 5s [ResponseTimeout]: crossing
+  // the 5s deadline rejects the caller with GrainCallTimeoutError while the
+  // callee's turn keeps running (never interrupted). Then advance past the 6s
+  // callee timer and drain so the turn completes and does not linger into the
+  // next test / teardown.
+  async function expectResponseDeadline(): Promise<void> {
+    const grain = cluster.getGrain(IEchoTaskGrain, randomGuidKey());
+    const promise = grain.blockingCallTimeoutAsync(6);
+    const assertion = expect(promise).rejects.toBeInstanceOf(GrainCallTimeoutError);
+    // The dispatch turn arms the caller-side deadline timer, and the callee turn
+    // arms its 6s timer, as microtasks — drain them before advancing so both are
+    // registered when the fake clock crosses the 5s deadline.
+    await flush();
+    time.advance(5_000);
+    await assertion;
+    time.advance(2_000);
+    await flush();
+  }
+
+  // All three upstream variants (ContinueWith / async-await / .Result) collapse
+  // to the same await/rejects assertion in JS, which has no synchronous .Result.
+  orleansTest(
+    "DefaultCluster.Tests.General.EchoTaskGrainTests.EchoGrain_Timeout_ContinueWith",
+    expectResponseDeadline,
+  );
+  orleansTest(
+    "DefaultCluster.Tests.General.EchoTaskGrainTests.EchoGrain_Timeout_Await",
+    expectResponseDeadline,
+  );
+  orleansTest(
+    "DefaultCluster.Tests.General.EchoTaskGrainTests.EchoGrain_Timeout_Result",
+    expectResponseDeadline,
   );
 });

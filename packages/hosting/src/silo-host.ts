@@ -60,6 +60,11 @@ export class SiloHost {
     return this.parts.node.getGrain(def, key);
   }
 
+  /** See `ClusterNode.getExtensionReference`: a reference to an explicit `GrainId` under `def`. */
+  getExtensionReference<T>(def: GrainInterface<T>, grainId: GrainId): T {
+    return this.parts.node.getExtensionReference(def, grainId);
+  }
+
   isActive(id: GrainId): boolean {
     return this.parts.node.isActive(id);
   }

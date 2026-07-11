@@ -1,6 +1,7 @@
 // Ported from dotnet/orleans test/Orleans.Runtime.Tests/ExceptionPropagationTests.cs @ v10.1.0 (MIT).
 import { afterAll, beforeAll, describe, expect } from "vitest";
 import { orleansTest } from "@tsva/testing/orleans-test";
+import { GrainTaskCanceledError } from "@tsva/core/errors";
 import { TestCluster } from "@tsva/testing/test-cluster";
 import { ExceptionGrain, IExceptionGrain } from "@tsva/parity/grains/impl/exception-grain";
 import { randomIntegerKey } from "@tsva/parity/support/keys";
@@ -58,9 +59,14 @@ describe("UnitTests.General.ExceptionPropagationTests", () => {
     "UnitTests.General.ExceptionPropagationTests.ExceptionPropagationDoesNoFlattenAggregateExceptions",
   );
 
-  orleansTest.gap(
-    "GAP-CANCELLATION",
+  orleansTest(
     "UnitTests.General.ExceptionPropagationTests.TaskCancelationPropagation",
+    async () => {
+      // Upstream asserts a `TaskCanceledException`; the analogue here is the
+      // `GrainTaskCanceledError` the grain's canceled-task stand-in throws.
+      const grain = cluster.getGrain(IExceptionGrain, randomIntegerKey());
+      await expect(grain.canceled()).rejects.toThrow(GrainTaskCanceledError);
+    },
   );
 
   orleansTest(

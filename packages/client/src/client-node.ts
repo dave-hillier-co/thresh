@@ -1,21 +1,40 @@
 import { GrainCallError, RejectionError } from "@tsva/core/errors";
+import { createClientId, createObserverId, isObserverGrainId } from "@tsva/core/client-grain-id";
 import type { Grain } from "@tsva/core/grain";
+import {
+  CancellationTokenPlaceholder,
+  GrainCancellationToken,
+  GrainCancellationTokenSource,
+} from "@tsva/core/grain-cancellation-token";
+import {
+  grainIncomingFilter,
+  runCallFilters,
+  type IncomingGrainCallContext,
+  type IncomingGrainCallFilter,
+  type OutgoingGrainCallFilter,
+} from "@tsva/core/grain-call-filter";
+import type { GrainId } from "@tsva/core/grain-id";
 import type { GrainInterface } from "@tsva/core/grain-interface";
 import { getGrainInterface } from "@tsva/core/grain-interface";
 import { getGrainMetadata } from "@tsva/core/grain-metadata";
-import type { GrainReferenceIdentity } from "@tsva/core/grain-reference";
+import {
+  grainReferenceIdentity,
+  type GrainReferenceIdentity,
+} from "@tsva/core/grain-reference";
 import type { GrainType } from "@tsva/core/grain-type";
 import type { GrainKeyFor } from "@tsva/core/key-kinds";
 import type { InvocationRequest } from "@tsva/core/request";
 import type { SiloAddress } from "@tsva/core/silo-address";
 import { ConnectionManager } from "@tsva/messaging/connection-manager";
 import { CorrelationTable } from "@tsva/messaging/correlation-table";
-import { nextCorrelationId, type Message } from "@tsva/messaging/message";
+import { nextCorrelationId, responseTo, type Message, type ResponseKind } from "@tsva/messaging/message";
 import { MessagePackSerializer } from "@tsva/messaging/msgpack-serializer";
 import type { Serializer } from "@tsva/messaging/serializer";
 import type { Listener, Transport } from "@tsva/messaging/transport";
+import { ICancellationSourcesExtension } from "@tsva/runtime/cancellation-extension";
 import type { Dispatcher } from "@tsva/runtime/dispatcher";
 import { GrainFactory } from "@tsva/runtime/grain-factory";
+import { invocationContext } from "@tsva/runtime/invocation-context";
 import { GatewayManager } from "@tsva/client/gateway-manager";
 import { staticGatewayProvider, type GatewayListProvider } from "@tsva/client/gateway-provider";
 
@@ -43,6 +62,28 @@ export interface ClientConfig {
    * keep the loop deterministic.
    */
   delay?: (ms: number) => Promise<void>;
+  /**
+   * The client's own identity, used to mint observer references
+   * (`createObjectReference`). Defaults to a fresh random client id; tests
+   * override it for deterministic assertions.
+   */
+  clientId?: GrainId;
+  /**
+   * Incoming call filters wrapping a call to one of this client's hosted
+   * objects (`createObjectReference`) — the client-side mirror of the
+   * catalog's `incomingCallFilters` (Orleans' client-builder
+   * `AddIncomingGrainCallFilter`), run through the SAME `runCallFilters`
+   * pipeline the silo uses (see `ClientNode.dispatchToLocalObject`).
+   */
+  incomingCallFilters?: readonly IncomingGrainCallFilter[];
+  /**
+   * Outgoing call filters run on every call this client issues through its
+   * internal `GrainFactory` (Orleans' client-builder `AddOutgoingGrainCallFilter`
+   * — e.g. `tracingFilters().outgoing`, so a client-originated call injects W3C
+   * trace context into `ctx.headers` the same way a grain-to-grain call does).
+   * Applied via `GrainFactory.setOutgoingCallFilters`.
+   */
+  outgoingCallFilters?: readonly OutgoingGrainCallFilter[];
 }
 
 /** Orleans `ClientMessageCenter.MINIMUM_INTERCONNECT_DELAY`. */
@@ -61,6 +102,12 @@ interface GrainRegistration {
   interfaces: GrainInterface<unknown>[];
 }
 
+/** A client-hosted callback object registered under an observer `GrainId`. */
+interface LocalObjectEntry {
+  object: Record<string, (...args: unknown[]) => unknown>;
+  interfaceId: number;
+}
+
 /**
  * An external client (docs/11). It is not a silo — it hosts no grains — but it
  * uses the same `getGrain` proxy mechanism, forwarding every call to a gateway
@@ -76,16 +123,37 @@ export class ClientNode implements Dispatcher {
   private readonly callTimeoutMs: number;
   private readonly gateways: GatewayManager;
   private readonly delay: (ms: number) => Promise<void>;
+  private readonly clientId: GrainId;
+  private readonly localObjects = new Map<string, LocalObjectEntry>();
+  /**
+   * Per-client store of `AbortController`s for cancellation tokens bound on
+   * this client's hosted-object dispatch path, keyed by `tokenId` — the
+   * client-side mirror of `ActivationData`'s per-activation extension store
+   * (`CancellationSourcesExtension`), since a client hosts objects rather than
+   * grain activations and so has no `getOrSetExtension` to lean on.
+   */
+  private readonly cancellationControllers = new Map<string, AbortController>();
+  private readonly incomingCallFilters: readonly IncomingGrainCallFilter[];
   private listener: Listener | undefined;
 
   constructor(private readonly config: ClientConfig) {
     this.callTimeoutMs = config.callTimeoutMs ?? 30_000;
-    this.connections = new ConnectionManager(config.transport, config.local, config.clusterId);
+    this.clientId = config.clientId ?? createClientId();
+    this.incomingCallFilters = config.incomingCallFilters ?? [];
+    this.connections = new ConnectionManager(
+      config.transport,
+      config.local,
+      config.clusterId,
+      this.clientId,
+    );
     this.serializer =
       config.serializer ??
       new MessagePackSerializer({ resolveGrainReference: (id) => this.rehydrate(id) });
     this.factory = new GrainFactory((interfaceId) => this.resolveGrainType(interfaceId));
     this.factory.setDispatcher(this);
+    if (config.outgoingCallFilters !== undefined) {
+      this.factory.setOutgoingCallFilters(config.outgoingCallFilters);
+    }
     const provider =
       config.gateways ??
       (config.gateway !== undefined ? staticGatewayProvider([config.gateway]) : undefined);
@@ -121,11 +189,62 @@ export class ClientNode implements Dispatcher {
   async connect(): Promise<this> {
     this.listener = await this.config.transport.listen(this.config.local, (m) => this.onMessage(m));
     await this.gateways.refresh();
+    // Eagerly open a connection to a gateway so its `onAccept` fires and the
+    // client-directory gossip runs immediately, rather than waiting for the
+    // first real call. Best-effort: a temporarily unreachable gateway doesn't
+    // fail connect() — the normal invoke() path retries and fails over.
+    const gateway = this.gateways.next();
+    if (gateway !== undefined) await this.connections.get(gateway).catch(() => undefined);
     return this;
   }
 
   getGrain<T>(def: GrainInterface<T>, key: GrainKeyFor<T>): T {
     return this.factory.getGrain(def, key);
+  }
+
+  /**
+   * A `GrainCancellationTokenSource` whose `canceller` reaches any recorded
+   * target grain's `ICancellationSourcesExtension`, wherever it lives
+   * (`TestCluster.newCancellationTokenSource`'s client-side counterpart): the
+   * client is itself a `Dispatcher`, so an extension reference built from its
+   * own factory routes `cancelRemoteToken` the same way any other client call
+   * does — via a gateway to the target's activation. Recording happens on
+   * `GrainFactory`'s outgoing dispatch (`recordTarget`, run before this
+   * client's own `invoke()` serializes the call), so passing `token` as an
+   * argument to a grain method reaches the grain in time to be recorded, even
+   * though the client's own call always crosses the wire.
+   */
+  newCancellationTokenSource(): GrainCancellationTokenSource {
+    return new GrainCancellationTokenSource(async (target: GrainId, tokenId: string) => {
+      const ext = this.factory.getReference(ICancellationSourcesExtension, target);
+      await ext.cancelRemoteToken(tokenId);
+    });
+  }
+
+  /**
+   * Host `obj` as a callback object a grain can invoke (Orleans'
+   * `CreateObjectReference`): mint a fresh observer identity scoped to this
+   * client, register it locally, and return a grain-reference proxy carrying
+   * that identity — pass it as a method argument like any other grain ref;
+   * the serializer reduces it to `{grainId, interfaceId}` on the wire.
+   */
+  createObjectReference<T>(def: GrainInterface<T>, obj: object): T {
+    if (grainReferenceIdentity(obj) !== undefined) {
+      throw new TypeError("createObjectReference: obj is already a grain reference");
+    }
+    const observer = createObserverId(this.clientId);
+    this.localObjects.set(observer.toString(), {
+      object: obj as Record<string, (...args: unknown[]) => unknown>,
+      interfaceId: def.id,
+    });
+    return this.factory.getReference(def, observer);
+  }
+
+  /** Stop hosting a reference previously returned by `createObjectReference`. */
+  deleteObjectReference(ref: object): void {
+    const identity = grainReferenceIdentity(ref);
+    if (identity === undefined) return;
+    this.localObjects.delete(identity.grainId.toString());
   }
 
   async close(): Promise<void> {
@@ -177,7 +296,10 @@ export class ClientNode implements Dispatcher {
           sendingGrain: req.sender,
           interfaceId: req.interfaceId,
           method: req.method,
-          requestContext: { reentrancyId: req.reentrancyId },
+          requestContext: {
+            reentrancyId: req.reentrancyId,
+            ...(req.headers !== undefined ? { headers: req.headers } : {}),
+          },
           body: this.serializer.serialize(req.args),
         };
         if (req.options.oneWay) {
@@ -202,8 +324,175 @@ export class ClientNode implements Dispatcher {
   }
 
   private onMessage(message: Message): void {
-    // A client only ever receives responses to its own requests.
-    if (message.direction === "response") this.correlation.complete(message);
+    if (message.direction === "response") {
+      this.correlation.complete(message);
+      return;
+    }
+    // The only other traffic a client receives is a grain calling back into
+    // one of its hosted observer objects (`createObjectReference`).
+    if (isObserverGrainId(message.targetGrain)) {
+      void this.dispatchToLocalObject(message);
+    }
+    // Any other inbound request/oneWay targets a real grain — a client hosts
+    // none, so there is nothing to do with it.
+  }
+
+  /**
+   * Invoke a hosted callback object for an inbound `request`/`oneWay`
+   * targeting one of its observer references, and reply in kind (mirroring
+   * the silo's own request/response construction convention). Async so it
+   * runs fire-and-forget from the sync `onMessage`; every failure path here
+   * is turned into an error response rather than an unhandled rejection.
+   */
+  private async dispatchToLocalObject(message: Message): Promise<void> {
+    // A cancellation notification for a token this client bound while
+    // dispatching a call to one of its hosted objects — not a hosted-object
+    // call itself (the `ICancellationSourcesExtension` interface has no
+    // entry in `localObjects`), so this must be checked before the
+    // `localObjects` lookup below, which would otherwise reject it as
+    // "no object hosted".
+    if (message.interfaceId === ICancellationSourcesExtension.id) {
+      const [tokenId] = this.serializer.deserialize<[string]>(message.body);
+      this.getOrCreateCancellationController(tokenId).abort();
+      if (message.direction === "oneWay") return;
+      await this.replyToCaller(
+        message,
+        responseTo(message, "success", this.serializer.serialize(undefined), this.config.local),
+      );
+      return;
+    }
+    const entry = this.localObjects.get(message.targetGrain.toString());
+    if (entry === undefined) {
+      if (message.direction === "oneWay") return; // nothing to reply to; drop silently
+      await this.replyToCaller(
+        message,
+        responseTo(
+          message,
+          "rejection",
+          this.serializer.serialize({
+            message: `no object hosted for observer ${message.targetGrain.toString()}`,
+            kind: "unknownTarget",
+          }),
+          this.config.local,
+        ),
+      );
+      return;
+    }
+    try {
+      const args = this.serializer.deserialize<unknown[]>(message.body);
+      // Bind any wire-arrived cancellation-token placeholders to live tokens
+      // controlled by this client, BEFORE the hosted object's method runs
+      // (mirrors `ActivationData.bindCancellationTokens` on the grain side).
+      this.bindCancellationTokens(args);
+      const method = entry.object[message.method];
+      if (typeof method !== "function") {
+        throw new GrainCallError(`hosted object has no method ${message.method}`);
+      }
+      // Run the dispatch inside an ambient invocation-context turn, exactly
+      // like `ActivationData.invoke` does for a grain call: a filter's write
+      // to `context.headers` is the SAME object the store holds, so it is
+      // visible to the hosted object's method body via `requestContext.get`
+      // (Orleans parity: `Observer_GrainCallFilter_Incoming_Order_Test`
+      // builds up its RequestContext value through the filter chain the same
+      // way the grain-side `GrainCallFilter_Incoming_Order_Test` does).
+      const result = await invocationContext.run(
+        {
+          senderId: message.sendingGrain,
+          reentrancyId: message.requestContext?.reentrancyId ?? "",
+          headers:
+            message.requestContext?.headers !== undefined
+              ? { ...message.requestContext.headers }
+              : {},
+        },
+        async () => {
+          // The hosted object's own filter (if it declares one), like a
+          // grain's, runs innermost — after this client's own incoming
+          // filters, just before the method (Orleans parity).
+          const own = grainIncomingFilter(entry.object);
+          const filters =
+            own === undefined ? this.incomingCallFilters : [...this.incomingCallFilters, own];
+          if (filters.length === 0) {
+            return await method.apply(entry.object, args);
+          }
+          const context: IncomingGrainCallContext = {
+            target: message.targetGrain,
+            source: message.sendingGrain,
+            interfaceId: message.interfaceId,
+            interfaceName: getGrainInterface(message.interfaceId)?.name ?? "",
+            methodName: message.method,
+            args: [...args],
+            result: undefined,
+            headers: invocationContext.getStore()?.headers ?? {},
+            grain: entry.object,
+            invoke: () => Promise.resolve(),
+          };
+          return await runCallFilters(filters, context, () =>
+            Promise.resolve(method.apply(entry.object, context.args)),
+          );
+        },
+      );
+      if (message.direction === "oneWay") return;
+      await this.replyToCaller(
+        message,
+        responseTo(message, "success", this.serializer.serialize(result), this.config.local),
+      );
+    } catch (err) {
+      if (message.direction === "oneWay") return;
+      const { kind, body } = this.serializeError(err);
+      await this.replyToCaller(message, responseTo(message, kind, body, this.config.local));
+    }
+  }
+
+  /** Get (or lazily create) this client's `AbortController` for `tokenId`. */
+  private getOrCreateCancellationController(tokenId: string): AbortController {
+    const existing = this.cancellationControllers.get(tokenId);
+    if (existing !== undefined) return existing;
+    const created = new AbortController();
+    this.cancellationControllers.set(tokenId, created);
+    return created;
+  }
+
+  /**
+   * Replace each `CancellationTokenPlaceholder` in `args` (produced by
+   * `decodeValue` for a wire-arrived `GrainCancellationToken` argument, which
+   * has no client context to bind a live signal) with a real
+   * `GrainCancellationToken` bound to this client's own controller for that
+   * `tokenId` — so a later `cancelRemoteToken(tokenId)` notification (handled
+   * above) fires it. A placeholder that arrived already-cancelled pre-aborts
+   * the controller, mirroring `ActivationData.bindCancellationTokens`.
+   */
+  private bindCancellationTokens(args: unknown[]): void {
+    for (let i = 0; i < args.length; i++) {
+      const arg = args[i];
+      if (!(arg instanceof CancellationTokenPlaceholder)) continue;
+      const controller = this.getOrCreateCancellationController(arg.tokenId);
+      if (arg.cancelled) controller.abort();
+      args[i] = new GrainCancellationToken({ tokenId: arg.tokenId, signal: controller.signal });
+    }
+  }
+
+  /** Send a reply for a hosted-object dispatch back to the calling silo. */
+  private async replyToCaller(request: Message, response: Message): Promise<void> {
+    if (request.sendingSilo === undefined) return;
+    try {
+      const conn = await this.connections.get(request.sendingSilo);
+      conn.send(response);
+    } catch {
+      // The caller has gone; dropping the reply is fine, matching the silo's
+      // own best-effort reply behaviour.
+    }
+  }
+
+  /** Map a thrown error to the `(kind, body)` of an error/rejection response. */
+  private serializeError(err: unknown): { kind: ResponseKind; body: Uint8Array } {
+    return err instanceof RejectionError
+      ? { kind: "rejection", body: this.serializer.serialize({ message: err.message, kind: err.kind }) }
+      : {
+          kind: "error",
+          body: this.serializer.serialize({
+            message: err instanceof Error ? err.message : String(err),
+          }),
+        };
   }
 
   private interpretResponse(response: Message): unknown {
@@ -227,7 +516,11 @@ export class ClientNode implements Dispatcher {
   private rehydrate(id: GrainReferenceIdentity): unknown {
     const iface = getGrainInterface(id.interfaceId);
     if (iface === undefined) throw new GrainCallError(`unknown interface ${id.interfaceId}`);
-    return this.factory.getGrain(iface, id.grainId.key);
+    // Use the wire `grainId` as-is rather than re-resolving a type from the
+    // interface: for a normal grain reference it is the same type `getGrain`
+    // would produce, but for an observer reference it preserves the reserved
+    // `$client` type + `+scope` key, which re-resolution would discard.
+    return this.factory.getReference(iface, id.grainId);
   }
 }
 

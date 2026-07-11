@@ -6,15 +6,24 @@ import type {
   IncomingGrainCallFilter,
   OutgoingGrainCallFilter,
 } from "@tsva/core/grain-call-filter";
+import { castGrainReference } from "@tsva/core/grain-reference";
+import type { ClientNode } from "@tsva/client/client-node";
 import {
   GRAIN_CALL_FILTER_TEST_KEY,
   GrainCallFilterTestGrain,
+  GrainCallFilterTestGrainObserver,
   IGrainCallFilterTestGrain,
+  IGrainCallFilterTestGrainObserver,
   IMethodInterceptionGrain,
+  IMethodInterceptionGrainObserver,
+  IMyGrainExtension,
   IOutgoingMethodInterceptionGrain,
   MethodInterceptionGrain,
+  MethodInterceptionGrainObserver,
+  MyGrainExtension,
   OutgoingMethodInterceptionGrain,
 } from "@tsva/parity/grains/impl/method-interception-grain";
+import { createClusterClient } from "@tsva/parity/support/client";
 import { randomIntegerKey } from "@tsva/parity/support/keys";
 
 // System-wide incoming filter: mirrors the upstream fixture's
@@ -33,6 +42,14 @@ const systemWideIncoming: IncomingGrainCallFilter = async (ctx) => {
   if (ctx.methodName === "systemWideCallFilterMarker") {
     // explicitly do not continue calling invoke()
     return;
+  }
+  // Request manipulation reaching through an extension call
+  // (`GrainCallFilter_GrainExtension`): negate the value argument before it
+  // reaches `MyGrainExtension.setExtensionValue`, proving a silo-wide filter
+  // sees and can rewrite an extension method's args exactly like an ordinary
+  // grain method's.
+  if (ctx.methodName === "setExtensionValue") {
+    ctx.args[0] = (ctx.args[0] as number) * -1;
   }
   await ctx.invoke();
 };
@@ -89,6 +106,14 @@ const systemWideOutgoing: OutgoingGrainCallFilter = async (ctx) => {
 
 describe("UnitTests.General.GrainCallFilterTests", () => {
   let cluster: TestCluster;
+  // The `Observer_*` cases below drive a client-hosted object
+  // (`ClientNode.createObjectReference`) directly rather than a grain
+  // activation; `client`'s own incoming filters mirror upstream's
+  // `ClientConfigurator` — the SAME `systemWideIncoming`/
+  // `requestContextContinuation` filters registered on the silo above,
+  // reused verbatim since the method names they match (`getRequestContext`,
+  // `systemWideCallFilterMarker`) are identical on the observer interfaces.
+  let client: ClientNode;
 
   beforeAll(async () => {
     cluster = await TestCluster.start({
@@ -101,11 +126,14 @@ describe("UnitTests.General.GrainCallFilterTests", () => {
         builder.addIncomingCallFilter(systemWideIncoming);
         builder.addIncomingCallFilter(requestContextContinuation);
         builder.addOutgoingCallFilter(systemWideOutgoing);
+        builder.addGrainExtension(IMyGrainExtension, () => new MyGrainExtension());
       },
     });
+    client = await createClusterClient(cluster, [], [systemWideIncoming, requestContextContinuation]);
   });
 
   afterAll(async () => {
+    await client.close();
     await cluster.dispose();
   });
 
@@ -231,9 +259,21 @@ describe("UnitTests.General.GrainCallFilterTests", () => {
     "UnitTests.General.GrainCallFilterTests.GrainCallFilter_Incoming_SetIncorrectResultType_Test",
   );
 
-  orleansTest.gap(
-    "GAP-GRAIN-EXTENSION",
+  // Filters run for extension calls too (Orleans parity): the silo-wide
+  // `systemWideIncoming` filter negates `setExtensionValue`'s argument before
+  // it reaches `MyGrainExtension`, exactly like it would for an ordinary
+  // grain method.
+  orleansTest(
     "UnitTests.General.GrainCallFilterTests.GrainCallFilter_GrainExtension",
+    async () => {
+      const grain = cluster.getGrain(IMethodInterceptionGrain, randomIntegerKey());
+      const extension = castGrainReference(grain, IMyGrainExtension);
+
+      await extension.setExtensionValue(42);
+      const result = await extension.getExtensionValue();
+
+      expect(result).toBe(-42);
+    },
   );
 
   orleansTest.gap(
@@ -269,56 +309,126 @@ describe("UnitTests.General.GrainCallFilterTests", () => {
   );
 
   // Observer_* cases below exercise the same scenarios above through a
-  // `CreateObjectReference` client observer; grain observers do not exist here
-  // yet (see default-cluster/observer.test.ts).
-  orleansTest.gap(
-    "GAP-OBSERVERS",
+  // `CreateObjectReference` client-hosted observer instead of a grain
+  // activation: the call round-trips client -> gateway silo -> back to this
+  // same client's `dispatchToLocalObject`, which now runs the SAME incoming
+  // call-filter pipeline (`runCallFilters`) the silo's catalog runs for a
+  // grain dispatch.
+  orleansTest(
     "UnitTests.General.GrainCallFilterTests.Observer_GrainCallFilter_Incoming_Order_Test",
+    async () => {
+      const observer = new GrainCallFilterTestGrainObserver();
+      const grain = client.createObjectReference(IGrainCallFilterTestGrainObserver, observer);
+
+      const context = await grain.getRequestContext();
+
+      expect(context).toBe("1234");
+      client.deleteObjectReference(grain);
+    },
   );
 
-  orleansTest.gap(
-    "GAP-OBSERVERS",
+  orleansTest(
     "UnitTests.General.GrainCallFilterTests.Observer_GrainCallFilter_Incoming_Retry_Test",
+    async () => {
+      const observer = new GrainCallFilterTestGrainObserver();
+      const grain = client.createObjectReference(IGrainCallFilterTestGrainObserver, observer);
+
+      const result = await grain.throwIfGreaterThanZero(1);
+      expect(result).toBe("Thanks for nothing");
+
+      await expect(grain.throwIfGreaterThanZero(2)).rejects.toThrow();
+      client.deleteObjectReference(grain);
+    },
   );
 
-  orleansTest.gap(
-    "GAP-OBSERVERS",
+  orleansTest(
     "UnitTests.General.GrainCallFilterTests.Observer_GrainCallFilter_Incoming_HashSet_Test",
+    async () => {
+      const observer = new GrainCallFilterTestGrainObserver();
+      const grain = client.createObjectReference(IGrainCallFilterTestGrainObserver, observer);
+
+      const result = await grain.sumSet([1, 2, 3]);
+      expect(result).toBe(6);
+      client.deleteObjectReference(grain);
+    },
   );
 
-  orleansTest.gap(
-    "GAP-OBSERVERS",
+  orleansTest(
     "UnitTests.General.GrainCallFilterTests.Observer_GrainCallFilter_Incoming_SystemWideDoesNotCallContextInvoke_Test",
+    async () => {
+      const observer = new GrainCallFilterTestGrainObserver();
+      const grain = client.createObjectReference(IGrainCallFilterTestGrainObserver, observer);
+
+      await expect(grain.systemWideCallFilterMarker()).rejects.toThrow();
+      client.deleteObjectReference(grain);
+    },
   );
 
-  orleansTest.gap(
-    "GAP-OBSERVERS",
+  orleansTest(
     "UnitTests.General.GrainCallFilterTests.Observer_GrainCallFilter_Incoming_GrainSpecificDoesNotCallContextInvoke_Test",
+    async () => {
+      const observer = new GrainCallFilterTestGrainObserver();
+      const grain = client.createObjectReference(IGrainCallFilterTestGrainObserver, observer);
+
+      await expect(grain.grainSpecificCallFilterMarker()).rejects.toThrow();
+      client.deleteObjectReference(grain);
+    },
   );
 
-  orleansTest.gap(
-    "GAP-OBSERVERS",
+  orleansTest(
     "UnitTests.General.GrainCallFilterTests.Observer_GrainCallFilter_Incoming_GrainLevel_Test",
+    async () => {
+      const observer = new MethodInterceptionGrainObserver();
+      const grain = client.createObjectReference(IMethodInterceptionGrainObserver, observer);
+
+      let result = await grain.one();
+      expect(result).toBe("intercepted one with no args");
+
+      result = await grain.echo("stao erom tae");
+      expect(result).toBe("eat more oats");
+
+      result = await grain.notIntercepted();
+      expect(result).toBe("not intercepted");
+
+      result = await grain.sayHello();
+      expect(result).toBe("Hello");
+      client.deleteObjectReference(grain);
+    },
   );
 
+  // Same reason as the non-observer `GrainCallFilter_Incoming_GenericGrain_Test`
+  // above: open generic grain interfaces are unrepresentable in this framework.
   orleansTest.gap(
-    "GAP-OBSERVERS",
+    "GAP-GENERIC-GRAINS",
     "UnitTests.General.GrainCallFilterTests.Observer_GrainCallFilter_Incoming_GenericGrain_Test",
   );
 
   orleansTest.gap(
-    "GAP-OBSERVERS",
+    "GAP-GENERIC-GRAINS",
     "UnitTests.General.GrainCallFilterTests.Observer_GrainCallFilter_Incoming_ConstructedGenericInheritance_Test",
   );
 
-  orleansTest.gap(
-    "GAP-OBSERVERS",
+  orleansTest(
     "UnitTests.General.GrainCallFilterTests.Observer_GrainCallFilter_Incoming_ExceptionHandling_Test",
+    async () => {
+      const observer = new MethodInterceptionGrainObserver();
+      const grain = client.createObjectReference(IMethodInterceptionGrainObserver, observer);
+
+      const result = await grain.doThrow();
+      expect(result).toBe("EXCEPTION! Oi!");
+      client.deleteObjectReference(grain);
+    },
   );
 
-  orleansTest.gap(
-    "GAP-OBSERVERS",
+  orleansTest(
     "UnitTests.General.GrainCallFilterTests.Observer_GrainCallFilter_Incoming_FilterThrows_Test",
+    async () => {
+      const observer = new MethodInterceptionGrainObserver();
+      const grain = client.createObjectReference(IMethodInterceptionGrainObserver, observer);
+
+      await expect(grain.filterThrows()).rejects.toThrow("Filter THROW!");
+      client.deleteObjectReference(grain);
+    },
   );
 
   orleansTest.excluded(

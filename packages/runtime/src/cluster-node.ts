@@ -1,4 +1,5 @@
 import { newActivationId } from "@tsva/core/activation-id";
+import { clientIdOf, isClient } from "@tsva/core/client-grain-id";
 import { GrainCallError, RejectionError } from "@tsva/core/errors";
 import type { Grain } from "@tsva/core/grain";
 import { grainAddressEquals, type GrainAddress } from "@tsva/core/grain-address";
@@ -63,9 +64,11 @@ import {
 } from "@tsva/messaging/message";
 import { MessagePackSerializer } from "@tsva/messaging/msgpack-serializer";
 import type { Serializer } from "@tsva/messaging/serializer";
-import type { Listener, Transport } from "@tsva/messaging/transport";
+import type { Connection, ConnectionPreamble, Listener, Transport } from "@tsva/messaging/transport";
 import { ActivationCollector } from "@tsva/runtime/activation-collector";
+import { ICancellationSourcesExtension } from "@tsva/runtime/cancellation-extension";
 import { Catalog, type GrainActivator, type RegisteredGrain } from "@tsva/runtime/catalog";
+import { ClientDirectory } from "@tsva/runtime/client-directory";
 import type { ActivationData } from "@tsva/runtime/activation";
 import { DistributedDispatcher } from "@tsva/runtime/distributed-dispatcher";
 import { BroadcastChannelProviderImpl } from "@tsva/runtime/broadcast-channel-provider";
@@ -102,6 +105,13 @@ export interface ClusterNodeOptions {
   serializer?: Serializer;
   time?: TimeProvider;
   callTimeoutMs?: number;
+  /**
+   * Silo-wide default per-method response timeout (ms), applied to any call
+   * whose interface doesn't set its own `options.responseTimeout` (Orleans
+   * `[ResponseTimeout]`). Off by default (`undefined`): no deadline races the
+   * call unless one is explicitly configured, here or per-method.
+   */
+  defaultResponseTimeoutMs?: number;
   defaultCollectionAgeSeconds?: number;
   /** How often the idle-collection sweep runs (defaults to 60s). */
   collectionIntervalSeconds?: number;
@@ -128,6 +138,8 @@ export interface ClusterNodeOptions {
   broadcastProviders?: readonly string[];
   /** Incoming grain-call filters wrapping each grain-method dispatch (silo-wide). */
   incomingCallFilters?: readonly IncomingGrainCallFilter[];
+  /** Auto-install factories for `GrainExtension` interfaces, keyed by interface id (Orleans `AddGrainExtension`). */
+  grainExtensionFactories?: ReadonlyMap<number, () => object>;
   /** Outgoing grain-call filters wrapping each outbound call at the proxy (silo-wide). */
   outgoingCallFilters?: readonly OutgoingGrainCallFilter[];
   /** Injectable RNG for deterministic placement in tests. */
@@ -190,6 +202,20 @@ interface MigrationPayload {
   bag: Record<string, unknown>;
 }
 
+/**
+ * A gossiped update to the cluster-wide client directory: `register` on
+ * accepting a client connection, `unregister` on it disconnecting. Sent
+ * `oneWay` to every other active silo so each silo's `ClientDirectory` learns
+ * which gateway(s) a client is reachable through (GrainId/SiloAddress round-trip
+ * through the serializer as class instances via the value codec's tagging, so
+ * no manual (de)serialization to primitives is needed here).
+ */
+interface ClientGossip {
+  op: "register" | "unregister";
+  clientId: GrainId;
+  gateway: SiloAddress;
+}
+
 const newChainId = () => Guid.newGuid().toString();
 const randomPlacement = new RandomPlacement();
 
@@ -228,6 +254,10 @@ export class ClusterNode {
   private readonly dispatcher: DistributedDispatcher;
   private readonly directory: DistributedGrainDirectory;
   private readonly callTimeoutMs: number;
+  /** Per-silo view of which gateway(s) each connected client is reachable through, kept current by gossip. */
+  private readonly clientDirectory = new ClientDirectory();
+  /** Connections held open to clients accepted on this silo, keyed by `clientId.toString()`. */
+  private readonly clientConnections = new Map<string, Connection>();
   private ring: ConsistentHashRing;
   private listener: Listener | undefined;
 
@@ -280,7 +310,11 @@ export class ClusterNode {
       activeSilos(options.membership.current()).some((s) => s.equals(silo)),
     );
     this.connections = new ConnectionManager(options.transport, options.local, options.clusterId);
-    this.factory = new GrainFactory((interfaceId) => this.resolveGrainType(interfaceId));
+    this.factory = new GrainFactory(
+      (interfaceId) => this.resolveGrainType(interfaceId),
+      time,
+      options.defaultResponseTimeoutMs,
+    );
     this.serializer =
       options.serializer ??
       new MessagePackSerializer({ resolveGrainReference: (id) => this.rehydrate(id) });
@@ -300,6 +334,13 @@ export class ClusterNode {
       onDeactivated: (a) => this.onDeactivated(a),
       migrate: (a) => this.migrateActivation(a),
       localSilo: () => this.options.local,
+      // Cascade a cancellation to a token's forwarded target wherever it
+      // lives, cluster-wide, via the same extension-reference substrate
+      // `getExtensionReference` exposes for a caller's own cascade canceller.
+      cancellationCanceller: (target, tokenId) =>
+        this.getExtensionReference(ICancellationSourcesExtension, target).cancelRemoteToken(
+          tokenId,
+        ),
       ...(options.stateBinder !== undefined ? { activateState: options.stateBinder } : {}),
       ...(options.reminderRegistry !== undefined
         ? { reminderRegistry: options.reminderRegistry }
@@ -315,6 +356,9 @@ export class ClusterNode {
         ? { incomingCallFilters: options.incomingCallFilters }
         : {}),
       ...(options.grainActivator !== undefined ? { grainActivator: options.grainActivator } : {}),
+      ...(options.grainExtensionFactories !== undefined
+        ? { grainExtensionFactories: options.grainExtensionFactories }
+        : {}),
     });
     this.dispatcher = new DistributedDispatcher({
       local: options.local,
@@ -327,6 +371,10 @@ export class ClusterNode {
       filtersFor: (grainType) => this.filtersFor(grainType),
       placementContext: () => this.placementContext(),
       versionFilter: (req, candidates) => this.applyVersionFilter(req, candidates),
+      clientRouter: {
+        isClientTarget: (t) => isClient(t),
+        route: (req) => this.routeToClient(req),
+      },
     });
     this.factory.setDispatcher(this.dispatcher);
     if (options.transactionsEnabled ?? true) {
@@ -422,8 +470,25 @@ export class ClusterNode {
     return this.factory.getGrain(def, key);
   }
 
+  /**
+   * Build a reference to an explicit `GrainId` under an arbitrary interface
+   * (typically a `GrainExtension`), bypassing key-type resolution from `def`.
+   * Used to reach a target grain's auto-installed extension (e.g.
+   * `ICancellationSourcesExtension`) whose grain id is only known as a
+   * `GrainId` — the dispatcher routes the call to wherever that grain
+   * actually lives, same as an ordinary `getGrain` reference.
+   */
+  getExtensionReference<T>(def: GrainInterface<T>, grainId: GrainId): T {
+    return this.factory.getReference(def, grainId);
+  }
+
   isActive(id: GrainId): boolean {
     return this.catalog.isActive(id);
+  }
+
+  /** The gateway `clientId` is reachable through, per this silo's gossiped client directory. */
+  clientGatewayFor(clientId: GrainId): SiloAddress | undefined {
+    return this.clientDirectory.lookup(clientId, this.options.local);
   }
 
   /** This silo's grain manifest: the interface versions it implements. */
@@ -526,8 +591,10 @@ export class ClusterNode {
   }
 
   async start(): Promise<void> {
-    this.listener = await this.options.transport.listen(this.options.local, (message) =>
-      this.onMessage(message),
+    this.listener = await this.options.transport.listen(
+      this.options.local,
+      (message) => this.onMessage(message),
+      (preamble, connection) => this.onClientAccept(preamble, connection),
     );
     this.collector.start();
     // Join recovery: when joining an already-running cluster, pull the live entries
@@ -567,6 +634,7 @@ export class ClusterNode {
       if (!live.has(member.ringKey)) {
         this.cache.invalidateSilo(member);
         void this.connections.drop(member);
+        this.clientDirectory.unregisterSilo(member);
       }
     }
     // Peer manifests may have shifted with the view (a silo upgraded/left);
@@ -765,7 +833,11 @@ export class ClusterNode {
   private rehydrate(id: GrainReferenceIdentity): unknown {
     const iface = getGrainInterface(id.interfaceId);
     if (iface === undefined) throw new GrainCallError(`unknown interface ${id.interfaceId}`);
-    return this.factory.getGrain(iface, id.grainId.key);
+    // Use the wire `grainId` as-is rather than re-resolving a type from the
+    // interface: for a normal grain reference it is the same type `getGrain`
+    // would produce, but for an observer reference it preserves the reserved
+    // `$client` type + `+scope` key, which re-resolution would discard.
+    return this.factory.getReference(iface, id.grainId);
   }
 
   private onDeactivated(activation: ActivationData): void {
@@ -892,7 +964,7 @@ export class ClusterNode {
 
   /** Take over a migrating activation here, rehydrating its state and claiming the directory entry. */
   private async acceptMigration(payload: MigrationPayload): Promise<boolean> {
-    const activation = this.catalog.activateMigrated(
+    const activation = await this.catalog.activateMigrated(
       payload.grainId,
       newActivationId(),
       payload.bag,
@@ -910,6 +982,158 @@ export class ClusterNode {
       return false;
     }
     return true;
+  }
+
+  // --- client directory ---
+
+  /**
+   * Fires when the transport accepts an inbound connection. A plain silo peer
+   * carries no `clientId` in its preamble — ignore it (silo-to-silo traffic
+   * uses `onMessage` directly, not this hook). A client connection is held so
+   * this silo could reach it (Orleans' gateway learning a connected client),
+   * recorded in the local `ClientDirectory`, and gossiped to every other
+   * active silo so the whole cluster learns which gateway the client is on.
+   */
+  private onClientAccept(preamble: ConnectionPreamble, connection: Connection): void {
+    const clientId = preamble.clientId;
+    if (clientId === undefined) return;
+    this.clientConnections.set(clientId.toString(), connection);
+    this.clientDirectory.register(clientId, this.options.local);
+    this.broadcastClientGossip({ op: "register", clientId, gateway: this.options.local });
+  }
+
+  /** Fire-and-forget a `system: "client"` gossip message to every other active silo. */
+  private broadcastClientGossip(gossip: ClientGossip): void {
+    const body = this.serializer.serialize(gossip);
+    for (const peer of this.otherActiveSilos()) {
+      this.connections
+        .get(peer)
+        .then((conn) => {
+          conn.send({
+            correlationId: nextCorrelationId(),
+            direction: "oneWay",
+            system: "client",
+            targetGrain: gossip.clientId,
+            sendingSilo: this.options.local,
+            interfaceId: 0,
+            method: "",
+            body,
+          });
+        })
+        .catch(() => undefined); // best-effort: an unreachable peer just misses this update
+    }
+  }
+
+  /** Apply an inbound client-directory gossip update (oneWay; never replies). */
+  private handleClientGossip(message: Message): void {
+    const gossip = this.serializer.deserialize<ClientGossip>(message.body);
+    if (gossip.op === "register") this.clientDirectory.register(gossip.clientId, gossip.gateway);
+    else this.clientDirectory.unregister(gossip.clientId, gossip.gateway);
+  }
+
+  // --- client routing (dispatcher divert for observer calls) ---
+
+  /**
+   * Route a call targeting a client-hosted observer: resolve the client's
+   * gateway from the (gossiped) client directory, then either forward it
+   * directly to the held connection if the client is connected here, or hop
+   * to the gateway silo (whose `receiveRequest` proxies it on, and relays the
+   * client's reply back to us).
+   */
+  private async routeToClient(req: InvocationRequest): Promise<unknown> {
+    const client = clientIdOf(req.target);
+    const gateway = this.clientDirectory.lookup(client, this.options.local);
+    if (gateway === undefined) {
+      throw new RejectionError(`no gateway for client ${client.toString()}`, "unknownTarget");
+    }
+    if (gateway.equals(this.options.local)) return this.deliverToProxy(req);
+    return this.sendRemote(gateway, req);
+  }
+
+  /** The client is connected here: forward the call over the held connection and await its reply. */
+  private async deliverToProxy(req: InvocationRequest): Promise<unknown> {
+    const conn = this.clientConnections.get(clientIdOf(req.target).toString());
+    if (conn === undefined) {
+      throw new RejectionError(
+        `client not connected here: ${clientIdOf(req.target).toString()}`,
+        "unknownTarget",
+      );
+    }
+    const correlationId = nextCorrelationId();
+    const message: Message = {
+      correlationId,
+      direction: req.options.oneWay ? "oneWay" : "request",
+      targetGrain: req.target,
+      sendingSilo: this.options.local,
+      sendingGrain: req.sender,
+      interfaceId: req.interfaceId,
+      ...(req.interfaceVersion !== undefined ? { interfaceVersion: req.interfaceVersion } : {}),
+      method: req.method,
+      requestContext: {
+        reentrancyId: req.reentrancyId,
+        ...(req.headers !== undefined ? { headers: req.headers } : {}),
+      },
+      body: this.serializer.serialize(req.args),
+    };
+    if (req.options.oneWay) {
+      conn.send(message);
+      return undefined;
+    }
+    const pending = this.correlation.register(correlationId, this.callTimeoutMs);
+    conn.send(message);
+    return this.interpretResponse(await pending);
+  }
+
+  /**
+   * A request arrived here targeting a client-hosted observer (this silo is
+   * the gateway): proxy it to the held client connection and relay the
+   * client's reply to the original caller under the original correlation id.
+   */
+  private async proxyRequestToClient(message: Message): Promise<void> {
+    const conn = this.clientConnections.get(clientIdOf(message.targetGrain).toString());
+    const replyTo = message.sendingSilo;
+    if (conn === undefined) {
+      if (message.direction === "oneWay" || replyTo === undefined) return;
+      await this.reply(
+        replyTo,
+        responseTo(
+          message,
+          "rejection",
+          this.serializer.serialize({
+            message: `client not connected: ${clientIdOf(message.targetGrain).toString()}`,
+            kind: "unknownTarget",
+          }),
+          this.options.local,
+        ),
+      );
+      return;
+    }
+    const forward: Message = {
+      ...message,
+      correlationId: nextCorrelationId(),
+      sendingSilo: this.options.local,
+    };
+    if (message.direction === "oneWay") {
+      conn.send(forward);
+      return;
+    }
+    try {
+      const pending = this.correlation.register(forward.correlationId, this.callTimeoutMs);
+      conn.send(forward);
+      const clientResponse = await pending;
+      if (replyTo === undefined) return;
+      const relayed = responseTo(
+        message,
+        clientResponse.responseKind ?? "error",
+        clientResponse.body,
+        this.options.local,
+      );
+      await this.reply(replyTo, relayed);
+    } catch (err) {
+      if (replyTo === undefined) return;
+      const { kind, body } = this.serializeError(err);
+      await this.reply(replyTo, responseTo(message, kind, body, this.options.local));
+    }
   }
 
   // --- transport ---
@@ -1004,6 +1228,10 @@ export class ClusterNode {
     }
     if (message.system === "rebalance") {
       void this.handleRebalanceRequest(message);
+      return;
+    }
+    if (message.system === "client") {
+      this.handleClientGossip(message);
       return;
     }
     void this.receiveRequest(message);
@@ -1238,6 +1466,7 @@ export class ClusterNode {
   }
 
   private async receiveRequest(message: Message): Promise<void> {
+    if (isClient(message.targetGrain)) return this.proxyRequestToClient(message);
     const replyTo = message.sendingSilo;
     // Reconstruct the transaction context (fresh participant set: resources on
     // this silo enlist into it, and we send those back on the reply).

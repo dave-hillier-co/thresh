@@ -6,6 +6,7 @@ import type { Message } from "@tsva/messaging/message";
 import { MessagePackSerializer } from "@tsva/messaging/msgpack-serializer";
 import type {
   Connection,
+  ConnectionAcceptHandler,
   ConnectionPreamble,
   Listener,
   MessageHandler,
@@ -34,7 +35,11 @@ export class WebSocketTransport implements Transport {
 
   constructor(private readonly clusterId: string) {}
 
-  async listen(address: SiloAddress, onMessage: MessageHandler): Promise<Listener> {
+  async listen(
+    address: SiloAddress,
+    onMessage: MessageHandler,
+    onAccept?: ConnectionAcceptHandler,
+  ): Promise<Listener> {
     const { host, port } = splitHostPort(address.endpoint);
     const server = new WebSocketServer({ host, port });
     await once(server, "listening");
@@ -55,6 +60,21 @@ export class WebSocketTransport implements Transport {
           }
           from = preamble.siloAddress;
           socket.send(ACK);
+          if (onAccept !== undefined) {
+            const serializer = this.serializer;
+            onAccept(preamble, {
+              send: (m) => socket.send(serializer.serialize(m)),
+              close: () =>
+                new Promise<void>((resolve) => {
+                  if (socket.readyState === WebSocket.CLOSED) {
+                    resolve();
+                    return;
+                  }
+                  socket.once("close", () => resolve());
+                  socket.close();
+                }),
+            });
+          }
           return;
         }
         void onMessage(this.serializer.deserialize<Message>(bytes), from);

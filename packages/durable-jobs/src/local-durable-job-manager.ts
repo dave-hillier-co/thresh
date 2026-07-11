@@ -1,5 +1,5 @@
 import { durationToMs, type Duration } from "@tsva/core/duration";
-import type { DurableJob, ScheduleJobRequest, ShouldRetry } from "@tsva/core/durable-job";
+import type { DurableJob, DurableJobsOptions, ScheduleJobRequest, ShouldRetry } from "@tsva/core/durable-job";
 import { Guid } from "@tsva/core/guid";
 import type { TimeProvider } from "@tsva/core/time-provider";
 import { claimBudget, defaultShouldRetry, shardKeyFor } from "@tsva/durable-jobs/job-model";
@@ -234,4 +234,86 @@ export function resolveOptions(options: {
     maxAdoptedCount: options.maxAdoptedCount ?? 3,
     claimRampUpBudget: options.claimRampUpBudget ?? 4,
   };
+}
+
+/**
+ * The claim budget is unlimited: ramp-up is disabled (`rampUpDurationMs <= 0`)
+ * or has fully elapsed. Orleans returns `int.MaxValue`; this port uses
+ * `Number.MAX_SAFE_INTEGER` as the equivalent "no ceiling" sentinel.
+ */
+export const UNLIMITED_CLAIM_BUDGET = Number.MAX_SAFE_INTEGER;
+
+/**
+ * The time-based claim budget a freshly joined silo may spend on this
+ * reconciliation step (Orleans `LocalDurableJobManager.ComputeClaimBudget`).
+ * The budget ramps linearly from `initialBudget` to `maxBudget` over
+ * `rampUpDurationMs`, becoming `UNLIMITED_CLAIM_BUDGET` once ramp-up is
+ * disabled (`rampUpDurationMs <= 0`) or has elapsed. `totalClaimedShards`
+ * already claimed this ramp-up window is subtracted from the interpolated
+ * budget, floored at 0.
+ *
+ * NOTE: this is a pure, standalone function alongside the flat
+ * `claimBudget` (job-model.ts) that `refreshOwnership` above actually calls.
+ * TODO(parity): wire `computeClaimBudget` into `refreshOwnership`'s claim
+ * path (tracking elapsed-since-join and cumulative-claimed-shards) so the
+ * time-based ramp-up governs live reconciliation, not just this pure API.
+ */
+export function computeClaimBudget(
+  rampUpDurationMs: number,
+  initialBudget: number,
+  maxBudget: number,
+  elapsedMs: number,
+  totalClaimedShards: number,
+): number {
+  if (rampUpDurationMs <= 0) return UNLIMITED_CLAIM_BUDGET;
+  if (elapsedMs >= rampUpDurationMs) return UNLIMITED_CLAIM_BUDGET;
+  const fraction = elapsedMs / rampUpDurationMs;
+  const budget = initialBudget + Math.trunc(fraction * (maxBudget - initialBudget));
+  return Math.max(0, budget - totalClaimedShards);
+}
+
+/** Raised when a `DurableJobsOptions` shard-claim-budget setting is invalid. */
+export class DurableJobsConfigurationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DurableJobsConfigurationError";
+  }
+}
+
+/**
+ * Validates the shard-claim-budget options of `DurableJobsOptions` (Orleans
+ * `DurableJobsOptionsValidator.ValidateConfiguration`): `shardClaimInitialBudget`
+ * must not be negative, `shardClaimMaxBudget` must not be less than
+ * `shardClaimInitialBudget`, and `shardClaimRampUpDuration` must not be
+ * negative (zero is allowed — it disables ramp-up).
+ */
+export class DurableJobsOptionsValidator {
+  constructor(private readonly options: DurableJobsOptions) {}
+
+  validateConfiguration(): void {
+    // Orleans' `DurableJobsOptions` defaults: ShardClaimInitialBudget = 2,
+    // ShardClaimMaxBudget = 20, ShardClaimRampUpDuration = 5 minutes.
+    const initialBudget = this.options.shardClaimInitialBudget ?? 2;
+    const maxBudget = this.options.shardClaimMaxBudget ?? 20;
+    const rampUpDurationMs =
+      this.options.shardClaimRampUpDuration !== undefined
+        ? durationToMs(this.options.shardClaimRampUpDuration)
+        : 300_000;
+
+    if (initialBudget < 0) {
+      throw new DurableJobsConfigurationError(
+        `ShardClaimInitialBudget must not be negative, but was ${initialBudget}.`,
+      );
+    }
+    if (maxBudget < initialBudget) {
+      throw new DurableJobsConfigurationError(
+        `ShardClaimMaxBudget (${maxBudget}) must not be less than ShardClaimInitialBudget (${initialBudget}).`,
+      );
+    }
+    if (rampUpDurationMs < 0) {
+      throw new DurableJobsConfigurationError(
+        `ShardClaimRampUpDuration must not be negative, but was ${rampUpDurationMs}ms.`,
+      );
+    }
+  }
 }

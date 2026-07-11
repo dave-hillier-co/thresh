@@ -1,6 +1,7 @@
 import { newActivationId } from "@tsva/core/activation-id";
 import { RejectionError } from "@tsva/core/errors";
 import type { GrainAddress } from "@tsva/core/grain-address";
+import type { GrainId } from "@tsva/core/grain-id";
 import type { GrainType } from "@tsva/core/grain-type";
 import type { InvocationRequest } from "@tsva/core/request";
 import type { SiloAddress } from "@tsva/core/silo-address";
@@ -41,6 +42,16 @@ export interface DistributedDispatcherDeps {
     req: InvocationRequest,
     candidates: readonly SiloAddress[],
   ) => Promise<readonly SiloAddress[]>;
+  /**
+   * Optional diversion for calls targeting a client-hosted observer
+   * (`$client` grain type): routed to the client's gateway instead of the
+   * grain-directory/placement funnel below. Absent for dispatchers with no
+   * client-routing concept.
+   */
+  clientRouter?: {
+    isClientTarget(target: GrainId): boolean;
+    route(req: InvocationRequest): Promise<unknown>;
+  };
 }
 
 /**
@@ -54,6 +65,8 @@ export class DistributedDispatcher implements Dispatcher {
   constructor(private readonly deps: DistributedDispatcherDeps) {}
 
   async invoke(req: InvocationRequest): Promise<unknown> {
+    if (this.deps.clientRouter?.isClientTarget(req.target)) return this.deps.clientRouter.route(req);
+
     const cached = this.deps.cache.get(req.target);
     if (cached !== undefined) {
       try {
@@ -75,8 +88,8 @@ export class DistributedDispatcher implements Dispatcher {
 
   /** A request that arrived here: ensure a local activation, or forward to the CAS winner. */
   async deliverLocal(req: InvocationRequest): Promise<unknown> {
-    const existing = this.deps.catalog.get(req.target);
-    if (existing !== undefined && existing.state !== "invalid") return existing.invoke(req);
+    const existing = await this.deps.catalog.resolveLive(req.target);
+    if (existing !== undefined) return existing.invoke(req);
 
     const activationId = newActivationId();
     const winner = await this.deps.directory.register({
@@ -129,9 +142,9 @@ export class DistributedDispatcher implements Dispatcher {
     req: InvocationRequest,
     activationId: string,
   ): Promise<unknown> {
-    let act: ReturnType<Catalog["activateLocal"]> | undefined;
+    let act: Awaited<ReturnType<Catalog["activateLocal"]>> | undefined;
     try {
-      act = this.deps.catalog.activateLocal(req.target, activationId);
+      act = await this.deps.catalog.activateLocal(req.target, activationId);
       return await act.invoke(req);
     } catch (err) {
       if (act === undefined || act.activationFailed) {
@@ -148,8 +161,8 @@ export class DistributedDispatcher implements Dispatcher {
 
   private async routeTo(addr: GrainAddress, req: InvocationRequest): Promise<unknown> {
     if (!addr.silo.equals(this.deps.local)) return this.deps.remote.send(addr.silo, req);
-    const act = this.deps.catalog.get(req.target);
-    if (act === undefined || act.state === "invalid" || act.activationId !== addr.activationId) {
+    const act = await this.deps.catalog.resolveLive(req.target);
+    if (act === undefined || act.activationId !== addr.activationId) {
       // The cache/directory points here but no live activation matches (a failed
       // or collected activation, or a stale pointer). Rather than rejecting —
       // which, when the caller is this same silo, has nothing to re-resolve

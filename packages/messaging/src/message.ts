@@ -43,8 +43,12 @@ export interface Message {
   interfaceVersion?: number | undefined;
   method: string;
 
-  /** Marks a system request (directory, migration, manifest, load, or rebalance) vs a grain call. */
-  system?: "directory" | "migration" | "manifest" | "load" | "rebalance" | undefined;
+  /**
+   * Marks a system request (directory, migration, manifest, load, or
+   * rebalance) or the client-directory gossip (`client`, oneWay only) vs a
+   * grain call.
+   */
+  system?: "directory" | "migration" | "manifest" | "load" | "rebalance" | "client" | undefined;
 
   responseKind?: ResponseKind | undefined;
   requestContext?: RequestContext | undefined;

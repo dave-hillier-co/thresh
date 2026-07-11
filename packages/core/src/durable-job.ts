@@ -153,4 +153,23 @@ export interface DurableJobsOptions {
   maxAdoptedCount?: number;
   /** Shards a freshly joined silo may claim per ramp-up step (claim budget). Default 4. */
   claimRampUpBudget?: number;
+  /**
+   * The claim budget a freshly joined silo starts at, before ramping to
+   * `shardClaimMaxBudget` over `shardClaimRampUpDuration` (Orleans
+   * `DurableJobsOptions.ShardClaimInitialBudget`). Must be >= 0.
+   */
+  shardClaimInitialBudget?: number;
+  /**
+   * The claim budget a silo ramps up to once `shardClaimRampUpDuration` has
+   * elapsed (Orleans `DurableJobsOptions.ShardClaimMaxBudget`). Must be >=
+   * `shardClaimInitialBudget`.
+   */
+  shardClaimMaxBudget?: number;
+  /**
+   * How long a freshly joined silo takes to ramp its claim budget from
+   * `shardClaimInitialBudget` to `shardClaimMaxBudget` (Orleans
+   * `DurableJobsOptions.ShardClaimRampUpDuration`). Zero disables ramp-up
+   * (unlimited budget immediately); must not be negative.
+   */
+  shardClaimRampUpDuration?: Duration;
 }

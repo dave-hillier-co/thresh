@@ -1,3 +1,7 @@
+import {
+  CancellationTokenPlaceholder,
+  GrainCancellationToken,
+} from "./grain-cancellation-token";
 import { GrainId } from "./grain-id";
 import { keyToString, type GrainKeyKind } from "./grain-key";
 import { grainReferenceIdentity, type GrainReferenceIdentity } from "./grain-reference";
@@ -32,6 +36,19 @@ export function encodeValue(value: unknown): unknown {
   if (typeof value === "bigint") return { [T]: "bigint", value: value.toString() };
   if (value instanceof Guid) return { [T]: "guid", value: value.toString() };
   if (value instanceof GrainId) return { [T]: "grainId", ...grainIdFields(value) };
+  if (value instanceof GrainCancellationToken) {
+    return { [T]: "cancellationToken", tokenId: value.tokenId, cancelled: value.isCancellationRequested };
+  }
+  // A placeholder re-entering `encodeValue` (e.g. a call re-forwarded to
+  // another silo, over a stale directory cache, before this silo ever bound
+  // it to a live `GrainCancellationToken`) must re-tag with its wire shape —
+  // without this, the generic plain-object branch below strips the `$tsva`
+  // tag (only `tokenId`/`cancelled` survive as bare own properties), and the
+  // next hop's `decodeValue` can no longer recognise it as a cancellation
+  // token, leaving the eventual callee with a signal-less plain object.
+  if (value instanceof CancellationTokenPlaceholder) {
+    return { [T]: "cancellationToken", tokenId: value.tokenId, cancelled: value.cancelled };
+  }
   if (value instanceof SiloAddress) {
     return { [T]: "silo", podName: value.podName, podUid: value.podUid, endpoint: value.endpoint };
   }
@@ -66,6 +83,8 @@ export function decodeValue(value: unknown, ctx: CodecContext = {}): unknown {
         return Guid.parse(obj.value as string);
       case "grainId":
         return grainIdFrom(obj);
+      case "cancellationToken":
+        return new CancellationTokenPlaceholder(obj.tokenId as string, obj.cancelled as boolean);
       case "silo":
         return new SiloAddress(obj.podName as string, obj.podUid as string, obj.endpoint as string);
       case "grainRef": {

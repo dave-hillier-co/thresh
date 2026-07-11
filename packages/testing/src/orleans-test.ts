@@ -10,9 +10,7 @@ export type GapTag =
   // Missing features (each maps to a todo.md parity-gap item).
   | "GAP-STATELESS-WORKER" // StatelessWorker placement parsed but not enforced
   | "GAP-READONLY-ENFORCEMENT" // @readOnly is advisory; mutations are not rejected
-  | "GAP-CANCELLATION" // no cancellation tokens or per-call response timeouts
   | "GAP-OBSERVERS" // no grain observers / client object references
-  | "GAP-GRAIN-EXTENSION" // no IGrainExtension equivalent
   | "GAP-MGMT-GRAIN" // no management grain / silo-control system targets
   | "GAP-SERIALIZER-POLYMORPHISM" // serializer lacks polymorphism/cycles
   | "GAP-STREAM-FAILURE-HANDLER" // streams lack IStreamFailureHandler
@@ -21,7 +19,6 @@ export type GapTag =
   | "GAP-BROADCAST-CHANNEL-CLIENT" // no client-side broadcast-channel writer/diagnostics/regex namespaces
   | "GAP-CALL-FILTER-CLIENT-LAYER" // no distinct client-issued vs grain-issued outgoing-filter layer
   | "GAP-CHANNEL-NAMESPACE-PREDICATE" // no IChannelNamespacePredicate provider abstraction
-  | "GAP-CLAIM-BUDGET-RAMPUP" // durable-jobs claim budget has no time-based ramp-up or options validator
   | "GAP-CLIENT-REQUEST-CONTEXT" // no client-side ambient RequestContext outside a grain turn
   | "GAP-CLIENT-SILO-SEPARATION" // no separate client process distinct from a silo in the harness
   | "GAP-COMPOUND-KEY" // no compound key kind (guid/integer primary + string extension)
@@ -31,7 +28,6 @@ export type GapTag =
   | "GAP-GRAIN-REF-CAST" // no AsReference<T>() runtime re-typing of grain references
   | "GAP-GRAIN-SERVICE" // no per-silo grain-service registration/lifecycle mechanism
   | "GAP-JOB-SHARD-MANAGER-API" // no explicit JobShardManager/shard-object API (implicit time-bucketing)
-  | "GAP-LIFECYCLE-SUBJECT" // no LifecycleSubject/ILifecycleObservable primitive
   | "GAP-LOAD-SHEDDING" // no overload detector / load shedding / CPU-aware placement scoring
   | "GAP-PLACEMENT-FILTER-DIRECTORS" // no DI-based custom placement-filter directors
   | "GAP-PLACEMENT-INTROSPECTION" // a grain cannot learn its own hosting silo address

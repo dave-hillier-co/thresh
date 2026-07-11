@@ -10,5 +10,8 @@
     "@tsva/core": "workspace:*",
     "@tsva/messaging": "workspace:*",
     "@tsva/runtime": "workspace:*"
+  },
+  "devDependencies": {
+    "@tsva/testing": "workspace:*"
   }
 }
