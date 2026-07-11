@@ -32,8 +32,8 @@ describe("UnitTests.General.GrainPlacementTests", () => {
     await cluster.dispose();
   });
 
-  orleansTest.gap(
-    "GAP-PLACEMENT-INTROSPECTION",
+  orleansTest.excluded(
+    "VerifyDefaultPlacement asserts Orleans' default placement strategy is ResourceOptimizedPlacement; this framework deliberately defaults to RandomPlacement (see packages/runtime/src/placement/placement-director.ts), a documented deviation rather than a missing feature",
     "UnitTests.General.GrainPlacementTests.VerifyDefaultPlacement",
   );
 

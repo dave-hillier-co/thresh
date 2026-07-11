@@ -60,14 +60,11 @@ transaction behaviour here remains covered by `packages/hosting`'s transactions-
 Each `GAP-*` tag below skips ported tests; implementing the feature un-gaps them (the scorecard
 shows per-tag counts). One-line definitions live on the `GapTag` union. Grouped by area:
 
-- [ ] **Grain identity & references** — `GAP-COMPOUND-KEY` (guid+string compound keys),
-      `GAP-GRAIN-REF-CAST` (`AsReference<T>()` re-typing), `GAP-GENERIC-GRAINS` (closed-generic
-      grain interface story).
 - [ ] **Activation & lifecycle** — `GAP-GRAIN-SERVICE`, `GAP-STORAGE-FACET`.
 - [ ] **Request context** — `GAP-REQUEST-CONTEXT` (expose on `@tsva/core` public surface),
       `GAP-CLIENT-REQUEST-CONTEXT`, `GAP-CALL-FILTER-CLIENT-LAYER`, `GAP-CLIENT-SILO-SEPARATION`.
 - [ ] **Timers** — `GAP-TIMER-VALIDATION` (callback-initiated Change/dispose portions).
-- [ ] **Placement & rebalancing** — `GAP-PLACEMENT-FILTER-DIRECTORS`, `GAP-PLACEMENT-INTROSPECTION`,
+- [ ] **Placement & rebalancing** — `GAP-PLACEMENT-FILTER-DIRECTORS`,
       `GAP-REBALANCER-CONTROL`, `GAP-ACTIVATION-REPARTITIONING`, `GAP-LOAD-SHEDDING`.
 - [ ] **Streams** — `GAP-STREAM-IMPLICIT-MEMORY` (implicit subscriptions on the memory provider),
       `GAP-STREAM-BATCHING`, `GAP-STREAM-FILTER`, `GAP-STREAM-SUBSCRIPTION-MANAGER`,
@@ -80,8 +77,6 @@ shows per-tag counts). One-line definitions live on the `GapTag` union. Grouped 
       `GAP-TRANSACTION-CONSISTENCY-HARNESS` (randomized workload + serializability checker).
 - [ ] **Journaling & event sourcing** — `GAP-EVENT-SOURCING` (`JournaledGrain` equivalent),
       `GAP-DURABLE-COLLECTION-API`.
-- [ ] **Durable jobs** — `GAP-JOB-SHARD-MANAGER-API` (deliberate deviation: implicit
-      time-bucketing, not an explicit shard-object model).
 - [ ] **Misc primitives** — `GAP-GRAIN-DIRECTORY-API`, `GAP-SERVICE-ID`, `GAP-TRACING` (trace-context
       propagation done; remaining: activation/deactivation span taxonomy — `ActivateGrain`/
       `OnActivate`/`PlaceGrain`/`RegisterDirectoryEntry` spans threaded through placement/catalog/

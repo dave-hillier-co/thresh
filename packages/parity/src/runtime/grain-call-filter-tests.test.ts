@@ -222,13 +222,13 @@ describe("UnitTests.General.GrainCallFilterTests", () => {
     },
   );
 
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "UnitTests.General.GrainCallFilterTests.GrainCallFilter_Incoming_GenericGrain_Test",
   );
 
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "UnitTests.General.GrainCallFilterTests.GrainCallFilter_Incoming_ConstructedGenericInheritance_Test",
   );
 
@@ -276,8 +276,8 @@ describe("UnitTests.General.GrainCallFilterTests", () => {
     },
   );
 
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "UnitTests.General.GrainCallFilterTests.GrainCallFilter_Incoming_GenericInterface_ConcreteGrain_Test",
   );
 
@@ -398,13 +398,13 @@ describe("UnitTests.General.GrainCallFilterTests", () => {
 
   // Same reason as the non-observer `GrainCallFilter_Incoming_GenericGrain_Test`
   // above: open generic grain interfaces are unrepresentable in this framework.
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "UnitTests.General.GrainCallFilterTests.Observer_GrainCallFilter_Incoming_GenericGrain_Test",
   );
 
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "UnitTests.General.GrainCallFilterTests.Observer_GrainCallFilter_Incoming_ConstructedGenericInheritance_Test",
   );
 
