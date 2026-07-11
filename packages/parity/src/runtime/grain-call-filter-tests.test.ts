@@ -8,6 +8,7 @@ import type {
 } from "@tsva/core/grain-call-filter";
 import { castGrainReference } from "@tsva/core/grain-reference";
 import type { ClientNode } from "@tsva/client/client-node";
+import { invocationContext } from "@tsva/runtime/invocation-context";
 import {
   GRAIN_CALL_FILTER_TEST_KEY,
   GrainCallFilterTestGrain,
@@ -76,6 +77,29 @@ const systemWideOutgoing: OutgoingGrainCallFilter = async (ctx) => {
     return;
   }
 
+  // Doubles the string arg of an outgoing "echo" call — but only a
+  // grain-to-grain one, i.e. one issued from inside a currently-executing
+  // grain turn on this silo (`invocationContext.getStore() !== undefined`),
+  // mirroring upstream's silo-wide outgoing filter
+  // (`SiloInvokerTestSiloBuilderConfigurator`), which only ever sees
+  // grain-issued calls — a real Orleans client's calls never reach a silo's
+  // `AddOutgoingGrainCallFilter` pipeline at all. This port's single
+  // `GrainFactory` is shared between `TestCluster.getGrain` (host/test-level,
+  // no turn in scope) and genuine grain-to-grain calls, so the ambient-turn
+  // check is this port's stand-in for that distinction — it keeps
+  // `GrainCallFilter_Incoming_GrainLevel_Test`'s direct `grain.echo(...)`
+  // call (host-level, no doubling) from colliding with
+  // `GrainCallFilter_Outgoing_Test`'s grain1-calls-grain2 `echo` (doubled).
+  // `ctx.source` cannot serve as this signal: it carries the ORIGINAL
+  // external caller's id (propagated transitively as `sender`), which is
+  // `undefined` for a client-issued call with no ambient sender of its own —
+  // exactly the same as a host-level call, even though the resulting
+  // grain1-to-grain2 hop genuinely originates from within grain1's turn.
+  if (invocationContext.getStore() !== undefined && ctx.methodName === "echo") {
+    const orig = ctx.args[0] as string;
+    ctx.args[0] = orig + orig;
+  }
+
   let attemptsRemaining = 2;
   while (attemptsRemaining > 0) {
     try {
@@ -104,6 +128,24 @@ const systemWideOutgoing: OutgoingGrainCallFilter = async (ctx) => {
   }
 };
 
+// The client's own outgoing filter (Orleans `IClientBuilder.AddOutgoingGrainCallFilter`,
+// upstream's `ClientConfigurator`): uppercases `EchoViaOtherGrain`'s message
+// argument before it leaves the client, then — after the call returns —
+// rewrites the result dictionary, proving a filter runs both before AND
+// after a client-issued call distinctly from the silo's own outgoing filter
+// (`systemWideOutgoing`, which only sees grain-to-grain calls).
+const clientOutgoing: OutgoingGrainCallFilter = async (ctx) => {
+  if (ctx.methodName === "echoViaOtherGrain" && typeof ctx.args[1] === "string") {
+    ctx.args[1] = ctx.args[1].toUpperCase();
+  }
+  await ctx.invoke();
+  if (ctx.methodName === "echoViaOtherGrain") {
+    const result = ctx.result as Record<string, unknown>;
+    result["orig"] = result["result"];
+    result["result"] = "intercepted!";
+  }
+};
+
 describe("UnitTests.General.GrainCallFilterTests", () => {
   let cluster: TestCluster;
   // The `Observer_*` cases below drive a client-hosted object
@@ -113,6 +155,9 @@ describe("UnitTests.General.GrainCallFilterTests", () => {
   // `requestContextContinuation` filters registered on the silo above,
   // reused verbatim since the method names they match (`getRequestContext`,
   // `systemWideCallFilterMarker`) are identical on the observer interfaces.
+  // `client`'s outgoing filter (`clientOutgoing`) is a genuinely separate
+  // pipeline from the silo's `systemWideOutgoing` — `GrainCallFilter_Outgoing_Test`
+  // relies on that separation.
   let client: ClientNode;
 
   beforeAll(async () => {
@@ -129,7 +174,12 @@ describe("UnitTests.General.GrainCallFilterTests", () => {
         builder.addGrainExtension(IMyGrainExtension, () => new MyGrainExtension());
       },
     });
-    client = await createClusterClient(cluster, [], [systemWideIncoming, requestContextContinuation]);
+    client = await createClusterClient(
+      cluster,
+      [{ ctor: OutgoingMethodInterceptionGrain, interfaces: [IOutgoingMethodInterceptionGrain] }],
+      [systemWideIncoming, requestContextContinuation],
+      [clientOutgoing],
+    );
   });
 
   afterAll(async () => {
@@ -137,15 +187,30 @@ describe("UnitTests.General.GrainCallFilterTests", () => {
     await cluster.dispose();
   });
 
-  // Needs a distinct client-vs-grain outgoing-filter layer (client uppercases,
-  // grain1's own outgoing filter doubles, grain2's incoming filter reverses,
-  // then the client's outgoing filter rewrites the response) — `TestCluster`
-  // routes every call through one primary silo host with one set of filters,
-  // so "client-issued" and "grain-issued" outgoing calls cannot be filtered
-  // separately here.
-  orleansTest.gap(
-    "GAP-CALL-FILTER-CLIENT-LAYER",
+  // Needs a distinct client-vs-grain outgoing-filter layer: `client`'s own
+  // `clientOutgoing` filter uppercases the message on the way out, grain1
+  // (`OutgoingMethodInterceptionGrain`) calls grain2's `echo` — a genuine
+  // grain-to-grain outgoing call, doubled by the silo's `systemWideOutgoing`
+  // — grain2's own incoming filter reverses the result, and `clientOutgoing`
+  // rewrites the response dictionary after the call returns. Closed by
+  // giving `client` its own `outgoingCallFilters` (`ClientConfig`,
+  // `GrainFactory.setOutgoingCallFilters`), separate from the silo's.
+  orleansTest(
     "UnitTests.General.GrainCallFilterTests.GrainCallFilter_Outgoing_Test",
+    async () => {
+      const grain = client.getGrain(IOutgoingMethodInterceptionGrain, randomIntegerKey());
+      const grain2 = cluster.getGrain(IMethodInterceptionGrain, randomIntegerKey());
+
+      // This grain method reads the context and returns it.
+      const result = await grain.echoViaOtherGrain(grain2, "ab");
+
+      // Original arg should have been:
+      // 1. Converted to upper case on the way out of the client: ab -> AB.
+      // 2. Doubled on the way out of grain1: AB -> ABAB.
+      // 3. Reversed on the way in to grain2: ABAB -> BABA.
+      expect(result["orig"]).toBe("BABA");
+      expect(result["result"]).toBe("intercepted!");
+    },
   );
 
   // Builds up RequestContext across filters ("1"->"12"->"123") then reads it

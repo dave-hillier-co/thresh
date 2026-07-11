@@ -47,13 +47,19 @@ export const IMethodInterceptionGrainObserver =
   );
 
 /**
- * Upstream `IOutgoingMethodInterceptionGrain`; `EchoViaOtherGrain` is omitted
- * because exercising it needs a distinct client-vs-grain outgoing-filter layer
- * that this harness does not model (`TestCluster` has no separate client
- * process — see `GrainCallFilter_Outgoing_Test`'s gap in grain-call-filter-tests.test.ts).
+ * Upstream `IOutgoingMethodInterceptionGrain`. `EchoViaOtherGrain` needs a
+ * grain-to-grain outgoing call distinct from a client-issued one — exercised
+ * via `ClientNode` (its own `outgoingCallFilters`, separate from the silo's),
+ * not `TestCluster.getGrain` (which shares the silo's single `GrainFactory`
+ * with every grain-to-grain call).
  */
 export interface IOutgoingMethodInterceptionGrain extends GrainWithIntegerKey {
   throwIfGreaterThanZero(value: number): Promise<string>;
+  /** Upstream `EchoViaOtherGrain`: calls `otherGrain.Echo(message)`, wraps the result. */
+  echoViaOtherGrain(
+    otherGrain: IMethodInterceptionGrain,
+    message: string,
+  ): Promise<Record<string, unknown>>;
 }
 
 export const IOutgoingMethodInterceptionGrain =

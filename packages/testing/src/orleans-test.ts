@@ -16,9 +16,7 @@ export type GapTag =
   | "GAP-STREAM-FAILURE-HANDLER" // streams lack IStreamFailureHandler
   | "GAP-ACTIVATION-REPARTITIONING" // no activation-repartitioning subsystem (communication-graph driven)
   | "GAP-BROADCAST-CHANNEL-CLIENT" // no client-side broadcast-channel writer/diagnostics/regex namespaces
-  | "GAP-CALL-FILTER-CLIENT-LAYER" // no distinct client-issued vs grain-issued outgoing-filter layer
   | "GAP-CHANNEL-NAMESPACE-PREDICATE" // no IChannelNamespacePredicate provider abstraction
-  | "GAP-CLIENT-REQUEST-CONTEXT" // no client-side ambient RequestContext outside a grain turn
   | "GAP-CLIENT-SILO-SEPARATION" // no separate client process distinct from a silo in the harness
   | "GAP-DURABLE-COLLECTION-API" // DurableQueue/Set/List miss parts of Orleans' API surface
   | "GAP-EVENT-SOURCING" // no JournaledGrain<TState,TEvent>/log-consistency-provider mechanism
@@ -27,7 +25,7 @@ export type GapTag =
   | "GAP-LOAD-SHEDDING" // no overload detector / load shedding / CPU-aware placement scoring
   | "GAP-PLACEMENT-FILTER-DIRECTORS" // no DI-based custom placement-filter directors
   | "GAP-REBALANCER-CONTROL" // no rebalancer suspend/resume/report-listener control API
-  | "GAP-REQUEST-CONTEXT" // ambient RequestContext not exposed on @tsva/core's public surface
+  | "GAP-REQUEST-CONTEXT" // no RequestContext-driven placement hints (IPlacementDirector.PlacementHintKey)
   | "GAP-SERVICE-ID" // no ServiceId concept surviving silo restarts
   | "GAP-STORAGE-FACET" // no third-party facet extensibility (named DI-resolved storage facets)
   | "GAP-STREAM-BATCHING" // no OnNextBatchAsync / batch-send stream API

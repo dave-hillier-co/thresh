@@ -16,6 +16,7 @@ import type { GrainType } from "@tsva/core/grain-type";
 import { Guid } from "@tsva/core/guid";
 import type { InvokeMethodOptions } from "@tsva/core/invoke-options";
 import type { InvocationRequest } from "@tsva/core/request";
+import { requestContextStore } from "@tsva/core/request-context";
 import type { TransactionInfo } from "@tsva/core/transaction-info";
 import { GrainCallTimeoutError, TransactionsDisabledError } from "@tsva/core/errors";
 import type { Dispatcher } from "@tsva/runtime/dispatcher";
@@ -160,7 +161,15 @@ export class GrainFactory {
                 ? this.runRootTransaction(transaction!, req)
                 : this.dispatcher!.invoke(req);
             };
-            const baseHeaders = ambient?.headers !== undefined ? { ...ambient.headers } : {};
+            // The ambient RequestContext bag (Orleans `RequestContext`) — the
+            // SAME store whether this call originates from inside a grain turn
+            // (scoped per-turn by `activation.ts`) or from a non-grain client
+            // caller that set it directly (`RequestContext.set`, `@tsva/core`,
+            // established ambiently via `enterWith` with no turn in scope at
+            // all). A fresh copy so mutating it here (or in an outgoing filter)
+            // never mutates the caller's own bag.
+            const ambientHeaders = requestContextStore();
+            const baseHeaders = ambientHeaders !== undefined ? { ...ambientHeaders } : {};
             // The terminal call, filters included — a plain function so the
             // deadline race below can wrap it without duplicating either branch.
             const invokeCall = (): Promise<unknown> => {
