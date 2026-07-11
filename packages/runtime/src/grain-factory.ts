@@ -26,6 +26,23 @@ import type { TransactionAgent } from "@tsva/runtime/transaction-agent";
 const newChainId = () => Guid.newGuid().toString();
 
 /**
+ * Cross-silo calls round-trip through the MessagePack serializer, which
+ * cannot represent `undefined` and turns it into `null` — so a grain method
+ * returning nothing (e.g. `Promise<void>`) yields `null` to a caller on a
+ * different silo. A same-silo call skips serialization entirely and would
+ * otherwise hand back the raw `undefined`, making the caller-visible result
+ * shape depend on placement. Normalizing here (the one caller-facing chokepoint
+ * every `getGrain`/`getReference` call funnels through) makes it
+ * placement-independent: `undefined` becomes `null`, matching what the wire
+ * already produces. Deliberately NOT applied to `GrainExtension` calls (routed
+ * here too via `getExtensionReference`) — extension/system dispatch semantics
+ * distinguish `undefined` and must not be reshaped.
+ */
+function normalizeGrainCallResult(value: unknown): unknown {
+  return value === undefined ? null : value;
+}
+
+/**
  * Builds grain references as ES `Proxy` objects. Each intercepted method call
  * becomes an `InvocationRequest` dispatched through the runtime; caller identity
  * and the call-chain reentrancy id are read from the ambient invocation context.
@@ -165,8 +182,20 @@ export class GrainFactory {
               );
             };
             const timeoutMs = this.resolveResponseTimeout(options);
-            if (timeoutMs === undefined) return await invokeCall();
-            return await this.raceResponseDeadline(invokeCall(), timeoutMs, prop);
+            const result =
+              timeoutMs === undefined
+                ? await invokeCall()
+                : await this.raceResponseDeadline(invokeCall(), timeoutMs, prop);
+            // Ordinary, waited-for grain-method calls only (see
+            // `normalizeGrainCallResult`); extension calls (`def.extension ===
+            // true`) pass the raw value through, and so does `oneWay` — a
+            // remote `oneWay` send never waits for (or serializes) a reply, so
+            // it already always yields `undefined` regardless of placement
+            // (see `ClusterNode`'s `oneWay` branch); normalizing only the local
+            // side here would make oneWay itself placement-dependent instead.
+            return def.extension === true || options.oneWay === true
+              ? result
+              : normalizeGrainCallResult(result);
           };
         },
       },

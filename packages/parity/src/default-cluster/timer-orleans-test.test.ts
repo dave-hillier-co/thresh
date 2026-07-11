@@ -101,15 +101,22 @@ describe("DefaultCluster.Tests.TimerTests.TimerOrleansTest", () => {
     },
   );
 
-  // Flaky by placement: this framework's `LocalDispatcher` (same-silo call) returns
-  // `undefined` unchanged, while `DistributedDispatcher` (cross-silo call) round-trips
-  // the value through the message serializer, which turns `undefined` into `null`.
-  // `getException()`'s "no exception" case returns exactly that value, so whether this
-  // assertion (`Assert.Null(err)`, ported as `toBeNull()`) passes depends on which silo
-  // ends up owning the grain — a real inconsistency, not a missing feature.
-  orleansTest.gap(
-    "GAP-BUG-LOCAL-CALL-UNDEFINED",
+  orleansTest(
     "DefaultCluster.Tests.TimerTests.TimerOrleansTest.AsyncTimerTest_GrainCall",
+    async () => {
+      const grain = cluster.getGrain(ITimerCallGrain, randomIntegerKey());
+      await grain.startTimer("async-timer-call", { seconds: 1 });
+      time.advance(1000);
+      await flush();
+      expect(await grain.getTickCount()).toBe(1);
+      // A grain-method call's "no value" result is `null` regardless of
+      // whether the call landed same-silo or cross-silo (GAP-BUG-LOCAL-CALL-UNDEFINED,
+      // now fixed): `GrainFactory`'s caller-facing return path normalizes a
+      // local `undefined` to `null`, matching what the message serializer
+      // already produces for a cross-silo call.
+      expect(await grain.getException()).toBeNull();
+      await grain.stopTimer("async-timer-call");
+    },
   );
 
   orleansTest.excluded(
@@ -144,10 +151,19 @@ describe("DefaultCluster.Tests.TimerTests.TimerOrleansTest", () => {
     },
   );
 
-  // Same placement-dependent undefined/null inconsistency as AsyncTimerTest_GrainCall.
-  orleansTest.gap(
-    "GAP-BUG-LOCAL-CALL-UNDEFINED",
+  orleansTest(
     "DefaultCluster.Tests.TimerTests.TimerOrleansTest.NonReentrantGrainTimer_Test",
+    async () => {
+      const grain = cluster.getGrain(INonReentrantTimerCallGrain, randomIntegerKey());
+      await grain.startTimer("non-reentrant-timer", { seconds: 1 });
+      time.advance(1000);
+      await flush();
+      expect(await grain.getTickCount()).toBe(1);
+      // See AsyncTimerTest_GrainCall above: null regardless of placement now
+      // that GAP-BUG-LOCAL-CALL-UNDEFINED is fixed.
+      expect(await grain.getException()).toBeNull();
+      await grain.stopTimer("non-reentrant-timer");
+    },
   );
 
   // Ports the due-time/period range-validation portion of upstream's
@@ -188,11 +204,9 @@ describe("DefaultCluster.Tests.TimerTests.TimerOrleansTest", () => {
     await expect(grain.restartTimer(testName, { seconds: 1 }, { seconds: -5 })).rejects.toThrow();
     await expect(grain.restartTimer(testName, { seconds: 1 }, { days: 100_000 })).rejects.toThrow();
 
-    // Same placement-dependent undefined/null inconsistency noted on
-    // AsyncTimerTest_GrainCall above (GAP-BUG-LOCAL-CALL-UNDEFINED): accept either
-    // for "no exception" rather than pinning down which silo owns the grain.
-    const err = await grain.getException();
-    expect(err == null, `expected no exception, got ${String(err)}`).toBe(true);
+    // `null` regardless of placement (GAP-BUG-LOCAL-CALL-UNDEFINED, now fixed
+    // — see AsyncTimerTest_GrainCall above).
+    expect(await grain.getException()).toBeNull();
 
     await grain.stopTimer(testName);
   });
