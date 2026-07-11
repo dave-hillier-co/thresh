@@ -10,7 +10,8 @@ import type { Dispatcher } from "@tsva/runtime/dispatcher";
 export class LocalDispatcher implements Dispatcher {
   constructor(private readonly catalog: Catalog) {}
 
-  invoke(req: InvocationRequest): Promise<unknown> {
-    return this.catalog.getOrCreate(req.target).invoke(req);
+  async invoke(req: InvocationRequest): Promise<unknown> {
+    const activation = await this.catalog.getOrCreate(req.target);
+    return activation.invoke(req);
   }
 }

@@ -6,6 +6,13 @@ import {
   GrainCancellationToken,
   GrainCancellationTokenSource,
 } from "@tsva/core/grain-cancellation-token";
+import {
+  grainIncomingFilter,
+  runCallFilters,
+  type IncomingGrainCallContext,
+  type IncomingGrainCallFilter,
+  type OutgoingGrainCallFilter,
+} from "@tsva/core/grain-call-filter";
 import type { GrainId } from "@tsva/core/grain-id";
 import type { GrainInterface } from "@tsva/core/grain-interface";
 import { getGrainInterface } from "@tsva/core/grain-interface";
@@ -27,6 +34,7 @@ import type { Listener, Transport } from "@tsva/messaging/transport";
 import { ICancellationSourcesExtension } from "@tsva/runtime/cancellation-extension";
 import type { Dispatcher } from "@tsva/runtime/dispatcher";
 import { GrainFactory } from "@tsva/runtime/grain-factory";
+import { invocationContext } from "@tsva/runtime/invocation-context";
 import { GatewayManager } from "@tsva/client/gateway-manager";
 import { staticGatewayProvider, type GatewayListProvider } from "@tsva/client/gateway-provider";
 
@@ -60,6 +68,22 @@ export interface ClientConfig {
    * override it for deterministic assertions.
    */
   clientId?: GrainId;
+  /**
+   * Incoming call filters wrapping a call to one of this client's hosted
+   * objects (`createObjectReference`) — the client-side mirror of the
+   * catalog's `incomingCallFilters` (Orleans' client-builder
+   * `AddIncomingGrainCallFilter`), run through the SAME `runCallFilters`
+   * pipeline the silo uses (see `ClientNode.dispatchToLocalObject`).
+   */
+  incomingCallFilters?: readonly IncomingGrainCallFilter[];
+  /**
+   * Outgoing call filters run on every call this client issues through its
+   * internal `GrainFactory` (Orleans' client-builder `AddOutgoingGrainCallFilter`
+   * — e.g. `tracingFilters().outgoing`, so a client-originated call injects W3C
+   * trace context into `ctx.headers` the same way a grain-to-grain call does).
+   * Applied via `GrainFactory.setOutgoingCallFilters`.
+   */
+  outgoingCallFilters?: readonly OutgoingGrainCallFilter[];
 }
 
 /** Orleans `ClientMessageCenter.MINIMUM_INTERCONNECT_DELAY`. */
@@ -109,11 +133,13 @@ export class ClientNode implements Dispatcher {
    * grain activations and so has no `getOrSetExtension` to lean on.
    */
   private readonly cancellationControllers = new Map<string, AbortController>();
+  private readonly incomingCallFilters: readonly IncomingGrainCallFilter[];
   private listener: Listener | undefined;
 
   constructor(private readonly config: ClientConfig) {
     this.callTimeoutMs = config.callTimeoutMs ?? 30_000;
     this.clientId = config.clientId ?? createClientId();
+    this.incomingCallFilters = config.incomingCallFilters ?? [];
     this.connections = new ConnectionManager(
       config.transport,
       config.local,
@@ -125,6 +151,9 @@ export class ClientNode implements Dispatcher {
       new MessagePackSerializer({ resolveGrainReference: (id) => this.rehydrate(id) });
     this.factory = new GrainFactory((interfaceId) => this.resolveGrainType(interfaceId));
     this.factory.setDispatcher(this);
+    if (config.outgoingCallFilters !== undefined) {
+      this.factory.setOutgoingCallFilters(config.outgoingCallFilters);
+    }
     const provider =
       config.gateways ??
       (config.gateway !== undefined ? staticGatewayProvider([config.gateway]) : undefined);
@@ -267,7 +296,10 @@ export class ClientNode implements Dispatcher {
           sendingGrain: req.sender,
           interfaceId: req.interfaceId,
           method: req.method,
-          requestContext: { reentrancyId: req.reentrancyId },
+          requestContext: {
+            reentrancyId: req.reentrancyId,
+            ...(req.headers !== undefined ? { headers: req.headers } : {}),
+          },
           body: this.serializer.serialize(req.args),
         };
         if (req.options.oneWay) {
@@ -356,7 +388,49 @@ export class ClientNode implements Dispatcher {
       if (typeof method !== "function") {
         throw new GrainCallError(`hosted object has no method ${message.method}`);
       }
-      const result = await Promise.resolve(method.apply(entry.object, args));
+      // Run the dispatch inside an ambient invocation-context turn, exactly
+      // like `ActivationData.invoke` does for a grain call: a filter's write
+      // to `context.headers` is the SAME object the store holds, so it is
+      // visible to the hosted object's method body via `requestContext.get`
+      // (Orleans parity: `Observer_GrainCallFilter_Incoming_Order_Test`
+      // builds up its RequestContext value through the filter chain the same
+      // way the grain-side `GrainCallFilter_Incoming_Order_Test` does).
+      const result = await invocationContext.run(
+        {
+          senderId: message.sendingGrain,
+          reentrancyId: message.requestContext?.reentrancyId ?? "",
+          headers:
+            message.requestContext?.headers !== undefined
+              ? { ...message.requestContext.headers }
+              : {},
+        },
+        async () => {
+          // The hosted object's own filter (if it declares one), like a
+          // grain's, runs innermost — after this client's own incoming
+          // filters, just before the method (Orleans parity).
+          const own = grainIncomingFilter(entry.object);
+          const filters =
+            own === undefined ? this.incomingCallFilters : [...this.incomingCallFilters, own];
+          if (filters.length === 0) {
+            return await method.apply(entry.object, args);
+          }
+          const context: IncomingGrainCallContext = {
+            target: message.targetGrain,
+            source: message.sendingGrain,
+            interfaceId: message.interfaceId,
+            interfaceName: getGrainInterface(message.interfaceId)?.name ?? "",
+            methodName: message.method,
+            args: [...args],
+            result: undefined,
+            headers: invocationContext.getStore()?.headers ?? {},
+            grain: entry.object,
+            invoke: () => Promise.resolve(),
+          };
+          return await runCallFilters(filters, context, () =>
+            Promise.resolve(method.apply(entry.object, context.args)),
+          );
+        },
+      );
       if (message.direction === "oneWay") return;
       await this.replyToCaller(
         message,

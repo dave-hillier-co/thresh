@@ -11,11 +11,16 @@
     "tag": "v10.1.0"
   },
   "dependencies": {
+    "@opentelemetry/api": "^1.9.1",
+    "@opentelemetry/context-async-hooks": "^2.7.1",
+    "@opentelemetry/core": "^2.7.1",
+    "@opentelemetry/sdk-trace-base": "^2.7.1",
     "@tsva/client": "workspace:*",
     "@tsva/core": "workspace:*",
     "@tsva/durable-jobs": "workspace:*",
     "@tsva/hosting": "workspace:*",
     "@tsva/messaging": "workspace:*",
+    "@tsva/observability": "workspace:*",
     "@tsva/runtime": "workspace:*",
     "@tsva/testing": "workspace:*"
   },

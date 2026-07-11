@@ -964,7 +964,7 @@ export class ClusterNode {
 
   /** Take over a migrating activation here, rehydrating its state and claiming the directory entry. */
   private async acceptMigration(payload: MigrationPayload): Promise<boolean> {
-    const activation = this.catalog.activateMigrated(
+    const activation = await this.catalog.activateMigrated(
       payload.grainId,
       newActivationId(),
       payload.bag,

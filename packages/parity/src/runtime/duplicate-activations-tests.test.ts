@@ -1,7 +1,8 @@
 // Ported from dotnet/orleans test/Orleans.Runtime.Tests/DuplicateActivationsTests.cs @ v10.1.0 (MIT).
 // Upstream also bumps SiloMessagingOptions.ResponseTimeout to 1 minute to
-// accommodate stress-test load; this framework enforces no per-call response
-// timeout yet (see GAP-CANCELLATION elsewhere), so there is nothing to configure.
+// accommodate stress-test load; this framework applies no per-call response
+// timeout by default (one is opt-in via `defaultResponseTimeout`), so there is
+// nothing to configure here.
 import { afterAll, beforeAll, describe } from "vitest";
 import { orleansTest } from "@tsva/testing/orleans-test";
 import { TestCluster } from "@tsva/testing/test-cluster";

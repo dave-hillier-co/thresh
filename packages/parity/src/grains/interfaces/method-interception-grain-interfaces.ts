@@ -27,6 +27,26 @@ export const IMethodInterceptionGrain = defineGrainInterface<IMethodInterception
 );
 
 /**
+ * Upstream `IMethodInterceptionGrainObserver`: the observer-side mirror of
+ * `IMethodInterceptionGrain`, hosted via `ClientNode.createObjectReference`
+ * rather than a grain activation (`Observer_GrainCallFilter_Incoming_*`).
+ */
+export interface IMethodInterceptionGrainObserver extends GrainWithIntegerKey {
+  one(): Promise<string>;
+  echo(someArg: string): Promise<string>;
+  notIntercepted(): Promise<string>;
+  sayHello(): Promise<string>;
+  doThrow(): Promise<string>;
+  filterThrows(): Promise<void>;
+  systemWideCallFilterMarker(): Promise<void>;
+}
+
+export const IMethodInterceptionGrainObserver =
+  defineGrainInterface<IMethodInterceptionGrainObserver>(
+    "UnitTests.GrainInterfaces.IMethodInterceptionGrainObserver",
+  );
+
+/**
  * Upstream `IOutgoingMethodInterceptionGrain`; `EchoViaOtherGrain` is omitted
  * because exercising it needs a distinct client-vs-grain outgoing-filter layer
  * that this harness does not model (`TestCluster` has no separate client
@@ -63,6 +83,24 @@ export interface IGrainCallFilterTestGrain extends GrainWithIntegerKey {
 export const IGrainCallFilterTestGrain = defineGrainInterface<IGrainCallFilterTestGrain>(
   "UnitTests.GrainInterfaces.IGrainCallFilterTestGrain",
 );
+
+/**
+ * Upstream `IGrainCallFilterTestGrainObserver`: the observer-side mirror of
+ * `IGrainCallFilterTestGrain`, hosted via `ClientNode.createObjectReference`
+ * rather than a grain activation.
+ */
+export interface IGrainCallFilterTestGrainObserver extends GrainWithIntegerKey {
+  throwIfGreaterThanZero(value: number): Promise<string>;
+  sumSet(numbers: readonly number[]): Promise<number>;
+  systemWideCallFilterMarker(): Promise<void>;
+  grainSpecificCallFilterMarker(): Promise<void>;
+  getRequestContext(): Promise<string | undefined>;
+}
+
+export const IGrainCallFilterTestGrainObserver =
+  defineGrainInterface<IGrainCallFilterTestGrainObserver>(
+    "UnitTests.GrainInterfaces.IGrainCallFilterTestGrainObserver",
+  );
 
 /**
  * Upstream `IMyGrainExtension`: a `GrainExtension` cast onto an

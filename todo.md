@@ -31,8 +31,6 @@ vertical slices (see [`CLAUDE.md`](CLAUDE.md)).
       crash, rather than relying on one-shot recovery at next activation.
 - [ ] **Grain observers / typed client callbacks** — `CreateObjectReference<T>()` surface for
       server-to-client push, including W3C `traceparent` propagation back to the client.
-- [ ] **`IGrainExtension` mechanism** — minimal extension surface so management/system-target style
-      APIs, cancellation tokens and per-grain push surfaces can be expressed.
 - [ ] **`StatelessWorker` placement enforcement** — honor the option in the catalog/dispatcher so
       multiple activations per key can be created up to `maxLocalWorkers`, with placement-local
       delivery.
@@ -65,7 +63,7 @@ shows per-tag counts). One-line definitions live on the `GapTag` union. Grouped 
 - [ ] **Grain identity & references** — `GAP-COMPOUND-KEY` (guid+string compound keys),
       `GAP-GRAIN-REF-CAST` (`AsReference<T>()` re-typing), `GAP-GENERIC-GRAINS` (closed-generic
       grain interface story).
-- [ ] **Activation & lifecycle** — `GAP-LIFECYCLE-SUBJECT`, `GAP-GRAIN-SERVICE`, `GAP-STORAGE-FACET`.
+- [ ] **Activation & lifecycle** — `GAP-GRAIN-SERVICE`, `GAP-STORAGE-FACET`.
 - [ ] **Request context** — `GAP-REQUEST-CONTEXT` (expose on `@tsva/core` public surface),
       `GAP-CLIENT-REQUEST-CONTEXT`, `GAP-CALL-FILTER-CLIENT-LAYER`, `GAP-CLIENT-SILO-SEPARATION`.
 - [ ] **Timers** — `GAP-TIMER-VALIDATION` (callback-initiated Change/dispose portions).
@@ -82,8 +80,12 @@ shows per-tag counts). One-line definitions live on the `GapTag` union. Grouped 
       `GAP-TRANSACTION-CONSISTENCY-HARNESS` (randomized workload + serializability checker).
 - [ ] **Journaling & event sourcing** — `GAP-EVENT-SOURCING` (`JournaledGrain` equivalent),
       `GAP-DURABLE-COLLECTION-API`.
-- [ ] **Durable jobs** — `GAP-JOB-SHARD-MANAGER-API`, `GAP-CLAIM-BUDGET-RAMPUP`.
-- [ ] **Misc primitives** — `GAP-GRAIN-DIRECTORY-API`, `GAP-SERVICE-ID`, `GAP-TRACING`.
+- [ ] **Durable jobs** — `GAP-JOB-SHARD-MANAGER-API` (deliberate deviation: implicit
+      time-bucketing, not an explicit shard-object model).
+- [ ] **Misc primitives** — `GAP-GRAIN-DIRECTORY-API`, `GAP-SERVICE-ID`, `GAP-TRACING` (trace-context
+      propagation done; remaining: activation/deactivation span taxonomy — `ActivateGrain`/
+      `OnActivate`/`PlaceGrain`/`RegisterDirectoryEntry` spans threaded through placement/catalog/
+      directory/storage/migration).
 
 ### Bugs found by the parity suite (`GAP-BUG-*`, fix then un-gap the tests)
 

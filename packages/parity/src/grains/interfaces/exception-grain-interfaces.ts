@@ -7,6 +7,7 @@ import { defineGrainInterface } from "@tsva/core/grain-interface";
 import type { GrainWithIntegerKey } from "@tsva/core/key-kinds";
 
 export interface IExceptionGrain extends GrainWithIntegerKey {
+  canceled(): Promise<void>;
   throwsInvalidOperationException(): Promise<void>;
   throwsNullReferenceException(): Promise<void>;
   grainCallToThrowsInvalidOperationException(otherGrainId: bigint): Promise<void>;

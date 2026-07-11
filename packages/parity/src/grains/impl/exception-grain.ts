@@ -4,6 +4,7 @@
 // echo-task-grain.ts), so plain `Error`s with the same messages stand in and
 // ported assertions check message text.
 import { grain } from "@tsva/core/decorators";
+import { GrainTaskCanceledError } from "@tsva/core/errors";
 import { Grain } from "@tsva/core/grain";
 import { IExceptionGrain } from "@tsva/parity/grains/interfaces/exception-grain-interfaces";
 
@@ -11,6 +12,14 @@ export { IExceptionGrain };
 
 @grain({ name: "UnitTests.Grains.ExceptionGrain" })
 export class ExceptionGrain extends Grain implements IExceptionGrain {
+  // Upstream returns a canceled `Task` (`tcs.TrySetCanceled()`), which surfaces
+  // to the caller as a `TaskCanceledException`. This framework has no canceled
+  // Promise, so the analogue is throwing `GrainTaskCanceledError` — the same
+  // error a `GrainCancellationToken` raises — which propagates as a rejection.
+  async canceled(): Promise<void> {
+    throw new GrainTaskCanceledError();
+  }
+
   async throwsInvalidOperationException(): Promise<void> {
     throw new Error("Test exception");
   }

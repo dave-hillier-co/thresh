@@ -433,6 +433,23 @@ export class ActivationData implements GrainContext {
     return now - this.lastActiveMs >= this.collectionAgeMs;
   }
 
+  /**
+   * True when a caller (e.g. `IGrainManagementExtension.deactivateOnIdle()`)
+   * has flagged this activation to go away and it is idle right now (not
+   * mid-turn). Unlike `isStale()`, this ignores `keepAliveUntilMs` and the
+   * age-based idle threshold — it exists solely so `Catalog.getOrActivate`
+   * can notice a PENDING explicit deactivation request lazily, on the very
+   * next lookup for this grain id, and finalize the old activation before
+   * handing out a fresh one (see `grain-management-extension.ts` for why the
+   * finalization can't happen synchronously inside `deactivateOnIdle()`
+   * itself). `delayDeactivation` deliberately does not suppress this: an
+   * explicit deactivateOnIdle() request should not be overridden by an
+   * unrelated keep-alive.
+   */
+  get deactivationRequestedAndIdle(): boolean {
+    return this.state === "valid" && !this.scheduler.busy && this.deactivateRequested;
+  }
+
   private touch(): void {
     this.lastActiveMs = this.time.now();
   }

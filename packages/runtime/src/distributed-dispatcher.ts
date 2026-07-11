@@ -88,8 +88,8 @@ export class DistributedDispatcher implements Dispatcher {
 
   /** A request that arrived here: ensure a local activation, or forward to the CAS winner. */
   async deliverLocal(req: InvocationRequest): Promise<unknown> {
-    const existing = this.deps.catalog.get(req.target);
-    if (existing !== undefined && existing.state !== "invalid") return existing.invoke(req);
+    const existing = await this.deps.catalog.resolveLive(req.target);
+    if (existing !== undefined) return existing.invoke(req);
 
     const activationId = newActivationId();
     const winner = await this.deps.directory.register({
@@ -142,9 +142,9 @@ export class DistributedDispatcher implements Dispatcher {
     req: InvocationRequest,
     activationId: string,
   ): Promise<unknown> {
-    let act: ReturnType<Catalog["activateLocal"]> | undefined;
+    let act: Awaited<ReturnType<Catalog["activateLocal"]>> | undefined;
     try {
-      act = this.deps.catalog.activateLocal(req.target, activationId);
+      act = await this.deps.catalog.activateLocal(req.target, activationId);
       return await act.invoke(req);
     } catch (err) {
       if (act === undefined || act.activationFailed) {
@@ -161,8 +161,8 @@ export class DistributedDispatcher implements Dispatcher {
 
   private async routeTo(addr: GrainAddress, req: InvocationRequest): Promise<unknown> {
     if (!addr.silo.equals(this.deps.local)) return this.deps.remote.send(addr.silo, req);
-    const act = this.deps.catalog.get(req.target);
-    if (act === undefined || act.state === "invalid" || act.activationId !== addr.activationId) {
+    const act = await this.deps.catalog.resolveLive(req.target);
+    if (act === undefined || act.activationId !== addr.activationId) {
       // The cache/directory points here but no live activation matches (a failed
       // or collected activation, or a stale pointer). Rather than rejecting —
       // which, when the caller is this same silo, has nothing to re-resolve
