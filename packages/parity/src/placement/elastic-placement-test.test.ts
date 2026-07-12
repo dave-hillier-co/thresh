@@ -5,15 +5,23 @@
 // remaining two (`LoadAwareGrainShouldNotAttemptToCreateActivationsOn*`) now
 // have their headline dependency — an `OverloadDetector`/latchable
 // CPU-usage source, and a gateway that sheds load — ported (GAP-LOAD-SHEDDING,
-// see `load-shedding-test.test.ts`). What still blocks them is a DIFFERENT
-// gap: both route their setup through `GetGrainAtSilo`, upstream's helper for
-// pinning a fresh grain onto a specific NEWLY STARTED silo via
-// `RequestContext.Set(IPlacementDirector.PlacementHintKey, silo)` — this
-// framework has no RequestContext-driven placement hint (GAP-REQUEST-CONTEXT),
-// so a test cannot reliably get a reference to the tainted silo's activation
-// to latch. Retagged under GAP-LOAD-SHEDDING still, since that's the tag with
-// the `todo.md` entry tracking this pair; the placement-hint half of the
-// blocker is tracked separately under GAP-REQUEST-CONTEXT.
+// see `load-shedding-test.test.ts`). Their setup routes through
+// `GetGrainAtSilo`, upstream's helper for pinning a fresh grain onto a
+// specific NEWLY STARTED silo via
+// `RequestContext.Set(IPlacementDirector.PlacementHintKey, silo)` — that
+// RequestContext-driven placement hint now exists (GAP-REQUEST-CONTEXT
+// closed; see `@tsva/runtime/placement/placement-hint`), so `GetGrainAtSilo`
+// itself is no longer the blocker. What still blocks these two is that this
+// framework's load-aware placement strategy never consults the
+// overload/CPU-latch state at all: it is only wired into the GATEWAY's
+// load-shedding rejection path (`ClusterNode.receiveRequest` /
+// `GatewayTooBusyException`), not into `OnAddActivation`'s candidate
+// selection — so an overloaded/busy silo is never excluded as a placement
+// candidate. Closing these also needs `IActivationCountBasedPlacementTestGrain`
+// (load-aware placement test grain) and its
+// `LatchOverloaded`/`UnlatchOverloaded`/`LatchCpuUsage`/`UnlatchCpuUsage`/
+// `GetLocation` members, none of which are ported yet. Still tagged
+// GAP-LOAD-SHEDDING, the tag with the `todo.md` entry tracking this pair.
 import { describe } from "vitest";
 import { orleansTest } from "@tsva/testing/orleans-test";
 

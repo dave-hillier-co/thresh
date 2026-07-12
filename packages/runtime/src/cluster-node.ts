@@ -81,6 +81,7 @@ import {
   placementFiltersFor,
   placementStrategyFor,
 } from "@tsva/runtime/placement/placement-director";
+import { resolvePlacementHintValue } from "@tsva/runtime/placement/placement-hint";
 import type { PlacementFilter } from "@tsva/runtime/placement/placement-filter";
 import type { PlacementFilterRegistry } from "@tsva/runtime/placement/placement-filter-registry";
 import { RandomPlacement } from "@tsva/runtime/placement/random-placement";
@@ -947,9 +948,14 @@ export class ClusterNode {
         activationCount: (silo) => (silo.equals(this.options.local) ? this.catalog.count() : 0),
         random: this.options.random ?? Math.random,
       };
+      // An explicit `migrationTarget` (set via `migrateOnIdle(target)`) wins;
+      // otherwise fall back to the caller's ambient placement hint captured
+      // at `requestMigration` time, resolved against the live candidates now.
+      const directed =
+        activation.migrationTarget ?? resolvePlacementHintValue(activation.migrationHint, candidates);
       const target = chooseMigrationTarget(
         activation.id.type,
-        activation.migrationTarget,
+        directed,
         candidates,
         this.placementFor(activation.id.type),
         context,

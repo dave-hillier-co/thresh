@@ -15,6 +15,7 @@ import { afterAll, beforeAll, describe, expect } from "vitest";
 import { FakeTimeProvider } from "@tsva/core/test-support/fake-time-provider";
 import { GrainId } from "@tsva/core/grain-id";
 import { getGrainMetadata } from "@tsva/core/grain-metadata";
+import { PLACEMENT_HINT_KEY, RequestContext } from "@tsva/core/request-context";
 import { orleansTest } from "@tsva/testing/orleans-test";
 import { TestCluster, type TestSiloHandle } from "@tsva/testing/test-cluster";
 import { waitFor } from "@tsva/testing/wait";
@@ -141,18 +142,49 @@ describe("DefaultCluster.Tests.General.MigrationTests", () => {
   );
 
   // Uses `RequestContext.Set(IPlacementDirector.PlacementHintKey, targetHost)`
-  // from the *client* (test method) to steer placement, then migrates via the
-  // cast-to-extension `MigrateOnIdle()` with no explicit target. The
-  // client-side ambient `RequestContext` this needs now exists (`@tsva/core`'s
-  // `RequestContext`, see request-context-test.test.ts) — what remains is
-  // RequestContext-DRIVEN PLACEMENT HINTS, which this framework has no
-  // equivalent for (`migrateOnIdle` instead takes an explicit `targetSilo`,
-  // already exercised by `DirectedGrainMigrationTest` above). That is a
-  // separate, standalone feature (a placement director reading a well-known
-  // `RequestContext` key), not attempted here.
-  orleansTest.gap(
-    "GAP-REQUEST-CONTEXT",
+  // from the *client* (test method) to steer both INITIAL placement (grain
+  // `b`, activated via `setState` with no explicit target) and migration (via
+  // the parameterless `migrateOnIdle()`, honouring the ambient hint captured
+  // at request time — see `ActivationData.migrationHint`).
+  orleansTest(
     "DefaultCluster.Tests.General.MigrationTests.MultiGrainDirectedMigrationTest",
+    async () => {
+      for (let i = 0; i < 3; i++) {
+        const keyA = randomIntegerKey();
+        const keyB = randomIntegerKey();
+        const a = cluster.getGrain(IMigrationTestGrain, keyA);
+        const b = cluster.getGrain(IMigrationTestGrain, keyB);
+        const grainIdA = new GrainId(migrationGrainType, keyA);
+        const grainIdB = new GrainId(migrationGrainType, keyB);
+        const expectedState = Math.floor(Math.random() * 1_000_000);
+
+        await a.setState(expectedState);
+        const originalHostA = hostOf(cluster, grainIdA);
+
+        // Force `b`'s initial activation onto the same silo as `a` via a
+        // placement hint (upstream: `RequestContext.Set(PlacementHintKey, originalHostA)`).
+        RequestContext.set(PLACEMENT_HINT_KEY, originalHostA!.address.toString());
+        await b.setState(expectedState);
+        expect(hostOf(cluster, grainIdB)).toBe(originalHostA);
+
+        const targetHost = cluster.silos.find((s) => s !== originalHostA)!;
+
+        // Trigger migration, setting a placement hint to coerce the placement
+        // director to use the target silo (no explicit target this time).
+        RequestContext.set(PLACEMENT_HINT_KEY, targetHost.address.toString());
+        const migrateA = a.migrateOnIdle();
+        const migrateB = b.migrateOnIdle();
+        await migrateA;
+        await migrateB;
+        await forceMigrationSweep(time);
+
+        await waitFor(() => hostOf(cluster, grainIdA) === targetHost);
+        await waitFor(() => hostOf(cluster, grainIdB) === targetHost);
+
+        expect(await a.getState()).toBe(expectedState);
+        expect(await b.getState()).toBe(expectedState);
+      }
+    },
   );
 
   orleansTest(
@@ -205,10 +237,13 @@ describe("DefaultCluster.Tests.General.MigrationTests", () => {
   );
 
   // Same client-side `RequestContext`-as-placement-hint pattern as
-  // `MultiGrainDirectedMigrationTest` above (`RequestContext.Set(...targetHost)`
-  // from the test method), plus `RequestContext.Set("fail_dehydrate", true)`
-  // from the client to tell the grain to fail its next dehydration — both
-  // client-side ambient-context uses this framework has no equivalent for yet.
+  // `MultiGrainDirectedMigrationTest` above (now ported — placement hints
+  // exist), plus `RequestContext.Set("fail_dehydrate", true)` from the client
+  // to tell the grain to fail its NEXT dehydration. That second half has no
+  // equivalent yet: `MigrationTestGrain.onDehydrate` has no fail-dehydrate
+  // knob (contrast `failNextRehydrate`/`onRehydrate`'s `failRehydrate`
+  // flag, used by `FailRehydrationTest` below). Adding one is a small,
+  // separate grain-side change, not attempted here.
   orleansTest.gap(
     "GAP-REQUEST-CONTEXT",
     "DefaultCluster.Tests.General.MigrationTests.FailDehydrationTest",

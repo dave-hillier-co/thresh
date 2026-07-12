@@ -15,6 +15,7 @@ import {
 import type { Catalog } from "@tsva/runtime/catalog";
 import type { Dispatcher } from "@tsva/runtime/dispatcher";
 import type { PlacementFilter } from "@tsva/runtime/placement/placement-filter";
+import { resolvePlacementHint } from "@tsva/runtime/placement/placement-hint";
 import type {
   PlacementContext,
   PlacementStrategy,
@@ -224,8 +225,12 @@ export class DistributedDispatcher implements Dispatcher {
       const compatible = await this.deps.versionFilter(req, candidates);
       if (compatible.length > 0) candidates = compatible;
     }
+    // Directed placement: a caller-set RequestContext hint (Orleans
+    // `IPlacementDirector.PlacementHintKey`) wins over the strategy when it
+    // names a live candidate; otherwise fall through to the strategy as before.
     const strategy = this.deps.placementFor(req.target.type);
-    const targetSilo = strategy.choose(req.target.type, candidates, ctx);
+    const targetSilo =
+      resolvePlacementHint(req.headers, candidates) ?? strategy.choose(req.target.type, candidates, ctx);
     return targetSilo.equals(this.deps.local)
       ? this.deliverLocal(req)
       : this.deps.remote.send(targetSilo, req);

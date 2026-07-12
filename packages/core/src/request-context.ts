@@ -14,6 +14,15 @@ import { AsyncLocalStorage } from "node:async_hooks";
 const storage = new AsyncLocalStorage<Record<string, string>>();
 
 /**
+ * Orleans `IPlacementDirector.PlacementHintKey`: the well-known `RequestContext`
+ * key a caller sets (`RequestContext.set(PLACEMENT_HINT_KEY, silo.toString())`)
+ * to steer a grain's activation onto a chosen silo. Honoured by the placement
+ * decision when the hinted silo is a live candidate; otherwise the normal
+ * placement strategy runs (see `@tsva/runtime/placement/placement-hint`).
+ */
+export const PLACEMENT_HINT_KEY = "PlacementHintKey";
+
+/**
  * The ambient request-context bag for the current async execution context.
  * Call {@link RequestContext.set} from anywhere — grain code mid-turn, or a
  * plain client/test caller with no turn in scope at all — and it flows onto

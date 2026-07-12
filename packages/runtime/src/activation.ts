@@ -43,7 +43,12 @@ import {
   type IncomingGrainCallFilter,
 } from "@tsva/core/grain-call-filter";
 import type { InvocationRequest } from "@tsva/core/request";
-import { requestContextStore, runWithRequestContext } from "@tsva/core/request-context";
+import {
+  PLACEMENT_HINT_KEY,
+  RequestContext,
+  requestContextStore,
+  runWithRequestContext,
+} from "@tsva/core/request-context";
 import {
   implicitStreamObserver,
   SequenceToken,
@@ -120,6 +125,15 @@ export class ActivationData implements GrainContext {
 
   /** When migrating: the directed target silo (undefined lets placement choose). */
   migrationTarget: SiloAddress | undefined;
+  /**
+   * When migrating with no explicit `migrationTarget`: the caller's ambient
+   * `RequestContext` placement hint (Orleans `IPlacementDirector.PlacementHintKey`),
+   * captured at `requestMigration` time since it must be read while the
+   * triggering call's `RequestContext` is still in scope — by the time the
+   * idle sweep actually migrates, that scope is long gone. Resolved against
+   * live candidates at migration time (see `ClusterNode.migrateActivation`).
+   */
+  migrationHint: string | undefined;
   /** State captured on the source silo to restore on the target; set by the catalog. */
   rehydrationBag: Record<string, unknown> | undefined;
 
@@ -426,6 +440,10 @@ export class ActivationData implements GrainContext {
   requestMigration(target?: SiloAddress): void {
     this.migrationRequested = true;
     this.migrationTarget = target;
+    // No explicit target: capture the caller's ambient placement hint now,
+    // while it's still in scope — the idle sweep that actually migrates runs
+    // well after this call's RequestContext scope has ended.
+    this.migrationHint = target === undefined ? RequestContext.get(PLACEMENT_HINT_KEY) : undefined;
   }
 
   get wantsMigration(): boolean {
