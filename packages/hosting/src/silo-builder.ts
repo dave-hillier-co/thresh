@@ -74,6 +74,13 @@ import { buildSiloHost, type SiloHost } from "@tsva/hosting/silo-host";
 
 export interface SiloConfig {
   clusterId: string;
+  /**
+   * Stable logical service identity (Orleans `ServiceId`), distinct from
+   * `clusterId` (a specific deployment): configured once and expected to
+   * persist across silo restarts/redeployments. Defaults to `clusterId` when
+   * omitted, mirroring Orleans' fallback.
+   */
+  serviceId?: string;
   local: SiloAddress;
   /** Shared clock (defaults to the system clock); inject a fake for tests. */
   time?: TimeProvider;
@@ -769,6 +776,7 @@ export class SiloBuilder {
 
     return buildSiloHost({
       node,
+      serviceId: this.config.serviceId ?? this.config.clusterId,
       health,
       healthServer: this.healthPort !== undefined ? new HealthServer(health) : undefined,
       healthPort: this.healthPort,

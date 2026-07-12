@@ -27,6 +27,13 @@ export interface TestClusterOptions {
   /** Number of silos to start with (Orleans TestClusterBuilder defaults to 2). */
   initialSilos?: number;
   clusterId?: string;
+  /**
+   * Stable logical service identity (Orleans `ServiceId`), distinct from
+   * `clusterId`. Defaults to `clusterId` when omitted; persists across
+   * `restartSilo`/`startAdditionalSilo` since it comes from cluster-level
+   * config, not per-silo state.
+   */
+  serviceId?: string;
   /** Grains registered on every silo. */
   grains?: ReadonlyArray<GrainRegistrationSpec>;
   /** Clock injected into every silo; pass a `FakeTimeProvider` for determinism. */
@@ -116,6 +123,16 @@ export class TestCluster {
     return this.options.clusterId ?? "test-cluster";
   }
 
+  /** The configured service id every silo shares (Orleans `ServiceId`). */
+  get serviceId(): string {
+    return this.options.serviceId ?? this.clusterId;
+  }
+
+  /** Reads the active ServiceId from a running silo (Orleans test-hooks `GetServiceId()`). */
+  getServiceId(handle: TestSiloHandle): string {
+    return handle.host.serviceId;
+  }
+
   getGrain<T>(def: GrainInterface<T>, key: GrainKeyFor<T>): T {
     return this.primary.host.getGrain(def, key);
   }
@@ -200,6 +217,7 @@ export class TestCluster {
     const membership = new MembershipView(this.shared, address);
     const builder = createSilo({
       clusterId: this.options.clusterId ?? "test-cluster",
+      serviceId: this.options.serviceId ?? this.options.clusterId ?? "test-cluster",
       local: address,
       ...(this.options.time !== undefined ? { time: this.options.time } : {}),
       ...(metadata !== undefined ? { metadata } : {}),

@@ -76,7 +76,7 @@ shows per-tag counts). One-line definitions live on the `GapTag` union. Grouped 
       `GAP-TRANSACTION-OVERLOAD-DETECTOR`,
       `GAP-TRANSACTION-CONSISTENCY-HARNESS` (randomized workload + serializability checker).
 - [ ] **Journaling & event sourcing** — `GAP-EVENT-SOURCING` (`JournaledGrain` equivalent).
-- [ ] **Misc primitives** — `GAP-GRAIN-DIRECTORY-API`, `GAP-SERVICE-ID`, `GAP-TRACING` (trace-context
+- [ ] **Misc primitives** — `GAP-GRAIN-DIRECTORY-API`, `GAP-TRACING` (trace-context
       propagation done; remaining: activation/deactivation span taxonomy — `ActivateGrain`/
       `OnActivate`/`PlaceGrain`/`RegisterDirectoryEntry` spans threaded through placement/catalog/
       directory/storage/migration).

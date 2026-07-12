@@ -17,6 +17,12 @@ export interface ReminderService {
 
 export interface SiloHostParts {
   node: ClusterNode;
+  /**
+   * Stable logical service identity (Orleans `ServiceId`), carried for the
+   * silo's lifetime — including across a restart, since it comes from
+   * cluster-level config, not per-process state.
+   */
+  serviceId: string;
   health: HealthCheck;
   healthServer: HealthServer | undefined;
   healthPort: number | undefined;
@@ -54,6 +60,11 @@ export class SiloHost {
 
   get health(): HealthCheck {
     return this.parts.health;
+  }
+
+  /** The active ServiceId this silo is running with (Orleans test-hooks `GetServiceId()`). */
+  get serviceId(): string {
+    return this.parts.serviceId;
   }
 
   getGrain<T>(def: GrainInterface<T>, key: GrainKeyFor<T>): T {
