@@ -7,8 +7,10 @@
     "./*": "./src/*.ts"
   },
   "dependencies": {
+    "@opentelemetry/api": "^1.9.1",
     "@tsva/core": "workspace:*",
     "@tsva/directory": "workspace:*",
-    "@tsva/messaging": "workspace:*"
+    "@tsva/messaging": "workspace:*",
+    "@tsva/observability": "workspace:*"
   }
 }

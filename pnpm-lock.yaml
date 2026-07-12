@@ -334,9 +334,15 @@ importers:
 
   packages/persistence:
     dependencies:
+      '@opentelemetry/api':
+        specifier: ^1.9.1
+        version: 1.9.1
       '@tsva/core':
         specifier: workspace:*
         version: link:../core
+      '@tsva/observability':
+        specifier: workspace:*
+        version: link:../observability
       pg:
         specifier: ^8.21.0
         version: 8.21.0
@@ -358,6 +364,9 @@ importers:
 
   packages/runtime:
     dependencies:
+      '@opentelemetry/api':
+        specifier: ^1.9.1
+        version: 1.9.1
       '@tsva/core':
         specifier: workspace:*
         version: link:../core
@@ -367,6 +376,9 @@ importers:
       '@tsva/messaging':
         specifier: workspace:*
         version: link:../messaging
+      '@tsva/observability':
+        specifier: workspace:*
+        version: link:../observability
 
   packages/streams:
     dependencies:
