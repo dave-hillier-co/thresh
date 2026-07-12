@@ -212,3 +212,23 @@ export function isActivationBound(
 ): provider is ActivationBoundStreamProvider {
   return typeof (provider as ActivationBoundStreamProvider).bindActivation === "function";
 }
+
+/**
+ * A component (typically a stream provider) that accepts an opaque,
+ * administratively-issued control command and returns its result (Orleans
+ * `IControllable.ExecuteCommand`, reached via
+ * `IManagementGrain.SendControlCommandToProvider`). The command's meaning and
+ * argument shape are private to the implementation — the caller and callee
+ * agree on both out of band.
+ */
+export interface Controllable {
+  /** Orleans `IControllable.ExecuteCommand`: run an opaque control command, return its result. */
+  executeCommand(command: number, arg: unknown): Promise<unknown>;
+}
+
+/**
+ * Orleans `StreamGeneratorCommand.Configure`: the control command a
+ * generator stream provider's `IControllable.ExecuteCommand` understands,
+ * reconfiguring its generator live (see `GeneratorPullingStreamProvider.reconfigure`).
+ */
+export const STREAM_GENERATOR_COMMAND_CONFIGURE = 20000;

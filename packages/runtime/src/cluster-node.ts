@@ -48,7 +48,7 @@ import {
   ConstructorChannelNamespacePredicateProvider,
   matchesChannelNamespace,
 } from "@tsva/core/channel-namespace-predicate";
-import { StreamConsumerInterface, type StreamProvider } from "@tsva/core/stream";
+import { StreamConsumerInterface, type Controllable, type StreamProvider } from "@tsva/core/stream";
 import type { InvocationRequest } from "@tsva/core/request";
 import { IManagementGrain, type SimpleGrainStatistic } from "@tsva/core/management-grain";
 import type { SiloAddress } from "@tsva/core/silo-address";
@@ -73,7 +73,12 @@ import {
 } from "@tsva/messaging/message";
 import { MessagePackSerializer } from "@tsva/messaging/msgpack-serializer";
 import type { Serializer } from "@tsva/messaging/serializer";
-import type { Connection, ConnectionPreamble, Listener, Transport } from "@tsva/messaging/transport";
+import type {
+  Connection,
+  ConnectionPreamble,
+  Listener,
+  Transport,
+} from "@tsva/messaging/transport";
 import { ActivationCollector } from "@tsva/runtime/activation-collector";
 import { ICancellationSourcesExtension } from "@tsva/runtime/cancellation-extension";
 import { Catalog, type GrainActivator, type RegisteredGrain } from "@tsva/runtime/catalog";
@@ -478,7 +483,10 @@ export class ClusterNode {
         lookupActivation: (id) => this.directory.lookup(id),
         isStatelessWorker: (type) => this.grainTypes.get(type)?.metadata.options.stateless === true,
         activationCountFor: (id) => this.gatherGrainActivationCount(id),
-        forceActivationCollection: (ageLimitMs) => this.forceActivationCollectionCluster(ageLimitMs),
+        forceActivationCollection: (ageLimitMs) =>
+          this.forceActivationCollectionCluster(ageLimitMs),
+        sendControlCommandToProvider: (providerName, command, arg) =>
+          this.sendControlCommandToProviderCluster(providerName, command, arg),
       }),
       { interfaces: [IManagementGrain] },
     );
@@ -617,7 +625,11 @@ export class ClusterNode {
     item: unknown,
   ): Promise<void> {
     const key = channelKey(channel);
-    emitBroadcastChannelEvent({ kind: "itemPublished", providerName: provider, channelId: channel });
+    emitBroadcastChannelEvent({
+      kind: "itemPublished",
+      providerName: provider,
+      channelId: channel,
+    });
     const deliver = (type: GrainType): Promise<void> =>
       this.dispatcher
         .invoke({
@@ -644,9 +656,7 @@ export class ClusterNode {
       return;
     }
     const results = await Promise.allSettled(deliveries);
-    const failures = results.filter(
-      (r): r is PromiseRejectedResult => r.status === "rejected",
-    );
+    const failures = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
     if (failures.length > 0) {
       throw new AggregateError(
         failures.map((f) => f.reason),
@@ -1081,7 +1091,8 @@ export class ClusterNode {
       // otherwise fall back to the caller's ambient placement hint captured
       // at `requestMigration` time, resolved against the live candidates now.
       const directed =
-        activation.migrationTarget ?? resolvePlacementHintValue(activation.migrationHint, candidates);
+        activation.migrationTarget ??
+        resolvePlacementHintValue(activation.migrationHint, candidates);
       const target = chooseMigrationTarget(
         activation.id.type,
         directed,
@@ -1470,6 +1481,10 @@ export class ClusterNode {
       void this.handleForceCollectRequest(message);
       return;
     }
+    if (message.system === "provctl") {
+      void this.handleProviderControlRequest(message);
+      return;
+    }
     if (message.system === "rebalance") {
       void this.handleRebalanceRequest(message);
       return;
@@ -1678,7 +1693,12 @@ export class ClusterNode {
     const id = this.serializer.deserialize<GrainId>(message.body);
     await this.reply(
       replyTo,
-      responseTo(message, "success", this.serializer.serialize(this.catalog.countFor(id)), this.options.local),
+      responseTo(
+        message,
+        "success",
+        this.serializer.serialize(this.catalog.countFor(id)),
+        this.options.local,
+      ),
     );
   }
 
@@ -1733,6 +1753,80 @@ export class ClusterNode {
         silo.equals(this.options.local)
           ? this.catalog.collectIdle(ageLimitMs)
           : this.sendForceCollect(silo, ageLimitMs).catch(() => undefined),
+      ),
+    );
+  }
+
+  /**
+   * Run one `IControllable.ExecuteCommand` locally against the named
+   * provider (Orleans `SendControlCommandToProvider`'s per-silo dispatch).
+   * Only a stream provider that implements `Controllable` accepts this;
+   * anything else (missing provider, or one that doesn't support control
+   * commands) throws.
+   */
+  private async executeProviderCommand(
+    providerName: string,
+    command: number,
+    arg: unknown,
+  ): Promise<unknown> {
+    const provider = this.streamProvider(providerName) as Partial<Controllable> | undefined;
+    if (provider !== undefined && typeof provider.executeCommand === "function") {
+      return provider.executeCommand(command, arg);
+    }
+    throw new Error(`no controllable provider named '${providerName}'`);
+  }
+
+  /** Tell a peer to run a provider control command, as a `system: "provctl"` request. */
+  private async sendProviderControl(
+    silo: SiloAddress,
+    providerName: string,
+    command: number,
+    arg: unknown,
+  ): Promise<unknown> {
+    return this.sendSystemMessage(
+      silo,
+      "provctl",
+      new GrainId("provctl", silo.ringKey),
+      this.serializer.serialize({ providerName, command, arg }),
+    );
+  }
+
+  private async handleProviderControlRequest(message: Message): Promise<void> {
+    const replyTo = message.sendingSilo;
+    if (replyTo === undefined) return;
+    try {
+      const { providerName, command, arg } = this.serializer.deserialize<{
+        providerName: string;
+        command: number;
+        arg: unknown;
+      }>(message.body);
+      const result = await this.executeProviderCommand(providerName, command, arg);
+      await this.reply(
+        replyTo,
+        responseTo(message, "success", this.serializer.serialize(result), this.options.local),
+      );
+    } catch (err) {
+      const { kind, body } = this.serializeError(err);
+      await this.reply(replyTo, responseTo(message, kind, body, this.options.local));
+    }
+  }
+
+  /**
+   * Invoke an `IControllable` control command on the named provider on every
+   * active silo, returning one result per silo (Orleans
+   * `IManagementGrain.SendControlCommandToProvider`), in active-silo order.
+   */
+  async sendControlCommandToProviderCluster(
+    providerName: string,
+    command: number,
+    arg?: unknown,
+  ): Promise<unknown[]> {
+    const active = activeSilos(this.options.membership.current());
+    return Promise.all(
+      active.map((silo) =>
+        silo.equals(this.options.local)
+          ? this.executeProviderCommand(providerName, command, arg)
+          : this.sendProviderControl(silo, providerName, command, arg),
       ),
     );
   }

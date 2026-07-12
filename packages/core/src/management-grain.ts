@@ -21,9 +21,9 @@ export interface SimpleGrainStatistic {
  * `getGrain(IManagementGrain, 0n)`) that surfaces cluster topology and
  * per-grain-type activation statistics. Only the subset of the upstream
  * surface the ported parity tests exercise is modelled here (GetHosts,
- * GetDetailedHosts, GetSimpleGrainStatistics, GetActivationAddress); the rest
- * of upstream's surface (ForceGarbageCollection, GetRuntimeStatistics,
- * SendControlCommandToProvider, ...) has no equivalent yet.
+ * GetDetailedHosts, GetSimpleGrainStatistics, GetActivationAddress,
+ * SendControlCommandToProvider); the rest of upstream's surface
+ * (ForceGarbageCollection, GetRuntimeStatistics, ...) has no equivalent yet.
  */
 export interface IManagementGrain extends GrainWithIntegerKey {
   /**
@@ -68,6 +68,19 @@ export interface IManagementGrain extends GrainWithIntegerKey {
    * `ForceActivationCollection(TimeSpan)`).
    */
   forceActivationCollection(ageLimit: Duration): Promise<void>;
+  /**
+   * Orleans `IManagementGrain.SendControlCommandToProvider`: invoke an
+   * `IControllable` control command on the named provider on EVERY active
+   * silo, returning one result per silo. `providerTypeName` is accepted for
+   * signature parity with upstream (which routes by provider type + name)
+   * but this port resolves providers by name only.
+   */
+  sendControlCommandToProvider(
+    providerTypeName: string,
+    providerName: string,
+    command: number,
+    arg?: unknown,
+  ): Promise<unknown[]>;
 }
 
 export const IManagementGrain = defineGrainInterface<IManagementGrain>(
