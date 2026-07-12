@@ -86,6 +86,8 @@ export interface CatalogOptions {
   localSilo?: () => SiloAddress | undefined;
   /** Resolves this silo's load-shedding test hooks, for a grain's `runtime.latchCpuUsage()`-style methods. */
   loadShedding?: () => SiloLoadSheddingTestHooks | undefined;
+  /** Pings a specific silo's control target, for a grain's `runtime.pingSilo()`. */
+  siloPing?: (siloAddress: SiloAddress, message?: string) => Promise<void>;
   /** Incoming call filters wrapping each grain-method dispatch (silo-wide). */
   incomingCallFilters?: readonly IncomingGrainCallFilter[];
   /**
@@ -423,6 +425,7 @@ export class Catalog {
       ...(this.options.loadShedding !== undefined
         ? { loadShedding: this.options.loadShedding }
         : {}),
+      ...(this.options.siloPing !== undefined ? { siloPing: this.options.siloPing } : {}),
     });
     const instance =
       this.options.grainActivator !== undefined
@@ -519,10 +522,7 @@ export class Catalog {
   }
 
   async deactivateAll(reason: DeactivationReason): Promise<void> {
-    const all = [
-      ...this.activations.values(),
-      ...[...this.workerActivations.values()].flat(),
-    ];
+    const all = [...this.activations.values(), ...[...this.workerActivations.values()].flat()];
     await Promise.all(all.map((a) => a.deactivate(reason)));
     this.activations.clear();
     this.workerActivations.clear();

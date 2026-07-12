@@ -6,6 +6,8 @@
 import { grain, reentrant } from "@tsva/core/decorators";
 import { Grain } from "@tsva/core/grain";
 import { Guid } from "@tsva/core/guid";
+import { IManagementGrain } from "@tsva/core/management-grain";
+import type { SiloAddress } from "@tsva/core/silo-address";
 import {
   IBlockingEchoTaskGrain,
   IEchoGrain,
@@ -69,6 +71,32 @@ export class EchoTaskGrain extends Grain implements IEchoTaskGrain {
 
   async pingAsync(): Promise<void> {
     return undefined;
+  }
+
+  async pingLocalSiloAsync(): Promise<void> {
+    await this.runtime.pingSilo(this.runtime.localSiloAddress(), "PingLocal");
+  }
+
+  async pingRemoteSiloAsync(siloAddress: SiloAddress): Promise<void> {
+    await this.runtime.pingSilo(siloAddress, "PingRemote");
+  }
+
+  async pingOtherSiloAsync(): Promise<void> {
+    await this.runtime.pingSilo(await this.findOtherSilo(), "PingOtherSilo");
+  }
+
+  async pingClusterMemberAsync(): Promise<void> {
+    await this.runtime.pingSilo(await this.findOtherSilo(), "PingClusterMember");
+  }
+
+  private async findOtherSilo(): Promise<SiloAddress> {
+    const mgmt = this.getGrain(IManagementGrain, 0n);
+    const hosts = await mgmt.getHosts();
+    const local = this.runtime.localSiloAddress();
+    for (const silo of hosts.keys()) {
+      if (!silo.equals(local)) return silo;
+    }
+    throw new Error("no other silo found in the cluster");
   }
 
   // Upstream: Thread.Sleep(delay) then throw — the callee is never

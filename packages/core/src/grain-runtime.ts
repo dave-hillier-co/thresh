@@ -107,4 +107,11 @@ export interface GrainRuntime {
   latchOverloaded(): void;
   /** Clear an overload latch set by `latchOverloaded` (Orleans `UnlatchOverloaded`). */
   unlatchOverloaded(): void;
+  /**
+   * Ping a specific silo's control target (Orleans `ISiloControl.Ping`): a
+   * health-check no-op that completes when the target silo is reachable.
+   * Used for silo-level diagnostics. Resolves once the target acknowledges;
+   * rejects if the silo is unreachable.
+   */
+  pingSilo(siloAddress: SiloAddress, message?: string): Promise<void>;
 }

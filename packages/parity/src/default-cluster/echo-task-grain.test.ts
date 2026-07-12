@@ -69,24 +69,41 @@ describe("DefaultCluster.Tests.General.EchoTaskGrainTests", () => {
     await grain.pingAsync();
   });
 
-  orleansTest.gap(
-    "GAP-MGMT-GRAIN",
+  orleansTest(
     "DefaultCluster.Tests.General.EchoTaskGrainTests.EchoGrain_PingSilo_Local",
+    async () => {
+      const grain = cluster.getGrain(IEchoTaskGrain, randomGuidKey());
+      await grain.pingLocalSiloAsync();
+    },
   );
 
-  orleansTest.gap(
-    "GAP-MGMT-GRAIN",
+  orleansTest(
     "DefaultCluster.Tests.General.EchoTaskGrainTests.EchoGrain_PingSilo_Remote",
+    async () => {
+      const grain = cluster.getGrain(IEchoTaskGrain, randomGuidKey());
+      const [silo1, silo2] = cluster.silos;
+      if (silo1 === undefined || silo2 === undefined) {
+        throw new Error("expected at least two silos in the cluster");
+      }
+      await grain.pingRemoteSiloAsync(silo1.address);
+      await grain.pingRemoteSiloAsync(silo2.address);
+    },
   );
 
-  orleansTest.gap(
-    "GAP-MGMT-GRAIN",
+  orleansTest(
     "DefaultCluster.Tests.General.EchoTaskGrainTests.EchoGrain_PingSilo_OtherSilo",
+    async () => {
+      const grain = cluster.getGrain(IEchoTaskGrain, randomGuidKey());
+      await grain.pingOtherSiloAsync();
+    },
   );
 
-  orleansTest.gap(
-    "GAP-MGMT-GRAIN",
+  orleansTest(
     "DefaultCluster.Tests.General.EchoTaskGrainTests.EchoGrain_PingSilo_OtherSilo_Membership",
+    async () => {
+      const grain = cluster.getGrain(IEchoTaskGrain, randomGuidKey());
+      await grain.pingClusterMemberAsync();
+    },
   );
 
   orleansTest("DefaultCluster.Tests.General.EchoTaskGrainTests.EchoTaskGrain_Await", async () => {
