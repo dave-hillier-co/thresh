@@ -439,6 +439,7 @@ export class ClusterNode {
         ? { grainExtensionFactories: options.grainExtensionFactories }
         : {}),
       loadShedding: () => this.siloTestHooks(),
+      siloPing: (target, message) => this.pingSilo(target, message),
     });
     this.dispatcher = new DistributedDispatcher({
       local: options.local,
@@ -1481,6 +1482,10 @@ export class ClusterNode {
       void this.handleForceCollectRequest(message);
       return;
     }
+    if (message.system === "siloping") {
+      void this.handleSiloPingRequest(message);
+      return;
+    }
     if (message.system === "provctl") {
       void this.handleProviderControlRequest(message);
       return;
@@ -1755,6 +1760,41 @@ export class ClusterNode {
           : this.sendForceCollect(silo, ageLimitMs).catch(() => undefined),
       ),
     );
+  }
+
+  /**
+   * Ping a specific silo's control target (Orleans `ISiloControl.Ping`): a
+   * health-check no-op that resolves once the target silo acknowledges. The
+   * local silo answers in-process; a peer answers a `system: "siloping"`
+   * request.
+   */
+  async pingSilo(target: SiloAddress, message?: string): Promise<void> {
+    if (target.equals(this.options.local)) return;
+    await this.sendSiloPing(target, message);
+  }
+
+  /** Tell a peer to answer a health-check ping, as a `system: "siloping"` request. */
+  private async sendSiloPing(silo: SiloAddress, message?: string): Promise<void> {
+    await this.sendSystemMessage(
+      silo,
+      "siloping",
+      new GrainId("siloping", silo.ringKey),
+      this.serializer.serialize(message ?? null),
+    );
+  }
+
+  private async handleSiloPingRequest(message: Message): Promise<void> {
+    const replyTo = message.sendingSilo;
+    if (replyTo === undefined) return;
+    try {
+      await this.reply(
+        replyTo,
+        responseTo(message, "success", this.serializer.serialize(null), this.options.local),
+      );
+    } catch (err) {
+      const { kind, body } = this.serializeError(err);
+      await this.reply(replyTo, responseTo(message, kind, body, this.options.local));
+    }
   }
 
   /**

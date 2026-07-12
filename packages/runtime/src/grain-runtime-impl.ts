@@ -23,6 +23,8 @@ export interface GrainRuntimeServices {
   localSilo?: () => SiloAddress | undefined;
   /** Resolves this silo's load-shedding test hooks, for `GrainRuntime.latchCpuUsage()`-style methods. */
   loadShedding?: () => SiloLoadSheddingTestHooks | undefined;
+  /** Pings a specific silo's control target, for `GrainRuntime.pingSilo()`. */
+  siloPing?: (siloAddress: SiloAddress, message?: string) => Promise<void>;
 }
 
 /** Per-activation `GrainRuntime`, reached by a grain through `this.runtime`. */
@@ -158,6 +160,12 @@ export class GrainRuntimeImpl implements GrainRuntime {
 
   unlatchOverloaded(): void {
     this.requireLoadShedding().unlatchOverloaded();
+  }
+
+  pingSilo(siloAddress: SiloAddress, message?: string): Promise<void> {
+    const ping = this.services.siloPing;
+    if (ping === undefined) throw new Error("silo ping is not configured on this runtime");
+    return ping(siloAddress, message);
   }
 
   private requireLoadShedding(): SiloLoadSheddingTestHooks {
