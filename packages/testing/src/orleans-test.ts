@@ -28,7 +28,6 @@ export type GapTag =
   | "GAP-STREAM-GENERATOR-ADAPTER" // no synthetic-generator queue-adapter stream provider
   | "GAP-STREAM-PROVIDER-CONFIG" // no config-load-failure distinction / typed stream-provider errors
   | "GAP-STREAM-PROVIDER-WIRING" // streams not wired into TestCluster / no client.getStreamProvider
-  | "GAP-STREAM-SUBSCRIPTION-MANAGER" // no administrative IStreamSubscriptionManager equivalent
   | "GAP-TIMER-VALIDATION" // GrainTimer.change() lacks due-time/period range validation
   | "GAP-TRACING" // no ActivitySource/span instrumentation on activation/call paths
   | "GAP-TRANSACTION-CONSISTENCY-HARNESS" // no randomized workload + serializable-history checker

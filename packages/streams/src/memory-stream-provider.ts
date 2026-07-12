@@ -1,3 +1,4 @@
+import { GrainId } from "@tsva/core/grain-id";
 import { keyToString, type GrainKey } from "@tsva/core/grain-key";
 import type { GrainType } from "@tsva/core/grain-type";
 import {
@@ -8,9 +9,11 @@ import {
   type StreamId,
   type StreamProvider,
   type StreamSubscriptionHandle,
+  type StreamSubscriptionManager,
   type SubscribeOptions,
 } from "@tsva/core/stream";
 import { implicitSubscriberIds } from "@tsva/streams/implicit-subscriptions";
+import { MemorySubscriptionManager } from "@tsva/streams/memory-subscription-manager";
 import type { StreamDeliver } from "@tsva/streams/stream-deliver";
 
 interface StreamEvent<T> {
@@ -47,11 +50,7 @@ class MemoryStream<T> implements AsyncStream<T> {
 
   constructor(
     readonly id: StreamId,
-    private readonly notifyImplicit: (
-      streamKey: string,
-      event: T,
-      token: number,
-    ) => Promise<void>,
+    private readonly notifyOutOfProcess: (streamKey: string, event: T, token: number) => Promise<void>,
   ) {}
 
   async publish(event: T): Promise<void> {
@@ -76,7 +75,7 @@ class MemoryStream<T> implements AsyncStream<T> {
     });
     for (const sub of this.subscriptions) void this.deliverTo(sub);
     for (const entry of entries) {
-      await this.notifyImplicit(`${this.id.namespace}/${this.id.key}`, entry.event, entry.token);
+      await this.notifyOutOfProcess(`${this.id.namespace}/${this.id.key}`, entry.event, entry.token);
     }
   }
 
@@ -160,6 +159,12 @@ export class MemoryStreamProvider implements StreamProvider {
   private readonly streams = new Map<string, MemoryStream<unknown>>();
   private deliver: StreamDeliver = async () => undefined;
   private implicitTypesFor: (namespace: string) => Iterable<GrainType> = () => [];
+  // Every memory provider exposes administrative subscription management
+  // (Orleans gates this behind `StreamSubscriptionManagerAdmin`, a separate
+  // DI service every streaming-configured silo registers regardless of a
+  // given provider's own pub-sub mode — there is no "explicit-subscribe-only"
+  // provider config to opt into upstream either).
+  private readonly subscriptionManager = new MemorySubscriptionManager();
 
   constructor(private readonly name: string = "default") {}
 
@@ -173,6 +178,16 @@ export class MemoryStreamProvider implements StreamProvider {
     this.implicitTypesFor = typesFor;
   }
 
+  /**
+   * Wire how an administratively-added subscription is confirmed with its
+   * target grain (Orleans `IStreamSubscriptionObserver.OnSubscribed`).
+   * Defaults to always-accept if never wired (e.g. a provider built without a
+   * hosting silo, as in a unit test that only exercises the registry).
+   */
+  setConfirmSubscription(confirm: (grainId: GrainId, streamKey: string) => Promise<boolean>): void {
+    this.subscriptionManager.setConfirm(confirm);
+  }
+
   getStream<T>(namespace: string, key: GrainKey): AsyncStream<T> {
     const keyString = keyToString(key);
     const mapKey = `${namespace}/${keyString}`;
@@ -180,16 +195,25 @@ export class MemoryStreamProvider implements StreamProvider {
     if (stream === undefined) {
       stream = new MemoryStream<unknown>(
         { provider: this.name, namespace, key: keyString },
-        (streamKey, event, token) => this.fanOutImplicit(streamKey, event, token),
+        (streamKey, event, token) => this.fanOut(streamKey, event, token),
       );
       this.streams.set(mapKey, stream);
     }
     return stream as AsyncStream<T>;
   }
 
-  private async fanOutImplicit(streamKey: string, event: unknown, token: number): Promise<void> {
+  getStreamSubscriptionManager(): StreamSubscriptionManager {
+    return this.subscriptionManager;
+  }
+
+  private async fanOut(streamKey: string, event: unknown, token: number): Promise<void> {
     const implicit = implicitSubscriberIds(streamKey, this.implicitTypesFor);
-    for (const subscriber of implicit) {
+    const admin = this.subscriptionManager.subscribersFor(streamKey);
+    const seen = new Set<string>();
+    for (const subscriber of [...implicit, ...admin]) {
+      const id = subscriber.toString();
+      if (seen.has(id)) continue;
+      seen.add(id);
       await this.deliver(subscriber, streamKey, event, token);
     }
   }

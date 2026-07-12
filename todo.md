@@ -69,15 +69,25 @@ shows per-tag counts). One-line definitions live on the `GapTag` union. Grouped 
 - [ ] **Timers** — `GAP-TIMER-VALIDATION` (callback-initiated Change/dispose portions).
 - [ ] **Placement & rebalancing** — `GAP-REBALANCER-CONTROL`, `GAP-ACTIVATION-REPARTITIONING`,
       `GAP-LOAD-SHEDDING`.
-- [ ] **Streams** — the memory stream provider now delivers to implicit subscribers and supports
-      batch publish/delivery (`GAP-STREAM-IMPLICIT-MEMORY`/`GAP-STREAM-BATCHING` closed). Remaining:
-      `GAP-STREAM-FILTER`, `GAP-STREAM-SUBSCRIPTION-MANAGER`,
+- [ ] **Streams** — the memory stream provider now delivers to implicit subscribers, supports
+      batch publish/delivery, and has an administrative `StreamSubscriptionManager`
+      (`GAP-STREAM-IMPLICIT-MEMORY`/`GAP-STREAM-BATCHING`/`GAP-STREAM-SUBSCRIPTION-MANAGER` closed).
+      Remaining: `GAP-STREAM-FILTER`,
       `GAP-STREAM-PROVIDER-WIRING` (stream delivery — `StreamConsumerInterface`/
       `BroadcastConsumerInterface` — bypasses the incoming-call-filter pipeline in
       `Activation.callMethod`; `TestCluster`/`SiloHost.getStreamProvider` now exist, so the
       remaining gap is filter coverage, not provider access), `GAP-STREAM-PROVIDER-CONFIG`,
       `GAP-STREAM-CACHE-DIAGNOSTICS`, `GAP-STREAM-GENERATOR-ADAPTER`,
       `GAP-BROADCAST-CHANNEL-CLIENT`, `GAP-CHANNEL-NAMESPACE-PREDICATE`.
+- [ ] **`MemoryStreamProvider` is per-silo, not cluster-shared** — `SiloBuilder.useMemoryStreams`
+      builds a fresh provider (and fresh admin subscription registry) on every silo that calls it;
+      `TestCluster`'s other backends (storage, reminders, journals, jobs) are explicitly shared
+      cluster-wide, streams are not. A producer grain and a consumer grain (implicit or
+      administratively-subscribed) landing on different silos of a multi-silo cluster publish
+      into, and register against, two independent provider instances that never see each other.
+      Currently sidestepped in `packages/parity/src/streaming/memory-programmatic-subcribe-tests.test.ts`
+      by pinning `initialSilos: 1`; fix properly by sharing named `MemoryStreamProvider` instances
+      across a `TestCluster` the way `storage`/`reminderTable`/etc. already are.
 - [ ] **Transactions** — `GAP-TRANSACTION-EXCEPTION-TYPES` (typed abort hierarchy),
       `GAP-TRANSACTION-CONTEXT-INTROSPECTION`, `GAP-TRANSACTION-EXCLUSIVE-LOCK`,
       `GAP-TRANSACTION-OVERLOAD-DETECTOR`,

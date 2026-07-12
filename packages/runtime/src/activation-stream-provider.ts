@@ -5,6 +5,7 @@ import type {
   StreamId,
   StreamProvider,
   StreamSubscriptionHandle,
+  StreamSubscriptionManager,
   SubscribeOptions,
 } from "@tsva/core/stream";
 
@@ -32,6 +33,11 @@ export class ActivationStreamProvider implements StreamProvider {
       this.runTurn,
       this.consumerId,
     );
+  }
+
+  /** Passed through unwrapped: administrative subscription management is not activation-scoped. */
+  getStreamSubscriptionManager(): StreamSubscriptionManager | undefined {
+    return this.base.getStreamSubscriptionManager?.();
   }
 }
 

@@ -75,8 +75,49 @@ export interface AsyncStream<T> {
   getSubscriptions(consumerId?: string): Promise<StreamSubscriptionHandle<T>[]>;
 }
 
+/**
+ * One administratively-created subscription (Orleans `Orleans.Streams.Core.StreamSubscription`):
+ * an arbitrary grain reference bound to a stream from outside that grain,
+ * without it ever calling `subscribe()` itself.
+ */
+export interface StreamSubscription {
+  readonly subscriptionId: string;
+  readonly streamId: StreamId;
+  readonly grainId: GrainId;
+}
+
+/**
+ * Administrative subscription management for a provider running in explicit
+ * pub-sub mode (Orleans `IStreamSubscriptionManager`, retrieved via
+ * `IStreamSubscriptionManagerAdmin.GetStreamSubscriptionManager(ExplicitSubscribeOnly)`):
+ * attach/detach/enumerate a stream's subscribers by grain id, independent of
+ * any implicit-subscription declaration or the grain calling `subscribe()`
+ * itself. `streamId.provider` is ignored by callers of a provider-scoped
+ * manager (it is implied by which provider's manager is being used) but kept
+ * on `StreamId` for symmetry with `AsyncStream.id`.
+ */
+export interface StreamSubscriptionManager {
+  addSubscription(streamId: StreamId, grainId: GrainId): Promise<StreamSubscription>;
+  removeSubscription(streamId: StreamId, subscriptionId: string): Promise<void>;
+  getSubscriptions(streamId: StreamId): Promise<StreamSubscription[]>;
+}
+
 export interface StreamProvider {
   getStream<T>(namespace: string, key: GrainKey): AsyncStream<T>;
+  /**
+   * Present only on a provider running in explicit pub-sub mode (Orleans
+   * `IStreamProvider.TryGetStreamSubscriptionManager`); absent on a provider
+   * that only supports a grain subscribing itself or declaring
+   * `@implicitStreamSubscription`.
+   */
+  getStreamSubscriptionManager?(): StreamSubscriptionManager | undefined;
+}
+
+/** Orleans `IStreamProvider.TryGetStreamSubscriptionManager(out manager)`, as a lookup. */
+export function tryGetStreamSubscriptionManager(
+  provider: StreamProvider,
+): StreamSubscriptionManager | undefined {
+  return provider.getStreamSubscriptionManager?.();
 }
 
 /**
@@ -88,19 +129,35 @@ export interface StreamProvider {
  * grain never calls `subscribe()`. The symbol key keeps it from colliding with
  * the grain's own (string-named) methods. Orleans' `StreamId` is namespace+key
  * (the provider is implied by context), so that is what the observer is given.
+ *
+ * The SAME symbol also serves an administratively-attached subscriber (see
+ * `StreamSubscriptionManager.addSubscription`), where it plays the role of
+ * Orleans' `IStreamSubscriptionObserver.OnSubscribed(handleFactory)`: called
+ * once, the first time delivery is attempted, to decide whether the grain
+ * wants the subscription at all. Returning `undefined` there declines it
+ * (Orleans: `handle.UnsubscribeAsync()` without ever resuming) — the runtime
+ * then drops the subscription. A grain that never declared this symbol at all
+ * (the common implicit case) is not affected: absence, not a declined return,
+ * is what silently drops delivery.
  */
 export const STREAM_SUBSCRIPTION_OBSERVER = Symbol.for("tsva.streamSubscriptionObserver");
 
-/** A grain that observes its implicitly-subscribed streams. */
+/** A grain that observes its implicitly- or administratively-subscribed streams. */
 export interface ImplicitStreamSubscriber {
-  [STREAM_SUBSCRIPTION_OBSERVER](namespace: string, key: string): StreamHandler<unknown>;
+  [STREAM_SUBSCRIPTION_OBSERVER](
+    namespace: string,
+    key: string,
+  ): StreamHandler<unknown> | undefined;
 }
 
 /** The grain's implicit-stream observer, bound to it, or `undefined` if it declares none. */
 export function implicitStreamObserver(
   instance: object,
-): ((namespace: string, key: string) => StreamHandler<unknown>) | undefined {
-  return createSymbolObserver<StreamHandler<unknown>>(instance, STREAM_SUBSCRIPTION_OBSERVER);
+): ((namespace: string, key: string) => StreamHandler<unknown> | undefined) | undefined {
+  return createSymbolObserver<StreamHandler<unknown> | undefined>(
+    instance,
+    STREAM_SUBSCRIPTION_OBSERVER,
+  );
 }
 
 /**
