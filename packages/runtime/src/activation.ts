@@ -27,7 +27,11 @@ import { MigrationBag } from "@tsva/core/grain-migration-participant";
 import type { GrainRuntime } from "@tsva/core/grain-runtime";
 import type { GrainTimer, TimerOptions } from "@tsva/core/grain-timer";
 import type { InvokeMethodOptions } from "@tsva/core/invoke-options";
-import { formatDeactivationReason, type ActivationReason, type DeactivationReason } from "@tsva/core/reasons";
+import {
+  formatDeactivationReason,
+  type ActivationReason,
+  type DeactivationReason,
+} from "@tsva/core/reasons";
 import type { SiloAddress } from "@tsva/core/silo-address";
 import { migrationParticipantsOf } from "@tsva/runtime/migration-participants";
 import { getGrainInterface } from "@tsva/core/grain-interface";
@@ -544,7 +548,11 @@ export class ActivationData implements GrainContext {
       }
       const [streamKey, event, token] = req.args as [string, unknown, number];
       const handler = this.streamHandlerFor(streamKey);
-      if (handler !== undefined) await handler.onNext(event, new SequenceToken(token));
+      if (handler !== undefined) {
+        await this.runSystemExtensionDelivery(req, () =>
+          handler.onNext(event, new SequenceToken(token)),
+        );
+      }
       return undefined;
     }
     // Broadcast-channel delivery is likewise a system extension: route the
@@ -552,7 +560,11 @@ export class ActivationData implements GrainContext {
     if (req.interfaceId === BroadcastConsumerInterface.id) {
       const [channelKey, item] = req.args as [string, unknown];
       const handler = this.broadcastHandlerFor(channelKey);
-      if (handler !== undefined) await handler.onPublished(item);
+      if (handler !== undefined) {
+        await this.runSystemExtensionDelivery(req, () =>
+          Promise.resolve(handler.onPublished(item)),
+        );
+      }
       return undefined;
     }
     // Durable-job delivery is a system extension: run one attempt of
@@ -623,6 +635,78 @@ export class ActivationData implements GrainContext {
     return await runCallFilters(filters, context, () =>
       Promise.resolve(method.apply(this.instance, context.args)),
     );
+  }
+
+  /**
+   * Deliver a system-extension event (a stream `onNext`, a broadcast-channel
+   * `onPublished`) through the SAME incoming call-filter pipeline as an
+   * ordinary grain method (Orleans parity: an `IIncomingGrainCallFilter` wraps
+   * stream and broadcast deliveries too, so a grain that filters its own calls
+   * — e.g. `StreamInterceptionGrain` — can observe and react to a delivery it
+   * just processed). A grain with no filters (the common case) delivers
+   * directly, so this is behaviour-neutral for every non-filtering consumer.
+   */
+  private runSystemExtensionDelivery(
+    req: InvocationRequest,
+    deliver: () => Promise<void>,
+  ): Promise<void> {
+    return this.deliverThroughIncomingFilters(
+      { interfaceId: req.interfaceId, methodName: req.method, source: req.sender, args: req.args },
+      deliver,
+    );
+  }
+
+  /**
+   * Run a memory-stream `onNext` delivery (which reaches this activation as a
+   * scheduler turn, not a `callMethod` dispatch — see
+   * `ActivationStreamProvider`) through the incoming call-filter pipeline, so a
+   * grain subscribed to a memory stream sees the same filter wrapping as one
+   * fed by a pulling-agent provider (whose delivery flows through `callMethod`'s
+   * `StreamConsumerInterface` branch). Behaviour-neutral without filters.
+   */
+  runStreamDelivery(deliver: () => Promise<void>): Promise<unknown> {
+    return this.runStreamTurn(() =>
+      this.deliverThroughIncomingFilters(
+        {
+          interfaceId: StreamConsumerInterface.id,
+          methodName: "onNext",
+          source: this.id,
+          args: [],
+        },
+        deliver,
+      ),
+    );
+  }
+
+  private async deliverThroughIncomingFilters(
+    seed: {
+      interfaceId: number;
+      methodName: string;
+      source: GrainId | undefined;
+      args: readonly unknown[];
+    },
+    deliver: () => Promise<void>,
+  ): Promise<void> {
+    const own = grainIncomingFilter(this.instance);
+    const filters =
+      own === undefined ? this.incomingCallFilters : [...this.incomingCallFilters, own];
+    if (filters.length === 0) {
+      await deliver();
+      return;
+    }
+    const context: IncomingGrainCallContext = {
+      target: this.id,
+      source: seed.source,
+      interfaceId: seed.interfaceId,
+      interfaceName: getGrainInterface(seed.interfaceId)?.name ?? "",
+      methodName: seed.methodName,
+      args: [...seed.args],
+      result: undefined,
+      headers: requestContextStore() ?? {},
+      grain: this.instance,
+      invoke: () => Promise.resolve(),
+    };
+    await runCallFilters(filters, context, () => Promise.resolve(deliver()));
   }
 
   /**

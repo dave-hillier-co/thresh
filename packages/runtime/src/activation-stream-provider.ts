@@ -25,6 +25,13 @@ export class ActivationStreamProvider implements StreamProvider {
     private readonly runTurn: RunTurn,
     /** The calling grain's identity; scopes durable subscriptions to this consumer. */
     private readonly consumerId: string,
+    /**
+     * Runs an `onNext` delivery — defaults to `runTurn`. The grain runtime
+     * passes a variant that additionally routes the delivery through the
+     * incoming call-filter pipeline (Orleans parity), while `onError`/
+     * `onCompleted` keep using `runTurn`.
+     */
+    private readonly runOnNext: RunTurn = runTurn,
   ) {}
 
   getStream<T>(namespace: string, key: GrainKey): AsyncStream<T> {
@@ -32,6 +39,7 @@ export class ActivationStreamProvider implements StreamProvider {
       this.base.getStream<T>(namespace, key),
       this.runTurn,
       this.consumerId,
+      this.runOnNext,
     );
   }
 
@@ -46,6 +54,7 @@ class TurnDeliveringStream<T> implements AsyncStream<T> {
     private readonly inner: AsyncStream<T>,
     private readonly runTurn: RunTurn,
     private readonly consumerId: string,
+    private readonly runOnNext: RunTurn,
   ) {}
 
   get id(): StreamId {
@@ -60,16 +69,16 @@ class TurnDeliveringStream<T> implements AsyncStream<T> {
     handler: StreamHandler<T>,
     options?: SubscribeOptions,
   ): Promise<StreamSubscriptionHandle<T>> {
-    const handle = await this.inner.subscribe(wrapHandler(handler, this.runTurn), {
+    const handle = await this.inner.subscribe(wrapHandler(handler, this.runTurn, this.runOnNext), {
       ...options,
       consumerId: this.consumerId,
     });
-    return new TurnDeliveringHandle(handle, this.runTurn);
+    return new TurnDeliveringHandle(handle, this.runTurn, this.runOnNext);
   }
 
   async getSubscriptions(): Promise<StreamSubscriptionHandle<T>[]> {
     const handles = await this.inner.getSubscriptions(this.consumerId);
-    return handles.map((h) => new TurnDeliveringHandle(h, this.runTurn));
+    return handles.map((h) => new TurnDeliveringHandle(h, this.runTurn, this.runOnNext));
   }
 }
 
@@ -77,10 +86,11 @@ class TurnDeliveringHandle<T> implements StreamSubscriptionHandle<T> {
   constructor(
     private readonly inner: StreamSubscriptionHandle<T>,
     private readonly runTurn: RunTurn,
+    private readonly runOnNext: RunTurn,
   ) {}
 
   resume(handler: StreamHandler<T>): Promise<void> {
-    return this.inner.resume(wrapHandler(handler, this.runTurn));
+    return this.inner.resume(wrapHandler(handler, this.runTurn, this.runOnNext));
   }
 
   unsubscribe(): Promise<void> {
@@ -88,11 +98,15 @@ class TurnDeliveringHandle<T> implements StreamSubscriptionHandle<T> {
   }
 }
 
-function wrapHandler<T>(handler: StreamHandler<T>, runTurn: RunTurn): StreamHandler<T> {
+function wrapHandler<T>(
+  handler: StreamHandler<T>,
+  runTurn: RunTurn,
+  runOnNext: RunTurn,
+): StreamHandler<T> {
   const onError = handler.onError;
   const onCompleted = handler.onCompleted;
   return {
-    onNext: (event, token) => runTurn(() => handler.onNext(event, token)) as Promise<void>,
+    onNext: (event, token) => runOnNext(() => handler.onNext(event, token)) as Promise<void>,
     ...(onError !== undefined
       ? { onError: (err) => runTurn(() => onError.call(handler, err)) as Promise<void> }
       : {}),
