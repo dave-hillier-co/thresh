@@ -18,7 +18,6 @@ export type GapTag =
   | "GAP-BROADCAST-CHANNEL-CLIENT" // no client-side broadcast-channel writer/diagnostics/regex namespaces
   | "GAP-CHANNEL-NAMESPACE-PREDICATE" // no IChannelNamespacePredicate provider abstraction
   | "GAP-CLIENT-SILO-SEPARATION" // no separate client process distinct from a silo in the harness
-  | "GAP-EVENT-SOURCING" // no JournaledGrain<TState,TEvent>/log-consistency-provider mechanism
   | "GAP-GRAIN-DIRECTORY-API" // internal directory not exposed via a pluggable IGrainDirectory API
   | "GAP-GRAIN-SERVICE" // no per-silo grain-service registration/lifecycle mechanism
   | "GAP-LOAD-SHEDDING" // no overload detector / load shedding / CPU-aware placement scoring

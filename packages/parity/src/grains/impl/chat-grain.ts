@@ -1,10 +1,12 @@
 // Ported from dotnet/orleans test/Grains/TestGrains/EventSourcing/{ChatGrain,ChatFormat,ChatEvents}.cs @ v10.1.0 (MIT).
 // Upstream is a `JournaledGrain<XDocument, IChatEvent>`: every mutation is a
 // replayable event applied to an in-memory `XDocument`, and `GetChat` returns
-// `TentativeState`. This framework has no journaled-grain machinery
-// (GAP-EVENT-SOURCING); the tests only assert on the rendered document's
-// content though, so this keeps the same document shape and truncation rule
-// (`MaxNumPosts`) with plain in-memory state instead of a real event log.
+// `TentativeState`. This framework now has `JournaledGrain` (see
+// `@tsva/core/journaled-grain`, added for the `event-sourcing` parity suite),
+// but the ported chat tests only assert on the rendered document's content —
+// not on replay-after-deactivation or tentative-vs-confirmed state — so this
+// keeps the same document shape and truncation rule (`MaxNumPosts`) with plain
+// in-memory state rather than porting a real event log for no test benefit.
 import { grain } from "@tsva/core/decorators";
 import { Grain } from "@tsva/core/grain";
 import type { Guid } from "@tsva/core/guid";

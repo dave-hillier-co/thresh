@@ -25,6 +25,16 @@ export interface TurnSchedulerOptions {
    * grain declared no predicate — admission ignores it entirely.
    */
   mayInterleave?: MayInterleavePredicate;
+  /**
+   * Nothing — not even a reentrant/alwaysInterleave/matching-reentrancy-id
+   * turn — may run concurrently with the very first turn scheduled, until it
+   * settles. Orleans guarantees `OnActivateAsync` (here: the activation turn,
+   * which also runs state binding) fully completes before any request is
+   * dispatched, even for a fully reentrant grain; the generic admission rules
+   * below are otherwise unaware that a "first turn" is special, so the
+   * activation layer opts into this explicitly.
+   */
+  barrierFirstTurn?: boolean;
 }
 
 interface QueuedTurn {
@@ -56,10 +66,14 @@ export class TurnScheduler {
   private readonly queue: QueuedTurn[] = [];
   private readonly running = new Set<RunningTurn>();
   private readonly reentrantSections = new Map<string, number>();
+  private readonly barrierFirstTurn: boolean;
+  private firstTurnSeen = false;
+  private firstTurnSettled = false;
 
   constructor(options: TurnSchedulerOptions = {}) {
     this.reentrant = options.reentrant ?? false;
     this.mayInterleavePredicate = options.mayInterleave;
+    this.barrierFirstTurn = options.barrierFirstTurn ?? false;
   }
 
   /**
@@ -104,6 +118,7 @@ export class TurnScheduler {
 
   private mayAdmit(turn: Turn<unknown>): boolean {
     if (this.running.size === 0) return true;
+    if (this.barrierFirstTurn && !this.firstTurnSettled) return false;
     if (this.reentrant) return true;
     if (turn.options.alwaysInterleave) return true;
     if (turn.options.readOnly && this.allRunningReadOnly()) return true;
@@ -138,6 +153,8 @@ export class TurnScheduler {
       options: item.turn.options,
       reentrancyId: item.turn.reentrancyId,
     };
+    const isFirstTurn = !this.firstTurnSeen;
+    this.firstTurnSeen = true;
     this.running.add(running);
     if (running.reentrancyId !== undefined) this.enterSection(running.reentrancyId);
 
@@ -147,6 +164,7 @@ export class TurnScheduler {
       .finally(() => {
         this.running.delete(running);
         if (running.reentrancyId !== undefined) this.leaveSection(running.reentrancyId);
+        if (isFirstTurn) this.firstTurnSettled = true;
         this.pump();
       });
   }

@@ -48,6 +48,7 @@ import { MemoryJournalStorage } from "@tsva/journaling/memory-journal-storage";
 import { RedisJournalStorage } from "@tsva/journaling/redis-journal-storage";
 import { JournalStorageRegistry } from "@tsva/journaling/journal-storage-registry";
 import { bindDurableStates } from "@tsva/journaling/durable-state-activator";
+import { bindJournaledGrain } from "@tsva/journaling/journaled-grain-binder";
 import type { StreamProvider } from "@tsva/core/stream";
 import type { DurableJobsOptions } from "@tsva/core/durable-job";
 import { activeSilos } from "@tsva/core/membership";
@@ -714,6 +715,12 @@ export class SiloBuilder {
           // One manager per grain owns the log; replay rebuilds all durable
           // structures. On rehydration skip replay (parity with persistent state).
           await bindDurableStates(instance, grainId, journalStorage, {
+            replay: mode !== "rehydrate",
+            ...(snapshotThreshold !== undefined ? { snapshotThreshold } : {}),
+          });
+          // A `JournaledGrain` owns its own single-machine log (the confirmed
+          // event sequence); install its adaptor and replay it the same way.
+          await bindJournaledGrain(instance, grainId, journalStorage, {
             replay: mode !== "rehydrate",
             ...(snapshotThreshold !== undefined ? { snapshotThreshold } : {}),
           });

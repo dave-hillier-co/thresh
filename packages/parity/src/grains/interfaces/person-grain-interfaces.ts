@@ -10,16 +10,16 @@ export interface PersonAttributes {
   gender: GenderType;
 }
 
-// Upstream also declares `RunTentativeConfirmedStateTest` (and the grain
-// implementation adds `ChangeLastName`/`ConfirmChanges`/`GetConfirmedVersion`/
-// `GetTentativeVersion`), all of which exist only to probe the tentative vs.
-// confirmed state split of `JournaledGrain`. This framework has no
-// journaled-grain / log-consistency-provider mechanism (GAP-EVENT-SOURCING),
-// so those members are omitted.
 export interface IPersonGrain extends GrainWithGuidKey {
   registerBirth(person: PersonAttributes): Promise<void>;
   marry(spouse: IPersonGrain): Promise<void>;
   getTentativePersonalAttributes(): Promise<PersonAttributes>;
+  /**
+   * Upstream test-only member: probes the tentative-vs-confirmed state split
+   * from inside the grain, since the interleaving of its steps has to be
+   * deterministic (see `PersonGrainTests.JournaledGrainTests_TentativeConfirmedState`).
+   */
+  runTentativeConfirmedStateTest(): Promise<void>;
 }
 
 export const IPersonGrain = defineGrainInterface<IPersonGrain>(

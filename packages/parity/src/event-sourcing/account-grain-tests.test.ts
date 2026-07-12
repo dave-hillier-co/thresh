@@ -22,12 +22,12 @@ describe("Tester.EventSourcingTests.AccountGrainTests", () => {
     await cluster.dispose();
   });
 
-  // Upstream skipped: https://github.com/dotnet/orleans/issues/5605. It also
-  // exercises `TestGrains.AccountGrain`'s `LogStorage` consistency provider
-  // (RaiseEvent/ConfirmEvents/RetrieveConfirmedEvents), which does not exist
-  // here (GAP-EVENT-SOURCING) — excluded on both counts.
+  // Upstream skipped: https://github.com/dotnet/orleans/issues/5605. This
+  // framework now has `JournaledGrain` (see `@tsva/core/journaled-grain`), but
+  // there is no reason to port a real `AccountGrain` event-log variant just to
+  // exercise a test upstream itself never runs.
   orleansTest.excluded(
-    "skipped upstream (dotnet/orleans#5605); also needs the LogStorage consistency provider (GAP-EVENT-SOURCING)",
+    "skipped upstream (dotnet/orleans#5605)",
     "Tester.EventSourcingTests.AccountGrainTests.AccountWithLog",
   );
 

@@ -191,6 +191,33 @@ describe("TurnScheduler", () => {
     a.resolve();
   });
 
+  it("barrierFirstTurn: a reentrant scheduler still queues everything behind the first turn", async () => {
+    const sched = new TurnScheduler({ reentrant: true, barrierFirstTurn: true });
+    const log: string[] = [];
+    const activation = deferred();
+    void sched.schedule({
+      options: {},
+      run: async () => {
+        log.push("activate:start");
+        await activation.promise;
+        log.push("activate:end");
+      },
+    });
+    void sched.schedule({
+      options: {},
+      run: async () => {
+        log.push("call:start");
+      },
+    });
+    await flush();
+    // The second turn must not start until the first (activation) settles,
+    // even though the scheduler is fully reentrant.
+    expect(log).toEqual(["activate:start"]);
+    activation.resolve();
+    await flush();
+    expect(log).toEqual(["activate:start", "activate:end", "call:start"]);
+  });
+
   describe("mayInterleave predicate (Orleans' [MayInterleave])", () => {
     it("admits an incoming turn whose method matches the predicate while another turn runs", async () => {
       const sched = new TurnScheduler({ mayInterleave: (method) => method === "goFast" });

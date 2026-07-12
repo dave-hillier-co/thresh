@@ -1,10 +1,12 @@
 // Ported from dotnet/orleans test/Grains/TestGrains/EventSourcing/AccountGrain.cs @ v10.1.0 (MIT).
 // Upstream `AccountGrain` is a `JournaledGrain<GrainState, Transaction>` with a
 // `LogStorage` consistency provider, so `GetTransactionLog` can replay the full
-// event history. This framework has no journaled-grain / log-consistency-provider
-// mechanism (GAP-EVENT-SOURCING), so only the `AccountGrain_PersistStateOnly`
-// variant — which keeps just the latest balance and rejects `GetTransactionLog`
-// with `NotSupportedException` — is portable; it needs no event log.
+// event history. This framework now has `JournaledGrain` (see
+// `@tsva/core/journaled-grain`), but the only ported test exercising a real
+// event log (`AccountGrainTests.AccountWithLog`) is skipped upstream too
+// (dotnet/orleans#5605), so only the `AccountGrain_PersistStateOnly` variant —
+// which keeps just the latest balance and rejects `GetTransactionLog` with
+// `NotSupportedException` — is ported here; it needs no event log.
 import { grain } from "@tsva/core/decorators";
 import { Grain } from "@tsva/core/grain";
 import type { Guid } from "@tsva/core/guid";
