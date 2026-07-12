@@ -64,7 +64,7 @@ describe("implicit stream subscriptions — observer", () => {
     const instance = new WatcherGrain();
     const observe = implicitStreamObserver(instance);
     expect(observe).toBeDefined();
-    await observe!("chat", "general").onNext("hi", undefined as never);
+    await observe!("chat", "general")!.onNext("hi", undefined as never);
     expect(seen).toEqual(["watcher:chat/general:hi"]);
   });
 

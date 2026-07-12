@@ -656,6 +656,26 @@ export class ClusterNode {
   }
 
   /**
+   * Confirm an administratively-created subscription (`StreamSubscriptionManager.addSubscription`)
+   * with the target grain's activation, routed through the dispatcher exactly
+   * like `deliverStreamEvent` — resolving (and caching) its
+   * `STREAM_SUBSCRIPTION_OBSERVER` without delivering an event. `false` means
+   * the grain declared an observer and explicitly declined; the caller then
+   * removes the subscription (Orleans: `OnSubscribed` calls `handle.UnsubscribeAsync()`
+   * without ever resuming).
+   */
+  async confirmStreamSubscription(grainId: GrainId, streamKey: string): Promise<boolean> {
+    return (await this.dispatcher.invoke({
+      target: grainId,
+      interfaceId: StreamConsumerInterface.id,
+      method: "confirmStreamSubscription",
+      args: [streamKey],
+      options: {},
+      reentrancyId: newChainId(),
+    })) as boolean;
+  }
+
+  /**
    * Ask the elected TM whether a transaction committed, routed to its grain over
    * the dispatcher. Used by a recovering transactional resource to resolve an
    * in-doubt pending record left by a mid-commit failure.

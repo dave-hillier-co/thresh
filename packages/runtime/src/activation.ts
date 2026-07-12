@@ -283,8 +283,25 @@ export class ActivationData implements GrainContext {
     if (observe === undefined) return undefined;
     const [namespace, key] = parseNamespaceKey(streamKey);
     const handler = observe(namespace, key);
-    this.streamHandlers.set(streamKey, handler);
+    // A decline (`undefined`) is not cached: `probeStreamSubscription` needs
+    // `observe` re-invoked so it can tell "declined" apart from "no observer
+    // at all" (see its doc comment), and a declined admin subscription is
+    // removed by its caller anyway, so there is nothing to cache toward.
+    if (handler !== undefined) this.streamHandlers.set(streamKey, handler);
     return handler;
+  }
+
+  /**
+   * Resolve (and cache) this activation's `STREAM_SUBSCRIPTION_OBSERVER` for
+   * `streamKey`, without delivering anything — the confirmation step of an
+   * administrative subscription (Orleans `IStreamSubscriptionObserver.OnSubscribed`).
+   * `true` when the grain accepts (or never declared an observer at all, so
+   * there is nothing to decline); `false` when it declared one and explicitly
+   * declined (returned `undefined`) — the caller then drops the subscription.
+   */
+  private probeStreamSubscription(streamKey: string): boolean {
+    if (implicitStreamObserver(this.instance) === undefined) return true;
+    return this.streamHandlerFor(streamKey) !== undefined;
   }
 
   /**
@@ -521,6 +538,10 @@ export class ActivationData implements GrainContext {
     // Stream delivery is a system extension, not a grain method: route it to the
     // handler the grain registered when it subscribed. Already on a turn here.
     if (req.interfaceId === StreamConsumerInterface.id) {
+      if (req.method === "confirmStreamSubscription") {
+        const [streamKey] = req.args as [string];
+        return this.probeStreamSubscription(streamKey);
+      }
       const [streamKey, event, token] = req.args as [string, unknown, number];
       const handler = this.streamHandlerFor(streamKey);
       if (handler !== undefined) await handler.onNext(event, new SequenceToken(token));

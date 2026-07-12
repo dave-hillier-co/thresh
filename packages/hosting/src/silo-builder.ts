@@ -840,6 +840,9 @@ export class SiloBuilder {
         node.deliverStreamEvent(grainId, streamKey, event, token),
       );
       provider.setImplicitSubscribers((namespace) => node.implicitGrainTypes(namespace));
+      provider.setConfirmSubscription((grainId, streamKey) =>
+        node.confirmStreamSubscription(grainId, streamKey),
+      );
     }
 
     return buildSiloHost({
