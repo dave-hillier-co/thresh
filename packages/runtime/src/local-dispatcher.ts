@@ -11,6 +11,11 @@ export class LocalDispatcher implements Dispatcher {
   constructor(private readonly catalog: Catalog) {}
 
   async invoke(req: InvocationRequest): Promise<unknown> {
+    // [StatelessWorker] grains scale to several local activations per id
+    // instead of the ordinary exactly-one; see `Catalog.pickOrScaleWorker`.
+    if (this.catalog.isStatelessWorkerType(req.target.type)) {
+      return this.catalog.pickOrScaleWorker(req.target).invoke(req);
+    }
     const activation = await this.catalog.getOrCreate(req.target);
     return activation.invoke(req);
   }

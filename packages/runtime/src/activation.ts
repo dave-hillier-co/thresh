@@ -462,13 +462,20 @@ export class ActivationData implements GrainContext {
     }
   }
 
-  isStale(): boolean {
+  /**
+   * `ageLimitOverrideMs`, when given, replaces `collectionAgeMs` for this
+   * check — the management grain's `ForceActivationCollection(ageLimit)`
+   * (Orleans parity) sweeps with a caller-chosen age (e.g. zero, to collect
+   * every currently-idle activation) rather than each activation's own
+   * configured collection age.
+   */
+  isStale(ageLimitOverrideMs?: number): boolean {
     if (this.state !== "valid") return false;
     if (this.scheduler.busy) return false;
     const now = this.time.now();
     if (now < this.keepAliveUntilMs) return false;
     if (this.deactivateRequested) return true;
-    return now - this.lastActiveMs >= this.collectionAgeMs;
+    return now - this.lastActiveMs >= (ageLimitOverrideMs ?? this.collectionAgeMs);
   }
 
   /**

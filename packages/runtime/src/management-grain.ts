@@ -1,3 +1,4 @@
+import { durationToMs, type Duration } from "@tsva/core/duration";
 import type { GrainAddress } from "@tsva/core/grain-address";
 import { Grain } from "@tsva/core/grain";
 import type { GrainId } from "@tsva/core/grain-id";
@@ -29,6 +30,14 @@ export interface ManagementContext {
   lookupActivation(id: GrainId): Promise<GrainAddress | undefined>;
   /** Whether `type` is registered with `[StatelessWorker]`-equivalent placement. */
   isStatelessWorker(type: GrainType): boolean;
+  /**
+   * Live activation count for `id`, amalgamated across every active silo —
+   * works for a `[StatelessWorker]` id too (0..maxLocalWorkers on whichever
+   * silos have activated it), unlike `lookupActivation`.
+   */
+  activationCountFor(id: GrainId): Promise<number>;
+  /** Force an immediate idle-activation sweep, with `ageLimitMs` in place of each activation's own age, on every active silo. */
+  forceActivationCollection(ageLimitMs: number): Promise<void>;
 }
 
 /**
@@ -75,6 +84,18 @@ export function createManagementGrainType(ctx: ManagementContext): new () => Gra
       }
       const addr = await ctx.lookupActivation(identity.grainId);
       return addr ?? null;
+    }
+
+    async getGrainActivationCount(grainReference: unknown): Promise<number> {
+      const identity = grainReferenceIdentity(grainReference);
+      if (identity === undefined) {
+        throw new TypeError("getGrainActivationCount: reference is not a grain reference");
+      }
+      return ctx.activationCountFor(identity.grainId);
+    }
+
+    async forceActivationCollection(ageLimit: Duration): Promise<void> {
+      await ctx.forceActivationCollection(durationToMs(ageLimit));
     }
   }
   setGrainOptions(ManagementGrain, MANAGEMENT_GRAIN_TYPE, {});

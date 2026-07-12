@@ -1,3 +1,4 @@
+import type { Duration } from "./duration";
 import type { GrainAddress } from "./grain-address";
 import { defineGrainInterface } from "./grain-interface";
 import type { GrainWithIntegerKey } from "./key-kinds";
@@ -52,6 +53,21 @@ export interface IManagementGrain extends GrainWithIntegerKey {
    * `InvalidOperationException`).
    */
   getActivationAddress(reference: unknown): Promise<GrainAddress | null>;
+  /**
+   * The number of live activations of the same grain as `grainReference`,
+   * amalgamated across every active silo (Orleans `GetGrainActivationCount`).
+   * Unlike `getActivationAddress`, this works for `StatelessWorker` grains
+   * too — it is in fact the only way to observe how many local activations
+   * one has scaled up to, since they have no single address.
+   */
+  getGrainActivationCount(grainReference: unknown): Promise<number>;
+  /**
+   * Forces an immediate activation-collection sweep on every active silo,
+   * treating any activation idle for at least `ageLimit` as collectible
+   * regardless of the silo's normal collection age (Orleans
+   * `ForceActivationCollection(TimeSpan)`).
+   */
+  forceActivationCollection(ageLimit: Duration): Promise<void>;
 }
 
 export const IManagementGrain = defineGrainInterface<IManagementGrain>(

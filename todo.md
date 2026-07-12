@@ -31,9 +31,12 @@ vertical slices (see [`CLAUDE.md`](CLAUDE.md)).
       crash, rather than relying on one-shot recovery at next activation.
 - [ ] **Grain observers / typed client callbacks** — `CreateObjectReference<T>()` surface for
       server-to-client push, including W3C `traceparent` propagation back to the client.
-- [ ] **`StatelessWorker` placement enforcement** — honor the option in the catalog/dispatcher so
-      multiple activations per key can be created up to `maxLocalWorkers`, with placement-local
-      delivery.
+- [x] **`StatelessWorker` placement enforcement** — the catalog now scales a stateless-worker grain
+      id to multiple local activations on demand (up to `maxLocalWorkers`), routed synchronously
+      (no directory) from `DistributedDispatcher`/`LocalDispatcher`; ordinary grains keep exactly
+      one activation per id. `IManagementGrain.getGrainActivationCount`/`forceActivationCollection`
+      added to observe/force-collect it. GAP-STATELESS-WORKER's remaining 3 skips are unrelated
+      (stream-provider wiring, 2 placement-test cases) — see their own gap comments.
 - [ ] **`@readOnly` runtime check** — at least a dev-mode mutation guard that detects state writes
       from a `@readOnly` call and surfaces the violation.
 - [ ] **Directory handoff ACK & cleanup** — ACK-delete loop on snapshot handoff so retained

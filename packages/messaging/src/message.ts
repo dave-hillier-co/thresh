@@ -44,9 +44,9 @@ export interface Message {
   method: string;
 
   /**
-   * Marks a system request (directory, migration, manifest, load, stats, or
-   * rebalance) or the client-directory gossip (`client`, oneWay only) vs a
-   * grain call.
+   * Marks a system request (directory, migration, manifest, load, stats,
+   * actcount, forcecollect, or rebalance) or the client-directory gossip
+   * (`client`, oneWay only) vs a grain call.
    */
   system?:
     | "directory"
@@ -54,6 +54,8 @@ export interface Message {
     | "manifest"
     | "load"
     | "stats"
+    | "actcount"
+    | "forcecollect"
     | "rebalance"
     | "client"
     | undefined;
