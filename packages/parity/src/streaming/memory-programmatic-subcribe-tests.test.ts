@@ -97,7 +97,7 @@ class PassiveConsumerGrain extends Grain implements IPassiveConsumerGrain {
   }
 }
 
-interface IJerkConsumerGrain extends GrainWithGuidKey {}
+type IJerkConsumerGrain = GrainWithGuidKey;
 const IJerkConsumerGrain = defineGrainInterface<IJerkConsumerGrain>("IJerkConsumerGrain");
 
 /** Unsubscribes on any subscription added to it (Orleans `Jerk_ConsumerGrain`). */
@@ -209,7 +209,9 @@ orleansTest(
   async () => {
     const cluster = await startCluster();
     try {
-      const manager = tryGetStreamSubscriptionManager(cluster.getStreamProvider(StreamProviderName)!)!;
+      const manager = tryGetStreamSubscriptionManager(
+        cluster.getStreamProvider(StreamProviderName)!,
+      )!;
       const streamId: StreamId = {
         provider: StreamProviderName,
         namespace: "",
@@ -234,7 +236,9 @@ orleansTest(
   async () => {
     const cluster = await startCluster();
     try {
-      const manager = tryGetStreamSubscriptionManager(cluster.getStreamProvider(StreamProviderName)!)!;
+      const manager = tryGetStreamSubscriptionManager(
+        cluster.getStreamProvider(StreamProviderName)!,
+      )!;
       const streamKey = randomGuidKey();
       const streamId: StreamId = {
         provider: StreamProviderName,
@@ -283,7 +287,9 @@ orleansTest(
   async () => {
     const cluster = await startCluster();
     try {
-      const manager = tryGetStreamSubscriptionManager(cluster.getStreamProvider(StreamProviderName)!)!;
+      const manager = tryGetStreamSubscriptionManager(
+        cluster.getStreamProvider(StreamProviderName)!,
+      )!;
       const streamId: StreamId = {
         provider: StreamProviderName,
         namespace: "EmptySpace",
@@ -295,13 +301,19 @@ orleansTest(
       );
       const expected = [];
       for (const consumer of consumers) {
-        expected.push(await manager.addSubscription(streamId, grainReferenceIdentity(consumer)!.grainId));
+        expected.push(
+          await manager.addSubscription(streamId, grainReferenceIdentity(consumer)!.grainId),
+        );
       }
-      let subscriptionIds = (await manager.getSubscriptions(streamId)).map((s) => s.subscriptionId).sort();
+      let subscriptionIds = (await manager.getSubscriptions(streamId))
+        .map((s) => s.subscriptionId)
+        .sort();
       expect(subscriptionIds).toEqual(expected.map((s) => s.subscriptionId).sort());
 
       await manager.removeSubscription(streamId, expected[0]!.subscriptionId);
-      subscriptionIds = (await manager.getSubscriptions(streamId)).map((s) => s.subscriptionId).sort();
+      subscriptionIds = (await manager.getSubscriptions(streamId))
+        .map((s) => s.subscriptionId)
+        .sort();
       expect(subscriptionIds).toEqual([expected[1]!.subscriptionId]);
     } finally {
       await cluster.dispose();
@@ -314,7 +326,9 @@ orleansTest(
   async () => {
     const cluster = await startCluster();
     try {
-      const manager = tryGetStreamSubscriptionManager(cluster.getStreamProvider(StreamProviderName)!)!;
+      const manager = tryGetStreamSubscriptionManager(
+        cluster.getStreamProvider(StreamProviderName)!,
+      )!;
       const streamKey = randomGuidKey();
       const streamId: StreamId = {
         provider: StreamProviderName,
@@ -350,8 +364,12 @@ orleansTest(
   async () => {
     const cluster = await startCluster();
     try {
-      const manager1 = tryGetStreamSubscriptionManager(cluster.getStreamProvider(StreamProviderName)!)!;
-      const manager2 = tryGetStreamSubscriptionManager(cluster.getStreamProvider(StreamProviderName2)!)!;
+      const manager1 = tryGetStreamSubscriptionManager(
+        cluster.getStreamProvider(StreamProviderName)!,
+      )!;
+      const manager2 = tryGetStreamSubscriptionManager(
+        cluster.getStreamProvider(StreamProviderName2)!,
+      )!;
       const streamKey = randomGuidKey();
       const streamId: StreamId = {
         provider: StreamProviderName,
@@ -398,7 +416,8 @@ orleansTest(
         return true;
       });
 
-      const numProduced = (await producer.getNumberProduced()) + (await producer2.getNumberProduced());
+      const numProduced =
+        (await producer.getNumberProduced()) + (await producer2.getNumberProduced());
       for (const consumer of consumers) {
         expect(await consumer.getNumberConsumed()).toBe(numProduced);
       }

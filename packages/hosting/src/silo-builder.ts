@@ -50,7 +50,7 @@ import { JournalStorageRegistry } from "@tsva/journaling/journal-storage-registr
 import { bindDurableStates } from "@tsva/journaling/durable-state-activator";
 import { bindJournaledGrain } from "@tsva/journaling/journaled-grain-binder";
 import type { BroadcastChannelOptions } from "@tsva/core/broadcast-channel";
-import type { StreamProvider } from "@tsva/core/stream";
+import type { StreamFilter, StreamProvider } from "@tsva/core/stream";
 import type { DurableJobsOptions } from "@tsva/core/durable-job";
 import { activeSilos } from "@tsva/core/membership";
 import {
@@ -174,7 +174,11 @@ export class SiloBuilder {
   private readonly closers: Array<() => Promise<void>> = [];
   private readonly startupTasks: Array<(grains: GrainFactoryAccess) => Promise<void>> = [];
   private readonly pullingStreams: PullingStreamProviderHost[] = [];
-  private readonly memoryStreams: MemoryStreamProvider[] = [];
+  private readonly memoryStreams: Array<{
+    provider: MemoryStreamProvider;
+    options: { streamInactivityPeriodMs?: number } | undefined;
+  }> = [];
+  private readonly streamFilters: Array<{ providerName: string; filter: StreamFilter }> = [];
   private readonly broadcastProviders = new Map<string, BroadcastChannelOptions>();
   private transactionsDisabled = false;
 
@@ -288,11 +292,33 @@ export class SiloBuilder {
     return this;
   }
 
-  /** Register a stream provider (in-memory by default), named "default" unless given. */
-  useMemoryStreams(name = "default"): this {
+  /**
+   * Register a stream provider (in-memory by default), named "default" unless
+   * given. `options.streamInactivityPeriodMs` mirrors Orleans'
+   * `ConfigurePullingAgent(... StreamInactivityPeriod ...)`: how long a stream
+   * may go without a publish before it is reported inactive (see
+   * `MemoryStreamProvider.setStreamInactivityPeriod`). Orleans' cache-eviction
+   * options (`DataMaxAgeInCache`, `DataMinTimeInCache`, `MetadataMinTimeInCache`,
+   * configured via `ConfigureCacheEviction`) are intentionally NOT exposed
+   * here: this provider delivers by direct push, in-process, with no bounded
+   * cache to evict from — see `MemoryStreamProvider`'s class doc.
+   */
+  useMemoryStreams(name = "default", options?: { streamInactivityPeriodMs?: number }): this {
     const provider = new MemoryStreamProvider(name);
-    this.memoryStreams.push(provider);
+    this.memoryStreams.push({ provider, options });
     this.streamProviders.set(name, provider);
+    return this;
+  }
+
+  /**
+   * Register a server-side stream filter (Orleans `ISiloBuilder.AddStreamFilter`)
+   * on the named memory stream provider: suppresses delivery of an item to
+   * every implicit subscriber before it reaches one, based on the item's
+   * content (see `StreamFilter`). Applies only to a provider registered via
+   * `useMemoryStreams` with a matching name.
+   */
+  addStreamFilter(providerName: string, filter: StreamFilter): this {
+    this.streamFilters.push({ providerName, filter });
     return this;
   }
 
@@ -726,9 +752,7 @@ export class SiloBuilder {
           }
         : {}),
       ...(this.config.metadata !== undefined ? { metadata: this.config.metadata } : {}),
-      ...(this.config.loadShedding !== undefined
-        ? { loadShedding: this.config.loadShedding }
-        : {}),
+      ...(this.config.loadShedding !== undefined ? { loadShedding: this.config.loadShedding } : {}),
       transactionsEnabled: transactionalStorage !== undefined,
       ...(this.broadcastProviders.size > 0
         ? {
@@ -871,7 +895,7 @@ export class SiloBuilder {
     // pulling agent/queue ownership), but implicit subscribers still need the
     // same dispatcher-routed delivery pulling providers use — see
     // `MemoryStreamProvider`'s class doc.
-    for (const provider of this.memoryStreams) {
+    for (const { provider, options } of this.memoryStreams) {
       provider.setDeliver((grainId, streamKey, event, token) =>
         node.deliverStreamEvent(grainId, streamKey, event, token),
       );
@@ -879,6 +903,16 @@ export class SiloBuilder {
       provider.setConfirmSubscription((grainId, streamKey) =>
         node.confirmStreamSubscription(grainId, streamKey),
       );
+      provider.setTimeProvider(time ?? systemTimeProvider);
+      if (options?.streamInactivityPeriodMs !== undefined) {
+        provider.setStreamInactivityPeriod(options.streamInactivityPeriodMs);
+      }
+      const filter = this.streamFilters.find((f) => f.providerName === provider.name)?.filter;
+      if (filter !== undefined) provider.setStreamFilter(filter);
+      // Cancel every stream's inactivity timer on shutdown so none leak past
+      // this silo's lifetime (a leaked `setTimeout`/fake-clock timer would
+      // otherwise hang a test worker).
+      this.closers.push(async () => provider.stop());
     }
 
     return buildSiloHost({
