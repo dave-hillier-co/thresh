@@ -88,6 +88,10 @@ export class GrainRuntimeImpl implements GrainRuntime {
       base,
       (cb) => this.activation.runStreamTurn(cb),
       this.activation.id.toString(),
+      // onNext runs through the incoming call-filter pipeline (Orleans parity:
+      // a grain's own filter wraps its stream deliveries); onError/onCompleted
+      // stay plain turns.
+      (cb) => this.activation.runStreamDelivery(cb),
     );
   }
 

@@ -2,10 +2,16 @@
 import { afterAll, beforeAll, describe, expect } from "vitest";
 import { orleansTest } from "@tsva/testing/orleans-test";
 import { TestCluster } from "@tsva/testing/test-cluster";
-import type {
-  IncomingGrainCallFilter,
-  OutgoingGrainCallFilter,
+import {
+  INCOMING_CALL_FILTER,
+  type IncomingGrainCallContext,
+  type IncomingGrainCallFilter,
+  type OutgoingGrainCallFilter,
 } from "@tsva/core/grain-call-filter";
+import { grain } from "@tsva/core/decorators";
+import { Grain } from "@tsva/core/grain";
+import { defineGrainInterface } from "@tsva/core/grain-interface";
+import type { GrainWithGuidKey } from "@tsva/core/key-kinds";
 import { castGrainReference } from "@tsva/core/grain-reference";
 import type { ClientNode } from "@tsva/client/client-node";
 import { invocationContext } from "@tsva/runtime/invocation-context";
@@ -25,7 +31,7 @@ import {
   OutgoingMethodInterceptionGrain,
 } from "@tsva/parity/grains/impl/method-interception-grain";
 import { createClusterClient } from "@tsva/parity/support/client";
-import { randomIntegerKey } from "@tsva/parity/support/keys";
+import { randomGuidKey, randomIntegerKey } from "@tsva/parity/support/keys";
 
 // System-wide incoming filter: mirrors the upstream fixture's
 // `SiloInvokerTestSiloBuilderConfigurator` incoming filter, trimmed to just
@@ -146,6 +152,48 @@ const clientOutgoing: OutgoingGrainCallFilter = async (ctx) => {
   }
 };
 
+// Ported from test/Grains/TestGrains/StreamInterceptionGrain.cs. An explicit
+// stream subscriber (subscribes in `onActivate`) that is ALSO its own incoming
+// call filter: the filter snapshots `lastStreamValue`, invokes (the wrapped
+// `onNext` writes the delivered value), then — if it changed — doubles it,
+// proving a stream delivery flows through the grain's incoming call-filter
+// pipeline exactly like an ordinary method call (Orleans parity).
+interface IStreamInterceptionGrain extends GrainWithGuidKey {
+  getLastStreamValue(): Promise<number>;
+}
+const IStreamInterceptionGrain = defineGrainInterface<IStreamInterceptionGrain>(
+  "IStreamInterceptionGrain",
+);
+
+@grain()
+class StreamInterceptionGrain extends Grain implements IStreamInterceptionGrain {
+  private lastStreamValue = 0;
+
+  override async onActivate(): Promise<void> {
+    const streams = this.runtime.getStreamProvider("MemoryStreamProvider");
+    const stream = streams.getStream<number>("InterceptedStream", this.id.key);
+    await stream.subscribe({
+      onNext: async (value) => {
+        this.lastStreamValue = value;
+      },
+    });
+  }
+
+  async getLastStreamValue(): Promise<number> {
+    return this.lastStreamValue;
+  }
+
+  async [INCOMING_CALL_FILTER](context: IncomingGrainCallContext): Promise<void> {
+    const initialLastStreamValue = this.lastStreamValue;
+    await context.invoke();
+    // If the last stream value changed after the invoke, then the stream must
+    // have produced a value; double it for testing purposes.
+    if (this.lastStreamValue !== initialLastStreamValue) {
+      this.lastStreamValue *= 2;
+    }
+  }
+}
+
 describe("UnitTests.General.GrainCallFilterTests", () => {
   let cluster: TestCluster;
   // The `Observer_*` cases below drive a client-hosted object
@@ -195,23 +243,20 @@ describe("UnitTests.General.GrainCallFilterTests", () => {
   // rewrites the response dictionary after the call returns. Closed by
   // giving `client` its own `outgoingCallFilters` (`ClientConfig`,
   // `GrainFactory.setOutgoingCallFilters`), separate from the silo's.
-  orleansTest(
-    "UnitTests.General.GrainCallFilterTests.GrainCallFilter_Outgoing_Test",
-    async () => {
-      const grain = client.getGrain(IOutgoingMethodInterceptionGrain, randomIntegerKey());
-      const grain2 = cluster.getGrain(IMethodInterceptionGrain, randomIntegerKey());
+  orleansTest("UnitTests.General.GrainCallFilterTests.GrainCallFilter_Outgoing_Test", async () => {
+    const grain = client.getGrain(IOutgoingMethodInterceptionGrain, randomIntegerKey());
+    const grain2 = cluster.getGrain(IMethodInterceptionGrain, randomIntegerKey());
 
-      // This grain method reads the context and returns it.
-      const result = await grain.echoViaOtherGrain(grain2, "ab");
+    // This grain method reads the context and returns it.
+    const result = await grain.echoViaOtherGrain(grain2, "ab");
 
-      // Original arg should have been:
-      // 1. Converted to upper case on the way out of the client: ab -> AB.
-      // 2. Doubled on the way out of grain1: AB -> ABAB.
-      // 3. Reversed on the way in to grain2: ABAB -> BABA.
-      expect(result["orig"]).toBe("BABA");
-      expect(result["result"]).toBe("intercepted!");
-    },
-  );
+    // Original arg should have been:
+    // 1. Converted to upper case on the way out of the client: ab -> AB.
+    // 2. Doubled on the way out of grain1: AB -> ABAB.
+    // 3. Reversed on the way in to grain2: ABAB -> BABA.
+    expect(result["orig"]).toBe("BABA");
+    expect(result["result"]).toBe("intercepted!");
+  });
 
   // Builds up RequestContext across filters ("1"->"12"->"123") then reads it
   // in the grain method ("1234"): two silo-wide filters each add a digit,
@@ -228,20 +273,55 @@ describe("UnitTests.General.GrainCallFilterTests", () => {
     },
   );
 
-  // `TestCluster.getStreamProvider` now exists (a memory-stream-provider slice
-  // added it), so a stream provider IS reachable from test code. What's still
-  // missing: this test's `StreamInterceptionGrain` relies on its OWN incoming
-  // call filter (`INCOMING_CALL_FILTER`) doubling a value that a stream
-  // delivery just wrote — but `Activation.callMethod` (packages/runtime/src/
-  // activation.ts) returns a delivered stream event straight from its
-  // `StreamConsumerInterface` branch, before reaching the incoming-call-filter
-  // pipeline built further down for ordinary grain methods and extensions.
-  // Routing stream (and broadcast-channel) delivery through that pipeline too
-  // is a runtime change with its own blast radius, out of scope for a
-  // memory-stream-provider delivery slice.
-  orleansTest.gap(
-    "GAP-STREAM-PROVIDER-WIRING",
+  // A stream delivery to a grain flows through that grain's own incoming
+  // call-filter pipeline (Orleans parity): `StreamInterceptionGrain` filters
+  // its own calls, so the value delivered on the stream is doubled by the time
+  // it can be read back. Runs on its own single-silo cluster — the memory
+  // stream provider is per-silo, so the publishing test code and the
+  // subscribed activation must share one silo (see `runStreamDelivery` in
+  // `activation.ts`, which routes memory-stream `onNext` through the filter
+  // pipeline the same way a pulling-agent delivery reaches `callMethod`).
+  orleansTest(
     "UnitTests.General.GrainCallFilterTests.GrainCallFilter_Incoming_Stream_Test",
+    async () => {
+      const streamCluster = await TestCluster.start({
+        initialSilos: 1,
+        grains: [{ ctor: StreamInterceptionGrain, interfaces: [IStreamInterceptionGrain] }],
+        configureSilo: (builder) => {
+          builder.useMemoryStreams("MemoryStreamProvider");
+        },
+      });
+      try {
+        const id = randomGuidKey();
+        const streamProvider = streamCluster.getStreamProvider("MemoryStreamProvider");
+        if (streamProvider === undefined) throw new Error("no MemoryStreamProvider configured");
+        const stream = streamProvider.getStream<number>("InterceptedStream", id);
+        const grain = streamCluster.getGrain(IStreamInterceptionGrain, id);
+
+        // Force activation so the grain's `onActivate` subscription is in place
+        // before we publish. This port's memory subscription starts "from now",
+        // so a pre-subscription publish would be missed — upstream's rewindable
+        // pulling-agent cache hides this ordering, immaterial to what the test
+        // asserts (that a delivered value is doubled by the grain's filter).
+        expect(await grain.getLastStreamValue()).toBe(0);
+
+        const testValue = 43;
+        await stream.publish(testValue);
+
+        let actual = 0;
+        const deadline = Date.now() + 30_000;
+        while (actual === 0 && Date.now() < deadline) {
+          actual = await grain.getLastStreamValue();
+          if (actual !== 0) break;
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+
+        // The intercepted grain doubles the value passed to the stream.
+        expect(actual).toBe(testValue * 2);
+      } finally {
+        await streamCluster.dispose();
+      }
+    },
   );
 
   orleansTest(
@@ -338,18 +418,15 @@ describe("UnitTests.General.GrainCallFilterTests", () => {
   // `systemWideIncoming` filter negates `setExtensionValue`'s argument before
   // it reaches `MyGrainExtension`, exactly like it would for an ordinary
   // grain method.
-  orleansTest(
-    "UnitTests.General.GrainCallFilterTests.GrainCallFilter_GrainExtension",
-    async () => {
-      const grain = cluster.getGrain(IMethodInterceptionGrain, randomIntegerKey());
-      const extension = castGrainReference(grain, IMyGrainExtension);
+  orleansTest("UnitTests.General.GrainCallFilterTests.GrainCallFilter_GrainExtension", async () => {
+    const grain = cluster.getGrain(IMethodInterceptionGrain, randomIntegerKey());
+    const extension = castGrainReference(grain, IMyGrainExtension);
 
-      await extension.setExtensionValue(42);
-      const result = await extension.getExtensionValue();
+    await extension.setExtensionValue(42);
+    const result = await extension.getExtensionValue();
 
-      expect(result).toBe(-42);
-    },
-  );
+    expect(result).toBe(-42);
+  });
 
   orleansTest.excluded(
     "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
