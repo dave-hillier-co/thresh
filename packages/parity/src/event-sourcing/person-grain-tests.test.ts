@@ -68,10 +68,14 @@ describe("Tester.EventSourcingTests.PersonGrainTests", () => {
     },
   );
 
-  // Requires `Version`/`TentativeVersion`/`ConfirmEvents` from the missing
-  // journaled-grain machinery (GAP-EVENT-SOURCING).
-  orleansTest.gap(
-    "GAP-EVENT-SOURCING",
+  orleansTest(
     "Tester.EventSourcingTests.PersonGrainTests.JournaledGrainTests_TentativeConfirmedState",
+    async () => {
+      const leia = cluster.getGrain(IPersonGrain, randomGuidKey());
+
+      // the whole test has to run inside the grain, otherwise the interleaving of
+      // the individual steps is nondeterministic
+      await leia.runTentativeConfirmedStateTest();
+    },
   );
 });

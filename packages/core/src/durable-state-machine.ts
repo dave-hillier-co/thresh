@@ -36,4 +36,9 @@ export interface StateMachineManager {
   append(machineName: string, payload: unknown): Promise<void>;
   /** Force a snapshot + truncate now. */
   compact(): Promise<void>;
+  /**
+   * Delete the log entirely and reset every registered machine to its initial
+   * (empty) state, mirroring Orleans' `ClearLogAsync`.
+   */
+  clear(): Promise<void>;
 }

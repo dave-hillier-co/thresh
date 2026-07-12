@@ -75,7 +75,12 @@ shows per-tag counts). One-line definitions live on the `GapTag` union. Grouped 
       `GAP-TRANSACTION-CONTEXT-INTROSPECTION`, `GAP-TRANSACTION-EXCLUSIVE-LOCK`,
       `GAP-TRANSACTION-OVERLOAD-DETECTOR`,
       `GAP-TRANSACTION-CONSISTENCY-HARNESS` (randomized workload + serializability checker).
-- [ ] **Journaling & event sourcing** — `GAP-EVENT-SOURCING` (`JournaledGrain` equivalent).
+- [x] **Journaling & event sourcing** — `GAP-EVENT-SOURCING` (`JournaledGrain` equivalent): done —
+      `JournaledGrain<TState,TEvent>` (`packages/core/src/journaled-grain.ts`) plus the
+      `LogViewAdaptor` provider (`packages/journaling/src/log-view-adaptor-impl.ts`,
+      `journaled-grain-binder.ts`), built on the existing journal-storage substrate and wired into
+      the silo builder's `stateBinder`. `CountersGrain`/`LogTestGrain`/`PersonGrain` ported as real
+      journaled grains; `event-sourcing` parity suite now 21 ported / 0 gap.
 - [ ] **Misc primitives** — `GAP-GRAIN-DIRECTORY-API`, `GAP-TRACING` (trace-context
       propagation done; remaining: activation/deactivation span taxonomy — `ActivateGrain`/
       `OnActivate`/`PlaceGrain`/`RegisterDirectoryEntry` spans threaded through placement/catalog/

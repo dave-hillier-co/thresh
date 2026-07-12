@@ -159,7 +159,10 @@ export class ActivationData implements GrainContext {
   ) {
     this.id = id;
     this.activationId = activationId;
-    this.scheduler = new TurnScheduler({ reentrant });
+    // Even a fully reentrant grain must finish activating (running state
+    // binding, then `onActivate`) before any request is dispatched — Orleans
+    // never interleaves a request with `OnActivateAsync`.
+    this.scheduler = new TurnScheduler({ reentrant, barrierFirstTurn: true });
     this.lastActiveMs = time.now();
   }
 

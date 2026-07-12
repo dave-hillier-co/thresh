@@ -162,4 +162,12 @@ export class StateMachineManagerImpl implements StateMachineManager {
     this.version = await this.storage.replace(this.logName, this.grainId, frames, this.version);
     this.liveEntryCount = frames.length;
   }
+
+  async clear(): Promise<void> {
+    await this.storage.clear(this.logName, this.grainId);
+    this.version = undefined;
+    this.liveEntryCount = 0;
+    this.retiring.clear();
+    for (const machine of this.machines.values()) machine.reset();
+  }
 }
