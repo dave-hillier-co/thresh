@@ -10,6 +10,7 @@ import type {
   RebalancerReportListener,
 } from "@tsva/runtime/placement/rebalancing/rebalancer-worker";
 import type { RebalancingReport } from "@tsva/runtime/placement/rebalancing/rebalancing-report";
+import type { Edge } from "@tsva/runtime/placement/repartitioning/edge";
 import { GracefulShutdown } from "@tsva/hosting/graceful-shutdown";
 import type { HealthCheck } from "@tsva/hosting/health-check";
 import type { HealthServer } from "@tsva/hosting/health-server";
@@ -138,6 +139,37 @@ export class SiloHost {
   /** Unsubscribe a previously subscribed listener (Orleans `UnsubscribeFromReports`). */
   unsubscribeFromReports(listener: RebalancerReportListener): void {
     this.parts.rebalancerWorker?.unsubscribe(listener);
+  }
+
+  /**
+   * The activation repartitioner's test/control surface (Orleans
+   * `IActivationRepartitionerSystemTarget`, reached upstream via
+   * `IActivationRepartitionerSystemTarget.GetReference(grainFactory, silo)`).
+   * Every operation is a no-op — resolves/returns nothing meaningful — when
+   * repartitioning was never enabled (`useActivationRepartitioning`).
+   */
+  async triggerRepartitionExchange(): Promise<void> {
+    await this.parts.node.triggerRepartitionExchange();
+  }
+
+  resetRepartitionCounters(): void {
+    this.parts.node.resetRepartitionCounters();
+  }
+
+  getRepartitionActivationCount(): number {
+    return this.parts.node.getRepartitionActivationCount();
+  }
+
+  setRepartitionActivationCountOffset(offset: number): void {
+    this.parts.node.setRepartitionActivationCountOffset(offset);
+  }
+
+  getRepartitionCallFrequencies(): ReadonlyArray<{ edge: Edge; count: number }> {
+    return this.parts.node.getRepartitionCallFrequencies();
+  }
+
+  async flushRepartitionBuffers(): Promise<void> {
+    await this.parts.node.flushRepartitionBuffers();
   }
 
   /** Run a sequence of optional hooks in order, awaiting each, with the given args. */

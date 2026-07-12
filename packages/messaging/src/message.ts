@@ -37,6 +37,14 @@ export interface Message {
   targetSilo?: SiloAddress | undefined;
   sendingGrain?: GrainId | undefined;
   sendingSilo?: SiloAddress | undefined;
+  /**
+   * The grain activation that made THIS specific call (Orleans
+   * `Message.SendingGrain` proper), distinct from `sendingGrain` above, which
+   * this codebase instead uses to carry a propagated caller-chain identity
+   * for cascading operations (see `InvocationContext.senderId`'s doc).
+   * Consulted only by the activation repartitioner's message sink.
+   */
+  callingGrain?: GrainId | undefined;
 
   interfaceId: number;
   /** Caller's interface version for version-aware placement (absent ⇒ 1). */
@@ -45,8 +53,8 @@ export interface Message {
 
   /**
    * Marks a system request (directory, migration, manifest, load, stats,
-   * actcount, forcecollect, provctl, rebalance, or siloping) or the
-   * client-directory gossip (`client`, oneWay only) vs a grain call.
+   * actcount, forcecollect, provctl, rebalance, repartition, or siloping) or
+   * the client-directory gossip (`client`, oneWay only) vs a grain call.
    */
   system?:
     | "directory"
@@ -58,6 +66,7 @@ export interface Message {
     | "forcecollect"
     | "provctl"
     | "rebalance"
+    | "repartition"
     | "siloping"
     | "client"
     | undefined;

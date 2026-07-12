@@ -261,6 +261,7 @@ export class ActivationData implements GrainContext {
             invocationContext.run(
               {
                 senderId: req.sender,
+                ownerId: this.id,
                 reentrancyId: req.reentrancyId,
                 transaction: req.transaction,
               },

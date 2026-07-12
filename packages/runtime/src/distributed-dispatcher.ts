@@ -58,6 +58,14 @@ export interface DistributedDispatcherDeps {
     isClientTarget(target: GrainId): boolean;
     route(req: InvocationRequest): Promise<unknown>;
   };
+  /**
+   * Optional hook (wired only when the activation repartitioner is enabled)
+   * recording the communication edge from this (calling) silo's perspective,
+   * at the moment a call's target silo is resolved — before it dispatches
+   * locally or over the wire. See
+   * `ActivationRepartitioner.recordLocalEdge`.
+   */
+  recordEdge?: (req: InvocationRequest, targetSilo: SiloAddress) => void;
 }
 
 /**
@@ -71,7 +79,8 @@ export class DistributedDispatcher implements Dispatcher {
   constructor(private readonly deps: DistributedDispatcherDeps) {}
 
   async invoke(req: InvocationRequest): Promise<unknown> {
-    if (this.deps.clientRouter?.isClientTarget(req.target)) return this.deps.clientRouter.route(req);
+    if (this.deps.clientRouter?.isClientTarget(req.target))
+      return this.deps.clientRouter.route(req);
 
     // [StatelessWorker] grains are placement-local (`StatelessWorkerPlacement`
     // always resolves to the calling silo) and never directory-registered —
@@ -191,6 +200,7 @@ export class DistributedDispatcher implements Dispatcher {
   }
 
   private async routeTo(addr: GrainAddress, req: InvocationRequest): Promise<unknown> {
+    this.deps.recordEdge?.(req, addr.silo);
     if (!addr.silo.equals(this.deps.local)) return this.deps.remote.send(addr.silo, req);
     const act = await this.deps.catalog.resolveLive(req.target);
     if (act === undefined || act.activationId !== addr.activationId) {
@@ -230,7 +240,9 @@ export class DistributedDispatcher implements Dispatcher {
     // names a live candidate; otherwise fall through to the strategy as before.
     const strategy = this.deps.placementFor(req.target.type);
     const targetSilo =
-      resolvePlacementHint(req.headers, candidates) ?? strategy.choose(req.target.type, candidates, ctx);
+      resolvePlacementHint(req.headers, candidates) ??
+      strategy.choose(req.target.type, candidates, ctx);
+    this.deps.recordEdge?.(req, targetSilo);
     return targetSilo.equals(this.deps.local)
       ? this.deliverLocal(req)
       : this.deps.remote.send(targetSilo, req);

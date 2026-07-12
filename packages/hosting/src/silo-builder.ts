@@ -77,6 +77,12 @@ import type { GrainActivator } from "@tsva/runtime/catalog";
 import type { LoadSheddingOptions } from "@tsva/runtime/load-shedding";
 import { StaticMembershipService } from "@tsva/runtime/static-membership";
 import { ActivationRebalancerWorker } from "@tsva/runtime/placement/rebalancing/rebalancer-worker";
+import type { ImbalanceToleranceRule } from "@tsva/runtime/placement/repartitioning/activation-repartitioner";
+import {
+  defaultActivationRepartitionerOptions,
+  validateActivationRepartitionerOptions,
+  type ActivationRepartitionerOptions,
+} from "@tsva/runtime/placement/repartitioning/activation-repartitioner-options";
 import {
   DEFAULT_REBALANCER_OPTIONS,
   type RebalancerOptions,
@@ -160,6 +166,9 @@ export class SiloBuilder {
   private jobShardStore: JobShardStore | undefined;
   private durableJobsOptions: DurableJobsOptions = {};
   private rebalancing: { options: RebalancerOptions; sessionCyclePeriodMs: number } | undefined;
+  private repartitioning:
+    | { options: ActivationRepartitionerOptions; toleranceRule?: ImbalanceToleranceRule }
+    | undefined;
   private readonly streamProviders = new Map<string, StreamProvider>();
   private readonly incomingCallFilters: IncomingGrainCallFilter[] = [];
   private readonly outgoingCallFilters: OutgoingGrainCallFilter[] = [];
@@ -288,6 +297,28 @@ export class SiloBuilder {
     this.rebalancing = {
       options: { ...DEFAULT_REBALANCER_OPTIONS, ...modelOptions },
       sessionCyclePeriodMs: (sessionCyclePeriodSeconds ?? 60) * 1000,
+    };
+    return this;
+  }
+
+  /**
+   * Enable the activation repartitioner (Orleans `AddActivationRepartitioner`):
+   * a communication-graph-driven protocol, distinct from the rebalancer, that
+   * moves grain activations near their most frequent communication partners.
+   * `toleranceRule` defaults to the cluster-size-aware
+   * `rebalancerCompatibleTolerance`; pass a custom one (Orleans
+   * `AddActivationRepartitioner<TRule>`) to control the tolerated imbalance
+   * between an exchanging silo pair directly.
+   */
+  useActivationRepartitioning(
+    options?: Partial<ActivationRepartitionerOptions>,
+    toleranceRule?: ImbalanceToleranceRule,
+  ): this {
+    const resolved = { ...defaultActivationRepartitionerOptions(), ...options };
+    validateActivationRepartitionerOptions(resolved);
+    this.repartitioning = {
+      options: resolved,
+      ...(toleranceRule !== undefined ? { toleranceRule } : {}),
     };
     return this;
   }
@@ -753,6 +784,7 @@ export class SiloBuilder {
         : {}),
       ...(this.config.metadata !== undefined ? { metadata: this.config.metadata } : {}),
       ...(this.config.loadShedding !== undefined ? { loadShedding: this.config.loadShedding } : {}),
+      ...(this.repartitioning !== undefined ? { repartitioning: this.repartitioning } : {}),
       transactionsEnabled: transactionalStorage !== undefined,
       ...(this.broadcastProviders.size > 0
         ? {
