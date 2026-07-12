@@ -1,5 +1,4 @@
 import type { createClient } from "redis";
-import type { GrainId } from "@tsva/core/grain-id";
 import { keyToString, type GrainKey } from "@tsva/core/grain-key";
 import type { GrainType } from "@tsva/core/grain-type";
 import { stableHash32 } from "@tsva/core/hash";
@@ -18,16 +17,10 @@ import { QueuePullingAgent } from "@tsva/streams/queue-pulling-agent";
 import { ownedQueueIndices, type HashRange } from "@tsva/streams/queue-ownership";
 import { RedisStreamQueue } from "@tsva/streams/redis-stream-queue";
 import { RedisSubscriptionRegistry } from "@tsva/streams/redis-subscription-registry";
+import type { StreamDeliver } from "@tsva/streams/stream-deliver";
 
 export type RedisClient = ReturnType<typeof createClient>;
-
-/** Delivers one event to a subscriber's activation; wired to `node.deliverStreamEvent`. */
-export type StreamDeliver = (
-  subscriber: GrainId,
-  streamKey: string,
-  event: unknown,
-  token: number,
-) => Promise<void>;
+export type { StreamDeliver } from "@tsva/streams/stream-deliver";
 
 export interface RedisPullingStreamProviderOptions {
   keyPrefix?: string;

@@ -228,7 +228,17 @@ describe("UnitTests.General.GrainCallFilterTests", () => {
     },
   );
 
-  // Stream providers are not wired into TestCluster/the parity harness.
+  // `TestCluster.getStreamProvider` now exists (a memory-stream-provider slice
+  // added it), so a stream provider IS reachable from test code. What's still
+  // missing: this test's `StreamInterceptionGrain` relies on its OWN incoming
+  // call filter (`INCOMING_CALL_FILTER`) doubling a value that a stream
+  // delivery just wrote — but `Activation.callMethod` (packages/runtime/src/
+  // activation.ts) returns a delivered stream event straight from its
+  // `StreamConsumerInterface` branch, before reaching the incoming-call-filter
+  // pipeline built further down for ordinary grain methods and extensions.
+  // Routing stream (and broadcast-channel) delivery through that pipeline too
+  // is a runtime change with its own blast radius, out of scope for a
+  // memory-stream-provider delivery slice.
   orleansTest.gap(
     "GAP-STREAM-PROVIDER-WIRING",
     "UnitTests.General.GrainCallFilterTests.GrainCallFilter_Incoming_Stream_Test",

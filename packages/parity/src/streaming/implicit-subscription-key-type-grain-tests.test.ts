@@ -1,28 +1,85 @@
 // Ported from dotnet/orleans test/Orleans.Streaming.Tests/StreamingTests/ImplicitSubscriptionKeyTypeGrainTests.cs @ v10.1.0 (MIT).
+// Grain: test/Grains/TestGrainInterfaces/IImplicitSubscriptionKeyTypeGrain.cs,
+// test/Grains/TestGrains/ImplicitSubscriptionWithKeyTypeGrain.cs @ v10.1.0 (MIT).
 //
-// This test publishes onto the memory stream provider and expects an
-// implicitly-subscribed grain (declared with `@implicitStreamSubscription`,
-// no explicit `subscribe()` call) to receive the event. In this framework,
-// implicit-subscription delivery is only wired up for pulling-agent-backed
-// stream providers (`SiloBuilder.pullingStreams` — e.g. Redis streams):
-// `SiloBuilder.build()` calls `provider.setDeliver(...)` /
-// `provider.setImplicitSubscribers(...)` only for those. `useMemoryStreams()`
-// registers a plain `MemoryStreamProvider`, which implements `StreamProvider`
-// but not `ActivationBoundStreamProvider` (no `bindActivation`), so it is
-// never added to `pullingStreams` and a `publish()` on it never reaches a
-// grain that only declares an implicit subscription — only grains that
-// explicitly `subscribe()` themselves receive memory-stream events. There is
-// therefore no way to make this test's `IImplicitSubscriptionLongKeyGrain`
-// (implicit-only) receive the published `int` over `TestCluster`'s memory
-// stream provider.
-import { it } from "vitest";
+// Upstream publishes onto the stream via `fixture.Client.GetStreamProvider(...)`
+// from test code, outside any grain. This framework has no separate
+// client-process gateway a test reaches a stream provider through, so the test
+// reaches the memory provider via `TestCluster.getStreamProvider` (which
+// forwards to the primary silo — see that method's doc) instead.
+//
+// The consumer grain (`ImplicitSubscriptionWithLongKeyGrain` upstream) declares
+// `[ImplicitStreamSubscription]` and subscribes itself from `OnActivateAsync`;
+// this framework's implicit-subscription model instead has the grain expose a
+// `STREAM_SUBSCRIPTION_OBSERVER` handler and never call `subscribe` at all
+// (see `packages/runtime/src/implicit-stream-delivery.test.ts`) — ported that
+// way, with equivalent behaviour: the grain receives the stream's events with
+// no explicit subscribe call.
+import { expect } from "vitest";
+import { grain, implicitStreamSubscription } from "@tsva/core/decorators";
+import { Grain } from "@tsva/core/grain";
+import { defineGrainInterface } from "@tsva/core/grain-interface";
+import type { GrainWithIntegerKey } from "@tsva/core/key-kinds";
+import { STREAM_SUBSCRIPTION_OBSERVER, type StreamHandler } from "@tsva/core/stream";
 import { orleansTest } from "@tsva/testing/orleans-test";
+import { TestCluster } from "@tsva/testing/test-cluster";
 
-orleansTest.gap(
-  "GAP-STREAM-IMPLICIT-MEMORY",
-  "UnitTests.StreamingTests.ImplicitSubscriptionKeyTypeGrainTests.LongKey",
+const STREAM_NAMESPACE = "IImplicitSubscriptionLongKeyGrain";
+
+interface IImplicitSubscriptionLongKeyGrain extends GrainWithIntegerKey {
+  getValue(): Promise<number>;
+}
+const IImplicitSubscriptionLongKeyGrain = defineGrainInterface<IImplicitSubscriptionLongKeyGrain>(
+  "IImplicitSubscriptionLongKeyGrain",
+  { options: { getValue: { readOnly: true } } },
 );
 
-// vitest requires at least one runtime test per file; the sole upstream Fact
-// is a gap above, so this placeholder keeps the file a valid suite.
-it.skip("(the sole test in this file is orleansTest.gap — see above)", () => undefined);
+@grain()
+@implicitStreamSubscription(STREAM_NAMESPACE)
+class ImplicitSubscriptionWithLongKeyGrain
+  extends Grain
+  implements IImplicitSubscriptionLongKeyGrain
+{
+  private value = 0;
+
+  async getValue(): Promise<number> {
+    return this.value;
+  }
+
+  [STREAM_SUBSCRIPTION_OBSERVER](_namespace: string, _key: string): StreamHandler<number> {
+    return {
+      onNext: async (data) => {
+        this.value = data;
+      },
+    };
+  }
+}
+
+orleansTest(
+  "UnitTests.StreamingTests.ImplicitSubscriptionKeyTypeGrainTests.LongKey",
+  async () => {
+    const cluster = await TestCluster.start({
+      grains: [
+        { ctor: ImplicitSubscriptionWithLongKeyGrain, interfaces: [IImplicitSubscriptionLongKeyGrain] },
+      ],
+    });
+    try {
+      const grainKey = 13n;
+      const value = 87;
+      const streamProvider = cluster.getStreamProvider();
+      if (streamProvider === undefined) throw new Error("no default stream provider configured");
+      const stream = streamProvider.getStream<number>(STREAM_NAMESPACE, grainKey);
+
+      // The memory provider's implicit-subscriber fan-out is awaited inside
+      // `publish` itself (see `MemoryStream.publishBatch`), so — unlike
+      // upstream's poll loop against a real cluster — the delivery has
+      // already happened by the time `publish` resolves.
+      await stream.publish(value);
+
+      const consumer = cluster.getGrain(IImplicitSubscriptionLongKeyGrain, grainKey);
+      expect(await consumer.getValue()).toBe(value);
+    } finally {
+      await cluster.dispose();
+    }
+  },
+);

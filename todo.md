@@ -69,9 +69,13 @@ shows per-tag counts). One-line definitions live on the `GapTag` union. Grouped 
 - [ ] **Timers** — `GAP-TIMER-VALIDATION` (callback-initiated Change/dispose portions).
 - [ ] **Placement & rebalancing** — `GAP-REBALANCER-CONTROL`, `GAP-ACTIVATION-REPARTITIONING`,
       `GAP-LOAD-SHEDDING`.
-- [ ] **Streams** — `GAP-STREAM-IMPLICIT-MEMORY` (implicit subscriptions on the memory provider),
-      `GAP-STREAM-BATCHING`, `GAP-STREAM-FILTER`, `GAP-STREAM-SUBSCRIPTION-MANAGER`,
-      `GAP-STREAM-PROVIDER-WIRING` (TestCluster/client surface), `GAP-STREAM-PROVIDER-CONFIG`,
+- [ ] **Streams** — the memory stream provider now delivers to implicit subscribers and supports
+      batch publish/delivery (`GAP-STREAM-IMPLICIT-MEMORY`/`GAP-STREAM-BATCHING` closed). Remaining:
+      `GAP-STREAM-FILTER`, `GAP-STREAM-SUBSCRIPTION-MANAGER`,
+      `GAP-STREAM-PROVIDER-WIRING` (stream delivery — `StreamConsumerInterface`/
+      `BroadcastConsumerInterface` — bypasses the incoming-call-filter pipeline in
+      `Activation.callMethod`; `TestCluster`/`SiloHost.getStreamProvider` now exist, so the
+      remaining gap is filter coverage, not provider access), `GAP-STREAM-PROVIDER-CONFIG`,
       `GAP-STREAM-CACHE-DIAGNOSTICS`, `GAP-STREAM-GENERATOR-ADAPTER`,
       `GAP-BROADCAST-CHANNEL-CLIENT`, `GAP-CHANNEL-NAMESPACE-PREDICATE`.
 - [ ] **Transactions** — `GAP-TRANSACTION-EXCEPTION-TYPES` (typed abort hierarchy),

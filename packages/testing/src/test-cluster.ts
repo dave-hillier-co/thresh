@@ -6,6 +6,7 @@ import type { GrainInterface } from "@tsva/core/grain-interface";
 import type { GrainKeyFor } from "@tsva/core/key-kinds";
 import type { MembershipService, MembershipSnapshot } from "@tsva/core/membership";
 import { SiloAddress } from "@tsva/core/silo-address";
+import type { StreamProvider } from "@tsva/core/stream";
 import type { TimeProvider } from "@tsva/core/time-provider";
 import { InProcessNetwork } from "@tsva/messaging/in-process-transport";
 import { ICancellationSourcesExtension } from "@tsva/runtime/cancellation-extension";
@@ -138,6 +139,17 @@ export class TestCluster {
 
   getGrain<T>(def: GrainInterface<T>, key: GrainKeyFor<T>): T {
     return this.primary.host.getGrain(def, key);
+  }
+
+  /**
+   * The named stream provider hosted by the primary silo (Orleans
+   * `fixture.Client.GetStreamProvider(name)`, adapted: ported tests have no
+   * separate client-process gateway, so they reach a provider through the
+   * primary silo directly, same as `getGrain`). `undefined` if no provider by
+   * that name is configured.
+   */
+  getStreamProvider(name?: string): StreamProvider | undefined {
+    return this.primary.host.getStreamProvider(name);
   }
 
   /**

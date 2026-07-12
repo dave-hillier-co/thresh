@@ -2,6 +2,7 @@ import type { GrainId } from "@tsva/core/grain-id";
 import type { GrainInterface } from "@tsva/core/grain-interface";
 import type { GrainKeyFor } from "@tsva/core/key-kinds";
 import type { MembershipService } from "@tsva/core/membership";
+import type { StreamProvider } from "@tsva/core/stream";
 import type { ClusterNode } from "@tsva/runtime/cluster-node";
 import type { SiloLoadSheddingTestHooks } from "@tsva/runtime/load-shedding";
 import type {
@@ -82,6 +83,11 @@ export class SiloHost {
 
   isActive(id: GrainId): boolean {
     return this.parts.node.isActive(id);
+  }
+
+  /** The named stream provider this silo hosts, or `undefined` if none is configured by that name. */
+  getStreamProvider(name?: string): StreamProvider | undefined {
+    return this.parts.node.streamProvider(name);
   }
 
   /**

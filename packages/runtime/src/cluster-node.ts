@@ -506,6 +506,17 @@ export class ClusterNode {
     return this.implicitSubscriptions.get(namespace) ?? [];
   }
 
+  /**
+   * The named stream provider this silo hosts (Orleans `IClusterClient.GetStreamProvider`,
+   * adapted: this framework has no separate client-process gateway to fetch a
+   * stream-provider proxy through, so a caller reaches it via the silo directly —
+   * `SiloHost.getStreamProvider`). `undefined` if no provider by that name is
+   * configured, or none at all when the name is omitted.
+   */
+  streamProvider(name?: string): StreamProvider | undefined {
+    return this.options.streamProvider?.(name);
+  }
+
   /** Grain types implicitly subscribed to a broadcast-channel namespace. */
   broadcastGrainTypes(namespace: string): readonly GrainType[] {
     return this.broadcastSubscriptions.get(namespace) ?? [];

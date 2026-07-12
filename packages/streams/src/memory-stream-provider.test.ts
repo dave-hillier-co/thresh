@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { SequenceToken, type StreamHandler } from "@tsva/core/stream";
+import { SequenceToken, type BatchedStreamItem, type StreamHandler } from "@tsva/core/stream";
 import { MemoryStreamProvider } from "@tsva/streams/memory-stream-provider";
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
@@ -93,5 +93,93 @@ describe("MemoryStreamProvider", () => {
     await flush();
     expect(a.received).toEqual([7]);
     expect(b.received).toEqual([]);
+  });
+
+  it("delivers a publish to an implicit subscriber via setDeliver/setImplicitSubscribers, with no subscribe call", async () => {
+    const provider = new MemoryStreamProvider();
+    const delivered: Array<{ subscriber: string; streamKey: string; event: unknown }> = [];
+    provider.setDeliver(async (subscriber, streamKey, event) => {
+      delivered.push({ subscriber: subscriber.toString(), streamKey, event });
+    });
+    provider.setImplicitSubscribers((namespace) => (namespace === "chat" ? ["Watcher"] : []));
+
+    await provider.getStream<string>("chat", "general").publish("hello");
+
+    expect(delivered).toEqual([{ subscriber: "Watcher/general", streamKey: "chat/general", event: "hello" }]);
+  });
+
+  it("does not deliver to an implicit subscriber before setImplicitSubscribers is wired", async () => {
+    const provider = new MemoryStreamProvider();
+    const delivered: unknown[] = [];
+    provider.setDeliver(async (_subscriber, _streamKey, event) => void delivered.push(event));
+
+    await provider.getStream<string>("chat", "general").publish("hello");
+
+    expect(delivered).toEqual([]);
+  });
+
+  it("delivers implicit subscribers by namespace only for namespaces with a matching type", async () => {
+    const provider = new MemoryStreamProvider();
+    const delivered: string[] = [];
+    provider.setDeliver(async (subscriber) => void delivered.push(subscriber.toString()));
+    provider.setImplicitSubscribers((namespace) => (namespace === "chat" ? ["Watcher"] : []));
+
+    await provider.getStream<string>("other", "general").publish("ignored");
+
+    expect(delivered).toEqual([]);
+  });
+
+  it("publishBatch delivers every event to a single-item subscriber, in order (unbatched)", async () => {
+    const provider = new MemoryStreamProvider();
+    const stream = provider.getStream<number>("telemetry", "dev-1");
+    const { received, handler } = collector<number>();
+    await stream.subscribe(handler);
+
+    await stream.publishBatch!([1, 2, 3]);
+    await flush();
+
+    expect(received).toEqual([1, 2, 3]);
+  });
+
+  it("publishBatch delivers the whole batch in one call to a subscriber that declares onNextBatch", async () => {
+    const provider = new MemoryStreamProvider();
+    const stream = provider.getStream<number>("telemetry", "dev-1");
+    const batches: number[][] = [];
+    await stream.subscribe({
+      onNext: async () => {
+        throw new Error("onNext should not be called when onNextBatch is declared");
+      },
+      onNextBatch: async (items: readonly BatchedStreamItem<number>[]) => {
+        batches.push(items.map((i) => i.event));
+      },
+    });
+
+    await stream.publishBatch!([1, 2, 3]);
+    await flush();
+
+    expect(batches).toEqual([[1, 2, 3]]);
+  });
+
+  it("publishBatch fans a batch out to implicit subscribers one event at a time", async () => {
+    const provider = new MemoryStreamProvider();
+    const delivered: unknown[] = [];
+    provider.setDeliver(async (_subscriber, _streamKey, event) => void delivered.push(event));
+    provider.setImplicitSubscribers((namespace) => (namespace === "chat" ? ["Watcher"] : []));
+
+    await provider.getStream<number>("chat", "general").publishBatch!([1, 2, 3]);
+
+    expect(delivered).toEqual([1, 2, 3]);
+  });
+
+  it("publish is equivalent to a one-item publishBatch", async () => {
+    const provider = new MemoryStreamProvider();
+    const stream = provider.getStream<number>("telemetry", "dev-1");
+    const { received, handler } = collector<number>();
+    await stream.subscribe(handler);
+
+    await stream.publish(1);
+    await flush();
+
+    expect(received).toEqual([1]);
   });
 });
