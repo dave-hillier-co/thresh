@@ -49,6 +49,7 @@ import { RedisJournalStorage } from "@tsva/journaling/redis-journal-storage";
 import { JournalStorageRegistry } from "@tsva/journaling/journal-storage-registry";
 import { bindDurableStates } from "@tsva/journaling/durable-state-activator";
 import { bindJournaledGrain } from "@tsva/journaling/journaled-grain-binder";
+import type { BroadcastChannelOptions } from "@tsva/core/broadcast-channel";
 import type { StreamProvider } from "@tsva/core/stream";
 import type { DurableJobsOptions } from "@tsva/core/durable-job";
 import { activeSilos } from "@tsva/core/membership";
@@ -168,7 +169,7 @@ export class SiloBuilder {
   private readonly startupTasks: Array<(grains: GrainFactoryAccess) => Promise<void>> = [];
   private readonly pullingStreams: RedisPullingStreamProvider[] = [];
   private readonly memoryStreams: MemoryStreamProvider[] = [];
-  private readonly broadcastProviders = new Set<string>();
+  private readonly broadcastProviders = new Map<string, BroadcastChannelOptions>();
   private transactionsDisabled = false;
 
   constructor(private readonly config: SiloConfig) {}
@@ -295,13 +296,15 @@ export class SiloBuilder {
   }
 
   /**
-   * Register a broadcast-channel provider, named "default" unless
-   * given. Broadcast channels are direct in-cluster pub/sub with no backing store
-   * — a publish fans the item out to the channel's implicit subscribers — so
-   * there is nothing to connect or tear down; only the name is registered.
+   * Register a broadcast-channel provider, named "default" unless given.
+   * Broadcast channels are direct in-cluster pub/sub with no backing store —
+   * a publish fans the item out to the channel's implicit subscribers — so
+   * there is nothing to connect or tear down; only the name (and its
+   * `fireAndForgetDelivery` setting, Orleans `BroadcastChannelOptions`,
+   * default `false` here — see `ClusterNode`'s constructor) is registered.
    */
-  useBroadcastChannels(name = "default"): this {
-    this.broadcastProviders.add(name);
+  useBroadcastChannels(name = "default", options: BroadcastChannelOptions = {}): this {
+    this.broadcastProviders.set(name, options);
     return this;
   }
 
@@ -700,7 +703,12 @@ export class SiloBuilder {
         : {}),
       transactionsEnabled: transactionalStorage !== undefined,
       ...(this.broadcastProviders.size > 0
-        ? { broadcastProviders: [...this.broadcastProviders] }
+        ? {
+            broadcastProviders: [...this.broadcastProviders].map(([name, options]) => ({
+              name,
+              ...options,
+            })),
+          }
         : {}),
       ...(this.incomingCallFilters.length > 0
         ? { incomingCallFilters: this.incomingCallFilters }
