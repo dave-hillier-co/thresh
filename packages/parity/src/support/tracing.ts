@@ -16,10 +16,10 @@ import {
   trace,
   type Span,
   type SpanKind,
-  SpanStatusCode,
+  type SpanStatusCode,
 } from "@opentelemetry/api";
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
-import { TraceState, W3CTraceContextPropagator } from "@opentelemetry/core";
+import { TraceState } from "@opentelemetry/core";
 import {
   BasicTracerProvider,
   InMemorySpanExporter,
