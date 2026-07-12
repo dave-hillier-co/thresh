@@ -83,6 +83,23 @@ export class TransactionsDisabledError extends Error {
 }
 
 /**
+ * Raised when a gateway silo is currently overloaded (Orleans
+ * `GatewayTooBusyException`): its `OverloadDetector` reports the silo's CPU
+ * usage above `LoadSheddingOptions.cpuThreshold`, so it refuses to accept a
+ * new client-originated request rather than queue behind an already
+ * struggling process. Transient — the same or another gateway is likely to
+ * accept the message if retransmitted later. Thrown client-side by
+ * `ClientNode.invoke` when a gateway's reply carries the `"overloaded"`
+ * rejection kind.
+ */
+export class GatewayTooBusyException extends Error {
+  constructor(message = "Gateway too busy") {
+    super(message);
+    this.name = "GatewayTooBusyException";
+  }
+}
+
+/**
  * Raised when a cooperatively-cancelled grain call observes its
  * `GrainCancellationToken` aborted and stops itself (Orleans
  * `TaskCanceledException`). JS has no thread interruption, so this is thrown

@@ -2,10 +2,18 @@
 //
 // The four elasticity tests are `[SkippableFact(Skip = "...")]` upstream
 // (https://github.com/dotnet/orleans/issues/4008) — skipped there too. The
-// remaining two exercise load-aware placement avoiding an overloaded/busy
-// silo, which needs an `OverloadDetector`/CPU-usage-aware environment
-// statistics subsystem this framework does not have: placement strategies
-// here only weigh activation counts (GAP-LOAD-SHEDDING).
+// remaining two (`LoadAwareGrainShouldNotAttemptToCreateActivationsOn*`) now
+// have their headline dependency — an `OverloadDetector`/latchable
+// CPU-usage source, and a gateway that sheds load — ported (GAP-LOAD-SHEDDING,
+// see `load-shedding-test.test.ts`). What still blocks them is a DIFFERENT
+// gap: both route their setup through `GetGrainAtSilo`, upstream's helper for
+// pinning a fresh grain onto a specific NEWLY STARTED silo via
+// `RequestContext.Set(IPlacementDirector.PlacementHintKey, silo)` — this
+// framework has no RequestContext-driven placement hint (GAP-REQUEST-CONTEXT),
+// so a test cannot reliably get a reference to the tainted silo's activation
+// to latch. Retagged under GAP-LOAD-SHEDDING still, since that's the tag with
+// the `todo.md` entry tracking this pair; the placement-hint half of the
+// blocker is tracked separately under GAP-REQUEST-CONTEXT.
 import { describe } from "vitest";
 import { orleansTest } from "@tsva/testing/orleans-test";
 

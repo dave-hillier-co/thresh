@@ -1,4 +1,4 @@
-import { GrainCallError, RejectionError } from "@tsva/core/errors";
+import { GatewayTooBusyException, GrainCallError, RejectionError } from "@tsva/core/errors";
 import { createClientId, createObserverId, isObserverGrainId } from "@tsva/core/client-grain-id";
 import type { Grain } from "@tsva/core/grain";
 import {
@@ -502,6 +502,11 @@ export class ClientNode implements Dispatcher {
     if (response.responseKind === "success") return this.serializer.deserialize(response.body);
     if (response.responseKind === "rejection") {
       const payload = this.serializer.deserialize<RejectionPayload>(response.body);
+      // A gateway's own overload rejection surfaces as `GatewayTooBusyException`
+      // (Orleans parity), not the generic `RejectionError` every other
+      // rejection kind uses — it's the one kind ORIGINATED specifically to
+      // signal "retry me, possibly against a different gateway".
+      if (payload.kind === "overloaded") throw new GatewayTooBusyException(payload.message);
       throw new RejectionError(payload.message, payload.kind);
     }
     const payload = this.serializer.deserialize<{ message: string }>(response.body);

@@ -67,6 +67,7 @@ import { MemoryStreamProvider } from "@tsva/streams/memory-stream-provider";
 import { RedisPullingStreamProvider } from "@tsva/streams/redis-pulling-stream-provider";
 import { ClusterNode } from "@tsva/runtime/cluster-node";
 import type { GrainActivator } from "@tsva/runtime/catalog";
+import type { LoadSheddingOptions } from "@tsva/runtime/load-shedding";
 import { StaticMembershipService } from "@tsva/runtime/static-membership";
 import { ActivationRebalancerWorker } from "@tsva/runtime/placement/rebalancing/rebalancer-worker";
 import {
@@ -108,6 +109,11 @@ export interface SiloConfig {
    * configured here or on the method itself.
    */
   defaultResponseTimeout?: Duration;
+  /**
+   * Load-shedding config (Orleans `Configure<LoadSheddingOptions>`). Defaults
+   * to shedding disabled; see `ClusterNodeOptions.loadShedding`.
+   */
+  loadShedding?: Partial<LoadSheddingOptions>;
 }
 
 interface Registration {
@@ -686,6 +692,9 @@ export class SiloBuilder {
           }
         : {}),
       ...(this.config.metadata !== undefined ? { metadata: this.config.metadata } : {}),
+      ...(this.config.loadShedding !== undefined
+        ? { loadShedding: this.config.loadShedding }
+        : {}),
       transactionsEnabled: transactionalStorage !== undefined,
       ...(this.broadcastProviders.size > 0
         ? { broadcastProviders: [...this.broadcastProviders] }

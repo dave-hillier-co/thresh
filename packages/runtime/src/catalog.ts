@@ -22,6 +22,7 @@ import {
   IGrainManagementExtension,
 } from "@tsva/runtime/grain-management-extension";
 import { GrainRuntimeImpl } from "@tsva/runtime/grain-runtime-impl";
+import type { SiloLoadSheddingTestHooks } from "@tsva/runtime/load-shedding";
 import type { TimeProvider } from "@tsva/runtime/time-provider";
 
 export interface RegisteredGrain {
@@ -83,6 +84,8 @@ export interface CatalogOptions {
   broadcastProvider?: (name?: string) => BroadcastChannelProvider | undefined;
   /** Resolves this silo's own address, for a grain's `runtime.localSiloAddress()`. */
   localSilo?: () => SiloAddress | undefined;
+  /** Resolves this silo's load-shedding test hooks, for a grain's `runtime.latchCpuUsage()`-style methods. */
+  loadShedding?: () => SiloLoadSheddingTestHooks | undefined;
   /** Incoming call filters wrapping each grain-method dispatch (silo-wide). */
   incomingCallFilters?: readonly IncomingGrainCallFilter[];
   /**
@@ -417,6 +420,9 @@ export class Catalog {
         ? { durableJobs: this.options.durableJobScheduler }
         : {}),
       ...(this.options.localSilo !== undefined ? { localSilo: this.options.localSilo } : {}),
+      ...(this.options.loadShedding !== undefined
+        ? { loadShedding: this.options.loadShedding }
+        : {}),
     });
     const instance =
       this.options.grainActivator !== undefined

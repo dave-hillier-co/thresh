@@ -98,6 +98,14 @@ import {
 } from "@tsva/runtime/placement/rebalancing/rebalancer-model";
 import { systemTimeProvider, type TimeProvider } from "@tsva/runtime/time-provider";
 import { TransactionAgent } from "@tsva/runtime/transaction-agent";
+import {
+  DEFAULT_LOAD_SHEDDING_OPTIONS,
+  OverloadDetector,
+  TestHooksEnvironmentStatisticsProvider,
+  type LoadSheddingOptions,
+  type SiloLoadSheddingTestHooks,
+} from "@tsva/runtime/load-shedding";
+import { GatewayTooBusyException } from "@tsva/core/errors";
 
 export interface ClusterNodeOptions {
   local: SiloAddress;
@@ -176,6 +184,14 @@ export interface ClusterNodeOptions {
    * `placementFilters` descriptor resolves against (Orleans `AddPlacementFilter`).
    */
   placementFilterRegistry?: PlacementFilterRegistry;
+  /**
+   * Load-shedding config (Orleans `LoadSheddingOptions`). Defaults to shedding
+   * disabled. When enabled and this silo's (test-hooks-latched) CPU usage
+   * exceeds `cpuThreshold`, a client-originated request arriving at this silo
+   * as gateway is rejected with a `"overloaded"` `RejectionError`
+   * (`GatewayTooBusyException` client-side) instead of being dispatched.
+   */
+  loadShedding?: Partial<LoadSheddingOptions>;
 }
 
 interface RejectionPayload {
@@ -267,6 +283,10 @@ export class ClusterNode {
   private readonly clientDirectory = new ClientDirectory();
   /** Connections held open to clients accepted on this silo, keyed by `clientId.toString()`. */
   private readonly clientConnections = new Map<string, Connection>();
+  /** This silo's (test-hooks-latched) CPU-usage source (Orleans `TestHooksEnvironmentStatisticsProvider`). */
+  private readonly environmentStatistics = new TestHooksEnvironmentStatisticsProvider();
+  /** Decides whether this silo is currently shedding load (Orleans `OverloadDetector`). */
+  private readonly overloadDetector: OverloadDetector;
   private ring: ConsistentHashRing;
   private listener: Listener | undefined;
 
@@ -303,6 +323,10 @@ export class ClusterNode {
 
   constructor(private readonly options: ClusterNodeOptions) {
     const time = options.time ?? systemTimeProvider;
+    this.overloadDetector = new OverloadDetector(this.environmentStatistics, {
+      ...DEFAULT_LOAD_SHEDDING_OPTIONS,
+      ...options.loadShedding,
+    });
     this.broadcastProviderNames = options.broadcastProviders ?? [];
     this.callTimeoutMs = options.callTimeoutMs ?? 30_000;
     this.versionPolicyConfigured =
@@ -368,6 +392,7 @@ export class ClusterNode {
       ...(options.grainExtensionFactories !== undefined
         ? { grainExtensionFactories: options.grainExtensionFactories }
         : {}),
+      loadShedding: () => this.siloTestHooks(),
     });
     this.dispatcher = new DistributedDispatcher({
       local: options.local,
@@ -444,6 +469,35 @@ export class ClusterNode {
       this.broadcastSubscriptions.set(namespace, types);
     }
     return this;
+  }
+
+  /**
+   * This silo's load-shedding test hooks (Orleans test-only access to
+   * `TestHooksEnvironmentStatisticsProvider`/`OverloadDetector` via the silo's
+   * `IServiceProvider`): latch/unlatch the reported CPU usage or force the
+   * overloaded state outright, and toggle overload detection on/off. Used both
+   * directly by tests (`SiloHost.loadShedding`) and by `IPlacementTestGrain`'s
+   * `enableOverloadDetection`/`latchCpuUsage`/`latchOverloaded`-style methods
+   * (via `GrainRuntime`, see `grain-runtime-impl.ts`).
+   */
+  siloTestHooks(): SiloLoadSheddingTestHooks {
+    return {
+      enableOverloadDetection: (enabled) => {
+        this.overloadDetector.enabled = enabled;
+      },
+      latchCpuUsage: (value) => this.environmentStatistics.latchCpuUsage(value),
+      unlatchCpuUsage: () => this.environmentStatistics.unlatchHardwareStatistics(),
+      // "Overloaded" is just a CPU reading above the configured threshold —
+      // there is no separate boolean the detector consults (Orleans mirrors
+      // this: `LatchOverloaded` also just latches CPU to `cpuThreshold + 1`).
+      latchOverloaded: () =>
+        this.environmentStatistics.latchCpuUsage(this.loadSheddingCpuThreshold() + 1),
+      unlatchOverloaded: () => this.environmentStatistics.unlatchHardwareStatistics(),
+    };
+  }
+
+  private loadSheddingCpuThreshold(): number {
+    return this.options.loadShedding?.cpuThreshold ?? DEFAULT_LOAD_SHEDDING_OPTIONS.cpuThreshold;
   }
 
   /** Grain types implicitly subscribed to a stream namespace (drives stream fan-out). */
@@ -1221,10 +1275,27 @@ export class ClusterNode {
     }
   }
 
+  /**
+   * Whether `message` arrived directly from an external client rather than a
+   * fellow cluster member: a plain (non-system) request/oneWay whose
+   * `sendingSilo` is not in the active membership view. Messages this silo
+   * proxies for another gateway, or routine inter-silo dispatcher/directory
+   * traffic, always carry a `sendingSilo` that IS an active member, so this is
+   * a safe stand-in for "this silo is acting as this call's gateway" without a
+   * dedicated per-connection flag.
+   */
+  private isClientOriginatedRequest(message: Message): boolean {
+    if (message.system !== undefined) return false;
+    const from = message.sendingSilo;
+    if (from === undefined) return false;
+    return !activeSilos(this.options.membership.current()).some((s) => s.equals(from));
+  }
+
   private interpretResponse(response: Message): unknown {
     if (response.responseKind === "success") return this.serializer.deserialize(response.body);
     if (response.responseKind === "rejection") {
       const payload = this.serializer.deserialize<RejectionPayload>(response.body);
+      if (payload.kind === "overloaded") throw new GatewayTooBusyException(payload.message);
       throw new RejectionError(payload.message, payload.kind);
     }
     const payload = this.serializer.deserialize<{ message: string }>(response.body);
@@ -1627,6 +1698,21 @@ export class ClusterNode {
   private async receiveRequest(message: Message): Promise<void> {
     if (isClient(message.targetGrain)) return this.proxyRequestToClient(message);
     const replyTo = message.sendingSilo;
+    // Gateway load shedding (Orleans `GatewayAcceptor`/`OverloadDetector`): a
+    // request arriving directly from an external client — not relayed from
+    // another cluster member — is refused outright while this silo is
+    // overloaded, before placement/activation ever runs. Inter-silo traffic
+    // (directory ops, migrations, ordinary grain-to-grain calls) is never
+    // shed here; only this silo's own gateway path is.
+    if (this.isClientOriginatedRequest(message) && this.overloadDetector.isOverloaded) {
+      if (message.direction === "oneWay" || replyTo === undefined) return;
+      const rejection: RejectionPayload = { message: "Gateway too busy", kind: "overloaded" };
+      await this.reply(
+        replyTo,
+        responseTo(message, "rejection", this.serializer.serialize(rejection), this.options.local),
+      );
+      return;
+    }
     // Reconstruct the transaction context (fresh participant set: resources on
     // this silo enlist into it, and we send those back on the reply).
     const header = message.requestContext?.transaction;
