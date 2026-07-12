@@ -1,3 +1,4 @@
+import { context, propagation } from "@opentelemetry/api";
 import { newActivationId } from "@tsva/core/activation-id";
 import { clientIdOf, isClient } from "@tsva/core/client-grain-id";
 import { GrainCallError, RejectionError } from "@tsva/core/errors";
@@ -1481,7 +1482,20 @@ export class ClusterNode {
           }
         : undefined;
     try {
-      const result = await this.dispatcher.deliverLocal(this.toRequest(message, transaction));
+      // Extract the incoming W3C `traceparent` (if any) BEFORE placement and
+      // activation run, not just around method dispatch (`tracingFilters()`'s
+      // incoming filter, which wraps `ActivationData.invoke` further down the
+      // call chain) — so a first call that triggers activation runs
+      // placement/register/activate inside the caller's trace, giving the
+      // "place grain"/"activate grain"/"register directory entry" spans
+      // (`@tsva/observability/activation-tracing`) the same trace id as the
+      // triggering grain call, not a disconnected root trace.
+      const headers = message.requestContext?.headers;
+      const extracted =
+        headers !== undefined ? propagation.extract(context.active(), headers) : context.active();
+      const result = await context.with(extracted, () =>
+        this.dispatcher.deliverLocal(this.toRequest(message, transaction)),
+      );
       if (message.direction === "oneWay" || replyTo === undefined) return;
       const response = responseTo(
         message,

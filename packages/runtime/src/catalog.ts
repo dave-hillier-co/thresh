@@ -206,7 +206,7 @@ export class Catalog {
    */
   private async finalizeStale(key: string, existing: ActivationData): Promise<void> {
     await existing.runDeactivateHook({
-      code: "runtime-requested",
+      code: "application-requested",
       description: "deactivateOnIdle requested",
     });
     existing.finalizeDeactivation();

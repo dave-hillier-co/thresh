@@ -27,7 +27,7 @@ import { MigrationBag } from "@tsva/core/grain-migration-participant";
 import type { GrainRuntime } from "@tsva/core/grain-runtime";
 import type { GrainTimer, TimerOptions } from "@tsva/core/grain-timer";
 import type { InvokeMethodOptions } from "@tsva/core/invoke-options";
-import type { ActivationReason, DeactivationReason } from "@tsva/core/reasons";
+import { formatDeactivationReason, type ActivationReason, type DeactivationReason } from "@tsva/core/reasons";
 import type { SiloAddress } from "@tsva/core/silo-address";
 import { migrationParticipantsOf } from "@tsva/runtime/migration-participants";
 import { getGrainInterface } from "@tsva/core/grain-interface";
@@ -57,6 +57,7 @@ import { GrainTimerImpl } from "@tsva/runtime/grain-timer-impl";
 import { invocationContext } from "@tsva/runtime/invocation-context";
 import type { TimeProvider } from "@tsva/runtime/time-provider";
 import { TurnScheduler } from "@tsva/runtime/turn-scheduler";
+import { withOnDeactivateSpan } from "@tsva/observability/activation-tracing";
 
 export type ActivationState = "creating" | "activating" | "valid" | "deactivating" | "invalid";
 
@@ -186,7 +187,7 @@ export class ActivationData implements GrainContext {
               this.timers.clear();
               await this.instance
                 .onDeactivate({
-                  code: "runtime-requested",
+                  code: "application-requested",
                   description: "deactivateOnIdle requested during activation",
                 })
                 .catch(() => undefined);
@@ -367,8 +368,37 @@ export class ActivationData implements GrainContext {
     for (const timer of this.timers) timer.dispose();
     this.timers.clear();
     await this.scheduler
-      .schedule({ options: {}, run: () => this.instance.onDeactivate(reason) })
+      .schedule({
+        options: {},
+        run: () =>
+          withOnDeactivateSpan(
+            {
+              grainId: this.id.toString(),
+              grainType: this.id.type,
+              siloId: this.localSiloId(),
+              activationId: this.activationId,
+              reason: formatDeactivationReason(reason),
+            },
+            () => this.instance.onDeactivate(reason),
+          ),
+      })
       .catch(() => undefined);
+  }
+
+  /**
+   * The local silo's address, for the `OnDeactivate` span's `orleans.silo.id`
+   * tag — best-effort: some lightweight test harnesses build an
+   * `ActivationData` with no local-silo address configured on its runtime
+   * (`GrainRuntimeImpl.localSiloAddress` throws in that case), and the
+   * deactivate hook must still run rather than being swallowed by
+   * `runDeactivateHook`'s outer `.catch`.
+   */
+  private localSiloId(): string {
+    try {
+      return this.runtime.localSiloAddress().toString();
+    } catch {
+      return "unknown";
+    }
   }
 
   /** Complete a deactivation whose hook already ran via `runDeactivateHook`. */

@@ -16,6 +16,7 @@ import {
   trace,
   type Span,
   type SpanKind,
+  SpanStatusCode,
 } from "@opentelemetry/api";
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
 import { TraceState, W3CTraceContextPropagator } from "@opentelemetry/core";
@@ -36,6 +37,10 @@ export interface CapturedSpan {
   readonly kind: SpanKind;
   readonly traceState: string | undefined;
   readonly attributes: Readonly<Record<string, unknown>>;
+  /** OTel span status — upstream's `Activity.Status`/`Activity.StatusDescription`. */
+  readonly statusCode: SpanStatusCode;
+  readonly statusMessage: string | undefined;
+  readonly startTimeMs: number;
 }
 
 function toCaptured(span: ReadableSpan): CapturedSpan {
@@ -49,6 +54,9 @@ function toCaptured(span: ReadableSpan): CapturedSpan {
     kind: span.kind,
     traceState: span.spanContext().traceState?.serialize(),
     attributes: span.attributes,
+    statusCode: span.status.code,
+    statusMessage: span.status.message,
+    startTimeMs: span.startTime[0] * 1000 + span.startTime[1] / 1e6,
   };
 }
 

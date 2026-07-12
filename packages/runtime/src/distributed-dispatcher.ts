@@ -7,6 +7,11 @@ import type { InvocationRequest } from "@tsva/core/request";
 import type { SiloAddress } from "@tsva/core/silo-address";
 import type { GrainDirectory } from "@tsva/directory/grain-directory";
 import type { LocationCache } from "@tsva/directory/location-cache";
+import {
+  withActivateGrainSpan,
+  withPlaceGrainSpan,
+  withRegisterDirectoryEntrySpan,
+} from "@tsva/observability/activation-tracing";
 import type { Catalog } from "@tsva/runtime/catalog";
 import type { Dispatcher } from "@tsva/runtime/dispatcher";
 import type { PlacementFilter } from "@tsva/runtime/placement/placement-filter";
@@ -91,41 +96,55 @@ export class DistributedDispatcher implements Dispatcher {
     const existing = await this.deps.catalog.resolveLive(req.target);
     if (existing !== undefined) return existing.invoke(req);
 
+    // Placement + directory registration + (if we won) activation all run
+    // inside a "place grain" span (Runtime source), so they share the trace
+    // id of whatever extracted the incoming call's trace context (see
+    // `ClusterNode.receiveRequest`). Nested inside it, "activate grain"
+    // (Lifecycle source) wraps registration through activation, so
+    // "register directory entry" (Runtime source) is a child span of it.
+    return withPlaceGrainSpan(() => this.claimAndActivateLocally(req));
+  }
+
+  private async claimAndActivateLocally(req: InvocationRequest): Promise<unknown> {
     const activationId = newActivationId();
-    const winner = await this.deps.directory.register({
-      grainId: req.target,
-      silo: this.deps.local,
-      activationId,
-    });
-    this.deps.cache.put(winner);
+    return withActivateGrainSpan({ grainType: req.target.type }, async () => {
+      const winner = await withRegisterDirectoryEntrySpan({ grainId: req.target.toString() }, () =>
+        this.deps.directory.register({
+          grainId: req.target,
+          silo: this.deps.local,
+          activationId,
+        }),
+      );
+      this.deps.cache.put(winner);
 
-    // We won the CAS: activate here.
-    if (winner.silo.equals(this.deps.local) && winner.activationId === activationId) {
-      return this.activateLocalAndInvoke(req, activationId);
-    }
-
-    // The directory points back at this silo but at a different activation id.
-    if (winner.silo.equals(this.deps.local)) {
-      const act = this.deps.catalog.get(req.target);
-      // A concurrent activator won the race here and is coming up: defer to it.
-      if (
-        act !== undefined &&
-        act.state !== "invalid" &&
-        act.activationId === winner.activationId
-      ) {
-        return act.invoke(req);
+      // We won the CAS: activate here.
+      if (winner.silo.equals(this.deps.local) && winner.activationId === activationId) {
+        return this.activateLocalAndInvoke(req, activationId);
       }
-      // The entry points at a dead/absent local activation (a failed activation
-      // its owner has not yet unregistered, or a failed migration). Remove the
-      // stale pointer and re-resolve locally instead of forwarding to ourselves
-      // forever — which is what otherwise drives an always-failing activation
-      // into an unbounded self-forward loop (OOM).
-      await this.deps.directory.unregister(winner);
-      this.deps.cache.invalidate(req.target);
-      return this.deliverLocal(req);
-    }
 
-    return this.deps.remote.send(winner.silo, req);
+      // The directory points back at this silo but at a different activation id.
+      if (winner.silo.equals(this.deps.local)) {
+        const act = this.deps.catalog.get(req.target);
+        // A concurrent activator won the race here and is coming up: defer to it.
+        if (
+          act !== undefined &&
+          act.state !== "invalid" &&
+          act.activationId === winner.activationId
+        ) {
+          return act.invoke(req);
+        }
+        // The entry points at a dead/absent local activation (a failed activation
+        // its owner has not yet unregistered, or a failed migration). Remove the
+        // stale pointer and re-resolve locally instead of forwarding to ourselves
+        // forever — which is what otherwise drives an always-failing activation
+        // into an unbounded self-forward loop (OOM).
+        await this.deps.directory.unregister(winner);
+        this.deps.cache.invalidate(req.target);
+        return this.deliverLocal(req);
+      }
+
+      return this.deps.remote.send(winner.silo, req);
+    });
   }
 
   /**
