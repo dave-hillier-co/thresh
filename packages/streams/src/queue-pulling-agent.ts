@@ -115,6 +115,18 @@ export class QueuePullingAgent {
     this.timer = undefined;
   }
 
+  /**
+   * Forget the cached cursor so the next pump re-reads it from the queue
+   * (`queue.getCursor()`) instead of continuing from wherever this agent last
+   * left off. Needed when the underlying queue is reconfigured out from under
+   * a running agent (Orleans' generator `IControllable.ExecuteCommand(Configure)`
+   * mid-run) — without this the agent keeps polling past the queue's
+   * newly-reset committed position and never observes the fresh stream.
+   */
+  resetCursor(): void {
+    this.cursor = undefined;
+  }
+
   private schedule(delayMs: number): void {
     if (!this.running) return;
     if (this.timer !== undefined) clearTimeout(this.timer);

@@ -38,6 +38,16 @@ export interface ManagementContext {
   activationCountFor(id: GrainId): Promise<number>;
   /** Force an immediate idle-activation sweep, with `ageLimitMs` in place of each activation's own age, on every active silo. */
   forceActivationCollection(ageLimitMs: number): Promise<void>;
+  /**
+   * Invoke an `IControllable` control command on the named stream provider on
+   * every active silo, returning one result per silo (Orleans
+   * `IManagementGrain.SendControlCommandToProvider`).
+   */
+  sendControlCommandToProvider(
+    providerName: string,
+    command: number,
+    arg?: unknown,
+  ): Promise<unknown[]>;
 }
 
 /**
@@ -96,6 +106,15 @@ export function createManagementGrainType(ctx: ManagementContext): new () => Gra
 
     async forceActivationCollection(ageLimit: Duration): Promise<void> {
       await ctx.forceActivationCollection(durationToMs(ageLimit));
+    }
+
+    async sendControlCommandToProvider(
+      _providerTypeName: string,
+      providerName: string,
+      command: number,
+      arg?: unknown,
+    ): Promise<unknown[]> {
+      return ctx.sendControlCommandToProvider(providerName, command, arg);
     }
   }
   setGrainOptions(ManagementGrain, MANAGEMENT_GRAIN_TYPE, {});

@@ -1,19 +1,24 @@
 import { keyToString, type GrainKey } from "@tsva/core/grain-key";
 import type { GrainType } from "@tsva/core/grain-type";
-import type {
-  AsyncStream,
-  StreamHandler,
-  StreamId,
-  StreamProvider,
-  StreamSubscriptionHandle,
-  SubscribeOptions,
+import {
+  STREAM_GENERATOR_COMMAND_CONFIGURE,
+  type AsyncStream,
+  type Controllable,
+  type StreamHandler,
+  type StreamId,
+  type StreamProvider,
+  type StreamSubscriptionHandle,
+  type SubscribeOptions,
 } from "@tsva/core/stream";
 import { implicitSubscriberIds } from "@tsva/streams/implicit-subscriptions";
 import {
   GeneratorStreamQueue,
   type StreamGeneratorConfig,
 } from "@tsva/streams/generator-stream-queue";
-import { QueuePullingAgent, type PullingStreamProviderHost } from "@tsva/streams/queue-pulling-agent";
+import {
+  QueuePullingAgent,
+  type PullingStreamProviderHost,
+} from "@tsva/streams/queue-pulling-agent";
 import { ownedQueueIndices, type HashRange } from "@tsva/streams/queue-ownership";
 import type { StreamDeliver } from "@tsva/streams/stream-deliver";
 
@@ -35,7 +40,9 @@ export interface GeneratorPullingStreamProviderOptions {
  * streams are never published to by a client), so `getStream` only supports
  * inspection, not publish/subscribe.
  */
-export class GeneratorPullingStreamProvider implements StreamProvider, PullingStreamProviderHost {
+export class GeneratorPullingStreamProvider
+  implements StreamProvider, PullingStreamProviderHost, Controllable
+{
   private readonly queueCount: number;
   private readonly pollIntervalMs: number;
   private readonly queues: GeneratorStreamQueue[];
@@ -79,6 +86,23 @@ export class GeneratorPullingStreamProvider implements StreamProvider, PullingSt
    */
   reconfigure(config: StreamGeneratorConfig): void {
     for (const queue of this.queues) queue.reconfigure(config);
+    // Any agent already running past the queue's now-reset cursor must forget
+    // it too, or it never notices the fresh stream (see `QueuePullingAgent.resetCursor`).
+    for (const agent of this.agents.values()) agent.resetCursor();
+  }
+
+  /**
+   * Orleans `IControllable.ExecuteCommand`, reached via
+   * `IManagementGrain.SendControlCommandToProvider`: the only command this
+   * provider understands is `StreamGeneratorCommand.Configure`, which
+   * reconfigures every queue live (see `reconfigure`) and reports success.
+   */
+  async executeCommand(command: number, arg: unknown): Promise<unknown> {
+    if (command === STREAM_GENERATOR_COMMAND_CONFIGURE) {
+      this.reconfigure(arg as StreamGeneratorConfig);
+      return true;
+    }
+    throw new Error(`GeneratorPullingStreamProvider: unsupported control command ${command}`);
   }
 
   startAgentsFor(indices: Iterable<number>): void {
@@ -128,7 +152,9 @@ class ReadOnlyGeneratedStream<T> implements AsyncStream<T> {
   constructor(readonly id: StreamId) {}
 
   async publish(_event: T): Promise<void> {
-    throw new Error("generator stream provider is read-only: streams are synthesized, not published");
+    throw new Error(
+      "generator stream provider is read-only: streams are synthesized, not published",
+    );
   }
 
   async subscribe(
