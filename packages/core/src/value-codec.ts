@@ -56,6 +56,9 @@ export function encodeValue(value: unknown): unknown {
   if (ref !== undefined) {
     return { [T]: "grainRef", interfaceId: ref.interfaceId, ...grainIdFields(ref.grainId) };
   }
+  if (value instanceof Map) {
+    return { [T]: "map", entries: [...value.entries()].map(([k, v]) => [encodeValue(k), encodeValue(v)]) };
+  }
   if (Array.isArray(value)) return value.map(encodeValue);
   if (value !== null && typeof value === "object") {
     const out: Record<string, unknown> = {};
@@ -87,6 +90,10 @@ export function decodeValue(value: unknown, ctx: CodecContext = {}): unknown {
         return new CancellationTokenPlaceholder(obj.tokenId as string, obj.cancelled as boolean);
       case "silo":
         return new SiloAddress(obj.podName as string, obj.podUid as string, obj.endpoint as string);
+      case "map": {
+        const entries = obj.entries as [unknown, unknown][];
+        return new Map(entries.map(([k, v]) => [decodeValue(k, ctx), decodeValue(v, ctx)]));
+      }
       case "grainRef": {
         const identity: GrainReferenceIdentity = {
           grainId: grainIdFrom(obj),
