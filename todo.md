@@ -64,8 +64,8 @@ shows per-tag counts). One-line definitions live on the `GapTag` union. Grouped 
 - [ ] **Request context** — `GAP-REQUEST-CONTEXT` (expose on `@tsva/core` public surface),
       `GAP-CLIENT-REQUEST-CONTEXT`, `GAP-CALL-FILTER-CLIENT-LAYER`, `GAP-CLIENT-SILO-SEPARATION`.
 - [ ] **Timers** — `GAP-TIMER-VALIDATION` (callback-initiated Change/dispose portions).
-- [ ] **Placement & rebalancing** — `GAP-PLACEMENT-FILTER-DIRECTORS`,
-      `GAP-REBALANCER-CONTROL`, `GAP-ACTIVATION-REPARTITIONING`, `GAP-LOAD-SHEDDING`.
+- [ ] **Placement & rebalancing** — `GAP-REBALANCER-CONTROL`, `GAP-ACTIVATION-REPARTITIONING`,
+      `GAP-LOAD-SHEDDING`.
 - [ ] **Streams** — `GAP-STREAM-IMPLICIT-MEMORY` (implicit subscriptions on the memory provider),
       `GAP-STREAM-BATCHING`, `GAP-STREAM-FILTER`, `GAP-STREAM-SUBSCRIPTION-MANAGER`,
       `GAP-STREAM-PROVIDER-WIRING` (TestCluster/client surface), `GAP-STREAM-PROVIDER-CONFIG`,

@@ -80,6 +80,7 @@ import {
   placementStrategyFor,
 } from "@tsva/runtime/placement/placement-director";
 import type { PlacementFilter } from "@tsva/runtime/placement/placement-filter";
+import type { PlacementFilterRegistry } from "@tsva/runtime/placement/placement-filter-registry";
 import { RandomPlacement } from "@tsva/runtime/placement/random-placement";
 import type {
   PlacementContext,
@@ -168,6 +169,11 @@ export interface ClusterNodeOptions {
    * e.g. object pooling or non-DI construction. Defaults to `new ctor()` when unset.
    */
   grainActivator?: GrainActivator;
+  /**
+   * Named custom placement-filter directors a grain's `"custom"`
+   * `placementFilters` descriptor resolves against (Orleans `AddPlacementFilter`).
+   */
+  placementFilterRegistry?: PlacementFilterRegistry;
 }
 
 interface RejectionPayload {
@@ -801,7 +807,7 @@ export class ClusterNode {
 
   private filtersFor(grainType: GrainType): readonly PlacementFilter[] {
     const reg = this.grainTypes.get(grainType);
-    return reg ? placementFiltersFor(reg.metadata) : [];
+    return reg ? placementFiltersFor(reg.metadata, this.options.placementFilterRegistry) : [];
   }
 
   /**
