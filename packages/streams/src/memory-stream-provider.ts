@@ -1,10 +1,11 @@
-import { GrainId } from "@tsva/core/grain-id";
+import type { GrainId } from "@tsva/core/grain-id";
 import { keyToString, type GrainKey } from "@tsva/core/grain-key";
 import type { GrainType } from "@tsva/core/grain-type";
 import {
   SequenceToken,
   type AsyncStream,
   type BatchedStreamItem,
+  type StreamFilter,
   type StreamHandler,
   type StreamId,
   type StreamProvider,
@@ -12,6 +13,8 @@ import {
   type StreamSubscriptionManager,
   type SubscribeOptions,
 } from "@tsva/core/stream";
+import { emitStreamingEvent } from "@tsva/core/streaming-diagnostics";
+import { systemTimeProvider, type TimeProvider, type TimerHandle } from "@tsva/core/time-provider";
 import { implicitSubscriberIds } from "@tsva/streams/implicit-subscriptions";
 import { MemorySubscriptionManager } from "@tsva/streams/memory-subscription-manager";
 import type { StreamDeliver } from "@tsva/streams/stream-deliver";
@@ -47,10 +50,18 @@ class MemorySubscription<T> implements StreamSubscriptionHandle<T> {
 class MemoryStream<T> implements AsyncStream<T> {
   private readonly events: StreamEvent<T>[] = [];
   private readonly subscriptions: MemorySubscription<T>[] = [];
+  private inactivityTimer: TimerHandle | undefined;
 
   constructor(
     readonly id: StreamId,
-    private readonly notifyOutOfProcess: (streamKey: string, event: T, token: number) => Promise<void>,
+    private readonly notifyOutOfProcess: (
+      streamId: StreamId,
+      event: T,
+      token: number,
+    ) => Promise<void>,
+    private readonly time: TimeProvider,
+    private readonly streamInactivityPeriodMs: number | undefined,
+    private readonly providerName: string,
   ) {}
 
   async publish(event: T): Promise<void> {
@@ -68,6 +79,7 @@ class MemoryStream<T> implements AsyncStream<T> {
    * individually, regardless of how they were published.
    */
   async publishBatch(events: readonly T[]): Promise<void> {
+    this.armInactivityTimer();
     const entries: StreamEvent<T>[] = events.map((event) => {
       const entry = { token: this.events.length, event };
       this.events.push(entry);
@@ -75,8 +87,34 @@ class MemoryStream<T> implements AsyncStream<T> {
     });
     for (const sub of this.subscriptions) void this.deliverTo(sub);
     for (const entry of entries) {
-      await this.notifyOutOfProcess(`${this.id.namespace}/${this.id.key}`, entry.event, entry.token);
+      await this.notifyOutOfProcess(this.id, entry.event, entry.token);
     }
+  }
+
+  /**
+   * (Re)arm the per-stream inactivity timer (Orleans `StreamInactivityPeriod`,
+   * a pulling-agent option): each publish counts as activity and pushes the
+   * "went inactive" signal out by another period; if nothing is published
+   * again before it fires, `emitStreamingEvent` reports the stream inactive.
+   * A no-op unless the provider was configured with a period.
+   */
+  private armInactivityTimer(): void {
+    if (this.streamInactivityPeriodMs === undefined) return;
+    if (this.inactivityTimer !== undefined) this.time.clearTimer(this.inactivityTimer);
+    this.inactivityTimer = this.time.setTimer(() => {
+      this.inactivityTimer = undefined;
+      emitStreamingEvent({
+        kind: "streamInactive",
+        providerName: this.providerName,
+        streamId: this.id,
+      });
+    }, this.streamInactivityPeriodMs);
+  }
+
+  /** Cancel the inactivity timer (silo/provider teardown), so it never leaks past disposal. */
+  dispose(): void {
+    if (this.inactivityTimer !== undefined) this.time.clearTimer(this.inactivityTimer);
+    this.inactivityTimer = undefined;
   }
 
   async subscribe(
@@ -127,6 +165,13 @@ class MemoryStream<T> implements AsyncStream<T> {
             break; // leave the cursor so the batch is redelivered
           }
           sub.cursor += pending.length;
+          for (const _item of items) {
+            emitStreamingEvent({
+              kind: "itemDelivered",
+              providerName: this.providerName,
+              streamId: this.id,
+            });
+          }
           continue;
         }
         const entry = this.events[sub.cursor]!;
@@ -137,6 +182,11 @@ class MemoryStream<T> implements AsyncStream<T> {
           break; // leave the cursor so the event is redelivered
         }
         sub.cursor++;
+        emitStreamingEvent({
+          kind: "itemDelivered",
+          providerName: this.providerName,
+          streamId: this.id,
+        });
       }
     } finally {
       sub.pumping = false;
@@ -165,8 +215,24 @@ export class MemoryStreamProvider implements StreamProvider {
   // given provider's own pub-sub mode — there is no "explicit-subscribe-only"
   // provider config to opt into upstream either).
   private readonly subscriptionManager = new MemorySubscriptionManager();
+  private time: TimeProvider = systemTimeProvider;
+  // Orleans' `StreamInactivityPeriod` (a pulling-agent option): how long a
+  // stream may go without a publish before it is reported inactive. This
+  // provider has no pulling agent, but the *timer* is still real work a test
+  // can synchronize on (see `MemoryStream.armInactivityTimer`), so the option
+  // is honored even though nothing else about the pulling-agent model exists
+  // here.
+  private streamInactivityPeriodMs: number | undefined;
+  // Orleans `IStreamFilter` (`ISiloBuilder.AddStreamFilter`): a server-side
+  // predicate applied before an event reaches any implicit subscriber. Only
+  // the implicit path is filtered — a stream's explicit subscribers
+  // (`stream.subscribe`) are delivered to directly and are not gated by this
+  // provider-wide filter upstream either (the filter is a pulling-agent/queue
+  // concern, and implicit subscription is the only path this provider routes
+  // through anything resembling one).
+  private streamFilter: StreamFilter | undefined;
 
-  constructor(private readonly name: string = "default") {}
+  constructor(readonly name: string = "default") {}
 
   /** Wire how a published event reaches an implicit subscriber's activation. */
   setDeliver(deliver: StreamDeliver): void {
@@ -188,6 +254,31 @@ export class MemoryStreamProvider implements StreamProvider {
     this.subscriptionManager.setConfirm(confirm);
   }
 
+  /**
+   * Inject the clock every stream created from this point on uses for its
+   * inactivity timer (defaults to the system clock). `SiloBuilder.build()`
+   * calls this before any `getStream` is reachable from a running silo, so a
+   * `FakeTimeProvider` passed to `TestCluster.start` reaches every stream.
+   */
+  setTimeProvider(time: TimeProvider): void {
+    this.time = time;
+  }
+
+  /**
+   * Configure `StreamInactivityPeriod` (Orleans pulling-agent option): every
+   * stream created from this point on (re)arms an inactivity timer of this
+   * length on each publish. Unset (the default) means no inactivity timer —
+   * existing behavior for every caller that never opts in.
+   */
+  setStreamInactivityPeriod(ms: number): void {
+    this.streamInactivityPeriodMs = ms;
+  }
+
+  /** Install a server-side filter (Orleans `AddStreamFilter`); see the field doc. */
+  setStreamFilter(filter: StreamFilter): void {
+    this.streamFilter = filter;
+  }
+
   getStream<T>(namespace: string, key: GrainKey): AsyncStream<T> {
     const keyString = keyToString(key);
     const mapKey = `${namespace}/${keyString}`;
@@ -195,7 +286,10 @@ export class MemoryStreamProvider implements StreamProvider {
     if (stream === undefined) {
       stream = new MemoryStream<unknown>(
         { provider: this.name, namespace, key: keyString },
-        (streamKey, event, token) => this.fanOut(streamKey, event, token),
+        (streamId, event, token) => this.fanOut(streamId, event, token),
+        this.time,
+        this.streamInactivityPeriodMs,
+        this.name,
       );
       this.streams.set(mapKey, stream);
     }
@@ -206,7 +300,15 @@ export class MemoryStreamProvider implements StreamProvider {
     return this.subscriptionManager;
   }
 
-  private async fanOut(streamKey: string, event: unknown, token: number): Promise<void> {
+  /** Cancel every stream's inactivity timer (silo shutdown) so none leak past disposal. */
+  stop(): void {
+    for (const stream of this.streams.values()) stream.dispose();
+  }
+
+  private async fanOut(streamId: StreamId, event: unknown, token: number): Promise<void> {
+    if (this.streamFilter !== undefined && !this.streamFilter.shouldDeliver(streamId, event))
+      return;
+    const streamKey = `${streamId.namespace}/${streamId.key}`;
     const implicit = implicitSubscriberIds(streamKey, this.implicitTypesFor);
     const admin = this.subscriptionManager.subscribersFor(streamKey);
     const seen = new Set<string>();
@@ -215,6 +317,7 @@ export class MemoryStreamProvider implements StreamProvider {
       if (seen.has(id)) continue;
       seen.add(id);
       await this.deliver(subscriber, streamKey, event, token);
+      emitStreamingEvent({ kind: "itemDelivered", providerName: this.name, streamId });
     }
   }
 }

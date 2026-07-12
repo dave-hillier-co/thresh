@@ -102,6 +102,19 @@ export interface StreamSubscriptionManager {
   getSubscriptions(streamId: StreamId): Promise<StreamSubscription[]>;
 }
 
+/**
+ * A server-side predicate that suppresses delivery of a published item before
+ * it reaches any consumer (Orleans `IStreamFilter.ShouldDeliver`, wired via
+ * `ISiloBuilder.AddStreamFilter`). Returning `false` drops the item entirely
+ * for every subscriber on that stream — it never reaches a handler, and no
+ * delivery is observed for it. `filterData` mirrors Orleans' per-subscription
+ * filter payload (Orleans `IStreamSubscriptionManager`'s filter data); most
+ * filters ignore it.
+ */
+export interface StreamFilter {
+  shouldDeliver(streamId: StreamId, item: unknown, filterData?: string): boolean;
+}
+
 export interface StreamProvider {
   getStream<T>(namespace: string, key: GrainKey): AsyncStream<T>;
   /**
