@@ -78,7 +78,10 @@ shows per-tag counts). One-line definitions live on the `GapTag` union. Grouped 
       `Activation.callMethod`; `TestCluster`/`SiloHost.getStreamProvider` now exist, so the
       remaining gap is filter coverage, not provider access), `GAP-STREAM-PROVIDER-CONFIG`,
       `GAP-STREAM-CACHE-DIAGNOSTICS`, `GAP-STREAM-GENERATOR-ADAPTER`,
-      `GAP-BROADCAST-CHANNEL-CLIENT`, `GAP-CHANNEL-NAMESPACE-PREDICATE`.
+      `GAP-BROADCAST-CHANNEL-CLIENT` (channel-namespace predicate mechanism itself now
+      exists — `IChannelNamespacePredicate`, `ConstructorChannelNamespacePredicateProvider`,
+      `regexImplicitChannelSubscription` in `@tsva/core/channel-namespace-predicate` — the
+      remaining gap is the client-side broadcast writer/diagnostics slice).
 - [ ] **`MemoryStreamProvider` is per-silo, not cluster-shared** — `SiloBuilder.useMemoryStreams`
       builds a fresh provider (and fresh admin subscription registry) on every silo that calls it;
       `TestCluster`'s other backends (storage, reminders, journals, jobs) are explicitly shared

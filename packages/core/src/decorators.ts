@@ -9,6 +9,7 @@ import {
   type GrainOptions,
   type MayInterleavePredicate,
 } from "./grain-metadata";
+import { ConstructorChannelNamespacePredicateProvider } from "./channel-namespace-predicate";
 import { registerGrainFacetField } from "./grain-facet-metadata";
 import { registerPersistentField } from "./persistent-state-metadata";
 import { registerReducerField } from "./reducer-state-metadata";
@@ -80,6 +81,26 @@ export function implicitStreamSubscription(namespace: string) {
 export function implicitChannelSubscription(namespace: string) {
   return function <T extends GrainConstructor>(value: T, _context: ClassDecoratorContext): T {
     markBroadcastSubscription(value, namespace);
+    return value;
+  };
+}
+
+/**
+ * Implicitly subscribes this grain type to every broadcast-channel namespace
+ * matching a regular expression (Orleans' `[RegexImplicitChannelSubscription]`).
+ * Encodes to the same `"ctor:RegexChannelNamespacePredicate:<pattern>"` string
+ * a `ConstructorChannelNamespacePredicateProvider` resolves back to a
+ * `RegexChannelNamespacePredicate` — see `channel-namespace-predicate.ts`.
+ */
+export function regexImplicitChannelSubscription(pattern: string) {
+  return function <T extends GrainConstructor>(value: T, _context: ClassDecoratorContext): T {
+    markBroadcastSubscription(
+      value,
+      ConstructorChannelNamespacePredicateProvider.formatPattern(
+        "RegexChannelNamespacePredicate",
+        pattern,
+      ),
+    );
     return value;
   };
 }
