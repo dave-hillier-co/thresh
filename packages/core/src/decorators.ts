@@ -9,6 +9,7 @@ import {
   type GrainOptions,
   type MayInterleavePredicate,
 } from "./grain-metadata";
+import { registerGrainFacetField } from "./grain-facet-metadata";
 import { registerPersistentField } from "./persistent-state-metadata";
 import { registerReducerField } from "./reducer-state-metadata";
 import type { Reducer } from "./reducer-state";
@@ -97,6 +98,34 @@ export function persistentState(stateName: string, options: PersistentStateOptio
         stateName,
         ...(options.provider !== undefined ? { provider: options.provider } : {}),
         ...(options.defaultValue !== undefined ? { defaultValue: options.defaultValue } : {}),
+      });
+    });
+  };
+}
+
+/**
+ * Injects a third-party facet into a grain field, resolved by a named factory
+ * a silo builder registered via `addGrainFacetFactory(kind, name, factory)`
+ * (the general form of what `@persistentState` does for storage: Orleans'
+ * constructor-parameter `[Attribute]` facets, e.g. `[ExampleStorage("Blob")]
+ * IExampleStorage<T> state`, become a decorated field here because this
+ * framework has no constructor DI). `kind` names the facet family; `name`
+ * selects which registered factory binds this field, defaulting to whichever
+ * factory was registered under `"default"` for that kind. `config` is passed
+ * through to the factory unchanged — typically a plugin defines its own
+ * thin decorator wrapping this one to shape `config` (see the `ExampleStorage`
+ * facet in `packages/parity` for a worked third-party example).
+ */
+export function grainFacet<TConfig = unknown>(kind: string, name?: string, config?: TConfig) {
+  return function (_value: undefined, context: ClassFieldDecoratorContext): void {
+    if (context.kind !== "field") throw new Error("@grainFacet must decorate a field");
+    const fieldName = String(context.name);
+    context.addInitializer(function (this: unknown) {
+      registerGrainFacetField(this as object, {
+        fieldName,
+        kind,
+        ...(name !== undefined ? { providerName: name } : {}),
+        ...(config !== undefined ? { config } : {}),
       });
     });
   };

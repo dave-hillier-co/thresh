@@ -25,7 +25,6 @@ export type GapTag =
   | "GAP-PLACEMENT-FILTER-DIRECTORS" // no DI-based custom placement-filter directors
   | "GAP-REBALANCER-CONTROL" // no rebalancer suspend/resume/report-listener control API
   | "GAP-REQUEST-CONTEXT" // no RequestContext-driven placement hints (IPlacementDirector.PlacementHintKey)
-  | "GAP-STORAGE-FACET" // no third-party facet extensibility (named DI-resolved storage facets)
   | "GAP-STREAM-BATCHING" // no OnNextBatchAsync / batch-send stream API
   | "GAP-STREAM-CACHE-DIAGNOSTICS" // no pulling-agent cache/eviction model or diagnostic observer
   | "GAP-STREAM-FILTER" // no IStreamFilter server-side delivery filtering

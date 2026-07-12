@@ -29,6 +29,8 @@ import { RedisGrainStorage } from "@tsva/persistence/redis-grain-storage";
 import { bindPersistentStates } from "@tsva/persistence/state-activator";
 import { bindReducerStates } from "@tsva/persistence/reducer-state-activator";
 import { StorageRegistry } from "@tsva/persistence/storage-registry";
+import { bindGrainFacets } from "@tsva/persistence/grain-facet-activator";
+import { GrainFacetRegistry, type GrainFacetFactory } from "@tsva/persistence/grain-facet-registry";
 import { bindTransactionalStates } from "@tsva/transactions/transactional-state-activator";
 import type { Logger } from "@tsva/core/logger";
 import { setupTracePropagation, tracingFilters } from "@tsva/observability/tracing";
@@ -136,6 +138,7 @@ export class SiloBuilder {
   private storage: StorageRegistry | undefined;
   private transactionalStorage: TransactionalStorageRegistry | undefined;
   private journalStorage: JournalStorageRegistry | undefined;
+  private grainFacets: GrainFacetRegistry | undefined;
   private reminderTable: ReminderTable | undefined;
   private jobShardStore: JobShardStore | undefined;
   private durableJobsOptions: DurableJobsOptions = {};
@@ -323,6 +326,21 @@ export class SiloBuilder {
   /** Convenience: register an in-memory "default" provider (dev/tests). */
   useMemoryStorage(provider: GrainStorage = new MemoryGrainStorage()): this {
     return this.addStorage("default", provider);
+  }
+
+  /**
+   * Register a named factory for a third-party grain facet family (Orleans'
+   * `IAttributeToFactoryMapper` extensibility point — e.g. an `ExampleStorage`
+   * plugin's `UseBlobExampleStorage`/`UseTableExampleStorage`). `kind` names
+   * the facet family; a grain's `@grainFacet(kind, name)` field (or a
+   * plugin-specific decorator built on it) resolves to the factory registered
+   * here under that `name`. Register a factory under `"default"` to make it
+   * the fallback for a `@grainFacet` field that names no provider (Orleans'
+   * `UseAsDefaultExampleStorage`).
+   */
+  addGrainFacetFactory(kind: string, name: string, factory: GrainFacetFactory): this {
+    (this.grainFacets ??= new GrainFacetRegistry()).add(kind, name, factory);
+    return this;
   }
 
   /**
@@ -621,6 +639,7 @@ export class SiloBuilder {
       : (this.transactionalStorage ??
         new TransactionalStorageRegistry().add("default", new MemoryTransactionalStorage()));
     const journalStorage = this.journalStorage;
+    const grainFacets = this.grainFacets;
     const snapshotThreshold = this.config.snapshotThreshold;
     const time = this.config.time;
     let reminderService: LocalReminderService | undefined;
@@ -686,6 +705,9 @@ export class SiloBuilder {
           await bindTransactionalStates(instance, grainId, transactionalStorage, (manager, txId) =>
             node.resolveTransactionStatus(manager, txId),
           );
+        }
+        if (grainFacets !== undefined) {
+          await bindGrainFacets(instance, grainId, grainFacets);
         }
       },
       ...(this.reminderTable !== undefined ? { reminderRegistry: () => reminderService } : {}),
