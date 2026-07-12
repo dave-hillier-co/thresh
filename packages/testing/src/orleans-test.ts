@@ -22,7 +22,6 @@ export type GapTag =
   | "GAP-GRAIN-DIRECTORY-API" // internal directory not exposed via a pluggable IGrainDirectory API
   | "GAP-GRAIN-SERVICE" // no per-silo grain-service registration/lifecycle mechanism
   | "GAP-LOAD-SHEDDING" // no overload detector / load shedding / CPU-aware placement scoring
-  | "GAP-PLACEMENT-FILTER-DIRECTORS" // no DI-based custom placement-filter directors
   | "GAP-REBALANCER-CONTROL" // no rebalancer suspend/resume/report-listener control API
   | "GAP-REQUEST-CONTEXT" // no RequestContext-driven placement hints (IPlacementDirector.PlacementHintKey)
   | "GAP-STREAM-BATCHING" // no OnNextBatchAsync / batch-send stream API

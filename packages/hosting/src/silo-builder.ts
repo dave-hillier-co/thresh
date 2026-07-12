@@ -31,6 +31,8 @@ import { bindReducerStates } from "@tsva/persistence/reducer-state-activator";
 import { StorageRegistry } from "@tsva/persistence/storage-registry";
 import { bindGrainFacets } from "@tsva/persistence/grain-facet-activator";
 import { GrainFacetRegistry, type GrainFacetFactory } from "@tsva/persistence/grain-facet-registry";
+import { PlacementFilterRegistry } from "@tsva/runtime/placement/placement-filter-registry";
+import type { PlacementFilter } from "@tsva/runtime/placement/placement-filter";
 import { bindTransactionalStates } from "@tsva/transactions/transactional-state-activator";
 import type { Logger } from "@tsva/core/logger";
 import { setupTracePropagation, tracingFilters } from "@tsva/observability/tracing";
@@ -139,6 +141,7 @@ export class SiloBuilder {
   private transactionalStorage: TransactionalStorageRegistry | undefined;
   private journalStorage: JournalStorageRegistry | undefined;
   private grainFacets: GrainFacetRegistry | undefined;
+  private placementFilters: PlacementFilterRegistry | undefined;
   private reminderTable: ReminderTable | undefined;
   private jobShardStore: JobShardStore | undefined;
   private durableJobsOptions: DurableJobsOptions = {};
@@ -340,6 +343,17 @@ export class SiloBuilder {
    */
   addGrainFacetFactory(kind: string, name: string, factory: GrainFacetFactory): this {
     (this.grainFacets ??= new GrainFacetRegistry()).add(kind, name, factory);
+    return this;
+  }
+
+  /**
+   * Register a named custom placement-filter director (Orleans
+   * `IServiceCollection.AddPlacementFilter<TStrategy, TDirector>`). A grain
+   * opts in via a `{ kind: "custom", name, order }` entry in its
+   * `placementFilters`, resolved here by `name` at placement time.
+   */
+  addPlacementFilter(name: string, director: PlacementFilter): this {
+    (this.placementFilters ??= new PlacementFilterRegistry()).add(name, director);
     return this;
   }
 
@@ -683,6 +697,9 @@ export class SiloBuilder {
         : {}),
       ...(this.grainActivator !== undefined ? { grainActivator: this.grainActivator } : {}),
       ...(this.grainExtensions.size > 0 ? { grainExtensionFactories: this.grainExtensions } : {}),
+      ...(this.placementFilters !== undefined
+        ? { placementFilterRegistry: this.placementFilters }
+        : {}),
       // Transactional facets need no storage provider in this slice, so the
       // binder always runs; persistent/reducer facets bind only when storage is
       // configured.

@@ -3,12 +3,29 @@ import type { GrainType } from "./grain-type";
 /**
  * A serializable description of a placement filter declared on a grain. Kept inert
  * here so `@tsva/core` need not depend on runtime placement classes; the runtime
- * resolves it to a `PlacementFilter` instance.
+ * resolves it to a `PlacementFilter` instance. A grain may declare several
+ * (Orleans' stackable `[XyzPlacementFilter(order)]` attributes); `order`
+ * (defaulting to `0`) fixes the composition order — ascending, output of one
+ * feeding the next — and two descriptors on the same grain sharing an `order`
+ * is a configuration error the runtime rejects at placement time (Orleans
+ * `InvalidOperationException`).
  */
-export type PlacementFilterDescriptor = {
-  kind: "metadataMatch";
-  match: Readonly<Record<string, string>>;
-};
+export type PlacementFilterDescriptor =
+  | { kind: "metadataMatch"; match: Readonly<Record<string, string>>; order?: number }
+  | { kind: "requiredMatchSiloMetadata"; keys: readonly string[]; order?: number }
+  | {
+      kind: "preferredMatchSiloMetadata";
+      keys: readonly string[];
+      minCandidates?: number;
+      order?: number;
+    }
+  /**
+   * A custom filter director registered on the silo builder via
+   * `addPlacementFilter(name, director)` (Orleans
+   * `AddPlacementFilter<TStrategy, TDirector>`), resolved by `name` from the
+   * `PlacementFilterRegistry` at placement time.
+   */
+  | { kind: "custom"; name: string; order?: number };
 
 export interface GrainOptions {
   /** Override the grain type name (defaults to the class name without "Grain"). */
