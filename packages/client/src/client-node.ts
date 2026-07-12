@@ -22,10 +22,7 @@ import type { GrainId } from "@tsva/core/grain-id";
 import type { GrainInterface } from "@tsva/core/grain-interface";
 import { getGrainInterface } from "@tsva/core/grain-interface";
 import { getGrainMetadata } from "@tsva/core/grain-metadata";
-import {
-  grainReferenceIdentity,
-  type GrainReferenceIdentity,
-} from "@tsva/core/grain-reference";
+import { grainReferenceIdentity, type GrainReferenceIdentity } from "@tsva/core/grain-reference";
 import type { GrainType } from "@tsva/core/grain-type";
 import type { GrainKeyFor } from "@tsva/core/key-kinds";
 import type { InvocationRequest } from "@tsva/core/request";
@@ -33,7 +30,12 @@ import { requestContextStore, runWithRequestContext } from "@tsva/core/request-c
 import type { SiloAddress } from "@tsva/core/silo-address";
 import { ConnectionManager } from "@tsva/messaging/connection-manager";
 import { CorrelationTable } from "@tsva/messaging/correlation-table";
-import { nextCorrelationId, responseTo, type Message, type ResponseKind } from "@tsva/messaging/message";
+import {
+  nextCorrelationId,
+  responseTo,
+  type Message,
+  type ResponseKind,
+} from "@tsva/messaging/message";
 import { MessagePackSerializer } from "@tsva/messaging/msgpack-serializer";
 import type { Serializer } from "@tsva/messaging/serializer";
 import type { Listener, Transport } from "@tsva/messaging/transport";
@@ -426,13 +428,14 @@ export class ClientNode implements Dispatcher {
       // builds up its RequestContext value through the filter chain the same
       // way the grain-side `GrainCallFilter_Incoming_Order_Test` does).
       const result = await runWithRequestContext(
-        message.requestContext?.headers !== undefined
-          ? { ...message.requestContext.headers }
-          : {},
+        message.requestContext?.headers !== undefined ? { ...message.requestContext.headers } : {},
         () =>
           invocationContext.run(
             {
               senderId: message.sendingGrain,
+              // A client-hosted observer isn't a grain activation, so it has
+              // no id to stamp as `ownerId` for a further outgoing call.
+              ownerId: undefined,
               reentrancyId: message.requestContext?.reentrancyId ?? "",
             },
             async () => {
@@ -518,7 +521,10 @@ export class ClientNode implements Dispatcher {
   /** Map a thrown error to the `(kind, body)` of an error/rejection response. */
   private serializeError(err: unknown): { kind: ResponseKind; body: Uint8Array } {
     return err instanceof RejectionError
-      ? { kind: "rejection", body: this.serializer.serialize({ message: err.message, kind: err.kind }) }
+      ? {
+          kind: "rejection",
+          body: this.serializer.serialize({ message: err.message, kind: err.kind }),
+        }
       : {
           kind: "error",
           body: this.serializer.serialize({

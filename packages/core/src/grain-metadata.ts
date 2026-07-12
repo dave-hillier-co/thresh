@@ -44,6 +44,14 @@ export interface GrainOptions {
    */
   maxLocalWorkers?: number;
   collectionAgeSeconds?: number;
+  /**
+   * `[Immovable(ImmovableKind)]`: excludes this grain type's activations from
+   * being moved by the named subsystem (or both, with `"any"`). `"rebalancer"`
+   * exempts it from the load-leveling activation rebalancer; `"repartitioner"`
+   * exempts it from the communication-graph activation repartitioner
+   * (`@tsva/runtime/placement/repartitioning/activation-repartitioner`).
+   */
+  immovable?: "any" | "rebalancer" | "repartitioner";
 }
 
 export interface GrainMetadata {

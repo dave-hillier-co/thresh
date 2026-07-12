@@ -154,6 +154,7 @@ export class GrainFactory {
                 options,
                 reentrancyId: ambient?.reentrancyId ?? newChainId(),
                 ...(ambient?.senderId !== undefined ? { sender: ambient.senderId } : {}),
+                ...(ambient?.ownerId !== undefined ? { callingGrain: ambient.ownerId } : {}),
                 ...(transaction !== undefined ? { transaction } : {}),
                 ...(Object.keys(callHeaders).length > 0 ? { headers: callHeaders } : {}),
               };

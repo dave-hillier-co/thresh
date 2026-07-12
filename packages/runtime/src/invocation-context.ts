@@ -16,7 +16,22 @@ import type { TransactionInfo } from "@tsva/core/transaction-info";
  * `RequestContext.get`/`set` read/write the identical bag during a turn.
  */
 export interface InvocationContext {
+  /**
+   * Propagated caller-chain identity (Orleans-adjacent name, but NOT message
+   * provenance): carried through a call chain unchanged from wherever it was
+   * first set, so a cascading operation (e.g. `GrainCancellationToken`
+   * forwarding, `grain-factory.ts`'s `source: ambient?.senderId`) can trace
+   * back to that origin. NOT "who called me for this specific hop" — see
+   * `ownerId` for that.
+   */
   senderId: GrainId | undefined;
+  /**
+   * This turn's own activation id — the grain actually executing right now.
+   * Read by a grain reference invoked during the turn to stamp the outgoing
+   * request's `callingGrain` (Orleans `Message.SendingGrain`): the immediate
+   * caller for THIS hop, unlike `senderId` above.
+   */
+  ownerId: GrainId | undefined;
   reentrancyId: string;
   /** The transaction this turn runs inside, if any. */
   transaction?: TransactionInfo | undefined;

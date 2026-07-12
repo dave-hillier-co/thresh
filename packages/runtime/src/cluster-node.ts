@@ -103,6 +103,15 @@ import type {
 } from "@tsva/runtime/placement/placement-strategy";
 import { filterByVersion } from "@tsva/runtime/placement/version-placement-filter";
 import {
+  ActivationRepartitioner,
+  rebalancerCompatibleTolerance,
+  type AcceptExchangeRequest,
+  type AcceptExchangeResponse,
+  type ImbalanceToleranceRule,
+} from "@tsva/runtime/placement/repartitioning/activation-repartitioner";
+import type { ActivationRepartitionerOptions } from "@tsva/runtime/placement/repartitioning/activation-repartitioner-options";
+import type { Edge } from "@tsva/runtime/placement/repartitioning/edge";
+import {
   DEFAULT_REBALANCER_OPTIONS,
   planCycle,
   type CycleState,
@@ -207,6 +216,19 @@ export interface ClusterNodeOptions {
    * (`GatewayTooBusyException` client-side) instead of being dispatched.
    */
   loadShedding?: Partial<LoadSheddingOptions>;
+  /**
+   * Enables the activation repartitioner (Orleans `AddActivationRepartitioner`):
+   * a communication-graph-driven protocol that moves grain activations near
+   * their most frequent communication partners. Only when set does the
+   * dispatcher record per-call communication edges (see
+   * `ActivationRepartitioner`'s doc for this port's scope) — every other silo
+   * pays no cost for this subsystem at all.
+   */
+  repartitioning?: {
+    options: ActivationRepartitionerOptions;
+    /** Defaults to `rebalancerCompatibleTolerance(membership)`. */
+    toleranceRule?: ImbalanceToleranceRule;
+  };
 }
 
 interface RejectionPayload {
@@ -267,6 +289,8 @@ const randomPlacement = new RandomPlacement();
 export class ClusterNode {
   readonly partition: LocalDirectoryPartition;
 
+  /** This silo's activation-repartitioner protocol object; `undefined` unless `repartitioning` was configured. */
+  private readonly repartitioner?: ActivationRepartitioner;
   private readonly grainTypes = new Map<GrainType, RegisteredGrain>();
   private readonly interfaceToGrainType = new Map<number, GrainType>();
   /** Stream namespace → grain types implicitly subscribed to it (auto-subscribe by key). */
@@ -456,8 +480,29 @@ export class ClusterNode {
         isClientTarget: (t) => isClient(t),
         route: (req) => this.routeToClient(req),
       },
+      ...(options.repartitioning !== undefined
+        ? {
+            recordEdge: (req, targetSilo) =>
+              this.repartitioner?.recordLocalEdge(req.callingGrain, req.target, targetSilo),
+          }
+        : {}),
     });
     this.factory.setDispatcher(this.dispatcher);
+    if (options.repartitioning !== undefined) {
+      const repartitioning = options.repartitioning;
+      this.repartitioner = new ActivationRepartitioner({
+        local: options.local,
+        membership: options.membership,
+        options: repartitioning.options,
+        toleranceRule:
+          repartitioning.toleranceRule ?? rebalancerCompatibleTolerance(options.membership),
+        activationCount: () => this.catalog.count(),
+        isMigratable: (grainId) => this.isMigratableBy(grainId, "repartitioner"),
+        migrate: (grainId, target) => this.migrateGrainToSilo(grainId, target),
+        sendAcceptExchangeRequest: (target, request) =>
+          this.sendAcceptExchangeRequest(target, request),
+      });
+    }
     if (options.transactionsEnabled ?? true) {
       const transactionAgent = new TransactionAgent(time);
       transactionAgent.setDispatcher(this.dispatcher);
@@ -1293,6 +1338,7 @@ export class ClusterNode {
       targetGrain: req.target,
       sendingSilo: this.options.local,
       sendingGrain: req.sender,
+      ...(req.callingGrain !== undefined ? { callingGrain: req.callingGrain } : {}),
       interfaceId: req.interfaceId,
       ...(req.interfaceVersion !== undefined ? { interfaceVersion: req.interfaceVersion } : {}),
       method: req.method,
@@ -1374,6 +1420,7 @@ export class ClusterNode {
       targetGrain: req.target,
       sendingSilo: this.options.local,
       sendingGrain: req.sender,
+      ...(req.callingGrain !== undefined ? { callingGrain: req.callingGrain } : {}),
       interfaceId: req.interfaceId,
       ...(req.interfaceVersion !== undefined ? { interfaceVersion: req.interfaceVersion } : {}),
       method: req.method,
@@ -1492,6 +1539,10 @@ export class ClusterNode {
     }
     if (message.system === "rebalance") {
       void this.handleRebalanceRequest(message);
+      return;
+    }
+    if (message.system === "repartition") {
+      void this.handleRepartitionRequest(message);
       return;
     }
     if (message.system === "client") {
@@ -1956,6 +2007,85 @@ export class ClusterNode {
     };
   }
 
+  // ── Activation repartitioner ────────────────────────────────────────────
+
+  /** Whether `grainId`'s type may be moved by `kind` (Orleans `GrainMigratabilityChecker`). */
+  private isMigratableBy(grainId: GrainId, kind: "rebalancer" | "repartitioner"): boolean {
+    const immovable = this.grainTypes.get(grainId.type)?.metadata.options.immovable;
+    return immovable !== "any" && immovable !== kind;
+  }
+
+  /** Migrate a locally-hosted grain (by id) to `target`; `false` if not hosted here. */
+  private async migrateGrainToSilo(grainId: GrainId, target: SiloAddress): Promise<boolean> {
+    const activation = this.catalog.get(grainId);
+    if (activation === undefined) return false;
+    const accepted = await this.migrateActivationTo(activation, target);
+    if (accepted) {
+      await activation.deactivate({
+        code: "migrating",
+        description: "repartitioned to another silo",
+      });
+    }
+    return accepted;
+  }
+
+  /** Send an `AcceptExchangeRequest` to a peer's repartitioner, as a `system: "repartition"` request. */
+  private async sendAcceptExchangeRequest(
+    target: SiloAddress,
+    request: AcceptExchangeRequest,
+  ): Promise<AcceptExchangeResponse> {
+    return (await this.sendSystemMessage(
+      target,
+      "repartition",
+      new GrainId("repartition", target.ringKey),
+      this.serializer.serialize(request),
+    )) as AcceptExchangeResponse;
+  }
+
+  private async handleRepartitionRequest(message: Message): Promise<void> {
+    const replyTo = message.sendingSilo;
+    if (replyTo === undefined) return;
+    try {
+      const request = this.serializer.deserialize<AcceptExchangeRequest>(message.body);
+      const response: AcceptExchangeResponse =
+        this.repartitioner === undefined
+          ? { type: "exchangedRecently", acceptedGrainIds: [], givenGrainIds: [] }
+          : await this.repartitioner.acceptExchangeRequest(request);
+      await this.reply(
+        replyTo,
+        responseTo(message, "success", this.serializer.serialize(response), this.options.local),
+      );
+    } catch (err) {
+      const { kind, body } = this.serializeError(err);
+      await this.reply(replyTo, responseTo(message, kind, body, this.options.local));
+    }
+  }
+
+  /** Manually run one exchange round on this silo's repartitioner (test/control surface). */
+  async triggerRepartitionExchange(): Promise<void> {
+    await this.repartitioner?.triggerExchangeRequest();
+  }
+
+  resetRepartitionCounters(): void {
+    this.repartitioner?.resetCounters();
+  }
+
+  getRepartitionActivationCount(): number {
+    return this.repartitioner?.getActivationCount() ?? this.catalog.count();
+  }
+
+  setRepartitionActivationCountOffset(offset: number): void {
+    this.repartitioner?.setActivationCountOffset(offset);
+  }
+
+  getRepartitionCallFrequencies(): ReadonlyArray<{ edge: Edge; count: number }> {
+    return this.repartitioner?.getGrainCallFrequencies() ?? [];
+  }
+
+  async flushRepartitionBuffers(): Promise<void> {
+    await this.repartitioner?.flushBuffers();
+  }
+
   private async applyDirectoryOp(
     op: DirectoryOp,
   ): Promise<GrainAddress | GrainAddress[] | undefined> {
@@ -1986,6 +2116,23 @@ export class ClusterNode {
   private async receiveRequest(message: Message): Promise<void> {
     if (isClient(message.targetGrain)) return this.proxyRequestToClient(message);
     const replyTo = message.sendingSilo;
+    // Record this inbound call's communication edge from the receiving side
+    // (Orleans' remote-to-local edge). The sending side already recorded its
+    // own local-to-remote/local-to-local view in `DistributedDispatcher` via
+    // `recordEdge`; only a call that truly crossed the wire from another silo
+    // is recorded here, so a locally-delivered call is never double-counted.
+    if (
+      this.repartitioner !== undefined &&
+      message.callingGrain !== undefined &&
+      message.sendingSilo !== undefined &&
+      !message.sendingSilo.equals(this.options.local)
+    ) {
+      this.repartitioner.recordRemoteEdge(
+        message.callingGrain,
+        message.sendingSilo,
+        message.targetGrain,
+      );
+    }
     // Gateway load shedding (Orleans `GatewayAcceptor`/`OverloadDetector`): a
     // request arriving directly from an external client — not relayed from
     // another cluster member — is refused outright while this silo is

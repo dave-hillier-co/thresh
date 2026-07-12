@@ -21,6 +21,15 @@ export interface InvocationRequest {
   reentrancyId: string;
   sender?: GrainId;
   /**
+   * The grain activation actually making THIS call (Orleans
+   * `Message.SendingGrain`), if any — distinct from `sender`, which carries a
+   * propagated caller-chain identity for cascading operations (cancellation
+   * forwarding) rather than per-hop provenance. Consulted by the activation
+   * repartitioner's message sink to attribute a communication edge to the
+   * true immediate caller.
+   */
+  callingGrain?: GrainId;
+  /**
    * Ambient transaction this call participates in, if any. In-process the same
    * `TransactionInfo` flows by reference so resources enlist into it; cross-silo
    * propagation rides the request context (later slice).
