@@ -3,7 +3,10 @@ import type { GrainInterface } from "@tsva/core/grain-interface";
 import type { GrainKeyFor } from "@tsva/core/key-kinds";
 import type { MembershipService } from "@tsva/core/membership";
 import type { ClusterNode } from "@tsva/runtime/cluster-node";
-import type { ActivationRebalancerWorker } from "@tsva/runtime/placement/rebalancing/rebalancer-worker";
+import type {
+  ActivationRebalancerWorker,
+  RebalancerReportListener,
+} from "@tsva/runtime/placement/rebalancing/rebalancer-worker";
 import type { RebalancingReport } from "@tsva/runtime/placement/rebalancing/rebalancing-report";
 import { GracefulShutdown } from "@tsva/hosting/graceful-shutdown";
 import type { HealthCheck } from "@tsva/hosting/health-check";
@@ -83,6 +86,41 @@ export class SiloHost {
   /** The latest activation-rebalancer report, if rebalancing is enabled. */
   rebalancingReport(): RebalancingReport | undefined {
     return this.parts.rebalancerWorker?.report();
+  }
+
+  /**
+   * The activation rebalancer's control surface (Orleans `IActivationRebalancer`,
+   * `GetSiloServiceProvider().GetRequiredService<IActivationRebalancer>()` in the upstream
+   * tests). Every operation is a no-op — `undefined`/does nothing — when rebalancing was never
+   * enabled (`useActivationRebalancing`), the same as a silo with no `IActivationRebalancer`
+   * registered.
+   *
+   * `force` is accepted for parity with Orleans' `GetRebalancingReport(bool force)` (which
+   * forces a round-trip refresh from the elected worker through its monitor); this framework's
+   * report is already live in-process, so it is accepted but has no effect.
+   */
+  getRebalancingReport(_force = false): RebalancingReport | undefined {
+    return this.parts.rebalancerWorker?.report();
+  }
+
+  /** Suspend rebalancing (Orleans `SuspendRebalancing`). `durationMs` omitted suspends indefinitely; given, auto-resumes once it elapses. */
+  suspendRebalancing(durationMs?: number): void {
+    this.parts.rebalancerWorker?.suspend(durationMs);
+  }
+
+  /** Resume rebalancing if suspended, otherwise a no-op (Orleans `ResumeRebalancing`). */
+  resumeRebalancing(): void {
+    this.parts.rebalancerWorker?.resume();
+  }
+
+  /** Subscribe to rebalancer reports (Orleans `SubscribeToReports`/`IActivationRebalancerReportListener`). */
+  subscribeToReports(listener: RebalancerReportListener): void {
+    this.parts.rebalancerWorker?.subscribe(listener);
+  }
+
+  /** Unsubscribe a previously subscribed listener (Orleans `UnsubscribeFromReports`). */
+  unsubscribeFromReports(listener: RebalancerReportListener): void {
+    this.parts.rebalancerWorker?.unsubscribe(listener);
   }
 
   /** Run a sequence of optional hooks in order, awaiting each, with the given args. */

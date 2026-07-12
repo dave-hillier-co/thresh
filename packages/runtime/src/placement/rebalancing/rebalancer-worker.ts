@@ -66,6 +66,9 @@ export interface ActivationRebalancerWorkerOptions {
 
 const EMPTY_REPORT_COUNTS: ReadonlyMap<string, number> = new Map();
 
+/** Notified with the worker's latest report after each cycle, or an immediate suspend/resume (Orleans `IActivationRebalancerReportListener`). */
+export type RebalancerReportListener = (report: RebalancingReport) => void;
+
 /**
  * The elected, timer-driven rebalancer worker. Self-reschedules off
  * `time.setTimer` (modelled on `ActivationCollector`), keeps the model's
@@ -84,6 +87,11 @@ export class ActivationRebalancerWorker {
   private acquired: ReadonlyMap<string, number> = EMPTY_REPORT_COUNTS;
   /** Guards against overlapping ticks if a cycle outruns its period. */
   private running = false;
+  /** When suspended with a duration: the deadline (`time.now() + duration`) to auto-resume at. `undefined` while executing or suspended indefinitely. */
+  private suspendedUntil: number | undefined;
+  /** The pending auto-resume timer for a timed suspension, if any. */
+  private suspendTimer: TimerHandle | undefined;
+  private readonly listeners = new Set<RebalancerReportListener>();
 
   constructor(private readonly options: ActivationRebalancerWorkerOptions) {}
 
@@ -102,16 +110,45 @@ export class ActivationRebalancerWorker {
     }
   }
 
-  /** Pause cycle execution without tearing down the loop (Orleans `SuspendRebalancing`). */
-  suspend(): void {
+  /**
+   * Pause cycle execution without tearing down the loop (Orleans
+   * `SuspendRebalancing`). `durationMs` given: auto-resumes off the shared
+   * clock once it elapses (Orleans' timed `TimeSpan?` overload). Omitted:
+   * suspends indefinitely, until an explicit `resume()`.
+   */
+  suspend(durationMs?: number): void {
     this.suspended = true;
     this.status = "suspended";
+    this.clearSuspendTimer();
+    if (durationMs !== undefined) {
+      this.suspendedUntil = this.options.time.now() + durationMs;
+      this.suspendTimer = this.options.time.setTimer(() => {
+        this.suspendTimer = undefined;
+        this.resume();
+      }, durationMs);
+    } else {
+      this.suspendedUntil = undefined;
+    }
+    this.notifyListeners();
   }
 
   /** Resume cycle execution after a suspend. */
   resume(): void {
     this.suspended = false;
     this.status = "executing";
+    this.suspendedUntil = undefined;
+    this.clearSuspendTimer();
+    this.notifyListeners();
+  }
+
+  /** Notified with the latest report after each cycle, and on an explicit suspend/resume (Orleans `SubscribeToReports`). */
+  subscribe(listener: RebalancerReportListener): void {
+    this.listeners.add(listener);
+  }
+
+  /** Stop notifying a previously subscribed listener (Orleans `UnsubscribeFromReports`). */
+  unsubscribe(listener: RebalancerReportListener): void {
+    this.listeners.delete(listener);
   }
 
   /** The latest observable status (Orleans `RebalancingReport`). */
@@ -122,7 +159,27 @@ export class ActivationRebalancerWorker {
       clusterImbalance: this.latestImbalance,
       dispersed: this.dispersed,
       acquired: this.acquired,
+      suspensionDurationMs: this.remainingSuspensionMs(),
     };
+  }
+
+  /** `undefined` while executing; the remaining ms until auto-resume (or `+Infinity` for an indefinite suspend) while suspended. */
+  private remainingSuspensionMs(): number | undefined {
+    if (!this.suspended) return undefined;
+    if (this.suspendedUntil === undefined) return Number.POSITIVE_INFINITY;
+    return Math.max(0, this.suspendedUntil - this.options.time.now());
+  }
+
+  private clearSuspendTimer(): void {
+    if (this.suspendTimer !== undefined) {
+      this.options.time.clearTimer(this.suspendTimer);
+      this.suspendTimer = undefined;
+    }
+  }
+
+  private notifyListeners(): void {
+    const report = this.report();
+    for (const listener of this.listeners) listener(report);
   }
 
   /** The deterministically elected leader: the lowest active ring key. */
@@ -171,6 +228,7 @@ export class ActivationRebalancerWorker {
         this.state = result.nextState;
         this.failedSessions = 0;
       }
+      this.notifyListeners();
     } catch {
       // A failed cycle (e.g. a transient peer error) must not kill the loop;
       // keep the current state and retry next period.
