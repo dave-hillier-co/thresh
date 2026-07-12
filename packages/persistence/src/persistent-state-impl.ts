@@ -6,7 +6,7 @@ import type {
 } from "@tsva/core/grain-migration-participant";
 import type { GrainStorage, StateHolder } from "@tsva/core/grain-storage";
 import type { PersistentState } from "@tsva/core/persistent-state";
-import { withStorageReadSpan } from "@tsva/observability/activation-tracing";
+import { withStorageReadSpan, withStorageWriteSpan } from "@tsva/observability/activation-tracing";
 
 /**
  * Binds a named state to a grain identity and a storage provider. Keeps the
@@ -57,7 +57,14 @@ export class PersistentStateImpl<T> implements PersistentState<T>, IGrainMigrati
   }
 
   async write(): Promise<void> {
-    await this.storage.write(this.stateName, this.grainId, this.holder);
+    await withStorageWriteSpan(
+      {
+        provider: this.storage.constructor.name,
+        stateName: this.stateName,
+        grainId: this.grainId.toString(),
+      },
+      () => this.storage.write(this.stateName, this.grainId, this.holder),
+    );
   }
 
   async clear(): Promise<void> {

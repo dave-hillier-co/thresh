@@ -1,4 +1,4 @@
-import { trace, type Attributes, type Span } from "@opentelemetry/api";
+import { SpanStatusCode, trace, type Attributes, type Span } from "@opentelemetry/api";
 
 /**
  * Span operation names for the ACTIVATION-path taxonomy (Orleans'
@@ -16,6 +16,8 @@ export const ActivityNames = {
   OnActivate: "execute OnActivateAsync",
   RegisterDirectoryEntry: "register directory entry",
   StorageRead: "read storage",
+  OnDeactivate: "execute OnDeactivateAsync",
+  StorageWrite: "write storage",
 } as const;
 
 const runtimeTracer = trace.getTracer("Microsoft.Orleans.Runtime");
@@ -93,5 +95,67 @@ export function withStorageReadSpan<T>(
       "orleans.grain.id": attrs.grainId,
     },
     fn,
+  );
+}
+
+/**
+ * Wraps a persistent-state write from a grain storage provider — most
+ * notably one made from inside `OnDeactivateAsync` (Storage source), where it
+ * nests under the `OnDeactivate` span via ambient OTel context the same way
+ * `withStorageReadSpan` nests under `ActivateGrain`.
+ */
+export function withStorageWriteSpan<T>(
+  attrs: { provider: string; stateName: string; grainId: string },
+  fn: () => Promise<T>,
+): Promise<T> {
+  return withSpan(
+    storageTracer,
+    ActivityNames.StorageWrite,
+    {
+      "orleans.storage.provider": attrs.provider,
+      "orleans.storage.state.name": attrs.stateName,
+      "orleans.grain.id": attrs.grainId,
+    },
+    fn,
+  );
+}
+
+/**
+ * Wraps a grain's `OnDeactivateAsync` hook execution (Lifecycle source).
+ * `reason` is the formatted `DeactivationReason` (`@tsva/core/reasons`'
+ * `formatDeactivationReason`, upstream's `DeactivationReason.ToString()`
+ * shape — `"{ReasonCode}: {Description}"`) recorded as
+ * `orleans.deactivation.reason`. On a thrown exception, records it AND sets
+ * the span status to `Error` with a fixed `"on-deactivate-failed"` message
+ * (matching upstream's `StatusDescription`) before rethrowing — unlike the
+ * generic `withSpan` helper, which records the exception but leaves status
+ * unset.
+ */
+export function withOnDeactivateSpan<T>(
+  attrs: { grainId: string; grainType: string; siloId: string; activationId: string; reason: string },
+  fn: () => Promise<T>,
+): Promise<T> {
+  return lifecycleTracer.startActiveSpan(
+    ActivityNames.OnDeactivate,
+    {
+      attributes: {
+        "orleans.grain.id": attrs.grainId,
+        "orleans.grain.type": attrs.grainType,
+        "orleans.silo.id": attrs.siloId,
+        "orleans.activation.id": attrs.activationId,
+        "orleans.deactivation.reason": attrs.reason,
+      },
+    },
+    async (span: Span) => {
+      try {
+        return await fn();
+      } catch (err) {
+        span.recordException(err as Error);
+        span.setStatus({ code: SpanStatusCode.ERROR, message: "on-deactivate-failed" });
+        throw err;
+      } finally {
+        span.end();
+      }
+    },
   );
 }
