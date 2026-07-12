@@ -84,4 +84,27 @@ export interface GrainRuntime {
    * routed by the activation instead of the grain instance's own methods.
    */
   getOrSetExtension<T extends object>(iface: GrainInterface<T>, factory: () => T): T;
+  /**
+   * Toggle this activation's HOSTING SILO's overload detection on or off
+   * (Orleans test-hook `IPlacementTestGrain.EnableOverloadDetection`, backed
+   * by `OverloadDetector.Enabled`). Silo-scoped, not activation-scoped: any
+   * grain hosted here can flip it.
+   */
+  enableOverloadDetection(enabled: boolean): void;
+  /**
+   * Force this activation's hosting silo's reported CPU usage to `value`
+   * until `unlatchCpuUsage()` (Orleans test-hook `IPlacementTestGrain.LatchCpuUsage`,
+   * backed by `TestHooksEnvironmentStatisticsProvider.LatchHardwareStatistics`).
+   */
+  latchCpuUsage(value: number): void;
+  /** Clear a CPU-usage latch set by `latchCpuUsage` (Orleans `UnlatchCpuUsage`). */
+  unlatchCpuUsage(): void;
+  /**
+   * Force this activation's hosting silo into the overloaded state (Orleans
+   * test-hook `IPlacementTestGrain.LatchOverloaded`): equivalent to latching
+   * CPU usage just above `LoadSheddingOptions.cpuThreshold`.
+   */
+  latchOverloaded(): void;
+  /** Clear an overload latch set by `latchOverloaded` (Orleans `UnlatchOverloaded`). */
+  unlatchOverloaded(): void;
 }

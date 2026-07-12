@@ -12,6 +12,7 @@ import type { ActivationData } from "@tsva/runtime/activation";
 import { ActivationStreamProvider } from "@tsva/runtime/activation-stream-provider";
 import type { GrainFactory } from "@tsva/runtime/grain-factory";
 import { currentTransaction, requestContext } from "@tsva/runtime/invocation-context";
+import type { SiloLoadSheddingTestHooks } from "@tsva/runtime/load-shedding";
 
 export interface GrainRuntimeServices {
   reminders?: () => ReminderRegistry | undefined;
@@ -20,6 +21,8 @@ export interface GrainRuntimeServices {
   durableJobs?: () => DurableJobScheduler | undefined;
   /** Resolves this silo's own address, for `GrainRuntime.localSiloAddress()`. */
   localSilo?: () => SiloAddress | undefined;
+  /** Resolves this silo's load-shedding test hooks, for `GrainRuntime.latchCpuUsage()`-style methods. */
+  loadShedding?: () => SiloLoadSheddingTestHooks | undefined;
 }
 
 /** Per-activation `GrainRuntime`, reached by a grain through `this.runtime`. */
@@ -131,6 +134,32 @@ export class GrainRuntimeImpl implements GrainRuntime {
 
   getOrSetExtension<T extends object>(iface: GrainInterface<T>, factory: () => T): T {
     return this.activation.getOrSetExtension(iface.id, factory);
+  }
+
+  enableOverloadDetection(enabled: boolean): void {
+    this.requireLoadShedding().enableOverloadDetection(enabled);
+  }
+
+  latchCpuUsage(value: number): void {
+    this.requireLoadShedding().latchCpuUsage(value);
+  }
+
+  unlatchCpuUsage(): void {
+    this.requireLoadShedding().unlatchCpuUsage();
+  }
+
+  latchOverloaded(): void {
+    this.requireLoadShedding().latchOverloaded();
+  }
+
+  unlatchOverloaded(): void {
+    this.requireLoadShedding().unlatchOverloaded();
+  }
+
+  private requireLoadShedding(): SiloLoadSheddingTestHooks {
+    const hooks = this.services.loadShedding?.();
+    if (hooks === undefined) throw new Error("load shedding is not configured on this runtime");
+    return hooks;
   }
 
   private requireReminders(): ReminderRegistry {

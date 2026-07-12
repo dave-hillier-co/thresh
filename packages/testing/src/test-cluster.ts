@@ -14,6 +14,7 @@ import { MemoryJournalStorage } from "@tsva/journaling/memory-journal-storage";
 import { MemoryGrainStorage } from "@tsva/persistence/memory-grain-storage";
 import { MemoryReminderTable } from "@tsva/reminders/memory-reminder-table";
 import { StaticMembershipService } from "@tsva/runtime/static-membership";
+import type { LoadSheddingOptions } from "@tsva/runtime/load-shedding";
 import { MemoryTransactionalStorage } from "@tsva/transactions/memory-transactional-storage";
 import { createSilo, type SiloBuilder } from "@tsva/hosting/silo-builder";
 import type { SiloHost } from "@tsva/hosting/silo-host";
@@ -64,6 +65,8 @@ export interface TestClusterOptions {
    * `FakeTimeProvider` via `time` to drive it deterministically in tests.
    */
   defaultResponseTimeout?: Duration;
+  /** Load-shedding config applied to every silo in this cluster (Orleans `Configure<LoadSheddingOptions>`). */
+  loadShedding?: Partial<LoadSheddingOptions>;
 }
 
 export interface TestSiloHandle {
@@ -223,6 +226,9 @@ export class TestCluster {
       ...(metadata !== undefined ? { metadata } : {}),
       ...(this.options.defaultResponseTimeout !== undefined
         ? { defaultResponseTimeout: this.options.defaultResponseTimeout }
+        : {}),
+      ...(this.options.loadShedding !== undefined
+        ? { loadShedding: this.options.loadShedding }
         : {}),
     })
       .useMembership(membership)

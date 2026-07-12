@@ -20,7 +20,7 @@ export type GapTag =
   | "GAP-CLIENT-SILO-SEPARATION" // no separate client process distinct from a silo in the harness
   | "GAP-GRAIN-DIRECTORY-API" // internal directory not exposed via a pluggable IGrainDirectory API
   | "GAP-GRAIN-SERVICE" // no per-silo grain-service registration/lifecycle mechanism
-  | "GAP-LOAD-SHEDDING" // no overload detector / load shedding / CPU-aware placement scoring
+  | "GAP-LOAD-SHEDDING" // overload detector / gateway load shedding exist; no CPU-aware placement scoring, and load-aware placement tests need GAP-REQUEST-CONTEXT's placement hints too
   | "GAP-REBALANCER-CONTROL" // no rebalancer suspend/resume/report-listener control API
   | "GAP-REQUEST-CONTEXT" // no RequestContext-driven placement hints (IPlacementDirector.PlacementHintKey)
   | "GAP-STREAM-BATCHING" // no OnNextBatchAsync / batch-send stream API
