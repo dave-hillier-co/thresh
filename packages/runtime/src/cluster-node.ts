@@ -411,6 +411,8 @@ export class ClusterNode {
         gatherGrainStats: () => this.gatherClusterGrainStats(),
         lookupActivation: (id) => this.directory.lookup(id),
         isStatelessWorker: (type) => this.grainTypes.get(type)?.metadata.options.stateless === true,
+        activationCountFor: (id) => this.gatherGrainActivationCount(id),
+        forceActivationCollection: (ageLimitMs) => this.forceActivationCollectionCluster(ageLimitMs),
       }),
       { interfaces: [IManagementGrain] },
     );
@@ -1254,6 +1256,14 @@ export class ClusterNode {
       void this.handleStatsRequest(message);
       return;
     }
+    if (message.system === "actcount") {
+      void this.handleActivationCountRequest(message);
+      return;
+    }
+    if (message.system === "forcecollect") {
+      void this.handleForceCollectRequest(message);
+      return;
+    }
     if (message.system === "rebalance") {
       void this.handleRebalanceRequest(message);
       return;
@@ -1425,6 +1435,81 @@ export class ClusterNode {
       }),
     );
     return results;
+  }
+
+  /** Ask a peer for its local live activation count for one grain id, as a `system: "actcount"` request. */
+  private async sendActivationCountQuery(silo: SiloAddress, id: GrainId): Promise<number> {
+    return (await this.sendSystemMessage(
+      silo,
+      "actcount",
+      id,
+      this.serializer.serialize(id),
+    )) as number;
+  }
+
+  private async handleActivationCountRequest(message: Message): Promise<void> {
+    const replyTo = message.sendingSilo;
+    if (replyTo === undefined) return;
+    const id = this.serializer.deserialize<GrainId>(message.body);
+    await this.reply(
+      replyTo,
+      responseTo(message, "success", this.serializer.serialize(this.catalog.countFor(id)), this.options.local),
+    );
+  }
+
+  /**
+   * Live activation count for one grain id, amalgamated across the active
+   * cluster (Orleans `IManagementGrain.GetGrainActivationCount`) — works for
+   * a `[StatelessWorker]` id too, unlike directory lookup, since it sums each
+   * silo's local count instead of resolving a single address.
+   */
+  async gatherGrainActivationCount(id: GrainId): Promise<number> {
+    const active = activeSilos(this.options.membership.current());
+    const counts = await Promise.all(
+      active.map((silo) =>
+        silo.equals(this.options.local)
+          ? Promise.resolve(this.catalog.countFor(id))
+          : this.sendActivationCountQuery(silo, id).catch(() => 0),
+      ),
+    );
+    return counts.reduce((sum, n) => sum + n, 0);
+  }
+
+  /** Tell a peer to run a forced idle-activation sweep, as a `system: "forcecollect"` request. */
+  private async sendForceCollect(silo: SiloAddress, ageLimitMs: number): Promise<void> {
+    await this.sendSystemMessage(
+      silo,
+      "forcecollect",
+      new GrainId("forcecollect", silo.ringKey),
+      this.serializer.serialize(ageLimitMs),
+    );
+  }
+
+  private async handleForceCollectRequest(message: Message): Promise<void> {
+    const replyTo = message.sendingSilo;
+    if (replyTo === undefined) return;
+    const ageLimitMs = this.serializer.deserialize<number>(message.body);
+    await this.catalog.collectIdle(ageLimitMs);
+    await this.reply(
+      replyTo,
+      responseTo(message, "success", this.serializer.serialize(null), this.options.local),
+    );
+  }
+
+  /**
+   * Force an immediate idle-activation sweep on every active silo, with
+   * `ageLimitMs` in place of each activation's own configured collection age
+   * (Orleans `IManagementGrain.ForceActivationCollection(TimeSpan)`).
+   */
+  async forceActivationCollectionCluster(ageLimitMs: number): Promise<void> {
+    const active = activeSilos(this.options.membership.current());
+    await Promise.all(
+      active.map((silo) =>
+        silo.equals(this.options.local)
+          ? this.catalog.collectIdle(ageLimitMs)
+          : this.sendForceCollect(silo, ageLimitMs).catch(() => undefined),
+      ),
+    );
   }
 
   /**

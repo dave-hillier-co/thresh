@@ -36,6 +36,13 @@ export interface GrainOptions {
   /** Filters that prune candidate silos by metadata before the placement strategy runs. */
   placementFilters?: readonly PlacementFilterDescriptor[];
   stateless?: boolean;
+  /**
+   * `[StatelessWorker(maxLocalWorkers)]`: the maximum number of concurrent
+   * local activations a stateless-worker grain type may scale up to on one
+   * silo. Ignored unless `stateless` is set. Defaults to the host's CPU
+   * count (Orleans' `Environment.ProcessorCount` default) when unset.
+   */
+  maxLocalWorkers?: number;
   collectionAgeSeconds?: number;
 }
 

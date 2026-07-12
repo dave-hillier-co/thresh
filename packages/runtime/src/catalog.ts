@@ -1,3 +1,4 @@
+import * as os from "node:os";
 import { GrainCallError } from "@tsva/core/errors";
 import type { Grain } from "@tsva/core/grain";
 import type { IncomingGrainCallFilter } from "@tsva/core/grain-call-filter";
@@ -27,6 +28,15 @@ export interface RegisteredGrain {
   ctor: new () => Grain;
   metadata: GrainMetadata;
 }
+
+/**
+ * Default `[StatelessWorker]` scaling ceiling when a grain type sets
+ * `stateless: true` but no explicit `maxLocalWorkers` — mirrors Orleans'
+ * `Environment.ProcessorCount` default. Falls back to a small constant if the
+ * host reports no CPUs (unusual, but `os.cpus()` can legitimately return `[]`
+ * in some sandboxes).
+ */
+const DEFAULT_MAX_LOCAL_WORKERS = os.cpus().length || 4;
 
 /**
  * Optional hook to construct/dispose grain instances instead of `new ctor()`
@@ -96,6 +106,17 @@ export interface CatalogOptions {
 /** Registry of live activations on this silo, keyed by grain id. */
 export class Catalog {
   private readonly activations = new Map<string, ActivationData>();
+  /**
+   * `[StatelessWorker]` grain ids may have MULTIPLE local activations
+   * (Orleans: interchangeable, scaled on demand, never directory-registered
+   * — see `StatelessWorkerPlacement`), so they get a parallel list-per-id
+   * structure instead of sharing `activations` (which is exactly one
+   * activation per id and must stay that way for every other grain type —
+   * the single-activation invariant the directory's CAS register and the
+   * rest of this class depend on). Only ids of a grain type registered with
+   * `stateless: true` are ever stored here; see `pickOrScaleWorker`.
+   */
+  private readonly workerActivations = new Map<string, ActivationData[]>();
   /**
    * `options.grainExtensionFactories` adapted once to the `(activation) =>
    * object` signature `ActivationData.setExtensionFactories` expects (the
@@ -235,28 +256,60 @@ export class Catalog {
     return this.finalizeStale(key, existing).then(() => undefined);
   }
 
+  /** A live activation for `id` — for a stateless-worker id, an arbitrary one of possibly several. */
   get(id: GrainId): ActivationData | undefined {
-    return this.activations.get(id.toString());
+    const key = id.toString();
+    const single = this.activations.get(key);
+    if (single !== undefined) return single;
+    return this.workerActivations.get(key)?.find((a) => a.state !== "invalid");
   }
 
   isActive(id: GrainId): boolean {
-    return this.activations.get(id.toString())?.state === "valid";
+    const key = id.toString();
+    if (this.activations.get(key)?.state === "valid") return true;
+    return this.workerActivations.get(key)?.some((a) => a.state === "valid") ?? false;
+  }
+
+  /**
+   * Live LOCAL activation count for one grain id — 0 or 1 for an ordinary
+   * grain, 0..maxLocalWorkers for a stateless-worker id (Orleans
+   * `IManagementGrain.GetGrainActivationCount`, per-silo half of it; the
+   * management grain amalgamates this across silos itself).
+   */
+  countFor(id: GrainId): number {
+    const key = id.toString();
+    const single = this.activations.get(key);
+    if (single !== undefined) return single.state === "invalid" ? 0 : 1;
+    const list = this.workerActivations.get(key);
+    if (list === undefined) return 0;
+    let n = 0;
+    for (const a of list) if (a.state !== "invalid") n++;
+    return n;
+  }
+
+  /** Whether `type` was registered with `stateless: true` ([StatelessWorker]-equivalent). */
+  isStatelessWorkerType(type: GrainType): boolean {
+    return this.options.grainTypes.get(type)?.metadata.options.stateless === true;
   }
 
   /** Live activation count, used by activation-count placement. */
   count(): number {
     let n = 0;
     for (const a of this.activations.values()) if (a.state !== "invalid") n++;
+    for (const list of this.workerActivations.values())
+      for (const a of list) if (a.state !== "invalid") n++;
     return n;
   }
 
   /** Live activation count per grain type, used by the management grain's per-type statistics. */
   grainTypeCounts(): Map<GrainType, number> {
     const counts = new Map<GrainType, number>();
-    for (const a of this.activations.values()) {
-      if (a.state === "invalid") continue;
+    const tally = (a: ActivationData): void => {
+      if (a.state === "invalid") return;
       counts.set(a.id.type, (counts.get(a.id.type) ?? 0) + 1);
-    }
+    };
+    for (const a of this.activations.values()) tally(a);
+    for (const list of this.workerActivations.values()) for (const a of list) tally(a);
     return counts;
   }
 
@@ -264,7 +317,74 @@ export class Catalog {
   liveActivations(): ActivationData[] {
     const out: ActivationData[] = [];
     for (const a of this.activations.values()) if (a.state === "valid") out.push(a);
+    for (const list of this.workerActivations.values())
+      for (const a of list) if (a.state === "valid") out.push(a);
     return out;
+  }
+
+  /** `stateless: true` grain types' configured (or defaulted) scaling ceiling, else `undefined`. */
+  private maxLocalWorkersFor(type: GrainType): number | undefined {
+    const reg = this.options.grainTypes.get(type);
+    if (reg === undefined || reg.metadata.options.stateless !== true) return undefined;
+    return reg.metadata.options.maxLocalWorkers ?? DEFAULT_MAX_LOCAL_WORKERS;
+  }
+
+  /**
+   * The `[StatelessWorker]` path: choose which of `id`'s (possibly several)
+   * local activations serves the next call, scaling up to `maxLocalWorkers`
+   * on demand. Placement (`StatelessWorkerPlacement`) already confined the
+   * call to this silo and it is never directory-registered, so this is the
+   * ENTIRE routing decision — the dispatcher calls this instead of the
+   * directory/CAS path for a stateless-worker grain type.
+   *
+   * - a non-busy existing activation, if any, is reused;
+   * - otherwise, below `maxLocalWorkers`, a new one is created;
+   * - otherwise (at the limit, all busy) the least-loaded existing one is
+   *   picked and the call queues onto it (still completes — Orleans doesn't
+   *   fail calls once at the cap, it backs up the workers it has).
+   *
+   * Deliberately synchronous end to end, mirroring `getOrActivate`'s
+   * check-then-set discipline (see its comment): the busy-scan and the
+   * create-or-pick happen in one slice with no `await` between them, so N
+   * concurrent calls for the same id can't all observe "nothing free" and
+   * each create a worker, overshooting `maxLocalWorkers`. Callers must invoke
+   * the returned activation synchronously too, for the same reason.
+   */
+  pickOrScaleWorker(id: GrainId): ActivationData {
+    const maxLocalWorkers = this.maxLocalWorkersFor(id.type);
+    if (maxLocalWorkers === undefined) {
+      throw new GrainCallError(`${id.type} is not a [StatelessWorker] grain type`);
+    }
+    const key = id.toString();
+    let list = this.workerActivations.get(key);
+    if (list === undefined) {
+      list = [];
+      this.workerActivations.set(key, list);
+    }
+    // Prune activations idle-collected or failed since the last pick — lazily,
+    // here, rather than via a separate pass (mirrors how `getOrActivate`
+    // lazily notices a stale single activation on the next lookup).
+    for (let i = list.length - 1; i >= 0; i--) {
+      if (list[i]!.state === "invalid") list.splice(i, 1);
+    }
+    for (const a of list) {
+      if (!a.scheduler.busy) return a;
+    }
+    if (list.length < maxLocalWorkers) {
+      const created = this.create(id);
+      list.push(created);
+      return created;
+    }
+    let best = list[0]!;
+    let bestLoad = best.scheduler.load;
+    for (let i = 1; i < list.length; i++) {
+      const load = list[i]!.scheduler.load;
+      if (load < bestLoad) {
+        best = list[i]!;
+        bestLoad = load;
+      }
+    }
+    return best;
   }
 
   private create(
@@ -325,45 +445,81 @@ export class Catalog {
     return activation;
   }
 
-  async collectIdle(): Promise<void> {
-    for (const [key, activation] of this.activations) {
-      if (activation.isStale()) {
-        if (activation.wantsMigration && this.options.migrate !== undefined) {
-          // Migration was requested before this sweep: dehydrate the grain's
-          // state and hand it off first (so `onDeactivate` — which may clear
-          // state — runs only after the state has been captured), then run the
-          // deactivate hook with the "migrating" reason.
-          const moved = await this.options.migrate(activation);
-          await activation.deactivate(
-            moved
-              ? { code: "migrating", description: "migrated to another silo" }
-              : { code: "idle", description: "idle collection" },
-          );
-        } else {
-          // No migration requested yet: run `onDeactivate` first, since a grain
-          // may call `migrateOnIdle()` from within it; honour a migration it
-          // asks for during the hook, then finalize.
-          await activation.runDeactivateHook({ code: "idle", description: "idle collection" });
-          if (activation.wantsMigration && this.options.migrate !== undefined) {
-            await this.options.migrate(activation);
-          }
-          activation.finalizeDeactivation();
-        }
+  /**
+   * If stale, run `onDeactivate` (honouring a migration request before or
+   * during it) and finalize — leaving `activation.state === "invalid"` for
+   * the caller to notice and remove from whichever map it lives in.
+   * `ageLimitOverrideMs`, when given, is `ForceActivationCollection`'s
+   * caller-chosen age instead of each activation's own collection age (see
+   * `ActivationData.isStale`).
+   */
+  private async collectOne(activation: ActivationData, ageLimitOverrideMs?: number): Promise<void> {
+    if (!activation.isStale(ageLimitOverrideMs)) return;
+    if (activation.wantsMigration && this.options.migrate !== undefined) {
+      // Migration was requested before this sweep: dehydrate the grain's
+      // state and hand it off first (so `onDeactivate` — which may clear
+      // state — runs only after the state has been captured), then run the
+      // deactivate hook with the "migrating" reason.
+      const moved = await this.options.migrate(activation);
+      await activation.deactivate(
+        moved
+          ? { code: "migrating", description: "migrated to another silo" }
+          : { code: "idle", description: "idle collection" },
+      );
+    } else {
+      // No migration requested yet: run `onDeactivate` first, since a grain
+      // may call `migrateOnIdle()` from within it; honour a migration it
+      // asks for during the hook, then finalize.
+      await activation.runDeactivateHook({ code: "idle", description: "idle collection" });
+      if (activation.wantsMigration && this.options.migrate !== undefined) {
+        await this.options.migrate(activation);
       }
+      activation.finalizeDeactivation();
+    }
+  }
+
+  private async disposeCollected(activation: ActivationData): Promise<void> {
+    if (this.options.grainActivator?.disposeInstance !== undefined) {
+      await this.options.grainActivator.disposeInstance(activation.instance, activation.id);
+    }
+    this.options.onDeactivated?.(activation);
+  }
+
+  /**
+   * Sweep every activation — ordinary and stateless-worker alike — and
+   * deactivate the stale ones. `ageLimitOverrideMs` is
+   * `IManagementGrain.forceActivationCollection`'s forced sweep age (e.g. `0`
+   * to collect every currently-idle activation); omitted, each activation
+   * uses its own configured collection age (the periodic `ActivationCollector`).
+   */
+  async collectIdle(ageLimitOverrideMs?: number): Promise<void> {
+    for (const [key, activation] of this.activations) {
+      await this.collectOne(activation, ageLimitOverrideMs);
       if (activation.state === "invalid") {
         this.activations.delete(key);
-        if (this.options.grainActivator?.disposeInstance !== undefined) {
-          await this.options.grainActivator.disposeInstance(activation.instance, activation.id);
-        }
-        this.options.onDeactivated?.(activation);
+        await this.disposeCollected(activation);
       }
+    }
+    for (const [key, list] of this.workerActivations) {
+      for (const activation of list) {
+        await this.collectOne(activation, ageLimitOverrideMs);
+      }
+      const collected = list.filter((a) => a.state === "invalid");
+      const remaining = list.filter((a) => a.state !== "invalid");
+      if (remaining.length === 0) this.workerActivations.delete(key);
+      else this.workerActivations.set(key, remaining);
+      for (const activation of collected) await this.disposeCollected(activation);
     }
   }
 
   async deactivateAll(reason: DeactivationReason): Promise<void> {
-    const all = [...this.activations.values()];
+    const all = [
+      ...this.activations.values(),
+      ...[...this.workerActivations.values()].flat(),
+    ];
     await Promise.all(all.map((a) => a.deactivate(reason)));
     this.activations.clear();
+    this.workerActivations.clear();
     for (const a of all) {
       if (this.options.grainActivator?.disposeInstance !== undefined) {
         await this.options.grainActivator.disposeInstance(a.instance, a.id);

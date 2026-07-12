@@ -1,11 +1,9 @@
 // Ported from dotnet/orleans test/Orleans.DefaultCluster.Tests/StatelessWorkerTests.cs @ v10.1.0 (MIT).
 //
-// Most cases here need a capability this framework does not have: enforced
-// [StatelessWorker] multi-activation scaling per silo (GAP-STATELESS-WORKER —
-// placement is parsed but not enforced, so activation-count assertions cannot
-// hold), or (for the constructor-throw case) .NET's specific "Failed to create
-// an instance of grain type" wrapping with an `InnerException`, which this
-// framework's plain activation-error propagation does not replicate.
+// One case needs a capability this framework does not have: (for the
+// constructor-throw case) .NET's specific "Failed to create an instance of
+// grain type" wrapping with an `InnerException`, which this framework's
+// plain activation-error propagation does not replicate.
 //
 // The 3 `[MayInterleave]` cases are different: upstream's grain under test
 // (`StatelessWorkerWithMayInterleaveGrain`) is marked `[StatelessWorker(1)]`
@@ -27,6 +25,10 @@ import {
   releaseMayInterleaveCalls,
   resetMayInterleaveTestState,
 } from "@tsva/parity/grains/impl/may-interleave-grain";
+import {
+  IStatelessWorkerGrain,
+  StatelessWorkerGrain,
+} from "@tsva/parity/grains/impl/stateless-worker-grain";
 
 /** Flush pending microtasks/macrotasks so any admitted-but-not-yet-observed turn gets a chance to start. */
 const flush = () => new Promise((r) => setTimeout(r, 0));
@@ -38,20 +40,76 @@ describe("DefaultCluster.Tests.General.StatelessWorkerTests", () => {
     "DefaultCluster.Tests.General.StatelessWorkerTests.StatelessWorkerThrowExceptionConstructor",
   );
 
-  orleansTest.gap(
-    "GAP-STATELESS-WORKER",
-    "DefaultCluster.Tests.General.StatelessWorkerTests.StatelessWorkerActivationsPerSiloDoNotExceedMaxLocalWorkersCount",
-  );
-
-  orleansTest.gap(
-    "GAP-STATELESS-WORKER",
-    "DefaultCluster.Tests.General.StatelessWorkerTests.ManyConcurrentInvocationsOnActivationLimitedStatelessWorkerDoesNotFail",
-  );
-
   orleansTest.excluded(
     'skipped upstream: "Skipping test for now, since there seems to be a bug" (SkippableFact Skip=...)',
     "DefaultCluster.Tests.General.StatelessWorkerTests.StatelessWorkerFastActivationsDontFailInMultiSiloDeployment",
   );
+
+  describe("[StatelessWorker]", () => {
+    // Upstream `StatelessWorkerGrain.MaxLocalWorkers` (the grain's own
+    // `[StatelessWorker(1)]` declaration).
+    const ExpectedMaxLocalActivations = 1;
+    let cluster: TestCluster;
+
+    beforeAll(async () => {
+      cluster = await TestCluster.start({
+        initialSilos: 1,
+        grains: [{ ctor: StatelessWorkerGrain, interfaces: [IStatelessWorkerGrain] }],
+      });
+    });
+
+    afterAll(async () => {
+      await cluster.dispose();
+    });
+
+    orleansTest(
+      "DefaultCluster.Tests.General.StatelessWorkerTests.StatelessWorkerActivationsPerSiloDoNotExceedMaxLocalWorkersCount",
+      async () => {
+        // do extra calls to trigger activation of ExpectedMaxLocalActivations local activations
+        const numberOfCalls = ExpectedMaxLocalActivations * 3;
+        const grain = cluster.getGrain(IStatelessWorkerGrain, randomIntegerKey());
+
+        // warmup
+        await grain.longCall();
+        await new Promise((r) => setTimeout(r, 50));
+
+        const calls: Array<Promise<void>> = [];
+        for (let i = 0; i < numberOfCalls; i += 1) calls.push(grain.longCall());
+        await Promise.all(calls);
+
+        const statsTasks: Array<Promise<[string, string, Array<[number, number]>]>> = [];
+        for (let i = 0; i < numberOfCalls; i += 1) statsTasks.push(grain.getCallStats());
+        const responses = await Promise.all(statsTasks);
+
+        const activationsPerSilo = new Map<string, Set<string>>();
+        for (const [activationGuid, silo] of responses) {
+          const activations = activationsPerSilo.get(silo) ?? new Set<string>();
+          activations.add(activationGuid);
+          activationsPerSilo.set(silo, activations);
+        }
+        for (const [silo, activations] of activationsPerSilo) {
+          expect(
+            activations.size,
+            `silo ${silo} had ${activations.size} activations but expected no more than ${ExpectedMaxLocalActivations}`,
+          ).toBeLessThanOrEqual(ExpectedMaxLocalActivations);
+        }
+      },
+    );
+
+    orleansTest(
+      "DefaultCluster.Tests.General.StatelessWorkerTests.ManyConcurrentInvocationsOnActivationLimitedStatelessWorkerDoesNotFail",
+      async () => {
+        // Issue #6795: significantly more concurrent invocations than the local worker limit results in too many
+        // message forwards. When the issue occurs, this test will throw an exception.
+        //
+        // We are trying to trigger a race condition and need more than 1 attempt to reliably reproduce the issue.
+        for (let attempt = 0; attempt < 100; attempt += 1) {
+          const grain = cluster.getGrain(IStatelessWorkerGrain, BigInt(attempt));
+          await Promise.all(Array.from({ length: 10 }, () => grain.dummyCall()));
+        }
+      },
+    );
+  });
 
   describe("[MayInterleave]", () => {
     let cluster: TestCluster;

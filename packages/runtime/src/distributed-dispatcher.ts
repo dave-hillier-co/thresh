@@ -72,6 +72,17 @@ export class DistributedDispatcher implements Dispatcher {
   async invoke(req: InvocationRequest): Promise<unknown> {
     if (this.deps.clientRouter?.isClientTarget(req.target)) return this.deps.clientRouter.route(req);
 
+    // [StatelessWorker] grains are placement-local (`StatelessWorkerPlacement`
+    // always resolves to the calling silo) and never directory-registered —
+    // they may have several interchangeable local activations per id, which
+    // the single-winner directory CAS below has no way to represent. Route
+    // straight to the catalog's pick-or-scale instead of the cache/directory
+    // funnel; this also means a stateless-worker call always resolves on
+    // whichever silo makes it, exactly like Orleans.
+    if (this.deps.catalog.isStatelessWorkerType(req.target.type)) {
+      return this.deps.catalog.pickOrScaleWorker(req.target).invoke(req);
+    }
+
     const cached = this.deps.cache.get(req.target);
     if (cached !== undefined) {
       try {

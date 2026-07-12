@@ -90,6 +90,16 @@ export class TurnScheduler {
     return this.running.size > 0 || this.queue.length > 0;
   }
 
+  /**
+   * Current concurrency load (running + queued turns) — used by the catalog
+   * to pick the least-loaded stateless-worker activation to queue an
+   * over-capacity call onto, once `maxLocalWorkers` local activations already
+   * exist and all are busy.
+   */
+  get load(): number {
+    return this.running.size + this.queue.length;
+  }
+
   schedule<R>(turn: Turn<R>): Promise<R> {
     return new Promise<R>((resolve, reject) => {
       this.queue.push({
