@@ -6,9 +6,12 @@
 // exist — see `load-shedding-test.test.ts` — so these could be wired up).
 // They stay unported here because every ported test that would exercise them
 // (`ElasticPlacementTests.LoadAwareGrainShouldNotAttemptToCreateActivationsOn*`)
-// is still gapped on a DIFFERENT dependency: `GetLocation`/`GetGrainAtSilo`
-// need a `RequestContext`-driven placement hint this framework doesn't have
-// (GAP-REQUEST-CONTEXT). Only the placement-forcing members and
+// is still gapped: `RequestContext`-driven placement hints
+// (`IPlacementDirector.PlacementHintKey`, ex-GAP-REQUEST-CONTEXT) now exist,
+// so `GetLocation`/`GetGrainAtSilo` are no longer blocked on that — but those
+// tests still need an overload/CPU-aware placement strategy (GAP-LOAD-SHEDDING;
+// see `elastic-placement-test.test.ts`), which this framework doesn't have.
+// Only the placement-forcing members and
 // `GetRuntimeInstanceId` (a grain reporting its own hosting silo, via
 // `GrainRuntime.localSiloAddress()`) that this suite's ported tests actually
 // exercise are declared.

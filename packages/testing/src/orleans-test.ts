@@ -20,9 +20,9 @@ export type GapTag =
   | "GAP-CLIENT-SILO-SEPARATION" // no separate client process distinct from a silo in the harness
   | "GAP-GRAIN-DIRECTORY-API" // internal directory not exposed via a pluggable IGrainDirectory API
   | "GAP-GRAIN-SERVICE" // no per-silo grain-service registration/lifecycle mechanism
-  | "GAP-LOAD-SHEDDING" // overload detector / gateway load shedding exist; no CPU-aware placement scoring, and load-aware placement tests need GAP-REQUEST-CONTEXT's placement hints too
+  | "GAP-LOAD-SHEDDING" // overload detector / gateway load shedding exist; no CPU-aware placement scoring (placement never excludes an overloaded/busy silo)
   | "GAP-REBALANCER-CONTROL" // no rebalancer suspend/resume/report-listener control API
-  | "GAP-REQUEST-CONTEXT" // no RequestContext-driven placement hints (IPlacementDirector.PlacementHintKey)
+  | "GAP-REQUEST-CONTEXT" // RequestContext-driven placement hints (IPlacementDirector.PlacementHintKey) now exist; kept for other client-side RequestContext scaffolding still missing (e.g. a grain-side fail-dehydrate injection knob a client would drive via RequestContext)
   | "GAP-STREAM-BATCHING" // no OnNextBatchAsync / batch-send stream API
   | "GAP-STREAM-CACHE-DIAGNOSTICS" // no pulling-agent cache/eviction model or diagnostic observer
   | "GAP-STREAM-FILTER" // no IStreamFilter server-side delivery filtering
