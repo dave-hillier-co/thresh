@@ -167,6 +167,7 @@ export class SiloBuilder {
   private readonly closers: Array<() => Promise<void>> = [];
   private readonly startupTasks: Array<(grains: GrainFactoryAccess) => Promise<void>> = [];
   private readonly pullingStreams: RedisPullingStreamProvider[] = [];
+  private readonly memoryStreams: MemoryStreamProvider[] = [];
   private readonly broadcastProviders = new Set<string>();
   private transactionsDisabled = false;
 
@@ -282,7 +283,9 @@ export class SiloBuilder {
 
   /** Register a stream provider (in-memory by default), named "default" unless given. */
   useMemoryStreams(name = "default"): this {
-    this.streamProviders.set(name, new MemoryStreamProvider(name));
+    const provider = new MemoryStreamProvider(name);
+    this.memoryStreams.push(provider);
+    this.streamProviders.set(name, provider);
     return this;
   }
 
@@ -827,6 +830,16 @@ export class SiloBuilder {
       );
       provider.setImplicitSubscribers((namespace) => node.implicitGrainTypes(namespace));
       onOwnershipChange.push(async (ranges) => provider.refreshOwnership(ranges));
+    }
+    // The memory provider delivers synchronously in-process on `publish` (no
+    // pulling agent/queue ownership), but implicit subscribers still need the
+    // same dispatcher-routed delivery pulling providers use — see
+    // `MemoryStreamProvider`'s class doc.
+    for (const provider of this.memoryStreams) {
+      provider.setDeliver((grainId, streamKey, event, token) =>
+        node.deliverStreamEvent(grainId, streamKey, event, token),
+      );
+      provider.setImplicitSubscribers((namespace) => node.implicitGrainTypes(namespace));
     }
 
     return buildSiloHost({

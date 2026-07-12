@@ -1,13 +1,17 @@
 import { keyToString, type GrainKey } from "@tsva/core/grain-key";
+import type { GrainType } from "@tsva/core/grain-type";
 import {
   SequenceToken,
   type AsyncStream,
+  type BatchedStreamItem,
   type StreamHandler,
   type StreamId,
   type StreamProvider,
   type StreamSubscriptionHandle,
   type SubscribeOptions,
 } from "@tsva/core/stream";
+import { implicitSubscriberIds } from "@tsva/streams/implicit-subscriptions";
+import type { StreamDeliver } from "@tsva/streams/stream-deliver";
 
 interface StreamEvent<T> {
   token: number;
@@ -41,11 +45,39 @@ class MemoryStream<T> implements AsyncStream<T> {
   private readonly events: StreamEvent<T>[] = [];
   private readonly subscriptions: MemorySubscription<T>[] = [];
 
-  constructor(readonly id: StreamId) {}
+  constructor(
+    readonly id: StreamId,
+    private readonly notifyImplicit: (
+      streamKey: string,
+      event: T,
+      token: number,
+    ) => Promise<void>,
+  ) {}
 
   async publish(event: T): Promise<void> {
-    this.events.push({ token: this.events.length, event });
+    await this.publishBatch([event]);
+  }
+
+  /**
+   * Append a batch of events in one shot (Orleans `OnNextBatchAsync`), then fan
+   * them out. An explicit subscriber whose handler declares `onNextBatch`
+   * receives the whole batch in one call; one that only implements `onNext`
+   * (the common case) still receives every event, one at a time, in order —
+   * batching only changes how many events arrive per callback, never whether
+   * one is dropped. Implicit subscribers (routed through the dispatcher, one
+   * event per call — see `deliverStreamEvent`) always receive events
+   * individually, regardless of how they were published.
+   */
+  async publishBatch(events: readonly T[]): Promise<void> {
+    const entries: StreamEvent<T>[] = events.map((event) => {
+      const entry = { token: this.events.length, event };
+      this.events.push(entry);
+      return entry;
+    });
     for (const sub of this.subscriptions) void this.deliverTo(sub);
+    for (const entry of entries) {
+      await this.notifyImplicit(`${this.id.namespace}/${this.id.key}`, entry.event, entry.token);
+    }
   }
 
   async subscribe(
@@ -72,15 +104,32 @@ class MemoryStream<T> implements AsyncStream<T> {
   }
 
   /**
-   * Deliver pending events to one subscription in order, one at a time. The
-   * cursor only advances once `onNext` resolves, so a handler that throws is
-   * redelivered (at-least-once).
+   * Deliver pending events to one subscription in order. A handler that
+   * declares `onNextBatch` receives every currently-pending event in one call;
+   * otherwise events are delivered one at a time via `onNext`. Either way, the
+   * cursor only advances once the handler's call resolves, so a handler that
+   * throws is redelivered (at-least-once).
    */
   async deliverTo(sub: MemorySubscription<T>): Promise<void> {
     if (sub.pumping || sub.handler === undefined) return;
     sub.pumping = true;
     try {
       while (sub.cursor < this.events.length && sub.handler !== undefined) {
+        if (sub.handler.onNextBatch !== undefined) {
+          const pending = this.events.slice(sub.cursor);
+          const items: BatchedStreamItem<T>[] = pending.map((e) => ({
+            event: e.event,
+            token: new SequenceToken(e.token),
+          }));
+          try {
+            await sub.handler.onNextBatch(items);
+          } catch (err) {
+            await sub.handler.onError?.(err);
+            break; // leave the cursor so the batch is redelivered
+          }
+          sub.cursor += pending.length;
+          continue;
+        }
         const entry = this.events[sub.cursor]!;
         try {
           await sub.handler.onNext(entry.event, new SequenceToken(entry.token));
@@ -96,20 +145,52 @@ class MemoryStream<T> implements AsyncStream<T> {
   }
 }
 
-/** In-memory, single-silo stream provider for development and tests. */
+/**
+ * In-memory, single-silo stream provider for development and tests. Explicit
+ * subscribers (`stream.subscribe`) are delivered to directly, in-process — no
+ * activation binding needed, since the subscribing grain already holds the
+ * handler closure. Implicit subscribers (Orleans `[ImplicitStreamSubscription]`,
+ * a grain that never calls `subscribe`) have no such closure to call, so they
+ * are reached the same way the pulling-agent providers reach them: `setDeliver`/
+ * `setImplicitSubscribers` are wired by `SiloBuilder.build()` to route each
+ * published event through `ClusterNode.deliverStreamEvent`, which resolves
+ * (and reactivates, if needed) the subscriber's activation via the dispatcher.
+ */
 export class MemoryStreamProvider implements StreamProvider {
   private readonly streams = new Map<string, MemoryStream<unknown>>();
+  private deliver: StreamDeliver = async () => undefined;
+  private implicitTypesFor: (namespace: string) => Iterable<GrainType> = () => [];
 
   constructor(private readonly name: string = "default") {}
+
+  /** Wire how a published event reaches an implicit subscriber's activation. */
+  setDeliver(deliver: StreamDeliver): void {
+    this.deliver = deliver;
+  }
+
+  /** Wire the implicit-subscription table (`namespace → grain types`). */
+  setImplicitSubscribers(typesFor: (namespace: string) => Iterable<GrainType>): void {
+    this.implicitTypesFor = typesFor;
+  }
 
   getStream<T>(namespace: string, key: GrainKey): AsyncStream<T> {
     const keyString = keyToString(key);
     const mapKey = `${namespace}/${keyString}`;
     let stream = this.streams.get(mapKey);
     if (stream === undefined) {
-      stream = new MemoryStream<unknown>({ provider: this.name, namespace, key: keyString });
+      stream = new MemoryStream<unknown>(
+        { provider: this.name, namespace, key: keyString },
+        (streamKey, event, token) => this.fanOutImplicit(streamKey, event, token),
+      );
       this.streams.set(mapKey, stream);
     }
     return stream as AsyncStream<T>;
+  }
+
+  private async fanOutImplicit(streamKey: string, event: unknown, token: number): Promise<void> {
+    const implicit = implicitSubscriberIds(streamKey, this.implicitTypesFor);
+    for (const subscriber of implicit) {
+      await this.deliver(subscriber, streamKey, event, token);
+    }
   }
 }

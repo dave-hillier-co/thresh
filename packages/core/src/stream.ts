@@ -15,10 +15,24 @@ export class SequenceToken {
   constructor(readonly value: number) {}
 }
 
+/** One item within a delivered batch, paired with its position (Orleans `SequentialItem<T>`). */
+export interface BatchedStreamItem<T> {
+  event: T;
+  token: SequenceToken;
+}
+
 export interface StreamHandler<T> {
   onNext(event: T, token: SequenceToken): Promise<void>;
   onError?(err: unknown): Promise<void>;
   onCompleted?(): Promise<void>;
+  /**
+   * Receive several consecutive events in one call (Orleans `IAsyncBatchObserver.OnNextBatchAsync`
+   * consumer side). Optional: a handler that omits it always receives events one at a time via
+   * `onNext`, even when the producer published them as a batch — a provider that supports batched
+   * delivery (see `AsyncStream.publishBatch`) only groups a delivery when the subscribed handler
+   * declares this.
+   */
+  onNextBatch?(items: readonly BatchedStreamItem<T>[]): Promise<void>;
 }
 
 export interface StreamSubscriptionHandle<T> {
@@ -42,6 +56,13 @@ export interface SubscribeOptions {
 export interface AsyncStream<T> {
   readonly id: StreamId;
   publish(event: T): Promise<void>;
+  /**
+   * Publish several events as one batch (Orleans `IAsyncStream.OnNextBatchAsync`). Optional: a
+   * provider that doesn't support batched publish can omit it — a caller falls back to one
+   * `publish` per event. A subscribed handler still receives the events one at a time via `onNext`
+   * unless it declares `onNextBatch` (see `StreamHandler`).
+   */
+  publishBatch?(events: readonly T[]): Promise<void>;
   subscribe(
     handler: StreamHandler<T>,
     options?: SubscribeOptions,
