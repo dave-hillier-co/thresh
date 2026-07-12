@@ -1,3 +1,4 @@
+import { GrainId } from "./grain-id";
 import { defineGrainInterface, type GrainInterface } from "./grain-interface";
 import { createSymbolObserver } from "./symbol-observer";
 
@@ -75,4 +76,49 @@ export interface BroadcastChannelWriter<T> {
 /** Hands out writers for channels (Orleans `IBroadcastChannelProvider`). */
 export interface BroadcastChannelProvider {
   getChannelWriter<T>(channel: ChannelId): BroadcastChannelWriter<T>;
+}
+
+/**
+ * Per-named-provider broadcast-channel config (Orleans `BroadcastChannelOptions`).
+ * `fireAndForgetDelivery` decides `ClusterNode.publishToBroadcastChannel`'s
+ * failure semantics: fire-and-forget swallows a subscriber's throw (visible
+ * only via delivery-count diagnostics), while non-fire-and-forget awaits
+ * every subscriber and, once all have been tried, throws an `AggregateError`
+ * collecting every failure (Orleans' `AggregateException`). Defaults to
+ * `false` (non-fire-and-forget) here — UNLIKE Orleans, whose default is
+ * `true` — since this framework's broadcast channels predate the option and
+ * always awaited every subscriber for error visibility; opt into Orleans'
+ * default per provider with `{ fireAndForgetDelivery: true }`.
+ */
+export interface BroadcastChannelOptions {
+  fireAndForgetDelivery?: boolean;
+}
+
+/**
+ * System extension a client (outside any grain) invokes to publish onto a
+ * broadcast channel through its gateway silo (Orleans `IClusterClient.
+ * GetBroadcastChannelProvider`). Unlike `BroadcastConsumerInterface`, this
+ * doesn't address a grain activation at all — `ClusterNode.receiveRequest`
+ * intercepts a call to this interface before placement/directory routing and
+ * calls `publishToBroadcastChannel` directly on the receiving (gateway) silo,
+ * which then fans the item out cluster-wide exactly like a grain-originated
+ * publish.
+ */
+export interface BroadcastChannelPublisher {
+  publish(providerName: string, channel: ChannelId, item: unknown): Promise<void>;
+}
+
+export const BroadcastChannelPublisherInterface: GrainInterface<BroadcastChannelPublisher> =
+  defineGrainInterface<BroadcastChannelPublisher>("system.BroadcastChannelPublisher", {
+    extension: true,
+  });
+
+/**
+ * The fixed pseudo-target a client's `BroadcastChannelProvider` addresses a
+ * publish call to — never a real grain activation (see
+ * `BroadcastChannelPublisherInterface`), so any stable `GrainId` works; one
+ * reserved constant keeps every client's publish call routable the same way.
+ */
+export function broadcastPublisherGrainId(): GrainId {
+  return new GrainId("$system.broadcastPublisher", "publisher");
 }

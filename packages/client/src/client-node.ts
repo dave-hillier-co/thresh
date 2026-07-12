@@ -1,3 +1,8 @@
+import {
+  BroadcastChannelPublisherInterface,
+  broadcastPublisherGrainId,
+  type BroadcastChannelProvider,
+} from "@tsva/core/broadcast-channel";
 import { GatewayTooBusyException, GrainCallError, RejectionError } from "@tsva/core/errors";
 import { createClientId, createObserverId, isObserverGrainId } from "@tsva/core/client-grain-id";
 import type { Grain } from "@tsva/core/grain";
@@ -32,6 +37,7 @@ import { nextCorrelationId, responseTo, type Message, type ResponseKind } from "
 import { MessagePackSerializer } from "@tsva/messaging/msgpack-serializer";
 import type { Serializer } from "@tsva/messaging/serializer";
 import type { Listener, Transport } from "@tsva/messaging/transport";
+import { BroadcastChannelProviderImpl } from "@tsva/runtime/broadcast-channel-provider";
 import { ICancellationSourcesExtension } from "@tsva/runtime/cancellation-extension";
 import type { Dispatcher } from "@tsva/runtime/dispatcher";
 import { GrainFactory } from "@tsva/runtime/grain-factory";
@@ -220,6 +226,29 @@ export class ClientNode implements Dispatcher {
       const ext = this.factory.getReference(ICancellationSourcesExtension, target);
       await ext.cancelRemoteToken(tokenId);
     });
+  }
+
+  /**
+   * A `BroadcastChannelProvider` whose writers publish from OUTSIDE any grain
+   * (Orleans `IClusterClient.GetBroadcastChannelProvider`) — the client-side
+   * counterpart of a grain's `this.runtime.getBroadcastChannelProvider()`.
+   * Each `publish` reaches the gateway silo via THIS client's own
+   * `GrainFactory` (the same proxy/dispatch path `newCancellationTokenSource`
+   * uses), addressed to `broadcastPublisherGrainId()` — a fixed pseudo-target
+   * `ClusterNode.receiveRequest` recognizes and handles directly (there's no
+   * real grain activation to place), calling `publishToBroadcastChannel` on
+   * whichever silo received the request, which then fans the item out
+   * cluster-wide exactly like a grain-originated publish.
+   */
+  getBroadcastChannelProvider(name?: string): BroadcastChannelProvider {
+    const providerName = name ?? "default";
+    const publisher = this.factory.getReference(
+      BroadcastChannelPublisherInterface,
+      broadcastPublisherGrainId(),
+    );
+    return new BroadcastChannelProviderImpl(providerName, (provider, channel, item) =>
+      publisher.publish(provider, channel, item),
+    );
   }
 
   /**
@@ -509,7 +538,21 @@ export class ClientNode implements Dispatcher {
       if (payload.kind === "overloaded") throw new GatewayTooBusyException(payload.message);
       throw new RejectionError(payload.message, payload.kind);
     }
-    const payload = this.serializer.deserialize<{ message: string }>(response.body);
+    const payload = this.serializer.deserialize<{
+      message: string;
+      aggregateMessages?: readonly string[];
+    }>(response.body);
+    // A non-fire-and-forget broadcast publish's aggregated subscriber
+    // failures (`ClusterNode.serializeError`) — reconstruct a real
+    // `AggregateError` rather than collapsing to a generic `GrainCallError`,
+    // so a caller can inspect `.errors` the way Orleans callers inspect
+    // `AggregateException.InnerExceptions`.
+    if (payload.aggregateMessages !== undefined) {
+      throw new AggregateError(
+        payload.aggregateMessages.map((m) => new Error(m)),
+        payload.message,
+      );
+    }
     throw new GrainCallError(payload.message);
   }
 

@@ -155,3 +155,21 @@ export class ConstructorChannelNamespacePredicateProvider {
     return { matched: true, predicate };
   }
 }
+
+const constructorPredicateProvider = new ConstructorChannelNamespacePredicateProvider();
+
+/**
+ * Whether a grain's recorded broadcast-subscription pattern string matches a
+ * published channel's `namespace` — the single chokepoint `ClusterNode.
+ * broadcastGrainTypes` uses for BOTH the plain exact-namespace strings
+ * `@implicitChannelSubscription` records (mark-time and match-time both plain
+ * strings, so compared directly) and the `"ctor:...".`-prefixed patterns
+ * `@regexImplicitChannelSubscription` records (resolved through the
+ * `ConstructorChannelNamespacePredicateProvider` registry and matched via
+ * `IChannelNamespacePredicate.isMatch`).
+ */
+export function matchesChannelNamespace(pattern: string, namespace: string): boolean {
+  const lookup = constructorPredicateProvider.tryGetPredicate(pattern);
+  if (lookup.matched) return lookup.predicate.isMatch(namespace);
+  return pattern === namespace;
+}

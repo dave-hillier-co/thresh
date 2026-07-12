@@ -36,11 +36,18 @@ import {
   type JobRunContext,
 } from "@tsva/core/durable-job";
 import {
+  BroadcastChannelPublisherInterface,
   BroadcastConsumerInterface,
   channelKey,
+  type BroadcastChannelOptions,
   type BroadcastChannelProvider,
   type ChannelId,
 } from "@tsva/core/broadcast-channel";
+import { emitBroadcastChannelEvent } from "@tsva/core/broadcast-channel-diagnostics";
+import {
+  ConstructorChannelNamespacePredicateProvider,
+  matchesChannelNamespace,
+} from "@tsva/core/channel-namespace-predicate";
 import { StreamConsumerInterface, type StreamProvider } from "@tsva/core/stream";
 import type { InvocationRequest } from "@tsva/core/request";
 import { IManagementGrain, type SimpleGrainStatistic } from "@tsva/core/management-grain";
@@ -144,11 +151,13 @@ export interface ClusterNodeOptions {
   /** Resolves the stream provider a grain's `getStreamProvider` returns. */
   streamProvider?: (name?: string) => StreamProvider | undefined;
   /**
-   * Names of broadcast-channel providers configured on this silo. Each
-   * becomes a `getBroadcastChannelProvider(name)` whose writers fan out to the
-   * channel's implicit subscribers. The first registered name is the default.
+   * Broadcast-channel providers configured on this silo. Each becomes a
+   * `getBroadcastChannelProvider(name)` whose writers fan out to the
+   * channel's implicit subscribers. The first registered name is the
+   * default. A plain string is shorthand for `{ name, fireAndForgetDelivery:
+   * true }` (Orleans' `BroadcastChannelOptions.FireAndForgetDelivery` default).
    */
-  broadcastProviders?: readonly string[];
+  broadcastProviders?: readonly (string | ({ name: string } & BroadcastChannelOptions))[];
   /** Incoming grain-call filters wrapping each grain-method dispatch (silo-wide). */
   incomingCallFilters?: readonly IncomingGrainCallFilter[];
   /** Auto-install factories for `GrainExtension` interfaces, keyed by interface id (Orleans `AddGrainExtension`). */
@@ -257,10 +266,28 @@ export class ClusterNode {
   private readonly interfaceToGrainType = new Map<number, GrainType>();
   /** Stream namespace → grain types implicitly subscribed to it (auto-subscribe by key). */
   private readonly implicitSubscriptions = new Map<string, GrainType[]>();
-  /** Broadcast-channel namespace → grain types implicitly subscribed to it. */
+  /**
+   * Broadcast-channel namespace → grain types implicitly subscribed to it via
+   * an EXACT namespace match (`@implicitChannelSubscription`).
+   */
   private readonly broadcastSubscriptions = new Map<string, GrainType[]>();
+  /**
+   * Broadcast-channel PREDICATE subscriptions (`@regexImplicitChannelSubscription`
+   * and any other `"ctor:..."`-pattern predicate) — checked against a
+   * published channel's namespace IN ADDITION to the exact-match map above,
+   * since a grain may match by predicate without ever appearing as an exact
+   * key.
+   */
+  private readonly broadcastPredicateSubscriptions: Array<{ pattern: string; type: GrainType }> =
+    [];
   /** Configured broadcast-channel provider names; the first is the default. */
   private readonly broadcastProviderNames: readonly string[];
+  /**
+   * Per-provider fire-and-forget delivery flag (Orleans
+   * `BroadcastChannelOptions.FireAndForgetDelivery`). Defaults to `false`
+   * here (Orleans defaults to `true`) — see the constructor.
+   */
+  private readonly broadcastFireAndForget = new Map<string, boolean>();
   /** Interface versions this silo implements: interfaceId -> hosted version. */
   private readonly localVersions = new Map<number, { version: number; grainType: GrainType }>();
   private maxLocalVersion = 1;
@@ -328,7 +355,20 @@ export class ClusterNode {
       ...DEFAULT_LOAD_SHEDDING_OPTIONS,
       ...options.loadShedding,
     });
-    this.broadcastProviderNames = options.broadcastProviders ?? [];
+    const broadcastConfigs = (options.broadcastProviders ?? []).map((p) =>
+      typeof p === "string" ? { name: p } : p,
+    );
+    this.broadcastProviderNames = broadcastConfigs.map((c) => c.name);
+    for (const c of broadcastConfigs) {
+      // Unlike Orleans (default `true`), an unconfigured provider here
+      // defaults to NON-fire-and-forget: this framework's broadcast channels
+      // predate `fireAndForgetDelivery` and always awaited every subscriber
+      // for error visibility (see `publishToBroadcastChannel`) — preserved as
+      // the default so every existing caller keeps that behaviour; opt into
+      // Orleans' fire-and-forget default per provider with `{
+      // fireAndForgetDelivery: true }`.
+      this.broadcastFireAndForget.set(c.name, c.fireAndForgetDelivery ?? false);
+    }
     this.callTimeoutMs = options.callTimeoutMs ?? 30_000;
     this.versionPolicyConfigured =
       options.versionCompatibility !== undefined || options.versionSelector !== undefined;
@@ -464,10 +504,19 @@ export class ClusterNode {
       if (!types.includes(metadata.grainType)) types.push(metadata.grainType);
       this.implicitSubscriptions.set(namespace, types);
     }
-    for (const namespace of metadata.broadcastSubscriptions) {
-      const types = this.broadcastSubscriptions.get(namespace) ?? [];
+    for (const pattern of metadata.broadcastSubscriptions) {
+      // A "ctor:..."-prefixed pattern (e.g. `@regexImplicitChannelSubscription`)
+      // is a PREDICATE, matched against each publish's namespace at delivery
+      // time (see `broadcastGrainTypes`) — it can't be exact-keyed up front
+      // since it may match many namespaces, including ones not yet seen. A
+      // plain namespace string is the existing exact-match case.
+      if (pattern.startsWith(`${ConstructorChannelNamespacePredicateProvider.prefix}:`)) {
+        this.broadcastPredicateSubscriptions.push({ pattern, type: metadata.grainType });
+        continue;
+      }
+      const types = this.broadcastSubscriptions.get(pattern) ?? [];
       if (!types.includes(metadata.grainType)) types.push(metadata.grainType);
-      this.broadcastSubscriptions.set(namespace, types);
+      this.broadcastSubscriptions.set(pattern, types);
     }
     return this;
   }
@@ -517,9 +566,19 @@ export class ClusterNode {
     return this.options.streamProvider?.(name);
   }
 
-  /** Grain types implicitly subscribed to a broadcast-channel namespace. */
+  /**
+   * Grain types implicitly subscribed to a broadcast-channel namespace: every
+   * exact-match subscriber PLUS every predicate subscriber whose pattern
+   * matches `namespace` (e.g. a `@regexImplicitChannelSubscription`) —
+   * deduplicated, since a grain type could in principle appear in both.
+   */
   broadcastGrainTypes(namespace: string): readonly GrainType[] {
-    return this.broadcastSubscriptions.get(namespace) ?? [];
+    const exact = this.broadcastSubscriptions.get(namespace) ?? [];
+    const predicated = this.broadcastPredicateSubscriptions
+      .filter((s) => matchesChannelNamespace(s.pattern, namespace))
+      .map((s) => s.type);
+    if (predicated.length === 0) return exact;
+    return [...new Set([...exact, ...predicated])];
   }
 
   /** The named broadcast-channel provider, or `undefined` if none is configured under that name. */
@@ -535,27 +594,66 @@ export class ClusterNode {
    * Publish an item to every grain implicitly subscribed to the channel's
    * namespace, each addressed by the channel key — routed through the dispatcher
    * as a `BroadcastConsumer` system call (directory → placement), reactivating an
-   * idle subscriber, exactly like stream delivery. Deliveries are awaited so a
-   * failing subscriber surfaces to the publisher; this diverges from Orleans'
-   * fire-and-forget default in favour of error visibility.
+   * idle subscriber, exactly like stream delivery. Emits an `itemPublished`
+   * diagnostic event once, and an `itemDelivered` event per successful
+   * subscriber delivery (`@tsva/core/broadcast-channel-diagnostics`) — tests
+   * synchronize on these instead of racing the fan-out.
+   *
+   * Delivery-failure semantics follow the named provider's
+   * `fireAndForgetDelivery` (default `false` here, unlike Orleans' `true` —
+   * see the constructor):
+   *  - fire-and-forget: `publish` doesn't wait for delivery at all, and a
+   *    subscriber's throw is swallowed — visible only via the diagnostic
+   *    (a failed delivery never emits `itemDelivered`) and the subscriber's
+   *    own state.
+   *  - non-fire-and-forget: every subscriber is awaited, and only once ALL
+   *    have been tried are their failures aggregated into one thrown
+   *    `AggregateError` (Orleans' `AggregateException`) — one failing
+   *    subscriber never prevents the others from being tried.
    */
   async publishToBroadcastChannel(
-    _provider: string,
+    provider: string,
     channel: ChannelId,
     item: unknown,
   ): Promise<void> {
     const key = channelKey(channel);
-    const deliveries = this.broadcastGrainTypes(channel.namespace).map((type) =>
-      this.dispatcher.invoke({
-        target: new GrainId(type, channel.key),
-        interfaceId: BroadcastConsumerInterface.id,
-        method: "onPublished",
-        args: [key, item],
-        options: {},
-        reentrancyId: newChainId(),
-      }),
+    emitBroadcastChannelEvent({ kind: "itemPublished", providerName: provider, channelId: channel });
+    const deliver = (type: GrainType): Promise<void> =>
+      this.dispatcher
+        .invoke({
+          target: new GrainId(type, channel.key),
+          interfaceId: BroadcastConsumerInterface.id,
+          method: "onPublished",
+          args: [key, item],
+          options: {},
+          reentrancyId: newChainId(),
+        })
+        .then(() => {
+          emitBroadcastChannelEvent({
+            kind: "itemDelivered",
+            providerName: provider,
+            channelId: channel,
+          });
+        });
+    const deliveries = this.broadcastGrainTypes(channel.namespace).map(deliver);
+    const fireAndForget = this.broadcastFireAndForget.get(provider) ?? false;
+    if (fireAndForget) {
+      // Consume every settlement so a later rejection never surfaces as an
+      // unhandled promise rejection; the caller doesn't wait for any of them.
+      for (const delivery of deliveries) void delivery.catch(() => undefined);
+      return;
+    }
+    const results = await Promise.allSettled(deliveries);
+    const failures = results.filter(
+      (r): r is PromiseRejectedResult => r.status === "rejected",
     );
-    await Promise.all(deliveries);
+    if (failures.length > 0) {
+      throw new AggregateError(
+        failures.map((f) => f.reason),
+        `broadcast publish to ${channel.namespace}/${channel.key} failed for ` +
+          `${failures.length} of ${results.length} subscriber(s)`,
+      );
+    }
   }
 
   getGrain<T>(def: GrainInterface<T>, key: GrainKeyFor<T>): T {
@@ -1408,19 +1506,38 @@ export class ClusterNode {
     }
   }
 
-  /** Map a thrown error to the `(kind, body)` of an error/rejection response. */
+  /**
+   * Map a thrown error to the `(kind, body)` of an error/rejection response.
+   * An `AggregateError` (non-fire-and-forget `publishToBroadcastChannel`'s
+   * aggregated subscriber failures) carries its inner error messages
+   * separately so the receiving end reconstructs a real `AggregateError`
+   * instead of collapsing to a generic error with no `.errors` — the wire has
+   * no general exception-type fidelity, so this is a narrow, deliberate
+   * exception to preserve what `MultipleSubscribersOneBadActorChannelTest`-style
+   * tests assert on (`Assert.Single(ex.InnerExceptions)`).
+   */
   private serializeError(err: unknown): { kind: ResponseKind; body: Uint8Array } {
-    return err instanceof RejectionError
-      ? {
-          kind: "rejection",
-          body: this.serializer.serialize({ message: err.message, kind: err.kind }),
-        }
-      : {
-          kind: "error",
-          body: this.serializer.serialize({
-            message: err instanceof Error ? err.message : String(err),
-          }),
-        };
+    if (err instanceof RejectionError) {
+      return {
+        kind: "rejection",
+        body: this.serializer.serialize({ message: err.message, kind: err.kind }),
+      };
+    }
+    if (err instanceof AggregateError) {
+      return {
+        kind: "error",
+        body: this.serializer.serialize({
+          message: err.message,
+          aggregateMessages: err.errors.map((e) => (e instanceof Error ? e.message : String(e))),
+        }),
+      };
+    }
+    return {
+      kind: "error",
+      body: this.serializer.serialize({
+        message: err instanceof Error ? err.message : String(err),
+      }),
+    };
   }
 
   /** Fetch a peer's manifest as a `system: "manifest"` request (mirrors directory RPC). */
@@ -1775,7 +1892,15 @@ export class ClusterNode {
       const extracted =
         headers !== undefined ? propagation.extract(context.active(), headers) : context.active();
       const result = await context.with(extracted, () =>
-        this.dispatcher.deliverLocal(this.toRequest(message, transaction)),
+        // A client-side `BroadcastChannelProvider`'s publish call: it addresses
+        // no real grain activation (`broadcastPublisherGrainId()` is a fixed
+        // pseudo-target), so it's handled directly here rather than going
+        // through placement/directory routing the way an ordinary grain call
+        // (and even `BroadcastConsumerInterface` delivery, which DOES target a
+        // real subscriber activation) does.
+        message.interfaceId === BroadcastChannelPublisherInterface.id
+          ? this.dispatchBroadcastPublish(message)
+          : this.dispatcher.deliverLocal(this.toRequest(message, transaction)),
       );
       if (message.direction === "oneWay" || replyTo === undefined) return;
       const response = responseTo(
@@ -1793,6 +1918,15 @@ export class ClusterNode {
       this.attachParticipants(response, transaction);
       await this.reply(replyTo, response);
     }
+  }
+
+  /** Deserialize and run a client-originated broadcast-channel publish (see `receiveRequest`). */
+  private async dispatchBroadcastPublish(message: Message): Promise<undefined> {
+    const [providerName, channel, item] = this.serializer.deserialize<[string, ChannelId, unknown]>(
+      message.body,
+    );
+    await this.publishToBroadcastChannel(providerName, channel, item);
+    return undefined;
   }
 
   /** Carry the participants enlisted during this call back on the reply. */
