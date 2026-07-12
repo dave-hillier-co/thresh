@@ -75,6 +75,15 @@ export interface GrainRuntime {
   /** Whether this turn runs inside a transaction, ambient or just begun. */
   isInTransaction(): boolean;
   /**
+   * Detach a call from the ambient transaction's own completion without
+   * awaiting it (Orleans `TransactionContext.GetRequiredTransactionInfo()
+   * .Fork()`). Marks the transaction as having an outstanding "orphaned" call
+   * so its root boundary aborts rather than commits if that call is never
+   * matched by a completion — see `TransactionOrphanCallError`
+   * (`@tsva/core/errors`). Throws if no transaction is ambient.
+   */
+  forkTransaction(): void;
+  /**
    * Get this activation's bound instance of a `GrainExtension` interface
    * (Orleans `IGrainExtension`/`IGrainContext.GetGrainExtension`), lazily
    * creating and binding one via `factory` on first use. Idempotent: once

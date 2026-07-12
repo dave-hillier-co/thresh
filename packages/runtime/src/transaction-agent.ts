@@ -1,4 +1,4 @@
-import { TransactionAbortedError } from "@tsva/core/errors";
+import { TransactionAbortedError, TransactionOrphanCallError } from "@tsva/core/errors";
 import { Guid } from "@tsva/core/guid";
 import type {
   EnlistedParticipant,
@@ -42,11 +42,21 @@ export class TransactionAgent {
       timeStamp: this.clock.utcNow(),
       readOnly,
       participants: new Map(),
+      pendingCalls: 0,
     };
   }
 
   /** Commit the transaction across its participants, or abort all and throw. */
   async resolve(info: TransactionInfo): Promise<void> {
+    // Orleans `TransactionInfo.MustAbort`: a call forked off this transaction
+    // (see `forkTransaction`, `@tsva/core/transaction-info`) that never
+    // completed leaves the transaction's true read/write set unknowable, so it
+    // may not commit — abort instead, even if it enlisted no participants at
+    // all (an orphan fork with no other work still must not silently "succeed").
+    if (info.pendingCalls !== 0) {
+      await this.abort(info);
+      throw new TransactionOrphanCallError(info.id, info.pendingCalls);
+    }
     const enlisted = [...info.participants.values()];
     if (enlisted.length === 0) return;
 

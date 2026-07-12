@@ -8,10 +8,15 @@ import type { DurableJob, DurableJobScheduler, ScheduleJobRequest } from "@tsva/
 import type { SiloAddress } from "@tsva/core/silo-address";
 import type { BroadcastChannelProvider } from "@tsva/core/broadcast-channel";
 import { isActivationBound, type StreamProvider } from "@tsva/core/stream";
+import { forkTransaction } from "@tsva/core/transaction-info";
 import type { ActivationData } from "@tsva/runtime/activation";
 import { ActivationStreamProvider } from "@tsva/runtime/activation-stream-provider";
 import type { GrainFactory } from "@tsva/runtime/grain-factory";
-import { currentTransaction, requestContext } from "@tsva/runtime/invocation-context";
+import {
+  currentTransaction,
+  requestContext,
+  requireTransaction,
+} from "@tsva/runtime/invocation-context";
 import type { SiloLoadSheddingTestHooks } from "@tsva/runtime/load-shedding";
 
 export interface GrainRuntimeServices {
@@ -136,6 +141,10 @@ export class GrainRuntimeImpl implements GrainRuntime {
 
   isInTransaction(): boolean {
     return currentTransaction() !== undefined;
+  }
+
+  forkTransaction(): void {
+    forkTransaction(requireTransaction());
   }
 
   getOrSetExtension<T extends object>(iface: GrainInterface<T>, factory: () => T): T {

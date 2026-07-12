@@ -2158,6 +2158,11 @@ export class ClusterNode {
             timeStamp: header.timeStamp,
             readOnly: header.readOnly,
             participants: new Map(),
+            // Orphan-call tracking (`TransactionInfo.pendingCalls`) is decided
+            // at the root boundary from the root's own fork/complete
+            // bookkeeping; a remote hop's reconstructed context doesn't
+            // separately track it.
+            pendingCalls: 0,
           }
         : undefined;
     try {

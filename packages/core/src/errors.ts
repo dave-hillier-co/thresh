@@ -125,8 +125,9 @@ export class TransactionAbortedError extends Error {
   constructor(
     readonly transactionId: string,
     reason: string,
+    options?: { cause?: unknown },
   ) {
-    super(`transaction ${transactionId} aborted: ${reason}`);
+    super(`transaction ${transactionId} aborted: ${reason}`, options);
     this.name = "TransactionAbortedError";
   }
 }
@@ -163,5 +164,44 @@ export class TransactionLockUpgradeError extends TransactionAbortedError {
       "could not upgrade a lock, because of a higher-priority conflicting transaction",
     );
     this.name = "TransactionLockUpgradeError";
+  }
+}
+
+/**
+ * Raised when a transaction's root call attempts to resolve while it still has
+ * outstanding "orphaned" calls it forked but never awaited to completion
+ * (Orleans `OrleansOrphanCallException`, a subtype of
+ * `OrleansTransactionAbortedException`). `TransactionInfo.fork()` increments
+ * the pending-call count each time application code detaches a call from the
+ * transaction's own completion (Orleans `TransactionInfo.Fork`); if that count
+ * is still nonzero when the root boundary tries to commit, the transaction
+ * cannot be resolved safely and is aborted instead.
+ */
+export class TransactionOrphanCallError extends TransactionAbortedError {
+  constructor(
+    transactionId: string,
+    readonly pendingCalls: number,
+  ) {
+    super(
+      transactionId,
+      `${pendingCalls} orphaned call(s) were still pending when the transaction attempted to resolve`,
+    );
+    this.name = "TransactionOrphanCallError";
+  }
+}
+
+/**
+ * Raised when a transaction is aborted purely because some other,
+ * transitively related transaction it read state from has already aborted
+ * (Orleans `OrleansCascadingAbortException`, a subtype of
+ * `OrleansTransactionTransientFailureException` — transient, worth retrying).
+ * Optimistic reads can observe a tentative value written by a transaction that
+ * later aborts; once that's discovered, every reader that saw it must abort
+ * too rather than commit on data that never became real.
+ */
+export class TransactionCascadingAbortError extends TransactionAbortedError {
+  constructor(transactionId: string, cause?: unknown) {
+    super(transactionId, "a transitively related transaction aborted", { cause });
+    this.name = "TransactionCascadingAbortError";
   }
 }
