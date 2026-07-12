@@ -43,6 +43,7 @@ import {
 } from "@tsva/core/broadcast-channel";
 import { StreamConsumerInterface, type StreamProvider } from "@tsva/core/stream";
 import type { InvocationRequest } from "@tsva/core/request";
+import { IManagementGrain, type SimpleGrainStatistic } from "@tsva/core/management-grain";
 import type { SiloAddress } from "@tsva/core/silo-address";
 import {
   participantKey,
@@ -74,6 +75,7 @@ import type { ActivationData } from "@tsva/runtime/activation";
 import { DistributedDispatcher } from "@tsva/runtime/distributed-dispatcher";
 import { BroadcastChannelProviderImpl } from "@tsva/runtime/broadcast-channel-provider";
 import { GrainFactory } from "@tsva/runtime/grain-factory";
+import { createManagementGrainType } from "@tsva/runtime/management-grain";
 import { chooseMigrationTarget } from "@tsva/runtime/placement/choose-migration-target";
 import {
   placementFiltersFor,
@@ -396,6 +398,21 @@ export class ClusterNode {
       this.catalog,
       time,
       (options.collectionIntervalSeconds ?? 60) * 1000,
+    );
+    // Built-in system grain (Orleans `IManagementGrain`), registered on every
+    // silo so `getGrain(IManagementGrain, 0n)` resolves wherever placement
+    // lands it. Its class closes over THIS silo's hooks (membership,
+    // cross-silo stats gathering, directory lookup) rather than reaching them
+    // through the general `GrainRuntime`/`GrainActivator` surface, since it
+    // needs no other silo-provided facet.
+    this.registerGrain(
+      createManagementGrainType({
+        membershipSnapshot: () => this.options.membership.current(),
+        gatherGrainStats: () => this.gatherClusterGrainStats(),
+        lookupActivation: (id) => this.directory.lookup(id),
+        isStatelessWorker: (type) => this.grainTypes.get(type)?.metadata.options.stateless === true,
+      }),
+      { interfaces: [IManagementGrain] },
     );
   }
 
@@ -1233,6 +1250,10 @@ export class ClusterNode {
       void this.handleLoadRequest(message);
       return;
     }
+    if (message.system === "stats") {
+      void this.handleStatsRequest(message);
+      return;
+    }
     if (message.system === "rebalance") {
       void this.handleRebalanceRequest(message);
       return;
@@ -1358,6 +1379,52 @@ export class ClusterNode {
       }),
     );
     return { counts, silos };
+  }
+
+  /** Ask a peer for its per-grain-type activation counts as a `system: "stats"` request. */
+  private async sendStatsQuery(silo: SiloAddress): Promise<[GrainType, number][]> {
+    return (await this.sendSystemMessage(
+      silo,
+      "stats",
+      new GrainId("stats", silo.ringKey),
+      this.serializer.serialize(null),
+    )) as [GrainType, number][];
+  }
+
+  private async handleStatsRequest(message: Message): Promise<void> {
+    const replyTo = message.sendingSilo;
+    if (replyTo === undefined) return;
+    await this.reply(
+      replyTo,
+      responseTo(
+        message,
+        "success",
+        this.serializer.serialize([...this.catalog.grainTypeCounts()]),
+        this.options.local,
+      ),
+    );
+  }
+
+  /**
+   * Per-grain-type activation counts amalgamated across the active cluster —
+   * the built-in management grain's `GetSimpleGrainStatistics` (Orleans
+   * parity). The local counts are read directly; each peer answers a `stats`
+   * query (an unreachable peer contributes nothing, same as `gatherClusterLoad`).
+   */
+  async gatherClusterGrainStats(): Promise<SimpleGrainStatistic[]> {
+    const active = activeSilos(this.options.membership.current());
+    const results: SimpleGrainStatistic[] = [];
+    await Promise.all(
+      active.map(async (silo) => {
+        const entries = silo.equals(this.options.local)
+          ? [...this.catalog.grainTypeCounts()]
+          : await this.sendStatsQuery(silo).catch(() => [] as [GrainType, number][]);
+        for (const [grainType, activationCount] of entries) {
+          results.push({ grainType, silo, activationCount });
+        }
+      }),
+    );
+    return results;
   }
 
   /**

@@ -250,6 +250,16 @@ export class Catalog {
     return n;
   }
 
+  /** Live activation count per grain type, used by the management grain's per-type statistics. */
+  grainTypeCounts(): Map<GrainType, number> {
+    const counts = new Map<GrainType, number>();
+    for (const a of this.activations.values()) {
+      if (a.state === "invalid") continue;
+      counts.set(a.id.type, (counts.get(a.id.type) ?? 0) + 1);
+    }
+    return counts;
+  }
+
   /** Valid (servable) activations — migration candidates for the rebalancer. */
   liveActivations(): ActivationData[] {
     const out: ActivationData[] = [];

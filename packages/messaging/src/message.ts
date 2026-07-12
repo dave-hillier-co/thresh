@@ -44,11 +44,19 @@ export interface Message {
   method: string;
 
   /**
-   * Marks a system request (directory, migration, manifest, load, or
+   * Marks a system request (directory, migration, manifest, load, stats, or
    * rebalance) or the client-directory gossip (`client`, oneWay only) vs a
    * grain call.
    */
-  system?: "directory" | "migration" | "manifest" | "load" | "rebalance" | "client" | undefined;
+  system?:
+    | "directory"
+    | "migration"
+    | "manifest"
+    | "load"
+    | "stats"
+    | "rebalance"
+    | "client"
+    | undefined;
 
   responseKind?: ResponseKind | undefined;
   requestContext?: RequestContext | undefined;
