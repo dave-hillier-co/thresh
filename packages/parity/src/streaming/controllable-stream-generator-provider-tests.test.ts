@@ -5,11 +5,21 @@
 // `generated-stream-recovery-tests.test.ts`), then poll a dedicated
 // `IGeneratedEventReporterGrain` that tallies per-stream event counts across
 // every queue in a `HashRingStreamQueueMapper`-partitioned persistent stream
-// provider. This framework has no persistent/queue-adapter stream provider,
-// no generator adapter, no hash-ring queue mapper, no management-grain
-// control-command channel (`GAP-MGMT-GRAIN`), and no generated-event
-// reporting grain — the same generator/queue-mapper/control-command stack
-// gapped there under `GAP-STREAM-GENERATOR-ADAPTER`.
+// provider.
+//
+// The base generator/queue-mapper/reporter stack now exists —
+// `GeneratorPullingStreamProvider` + `GeneratorStreamQueue`
+// (`packages/streams/src/generator-pulling-stream-provider.ts`,
+// `generator-stream-queue.ts`, with a `reconfigure()` method standing in for
+// `IControllable.ExecuteCommand`) and a reporter-grain fixture, ported for
+// `stream-generator-provider-tests.test.ts`'s `ValidateGeneratedStreamsTest`.
+// What these two tests still need is the *reach path* to that
+// reconfiguration: upstream drives it live, mid-test, through
+// `IManagementGrain.SendControlCommandToProvider` — a silo-control system
+// target with no equivalent here (`GAP-MGMT-GRAIN`: no management grain /
+// silo-control system targets at all). Without it there is no in-test way to
+// invoke `reconfigure()` the way the upstream `[Fact]`s do, so both stay
+// gapped under GAP-STREAM-GENERATOR-ADAPTER pending GAP-MGMT-GRAIN.
 import { it } from "vitest";
 import { orleansTest } from "@tsva/testing/orleans-test";
 

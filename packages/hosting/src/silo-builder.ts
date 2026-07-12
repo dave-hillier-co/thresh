@@ -66,6 +66,12 @@ import { PostgresReminderTable } from "@tsva/reminders/postgres-reminder-table";
 import { RedisReminderTable } from "@tsva/reminders/redis-reminder-table";
 import { MemoryStreamProvider } from "@tsva/streams/memory-stream-provider";
 import { RedisPullingStreamProvider } from "@tsva/streams/redis-pulling-stream-provider";
+import {
+  GeneratorPullingStreamProvider,
+  type GeneratorPullingStreamProviderOptions,
+} from "@tsva/streams/generator-pulling-stream-provider";
+import type { StreamGeneratorConfig } from "@tsva/streams/generator-stream-queue";
+import type { PullingStreamProviderHost } from "@tsva/streams/queue-pulling-agent";
 import { ClusterNode } from "@tsva/runtime/cluster-node";
 import type { GrainActivator } from "@tsva/runtime/catalog";
 import type { LoadSheddingOptions } from "@tsva/runtime/load-shedding";
@@ -167,7 +173,7 @@ export class SiloBuilder {
   private readonly starters: Array<() => Promise<void>> = [];
   private readonly closers: Array<() => Promise<void>> = [];
   private readonly startupTasks: Array<(grains: GrainFactoryAccess) => Promise<void>> = [];
-  private readonly pullingStreams: RedisPullingStreamProvider[] = [];
+  private readonly pullingStreams: PullingStreamProviderHost[] = [];
   private readonly memoryStreams: MemoryStreamProvider[] = [];
   private readonly broadcastProviders = new Map<string, BroadcastChannelOptions>();
   private transactionsDisabled = false;
@@ -329,6 +335,28 @@ export class SiloBuilder {
     this.closers.push(async () => {
       provider.stop();
       await client.close();
+    });
+    return this.addStreamProvider(name, provider);
+  }
+
+  /**
+   * Register a test-only generator stream provider (Orleans
+   * `GeneratorAdapterFactory`): each of `options.queueCount` physical queues
+   * synthesizes one stream of `config.eventsInStream` events under
+   * `config.streamNamespace`, delivered to implicit subscribers through the
+   * same pulling-agent/queue-ownership path as `addRedisStreams` — no real
+   * backing store, so there is nothing to connect; only agents to stop on
+   * shutdown.
+   */
+  addGeneratorStreams(
+    name: string,
+    config: StreamGeneratorConfig,
+    options: GeneratorPullingStreamProviderOptions = {},
+  ): this {
+    const provider = new GeneratorPullingStreamProvider(name, config, options);
+    this.pullingStreams.push(provider);
+    this.closers.push(async () => {
+      provider.stop();
     });
     return this.addStreamProvider(name, provider);
   }

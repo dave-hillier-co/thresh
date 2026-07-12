@@ -1,7 +1,35 @@
-import type { QueueEntry, RedisStreamQueue } from "@tsva/streams/redis-stream-queue";
+import type { GrainType } from "@tsva/core/grain-type";
+import type { QueueEntry } from "@tsva/streams/redis-stream-queue";
+import type { HashRange } from "@tsva/streams/queue-ownership";
+import type { StreamDeliver } from "@tsva/streams/stream-deliver";
 
 /** Delivers one pulled event to the stream's subscribers; the agent supplies it. */
 export type DeliverEvent = (streamKey: string, event: unknown, token: number) => Promise<void>;
+
+/**
+ * The minimal shape a physical queue must offer a pulling agent: a durably
+ * committed cursor, entries strictly after it, and a way to advance the
+ * cursor. `RedisStreamQueue` is the durable implementation; a generator queue
+ * (`GeneratorStreamQueue`) synthesizes entries in-memory instead of reading a
+ * real backing store, but plugs into the same agent unchanged.
+ */
+export interface PullableQueue {
+  getCursor(): Promise<number>;
+  readAfter(cursor: number, count?: number): Promise<QueueEntry[]>;
+  commit(cursor: number): Promise<void>;
+}
+
+/**
+ * What a host needs to drive a pulling-agent-backed stream provider through a
+ * silo's lifecycle: wire delivery/implicit subscribers once, then hand it the
+ * hash ranges it owns on every membership change (`RedisPullingStreamProvider`
+ * and `GeneratorPullingStreamProvider` both implement this).
+ */
+export interface PullingStreamProviderHost {
+  setDeliver(deliver: StreamDeliver): void;
+  setImplicitSubscribers(typesFor: (namespace: string) => Iterable<GrainType>): void;
+  refreshOwnership(ranges: readonly HashRange[]): void;
+}
 
 /**
  * Reports a permanently-failed delivery — Orleans' `IStreamFailureHandler.OnDeliveryFailure`.
@@ -63,7 +91,7 @@ export class QueuePullingAgent {
   private running = false;
 
   constructor(
-    private readonly queue: RedisStreamQueue,
+    private readonly queue: PullableQueue,
     private readonly deliver: DeliverEvent,
     options: QueuePullingAgentOptions = {},
   ) {
