@@ -18,7 +18,11 @@ import type { InvokeMethodOptions } from "@tsva/core/invoke-options";
 import type { InvocationRequest } from "@tsva/core/request";
 import { requestContextStore } from "@tsva/core/request-context";
 import type { TransactionInfo } from "@tsva/core/transaction-info";
-import { GrainCallTimeoutError, TransactionsDisabledError } from "@tsva/core/errors";
+import {
+  GrainCallTimeoutError,
+  TransactionAbortedError,
+  TransactionsDisabledError,
+} from "@tsva/core/errors";
 import type { Dispatcher } from "@tsva/runtime/dispatcher";
 import { invocationContext } from "@tsva/runtime/invocation-context";
 import { systemTimeProvider, type TimeProvider } from "@tsva/runtime/time-provider";
@@ -41,6 +45,22 @@ const newChainId = () => Guid.newGuid().toString();
  */
 function normalizeGrainCallResult(value: unknown): unknown {
   return value === undefined ? null : value;
+}
+
+/**
+ * Reduce an aggregate rejection (e.g. `AggregateError`, from `Promise.any` or
+ * a hand-rolled fan-out) to its first underlying error, so a transaction abort
+ * always carries exactly one root cause (Orleans: `InnerException` is a single
+ * exception, never a collection) even when several concurrent grain calls
+ * failed together. A plain `Promise.all` rejection is already singular — it
+ * settles on the first rejection it observes — so this only matters for the
+ * aggregate shapes that don't collapse on their own.
+ */
+function singleRootCause(error: unknown): unknown {
+  if (error instanceof AggregateError && error.errors.length > 0) {
+    return singleRootCause(error.errors[0]);
+  }
+  return error;
 }
 
 /**
@@ -258,11 +278,17 @@ export class GrainFactory {
   ): { transaction: TransactionInfo | undefined; beginsHere: boolean } {
     switch (options.transaction) {
       case "create":
-        return { transaction: this.requireAgent().startTransaction(), beginsHere: true };
+        return {
+          transaction: this.requireAgent().startTransaction(options.readOnly === true),
+          beginsHere: true,
+        };
       case "createOrJoin":
         return ambient !== undefined
           ? { transaction: ambient, beginsHere: false }
-          : { transaction: this.requireAgent().startTransaction(), beginsHere: true };
+          : {
+              transaction: this.requireAgent().startTransaction(options.readOnly === true),
+              beginsHere: true,
+            };
       case "join":
         if (ambient === undefined) {
           throw new Error(`method ${method} requires an ambient transaction (join)`);
@@ -351,7 +377,22 @@ export class GrainFactory {
       return result;
     } catch (error) {
       await agent.abort(transaction);
-      throw error;
+      // A failure already shaped as a transaction abort (a read-only
+      // violation, an orphan call, a wait-die/lock-upgrade death, or the
+      // commit protocol's own veto) is surfaced as-is, preserving its
+      // specific subtype — it already IS the Orleans-parity outcome, not a
+      // grain exception that needs wrapping.
+      if (error instanceof TransactionAbortedError) throw error;
+      // Otherwise this is an ordinary grain-method exception that aborted the
+      // transaction (Orleans: the tx aborts and the caller sees
+      // `OrleansTransactionAbortedException` with the original exception as
+      // its `InnerException`). Even when several grains threw concurrently
+      // (e.g. a coordinator's `Promise.all` over several failing calls),
+      // exactly ONE root cause must surface — never an aggregate — so unwrap
+      // down to a single underlying error before wrapping it.
+      const rootCause = singleRootCause(error);
+      const reason = rootCause instanceof Error ? rootCause.message : String(rootCause);
+      throw new TransactionAbortedError(transaction.id, reason, { cause: rootCause });
     }
   }
 

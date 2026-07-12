@@ -98,4 +98,22 @@ export interface TransactionInfo {
   readonly readOnly: boolean;
   /** Live participant set, keyed by a stable per-resource key. */
   readonly participants: Map<string, EnlistedParticipant>;
+  /**
+   * Count of calls forked off this transaction (via {@link forkTransaction})
+   * that have not yet been matched by a completion, mirroring Orleans
+   * `TransactionInfo.PendingCalls`. The root boundary must see this at zero
+   * before it may resolve (commit) — see `TransactionAgent.resolve` and
+   * `TransactionOrphanCallError` (`@tsva/core/errors`).
+   */
+  pendingCalls: number;
+}
+
+/**
+ * Detach a call from the transaction's own completion without awaiting it
+ * (Orleans `TransactionInfo.Fork`): increments {@link TransactionInfo.pendingCalls}
+ * so the root boundary can detect, at resolve time, that an orphaned call was
+ * left outstanding and abort rather than commit unsafely.
+ */
+export function forkTransaction(info: TransactionInfo): void {
+  info.pendingCalls += 1;
 }

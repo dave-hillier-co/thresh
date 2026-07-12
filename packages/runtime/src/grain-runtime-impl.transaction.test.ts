@@ -26,6 +26,7 @@ const transaction = (id: string): TransactionInfo => ({
   timeStamp: 0,
   readOnly: false,
   participants: new Map(),
+  pendingCalls: 0,
 });
 
 describe("GrainRuntime transaction introspection", () => {
