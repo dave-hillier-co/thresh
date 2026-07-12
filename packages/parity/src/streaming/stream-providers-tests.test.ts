@@ -10,21 +10,49 @@
 // exception-type hierarchy to assert against, so there is nothing to port
 // the specific typed-exception assertion to.
 //
-// `ServiceId_ProviderRuntime` and `ServiceId_SiloRestart` depend on Orleans'
-// `ServiceId` — a stable cluster identifier configured on `TestClusterBuilder`
-// and read back via `Client.GetTestHooks(siloHandle).GetServiceId()`, verified
-// to survive a full silo restart. This framework has no `ServiceId` concept
-// anywhere (no equivalent config option, no test-hooks surface to read it
-// back from a running silo).
-import { it } from "vitest";
+// `ServiceId_ProviderRuntime` and `ServiceId_SiloRestart` live in this file
+// upstream but don't actually exercise streaming: they only assert that a
+// configured `ServiceId` is readable from a running silo and stable across a
+// full silo restart. Ported against `TestCluster`'s `serviceId` option and
+// `getServiceId()` accessor, with no stream provider configured.
+import { expect } from "vitest";
+import { TestCluster } from "@tsva/testing/test-cluster";
 import { orleansTest } from "@tsva/testing/orleans-test";
 
 const NS = "UnitTests.Streaming.StreamProvidersTests_ProviderConfigNotLoaded";
 
 orleansTest.gap("GAP-STREAM-PROVIDER-CONFIG", `${NS}.ProvidersTests_ConfigNotLoaded`);
-orleansTest.gap("GAP-SERVICE-ID", `${NS}.ServiceId_ProviderRuntime`);
-orleansTest.gap("GAP-SERVICE-ID", `${NS}.ServiceId_SiloRestart`);
 
-// vitest requires at least one runtime test per file; all upstream Facts are
-// gaps above, so this placeholder keeps the file a valid suite.
-it.skip("(all tests in this file are orleansTest.gap — see above)", () => undefined);
+orleansTest("UnitTests.Streaming.StreamProvidersTests_ProviderConfigNotLoaded.ServiceId_ProviderRuntime", async () => {
+  const configServiceId = "test-service-id";
+  const cluster = await TestCluster.start({ serviceId: configServiceId, initialSilos: 1 });
+  try {
+    const siloHandle = cluster.silos[0]!;
+    const serviceId = cluster.getServiceId(siloHandle);
+    expect(serviceId).toBe(configServiceId); // "ServiceId active in silo"
+  } finally {
+    await cluster.dispose();
+  }
+});
+
+orleansTest("UnitTests.Streaming.StreamProvidersTests_ProviderConfigNotLoaded.ServiceId_SiloRestart", async () => {
+  const configServiceId = "test-service-id";
+  const cluster = await TestCluster.start({ serviceId: configServiceId, initialSilos: 1 });
+  try {
+    expect(cluster.serviceId).toBe(configServiceId); // "ServiceId in test config"
+
+    for (const silo of [...cluster.silos]) {
+      await cluster.restartSilo(silo);
+    }
+
+    const activeSilos = cluster.silos;
+    expect(activeSilos.length).toBeGreaterThan(0);
+
+    for (const siloHandle of activeSilos) {
+      const serviceId = cluster.getServiceId(siloHandle);
+      expect(serviceId).toBe(configServiceId); // "ServiceId active in silo"
+    }
+  } finally {
+    await cluster.dispose();
+  }
+});

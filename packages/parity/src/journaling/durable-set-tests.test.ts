@@ -71,15 +71,31 @@ describe("Orleans.Journaling.Tests.DurableSetTests", () => {
     expect(await grain2.setToArray()).toEqual(["one", "two", "three"]);
   });
 
-  // GAP: upstream relies on record-class structural equality (`record class
-  // TestPerson`, whose auto-generated Equals compares by value) so a
-  // structurally-equal-but-distinct instance is rejected as a duplicate.
-  // DurableSetImpl is documented as scalar-only (string/number/boolean) and
-  // its backing `Set<T>` compares objects by reference, so two distinct
-  // TestPerson-shaped objects are never recognised as duplicates.
-  orleansTest.gap(
-    "GAP-DURABLE-COLLECTION-API",
+  orleansTest(
     "Orleans.Journaling.Tests.DurableSetTests.DurableSet_ComplexValues_Test",
+    async () => {
+      const grain = cluster.getGrain(IDurableCollectionsGrain, freshKey());
+
+      const person1 = { Id: 1, Name: "John", Age: 30 };
+      const person2 = { Id: 2, Name: "Jane", Age: 25 };
+      // Same field values as person1, but a distinct instance: upstream's
+      // `record class TestPerson` has value-based Equals, so this is a
+      // duplicate of person1.
+      const person3 = { Id: 1, Name: "John", Age: 30 };
+
+      const added1 = await grain.setAdd(person1);
+      const added2 = await grain.setAdd(person2);
+      const added3 = await grain.setAdd(person3);
+
+      expect(added1).toBe(true);
+      expect(added2).toBe(true);
+      expect(added3).toBe(false);
+      expect(await grain.setSize()).toBe(2);
+
+      const all = await grain.setToArray();
+      expect(all).toEqual(expect.arrayContaining([person1, person2]));
+      expect(all).toHaveLength(2);
+    },
   );
 
   orleansTest("Orleans.Journaling.Tests.DurableSetTests.DurableSet_Clear_Test", async () => {

@@ -8,7 +8,7 @@
 // tag. Only the handful of tests that exercise a genuinely non-generic grain
 // (GrainWithNoProperties, GrainWithListFields, ValueTypeTestGrain) or a
 // different, already-tagged gap are ported or otherwise accounted for below.
-import { afterAll, beforeAll, describe, expect } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { orleansTest } from "@tsva/testing/orleans-test";
 import { TestCluster } from "@tsva/testing/test-cluster";
 import {
@@ -41,64 +41,64 @@ describe("DefaultCluster.Tests.General.GenericGrainTests", () => {
     await cluster.dispose();
   });
 
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.GenericGrainTests.GenericGrainTests_ConcreteGrainWithGenericInterfaceGetGrain",
   );
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.GenericGrainTests.GenericGrainTests_ConcreteGrainWithGenericInterfaceMultiplicity",
   );
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.GenericGrainTests.GenericGrainTests_SimpleGenericGrainGetGrain",
   );
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.GenericGrainTests.GenericGrainTests_SimpleGenericGrainGetGrain_ArrayTypeParameter",
   );
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.GenericGrainTests.GenericGrainTests_GenericGrainInheritingArray",
   );
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.GenericGrainTests.GenericGrainTests_GenericInterfaceWithGenericParametersGetGrain",
   );
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.GenericGrainTests.GenericGrainTests_SimpleGenericGrainMultiplicity",
   );
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.GenericGrainTests.GenericGrainTests_PreferConcreteGrainImplementationOfGenericInterface",
   );
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.GenericGrainTests.GenericGrainTests_PreferConcreteGrainImplementationOfGenericInterfaceMultiplicity",
   );
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.GenericGrainTests.GenericGrainTests_ConcreteGrainWithMultipleGenericInterfacesGetGrain",
   );
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.GenericGrainTests.GenericGrainTests_ConcreteGrainWithMultipleGenericInterfacesMultiplicity1",
   );
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.GenericGrainTests.GenericGrainTests_ConcreteGrainWithMultipleGenericInterfacesMultiplicity2",
   );
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.GenericGrainTests.GenericGrainTests_UseGenericFactoryInsideGrain",
   );
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.GenericGrainTests.Generic_SimpleGrain_GetGrain",
   );
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.GenericGrainTests.Generic_SimpleGrainControlFlow",
   );
 
@@ -107,28 +107,28 @@ describe("DefaultCluster.Tests.General.GenericGrainTests", () => {
     "DefaultCluster.Tests.General.GenericGrainTests.Generic_SimpleGrainControlFlow_Blocking",
   );
 
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.GenericGrainTests.Generic_SimpleGrainDataFlow",
   );
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.GenericGrainTests.Generic_SimpleGrain2_GetGrain",
   );
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.GenericGrainTests.Generic_SimpleGrainGenericParameterWithMultipleArguments_GetGrain",
   );
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.GenericGrainTests.Generic_SimpleGrainControlFlow2_GetAB",
   );
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.GenericGrainTests.Generic_SimpleGrainControlFlow3",
   );
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.GenericGrainTests.Generic_BasicGrainControlFlow",
   );
 
@@ -147,12 +147,12 @@ describe("DefaultCluster.Tests.General.GenericGrainTests", () => {
     expect((a === r1[0] && b === r1[1]) || (b === r1[0] && a === r1[1])).toBe(true);
   });
 
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.GenericGrainTests.Generic_GrainWithListFields",
   );
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.GenericGrainTests.Generic_GrainWithNoProperties_ControlFlow",
   );
 
@@ -170,48 +170,48 @@ describe("DefaultCluster.Tests.General.GenericGrainTests", () => {
     },
   );
 
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.GenericGrainTests.Generic_ReaderWriterGrain1",
   );
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.GenericGrainTests.Generic_ReaderWriterGrain2",
   );
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.GenericGrainTests.Generic_ReaderWriterGrain3",
   );
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.GenericGrainTests.Generic_Non_Primitive_Type_Argument",
   );
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.GenericGrainTests.Generic_Echo_Chain_1",
   );
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.GenericGrainTests.Generic_Echo_Chain_2",
   );
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.GenericGrainTests.Generic_Echo_Chain_3",
   );
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.GenericGrainTests.Generic_Echo_Chain_4",
   );
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.GenericGrainTests.Generic_Echo_Chain_5",
   );
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.GenericGrainTests.Generic_Echo_Chain_6",
   );
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.GenericGrainTests.Generic_1Argument_GenericCallOnly",
   );
 
@@ -220,38 +220,38 @@ describe("DefaultCluster.Tests.General.GenericGrainTests", () => {
     "DefaultCluster.Tests.General.GenericGrainTests.Generic_1Argument_NonGenericCallFirst",
   );
 
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.GenericGrainTests.Generic_1Argument_GenericCallFirst",
   );
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.GenericGrainTests.DifferentTypeArgsProduceIndependentActivations",
   );
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.GenericGrainTests.Generic_PingSelf",
   );
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.GenericGrainTests.Generic_PingOther",
   );
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.GenericGrainTests.Generic_PingSelfThroughOther",
   );
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.GenericGrainTests.Generic_ScheduleDelayedPingAndDeactivate",
   );
 
-  orleansTest.gap(
-    "GAP-COMPOUND-KEY",
+  orleansTest.excluded(
+    "SerializationTests_Generic_CircularReferenceTest exercises a generic grain (ISimpleGenericGrain2<GrainWithCircularReferences,string>) with a compound key (guid primary + string extension); this framework has neither open generic grain interfaces (GAP-GENERIC-GRAINS) nor a compound-key grain kind",
     "DefaultCluster.Tests.General.GenericGrainTests.SerializationTests_Generic_CircularReferenceTest",
   );
 
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.GenericGrainTests.Generic_GrainWithTypeConstraints",
   );
 
@@ -270,24 +270,24 @@ describe("DefaultCluster.Tests.General.GenericGrainTests", () => {
     },
   );
 
-  orleansTest.gap(
-    "GAP-GRAIN-REF-CAST",
+  orleansTest.excluded(
+    "requires AsReference<T>() runtime re-typing of a grain reference to a differently-concretized generic interface; this framework has no such re-typing mechanism, and it is bound to the same generic-grains erasure incompatibility (GAP-GENERIC-GRAINS)",
     "DefaultCluster.Tests.General.GenericGrainTests.Generic_CastToGenericInterfaceAfterActivation",
   );
-  orleansTest.gap(
-    "GAP-GRAIN-REF-CAST",
+  orleansTest.excluded(
+    "requires AsReference<T>() runtime re-typing of a grain reference to a differently-concretized generic interface; this framework has no such re-typing mechanism, and it is bound to the same generic-grains erasure incompatibility (GAP-GENERIC-GRAINS)",
     "DefaultCluster.Tests.General.GenericGrainTests.Generic_CastToDifferentlyConcretizedGenericInterfaceBeforeActivation",
   );
-  orleansTest.gap(
-    "GAP-GRAIN-REF-CAST",
+  orleansTest.excluded(
+    "requires AsReference<T>() runtime re-typing of a grain reference to a differently-concretized generic interface; this framework has no such re-typing mechanism, and it is bound to the same generic-grains erasure incompatibility (GAP-GENERIC-GRAINS)",
     "DefaultCluster.Tests.General.GenericGrainTests.Generic_CastToDifferentlyConcretizedInterfaceBeforeActivation",
   );
-  orleansTest.gap(
-    "GAP-GRAIN-REF-CAST",
+  orleansTest.excluded(
+    "requires AsReference<T>() runtime re-typing of a grain reference to a differently-concretized generic interface; this framework has no such re-typing mechanism, and it is bound to the same generic-grains erasure incompatibility (GAP-GENERIC-GRAINS)",
     "DefaultCluster.Tests.General.GenericGrainTests.Generic_CastGenericInterfaceToNonGenericInterfaceBeforeActivation",
   );
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.GenericGrainTests.GenericGrainStateParameterMismatchTest",
   );
 });
@@ -303,52 +303,52 @@ describe("DefaultCluster.Tests.General.Generic.EdgeCases.GenericEdgeCaseTests", 
     skippedUpstreamReason,
     "DefaultCluster.Tests.General.Generic.EdgeCases.GenericEdgeCaseTests.Generic_GenericGrainCanReuseOwnGenArgRepeatedly",
   );
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.Generic.EdgeCases.GenericEdgeCaseTests.Generic_PartiallySpecifyingGenericInterfaceIsCastable",
   );
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.Generic.EdgeCases.GenericEdgeCaseTests.Generic_PartiallySpecifyingGenericInterfaceIsCastable_Activating",
   );
   orleansTest.excluded(
     skippedUpstreamReason,
     "DefaultCluster.Tests.General.Generic.EdgeCases.GenericEdgeCaseTests.Generic_RepeatedRearrangedGenArgsResolved",
   );
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.Generic.EdgeCases.GenericEdgeCaseTests.Generic_RepeatedGenArgsWorkAmongstInterfacesInTypeResolution",
   );
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.Generic.EdgeCases.GenericEdgeCaseTests.Generic_RepeatedGenArgsWorkAmongstInterfacesInCasting",
   );
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.Generic.EdgeCases.GenericEdgeCaseTests.Generic_RepeatedGenArgsWorkAmongstInterfacesInCasting_Activating",
   );
   orleansTest.excluded(
     skippedUpstreamReason,
     "DefaultCluster.Tests.General.Generic.EdgeCases.GenericEdgeCaseTests.Generic_RearrangedGenArgsOfCorrectArityAreResolved",
   );
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.Generic.EdgeCases.GenericEdgeCaseTests.Generic_RearrangedGenArgsOfCorrectNumberAreCastable",
   );
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.Generic.EdgeCases.GenericEdgeCaseTests.Generic_RearrangedGenArgsOfCorrectNumberAreCastable_Activating",
   );
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.Generic.EdgeCases.GenericEdgeCaseTests.CastingBetweenFullySpecifiedGenericInterfaces",
   );
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.Generic.EdgeCases.GenericEdgeCaseTests.Generic_CanCastToFullySpecifiedInterfaceUnrelatedToConcreteGenArgs",
   );
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.General.Generic.EdgeCases.GenericEdgeCaseTests.Generic_CanCastToFullySpecifiedInterfaceUnrelatedToConcreteGenArgs_Activating",
   );
   orleansTest.excluded(
@@ -367,4 +367,8 @@ describe("DefaultCluster.Tests.General.Generic.EdgeCases.GenericEdgeCaseTests", 
     skippedUpstreamReason,
     "DefaultCluster.Tests.General.Generic.EdgeCases.GenericEdgeCaseTests.Generic_CanCastBetweenInterfacesWithFurtherSpecializedGenArgs_Activating",
   );
+
+  // vitest requires at least one runtime test per suite; every upstream Fact in
+  // this describe block is orleansTest.excluded above.
+  it.skip("(all tests in this suite are orleansTest.excluded — see above)", () => undefined);
 });

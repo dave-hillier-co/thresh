@@ -142,14 +142,14 @@ describe("DefaultCluster.Tests.General.MigrationTests", () => {
 
   // Uses `RequestContext.Set(IPlacementDirector.PlacementHintKey, targetHost)`
   // from the *client* (test method) to steer placement, then migrates via the
-  // cast-to-extension `MigrateOnIdle()` with no explicit target — two distinct
-  // gaps stacked: client-side ambient RequestContext (GAP-CLIENT-REQUEST-CONTEXT,
-  // an escape hatch this pass intentionally left alone — see
-  // request-context-test.test.ts) and RequestContext-driven placement hints,
-  // which this framework has no equivalent for (`migrateOnIdle` instead takes
-  // an explicit `targetSilo`, already exercised by `DirectedGrainMigrationTest`
-  // above). Un-gapping this needs both, not just the grain-facing
-  // `requestContext` exposure this pass added.
+  // cast-to-extension `MigrateOnIdle()` with no explicit target. The
+  // client-side ambient `RequestContext` this needs now exists (`@tsva/core`'s
+  // `RequestContext`, see request-context-test.test.ts) — what remains is
+  // RequestContext-DRIVEN PLACEMENT HINTS, which this framework has no
+  // equivalent for (`migrateOnIdle` instead takes an explicit `targetSilo`,
+  // already exercised by `DirectedGrainMigrationTest` above). That is a
+  // separate, standalone feature (a placement director reading a well-known
+  // `RequestContext` key), not attempted here.
   orleansTest.gap(
     "GAP-REQUEST-CONTEXT",
     "DefaultCluster.Tests.General.MigrationTests.MultiGrainDirectedMigrationTest",

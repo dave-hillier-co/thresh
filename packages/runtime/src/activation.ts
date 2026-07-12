@@ -43,6 +43,7 @@ import {
   type IncomingGrainCallFilter,
 } from "@tsva/core/grain-call-filter";
 import type { InvocationRequest } from "@tsva/core/request";
+import { requestContextStore, runWithRequestContext } from "@tsva/core/request-context";
 import {
   implicitStreamObserver,
   SequenceToken,
@@ -229,16 +230,20 @@ export class ActivationData implements GrainContext {
           if (this.dehydrated) {
             throw new RejectionError(`activation migrated: ${this.id.toString()}`, "noActivation");
           }
-          return invocationContext.run(
-            {
-              senderId: req.sender,
-              reentrancyId: req.reentrancyId,
-              transaction: req.transaction,
-              // A fresh, mutable copy so `requestContext.set` during the turn does
-              // not mutate the caller's bag but does flow to downstream calls.
-              headers: req.headers !== undefined ? { ...req.headers } : {},
-            },
-            () => this.callMethod(req),
+          // A fresh, mutable copy of the incoming headers so `requestContext.set`
+          // during the turn does not mutate the caller's bag but does flow to
+          // downstream calls. Scoped via `runWithRequestContext` (the SAME
+          // ambient store a non-grain/client caller uses), nested inside
+          // `invocationContext.run` so both are in scope for the turn.
+          return runWithRequestContext(req.headers !== undefined ? { ...req.headers } : {}, () =>
+            invocationContext.run(
+              {
+                senderId: req.sender,
+                reentrancyId: req.reentrancyId,
+                transaction: req.transaction,
+              },
+              () => this.callMethod(req),
+            ),
           );
         },
       })
@@ -532,7 +537,7 @@ export class ActivationData implements GrainContext {
       methodName: req.method,
       args: [...req.args],
       result: undefined,
-      headers: invocationContext.getStore()?.headers ?? {},
+      headers: requestContextStore() ?? {},
       grain: this.instance,
       invoke: () => Promise.resolve(),
     };
@@ -627,7 +632,7 @@ export class ActivationData implements GrainContext {
       methodName: req.method,
       args: [...req.args],
       result: undefined,
-      headers: invocationContext.getStore()?.headers ?? {},
+      headers: requestContextStore() ?? {},
       // Orleans parity: `IGrainCallContext.Grain` is always the grain instance
       // (`GrainMethodInvoker.Grain => grainContext.GrainInstance`), never the
       // extension component itself, even when the call targets an extension

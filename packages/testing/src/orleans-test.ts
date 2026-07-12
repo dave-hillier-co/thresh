@@ -14,27 +14,17 @@ export type GapTag =
   | "GAP-MGMT-GRAIN" // no management grain / silo-control system targets
   | "GAP-SERIALIZER-POLYMORPHISM" // serializer lacks polymorphism/cycles
   | "GAP-STREAM-FAILURE-HANDLER" // streams lack IStreamFailureHandler
-  | "GAP-GENERIC-GRAINS" // open generic grain interfaces are unrepresentable
   | "GAP-ACTIVATION-REPARTITIONING" // no activation-repartitioning subsystem (communication-graph driven)
   | "GAP-BROADCAST-CHANNEL-CLIENT" // no client-side broadcast-channel writer/diagnostics/regex namespaces
-  | "GAP-CALL-FILTER-CLIENT-LAYER" // no distinct client-issued vs grain-issued outgoing-filter layer
   | "GAP-CHANNEL-NAMESPACE-PREDICATE" // no IChannelNamespacePredicate provider abstraction
-  | "GAP-CLIENT-REQUEST-CONTEXT" // no client-side ambient RequestContext outside a grain turn
   | "GAP-CLIENT-SILO-SEPARATION" // no separate client process distinct from a silo in the harness
-  | "GAP-COMPOUND-KEY" // no compound key kind (guid/integer primary + string extension)
-  | "GAP-DURABLE-COLLECTION-API" // DurableQueue/Set/List miss parts of Orleans' API surface
   | "GAP-EVENT-SOURCING" // no JournaledGrain<TState,TEvent>/log-consistency-provider mechanism
   | "GAP-GRAIN-DIRECTORY-API" // internal directory not exposed via a pluggable IGrainDirectory API
-  | "GAP-GRAIN-REF-CAST" // no AsReference<T>() runtime re-typing of grain references
   | "GAP-GRAIN-SERVICE" // no per-silo grain-service registration/lifecycle mechanism
-  | "GAP-JOB-SHARD-MANAGER-API" // no explicit JobShardManager/shard-object API (implicit time-bucketing)
   | "GAP-LOAD-SHEDDING" // no overload detector / load shedding / CPU-aware placement scoring
   | "GAP-PLACEMENT-FILTER-DIRECTORS" // no DI-based custom placement-filter directors
-  | "GAP-PLACEMENT-INTROSPECTION" // a grain cannot learn its own hosting silo address
   | "GAP-REBALANCER-CONTROL" // no rebalancer suspend/resume/report-listener control API
-  | "GAP-REQUEST-CONTEXT" // ambient RequestContext not exposed on @tsva/core's public surface
-  | "GAP-SERVICE-ID" // no ServiceId concept surviving silo restarts
-  | "GAP-STORAGE-FACET" // no third-party facet extensibility (named DI-resolved storage facets)
+  | "GAP-REQUEST-CONTEXT" // no RequestContext-driven placement hints (IPlacementDirector.PlacementHintKey)
   | "GAP-STREAM-BATCHING" // no OnNextBatchAsync / batch-send stream API
   | "GAP-STREAM-CACHE-DIAGNOSTICS" // no pulling-agent cache/eviction model or diagnostic observer
   | "GAP-STREAM-FILTER" // no IStreamFilter server-side delivery filtering
@@ -49,10 +39,7 @@ export type GapTag =
   | "GAP-TRANSACTION-CONTEXT-INTROSPECTION" // no public API to read the ambient transaction id
   | "GAP-TRANSACTION-EXCEPTION-TYPES" // only a generic TransactionAbortedError, no typed hierarchy
   | "GAP-TRANSACTION-EXCLUSIVE-LOCK" // no shared-vs-exclusive lock distinction on transactional state
-  | "GAP-TRANSACTION-OVERLOAD-DETECTOR" // no transaction-rate load shedding
-  // Confirmed framework defects exposed by ported tests: fix the bug, then
-  // un-gap the test. Each has a todo.md entry under "Bugs found by the parity suite".
-  | "GAP-BUG-LOCAL-CALL-UNDEFINED"; // local calls return undefined where remote calls yield null
+  | "GAP-TRANSACTION-OVERLOAD-DETECTOR"; // no transaction-rate load shedding
 
 type TestBody = () => void | Promise<void>;
 

@@ -61,13 +61,13 @@ describe("DefaultCluster.Tests.ProviderTests", () => {
     expect(await extension.checkExtension_2()).toBe("23");
   });
 
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.ProviderTests.Providers_ActivateNonGenericExtensionOfGenericInterface",
   );
 
-  orleansTest.gap(
-    "GAP-GENERIC-GRAINS",
+  orleansTest.excluded(
+    "open generic grain interfaces (e.g. IGenericGrain<T,U>/ISimpleGenericGrain<T>) are unrepresentable in this framework: TypeScript erases generics at runtime, and the grain-interface registry keys interfaces by a fixed string name/id with no notion of a type parameter to instantiate",
     "DefaultCluster.Tests.ProviderTests.Providers_ReferenceNonGenericExtensionOfGenericInterface",
   );
 

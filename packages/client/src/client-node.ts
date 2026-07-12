@@ -24,6 +24,7 @@ import {
 import type { GrainType } from "@tsva/core/grain-type";
 import type { GrainKeyFor } from "@tsva/core/key-kinds";
 import type { InvocationRequest } from "@tsva/core/request";
+import { requestContextStore, runWithRequestContext } from "@tsva/core/request-context";
 import type { SiloAddress } from "@tsva/core/silo-address";
 import { ConnectionManager } from "@tsva/messaging/connection-manager";
 import { CorrelationTable } from "@tsva/messaging/correlation-table";
@@ -395,41 +396,43 @@ export class ClientNode implements Dispatcher {
       // (Orleans parity: `Observer_GrainCallFilter_Incoming_Order_Test`
       // builds up its RequestContext value through the filter chain the same
       // way the grain-side `GrainCallFilter_Incoming_Order_Test` does).
-      const result = await invocationContext.run(
-        {
-          senderId: message.sendingGrain,
-          reentrancyId: message.requestContext?.reentrancyId ?? "",
-          headers:
-            message.requestContext?.headers !== undefined
-              ? { ...message.requestContext.headers }
-              : {},
-        },
-        async () => {
-          // The hosted object's own filter (if it declares one), like a
-          // grain's, runs innermost — after this client's own incoming
-          // filters, just before the method (Orleans parity).
-          const own = grainIncomingFilter(entry.object);
-          const filters =
-            own === undefined ? this.incomingCallFilters : [...this.incomingCallFilters, own];
-          if (filters.length === 0) {
-            return await method.apply(entry.object, args);
-          }
-          const context: IncomingGrainCallContext = {
-            target: message.targetGrain,
-            source: message.sendingGrain,
-            interfaceId: message.interfaceId,
-            interfaceName: getGrainInterface(message.interfaceId)?.name ?? "",
-            methodName: message.method,
-            args: [...args],
-            result: undefined,
-            headers: invocationContext.getStore()?.headers ?? {},
-            grain: entry.object,
-            invoke: () => Promise.resolve(),
-          };
-          return await runCallFilters(filters, context, () =>
-            Promise.resolve(method.apply(entry.object, context.args)),
-          );
-        },
+      const result = await runWithRequestContext(
+        message.requestContext?.headers !== undefined
+          ? { ...message.requestContext.headers }
+          : {},
+        () =>
+          invocationContext.run(
+            {
+              senderId: message.sendingGrain,
+              reentrancyId: message.requestContext?.reentrancyId ?? "",
+            },
+            async () => {
+              // The hosted object's own filter (if it declares one), like a
+              // grain's, runs innermost — after this client's own incoming
+              // filters, just before the method (Orleans parity).
+              const own = grainIncomingFilter(entry.object);
+              const filters =
+                own === undefined ? this.incomingCallFilters : [...this.incomingCallFilters, own];
+              if (filters.length === 0) {
+                return await method.apply(entry.object, args);
+              }
+              const context: IncomingGrainCallContext = {
+                target: message.targetGrain,
+                source: message.sendingGrain,
+                interfaceId: message.interfaceId,
+                interfaceName: getGrainInterface(message.interfaceId)?.name ?? "",
+                methodName: message.method,
+                args: [...args],
+                result: undefined,
+                headers: requestContextStore() ?? {},
+                grain: entry.object,
+                invoke: () => Promise.resolve(),
+              };
+              return await runCallFilters(filters, context, () =>
+                Promise.resolve(method.apply(entry.object, context.args)),
+              );
+            },
+          ),
       );
       if (message.direction === "oneWay") return;
       await this.replyToCaller(

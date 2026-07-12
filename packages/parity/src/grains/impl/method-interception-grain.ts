@@ -164,6 +164,13 @@ export class OutgoingMethodInterceptionGrain
     }
     return "Thanks for nothing";
   }
+
+  async echoViaOtherGrain(
+    otherGrain: IMethodInterceptionGrain,
+    message: string,
+  ): Promise<Record<string, unknown>> {
+    return { result: await otherGrain.echo(message) };
+  }
 }
 
 /**

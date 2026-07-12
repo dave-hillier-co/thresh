@@ -78,7 +78,7 @@ describe("DefaultCluster.Tests.General.StatelessWorkerTests", () => {
         const task = grain.goFast("go-fast");
         await mayInterleaveCallStarted("go-fast");
         releaseMayInterleaveCalls();
-        await expect(task).resolves.toBeUndefined();
+        await expect(task).resolves.toBeNull();
       },
     );
 
