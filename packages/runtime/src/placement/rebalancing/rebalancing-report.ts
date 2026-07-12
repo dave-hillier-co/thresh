@@ -25,4 +25,12 @@ export interface RebalancingReport {
   dispersed: ReadonlyMap<string, number>;
   /** Per-silo count of activations received in the latest cycle, keyed by ring key. */
   acquired: ReadonlyMap<string, number>;
+  /**
+   * How much longer the worker remains suspended, in ms (Orleans
+   * `SuspensionDuration`). `undefined` when `status` is `"executing"`.
+   * An indefinite suspension (no duration given to `suspend`) reports
+   * `Number.POSITIVE_INFINITY` rather than `undefined` — it is still a
+   * suspension, just one with no scheduled end.
+   */
+  suspensionDurationMs: number | undefined;
 }

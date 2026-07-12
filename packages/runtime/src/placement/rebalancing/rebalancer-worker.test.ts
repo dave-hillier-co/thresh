@@ -247,6 +247,107 @@ describe("ActivationRebalancerWorker — elected timer-driven singleton (slice 2
     }
   });
 
+  it("suspends indefinitely by default, reporting a (very large) suspension duration", async () => {
+    const silos = [silo(0), silo(1)];
+    const time = new FakeTimeProvider();
+    const worker = new ActivationRebalancerWorker({
+      local: silo(0),
+      membership: membershipOf(silo(0), silos),
+      time,
+      runCycle: recordingRunner([]).run,
+      options: opts,
+      sessionCyclePeriodMs: period,
+    });
+    worker.start();
+    try {
+      expect(worker.report().suspensionDurationMs).toBeUndefined();
+      worker.suspend();
+      const report = worker.report();
+      expect(report.status).toBe("suspended");
+      expect(report.suspensionDurationMs).not.toBeUndefined();
+      expect(report.suspensionDurationMs).toBe(Number.POSITIVE_INFINITY);
+    } finally {
+      worker.stop();
+    }
+  });
+
+  it("suspends for a duration and auto-resumes off the shared clock", async () => {
+    const silos = [silo(0), silo(1)];
+    const time = new FakeTimeProvider();
+    const runner = recordingRunner([
+      {
+        nextState: { rebalancingCycle: 1, stagnantCycles: 0, previousEntropy: 0 },
+        imbalance: 0.3,
+        moved: 1,
+      },
+    ]);
+    const worker = new ActivationRebalancerWorker({
+      local: silo(0),
+      membership: membershipOf(silo(0), silos),
+      time,
+      runCycle: runner.run,
+      options: opts,
+      sessionCyclePeriodMs: period,
+    });
+    worker.start();
+    try {
+      worker.suspend(500);
+      expect(worker.report().status).toBe("suspended");
+      expect(worker.report().suspensionDurationMs).toBeLessThanOrEqual(500);
+      expect(worker.report().suspensionDurationMs).toBeGreaterThan(0);
+
+      // The 500ms suspension auto-resumes (at t=500) before the next scheduled
+      // tick (at t=1000, the full period), so that tick runs normally.
+      time.advance(period);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(worker.report().status).toBe("executing");
+      expect(worker.report().suspensionDurationMs).toBeUndefined();
+      expect(runner.calls).toBe(1);
+    } finally {
+      worker.stop();
+    }
+  });
+
+  it("notifies subscribed report listeners after each cycle, and stops after unsubscribe", async () => {
+    const silos = [silo(0), silo(1)];
+    const time = new FakeTimeProvider();
+    const runner = recordingRunner([
+      {
+        nextState: { rebalancingCycle: 1, stagnantCycles: 0, previousEntropy: 0 },
+        imbalance: 0.3,
+        moved: 1,
+      },
+    ]);
+    const worker = new ActivationRebalancerWorker({
+      local: silo(0),
+      membership: membershipOf(silo(0), silos),
+      time,
+      runCycle: runner.run,
+      options: opts,
+      sessionCyclePeriodMs: period,
+    });
+    const reports: Array<{ status: string }> = [];
+    const listener = (report: { status: string }) => reports.push(report);
+    worker.subscribe(listener);
+
+    worker.start();
+    try {
+      time.advance(period);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(reports.length).toBeGreaterThan(0);
+      expect(reports.at(-1)!.status).toBe("executing");
+
+      worker.unsubscribe(listener);
+      const before = reports.length;
+      worker.suspend();
+      expect(reports.length).toBe(before); // unsubscribed: no further notifications
+    } finally {
+      worker.stop();
+    }
+  });
+
   it("tracks a report with host, imbalance and per-silo dispersed/acquired", async () => {
     const silos = [silo(0), silo(1)];
     const time = new FakeTimeProvider();

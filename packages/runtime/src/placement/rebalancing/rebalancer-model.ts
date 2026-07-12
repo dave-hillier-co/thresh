@@ -36,15 +36,28 @@ export interface RebalancerOptions {
   activationMigrationCountLimit: number;
 }
 
+/** Named defaults, mirroring `ActivationRebalancerOptions`' `DEFAULT_*`/`MAX_*` static fields. */
+export const DEFAULT_MAX_STAGNANT_CYCLES = 3;
+export const DEFAULT_ENTROPY_QUANTUM = 0.0001;
+export const DEFAULT_ALLOWED_ENTROPY_DEVIATION = 0.0001;
+export const DEFAULT_SCALE_ALLOWED_ENTROPY_DEVIATION = true;
+/** The cap `ComputeAllowedEntropyDeviation` scales up to (Orleans `MAX_SCALED_ENTROPY_DEVIATION`). */
+export const MAX_SCALED_ENTROPY_DEVIATION = 0.1;
+export const DEFAULT_SCALED_ENTROPY_DEVIATION_ACTIVATION_THRESHOLD = 10_000;
+export const DEFAULT_CYCLE_NUMBER_WEIGHT = 0.1;
+export const DEFAULT_SILO_NUMBER_WEIGHT = 0.1;
+/** Practically "no limit" — mirrors Orleans' `int.MaxValue` default within this codebase's number range. */
+export const DEFAULT_ACTIVATION_MIGRATION_COUNT_LIMIT = Number.MAX_SAFE_INTEGER;
+
 export const DEFAULT_REBALANCER_OPTIONS: RebalancerOptions = {
-  maxStagnantCycles: 3,
-  entropyQuantum: 0.0001,
-  allowedEntropyDeviation: 0.0001,
-  scaleAllowedEntropyDeviation: true,
-  scaledEntropyDeviationActivationThreshold: 10_000,
-  cycleNumberWeight: 0.1,
-  siloNumberWeight: 0.1,
-  activationMigrationCountLimit: Number.MAX_SAFE_INTEGER,
+  maxStagnantCycles: DEFAULT_MAX_STAGNANT_CYCLES,
+  entropyQuantum: DEFAULT_ENTROPY_QUANTUM,
+  allowedEntropyDeviation: DEFAULT_ALLOWED_ENTROPY_DEVIATION,
+  scaleAllowedEntropyDeviation: DEFAULT_SCALE_ALLOWED_ENTROPY_DEVIATION,
+  scaledEntropyDeviationActivationThreshold: DEFAULT_SCALED_ENTROPY_DEVIATION_ACTIVATION_THRESHOLD,
+  cycleNumberWeight: DEFAULT_CYCLE_NUMBER_WEIGHT,
+  siloNumberWeight: DEFAULT_SILO_NUMBER_WEIGHT,
+  activationMigrationCountLimit: DEFAULT_ACTIVATION_MIGRATION_COUNT_LIMIT,
 };
 
 /** The rebalancer's per-session state, carried between cycles. */
@@ -160,7 +173,10 @@ function allowedDeviation(totalActivations: number, options: RebalancerOptions):
   const logFactor = Math.trunc(
     Math.log10(totalActivations / options.scaledEntropyDeviationActivationThreshold),
   );
-  return Math.min(options.allowedEntropyDeviation * Math.pow(10, logFactor), 0.1);
+  return Math.min(
+    options.allowedEntropyDeviation * Math.pow(10, logFactor),
+    MAX_SCALED_ENTROPY_DEVIATION,
+  );
 }
 
 /**
