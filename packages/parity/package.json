@@ -22,7 +22,8 @@
     "@tsva/messaging": "workspace:*",
     "@tsva/observability": "workspace:*",
     "@tsva/runtime": "workspace:*",
-    "@tsva/testing": "workspace:*"
+    "@tsva/testing": "workspace:*",
+    "@tsva/transactions": "workspace:*"
   },
   "devDependencies": {
     "vitest": "^4.1.7"

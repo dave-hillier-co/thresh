@@ -327,6 +327,9 @@ importers:
       '@tsva/testing':
         specifier: workspace:*
         version: link:../testing
+      '@tsva/transactions':
+        specifier: workspace:*
+        version: link:../transactions
     devDependencies:
       vitest:
         specifier: ^4.1.7
