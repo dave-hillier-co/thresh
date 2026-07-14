@@ -3,6 +3,7 @@ import { GrainCallError } from "@tsva/core/errors";
 import type { Grain } from "@tsva/core/grain";
 import type { IncomingGrainCallFilter } from "@tsva/core/grain-call-filter";
 import type { BroadcastChannelProvider } from "@tsva/core/broadcast-channel";
+import type { GrainAddress } from "@tsva/core/grain-address";
 import type { GrainId } from "@tsva/core/grain-id";
 import type { GrainMetadata } from "@tsva/core/grain-metadata";
 import type { GrainType } from "@tsva/core/grain-type";
@@ -171,8 +172,9 @@ export class Catalog {
     id: GrainId,
     activationId: string,
     bag: Record<string, unknown>,
+    sourceAddr?: GrainAddress,
   ): Promise<ActivationData> {
-    return this.getOrActivate(id, activationId, bag);
+    return this.getOrActivate(id, activationId, bag, sourceAddr);
   }
 
   /**
@@ -196,18 +198,19 @@ export class Catalog {
     id: GrainId,
     activationId?: string,
     rehydrationBag?: Record<string, unknown>,
+    sourceAddr?: GrainAddress,
   ): Promise<ActivationData> {
     const key = id.toString();
     const existing = this.activations.get(key);
     if (existing !== undefined && existing.state !== "invalid") {
       if (!existing.deactivationRequestedAndIdle) return Promise.resolve(existing);
       return this.finalizeStale(key, existing).then(() => {
-        const created = this.create(id, activationId, rehydrationBag);
+        const created = this.create(id, activationId, rehydrationBag, sourceAddr);
         this.activations.set(key, created);
         return created;
       });
     }
-    const created = this.create(id, activationId, rehydrationBag);
+    const created = this.create(id, activationId, rehydrationBag, sourceAddr);
     this.activations.set(key, created);
     return Promise.resolve(created);
   }
@@ -396,6 +399,7 @@ export class Catalog {
     id: GrainId,
     activationId?: string,
     rehydrationBag?: Record<string, unknown>,
+    sourceAddr?: GrainAddress,
   ): ActivationData {
     const reg = this.options.grainTypes.get(id.type);
     if (reg === undefined) throw new GrainCallError(`no grain type registered: ${id.type}`);
@@ -442,7 +446,7 @@ export class Catalog {
       activation.rehydrationBag = rehydrationBag;
       activation.preActivate = async () => {
         if (activateState !== undefined) await activateState(instance, id, "rehydrate");
-        activation.applyRehydration();
+        await activation.applyRehydration(sourceAddr);
       };
       activation.beginActivate("reactivation");
     } else {
@@ -465,16 +469,17 @@ export class Catalog {
   private async collectOne(activation: ActivationData, ageLimitOverrideMs?: number): Promise<void> {
     if (!activation.isStale(ageLimitOverrideMs)) return;
     if (activation.wantsMigration && this.options.migrate !== undefined) {
-      // Migration was requested before this sweep: dehydrate the grain's
-      // state and hand it off first (so `onDeactivate` — which may clear
-      // state — runs only after the state has been captured), then run the
-      // deactivate hook with the "migrating" reason.
-      const moved = await this.options.migrate(activation);
-      await activation.deactivate(
-        moved
-          ? { code: "migrating", description: "migrated to another silo" }
-          : { code: "idle", description: "idle collection" },
-      );
+      // Faithful to Orleans' `ActivationData.FinishDeactivating`:
+      // `OnDeactivateAsync` runs (and its span starts) BEFORE the dehydrate
+      // span/hand-off, and the "migrating" reason is committed up front —
+      // before the destination is known to have accepted the move, so it
+      // doesn't retroactively change to "idle" if the move ends up failing.
+      await activation.runDeactivateHook({
+        code: "migrating",
+        description: "migrating to another silo",
+      });
+      await this.options.migrate(activation);
+      activation.finalizeDeactivation();
     } else {
       // No migration requested yet: run `onDeactivate` first, since a grain
       // may call `migrateOnIdle()` from within it; honour a migration it

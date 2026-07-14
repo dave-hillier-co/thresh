@@ -6,6 +6,7 @@
 // activation-tracing grains' shape).
 import { defineGrainInterface } from "@tsva/core/grain-interface";
 import type { GrainWithIntegerKey } from "@tsva/core/key-kinds";
+import type { SiloAddress } from "@tsva/core/silo-address";
 
 /** Basic deactivation tracing: a plain `onDeactivate` no-op. */
 export interface IDeactivationTracingTestGrain extends GrainWithIntegerKey {
@@ -45,4 +46,23 @@ export interface IActivationFailureDeactivationGrain extends GrainWithIntegerKey
 export const IActivationFailureDeactivationGrain =
   defineGrainInterface<IActivationFailureDeactivationGrain>(
     "UnitTests.GrainInterfaces.IActivationFailureDeactivationGrain",
+  );
+
+/**
+ * Deactivation tracing with a migration participant, so a migration sweep's
+ * `OnDeactivate` span (with the "migrating" reason) can be asserted alongside
+ * the dehydrate span it precedes. `migrateOnIdle(target?)` mirrors
+ * `IMigrationTestGrain`'s shape (this framework's `GrainRuntime.migrateOnIdle`
+ * takes the target directly, unlike upstream's placement-hint-directed
+ * `Cast<IGrainManagementExtension>().MigrateOnIdle()`).
+ */
+export interface IDeactivationMigrationTracingTestGrain extends GrainWithIntegerKey {
+  setState(state: number): Promise<void>;
+  getState(): Promise<number>;
+  migrateOnIdle(target?: SiloAddress): Promise<void>;
+}
+
+export const IDeactivationMigrationTracingTestGrain =
+  defineGrainInterface<IDeactivationMigrationTracingTestGrain>(
+    "UnitTests.GrainInterfaces.IDeactivationMigrationTracingTestGrain",
   );

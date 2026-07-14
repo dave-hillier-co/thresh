@@ -32,6 +32,7 @@ import {
   type ActivationReason,
   type DeactivationReason,
 } from "@tsva/core/reasons";
+import type { GrainAddress } from "@tsva/core/grain-address";
 import type { SiloAddress } from "@tsva/core/silo-address";
 import { migrationParticipantsOf } from "@tsva/runtime/migration-participants";
 import { getGrainInterface } from "@tsva/core/grain-interface";
@@ -66,7 +67,11 @@ import { GrainTimerImpl } from "@tsva/runtime/grain-timer-impl";
 import { invocationContext } from "@tsva/runtime/invocation-context";
 import type { TimeProvider } from "@tsva/runtime/time-provider";
 import { TurnScheduler } from "@tsva/runtime/turn-scheduler";
-import { withOnDeactivateSpan } from "@tsva/observability/activation-tracing";
+import {
+  withDehydrateSpan,
+  withOnDeactivateSpan,
+  withRehydrateSpan,
+} from "@tsva/observability/activation-tracing";
 
 export type ActivationState = "creating" | "activating" | "valid" | "deactivating" | "invalid";
 
@@ -476,30 +481,73 @@ export class ActivationData implements GrainContext {
    * Gather the activation's in-memory state into a transport-safe bag by running
    * each migration participant's `onDehydrate` on a turn. Marks the activation
    * dehydrated so no further calls run here — they re-resolve to the new host.
+   *
+   * Wrapped in a `Dehydrate` span (Lifecycle source) ONLY when the activation
+   * actually has migration participants — a grain with none (or one that
+   * doesn't opt into migration at all) gets no span, matching upstream: an
+   * activity is only started around `OnDehydrate` when a participant exists
+   * (`ActivationData.OnDehydrate`, Orleans v10.1.0). `target`, when given, is
+   * recorded as the `orleans.migration.target.silo` tag.
    */
-  async dehydrate(): Promise<Record<string, unknown>> {
-    const bag = new MigrationBag();
-    await this.scheduler.schedule({
-      options: {},
-      reentrancyId: this.activationId,
-      run: () => {
-        for (const participant of migrationParticipantsOf(this.instance)) {
-          participant.onDehydrate(bag);
-        }
-        this.dehydrated = true;
-        return Promise.resolve();
+  async dehydrate(target?: SiloAddress): Promise<Record<string, unknown>> {
+    const participants = migrationParticipantsOf(this.instance);
+    const gather = async (): Promise<Record<string, unknown>> => {
+      const bag = new MigrationBag();
+      await this.scheduler.schedule({
+        options: {},
+        reentrancyId: this.activationId,
+        run: () => {
+          for (const participant of participants) participant.onDehydrate(bag);
+          this.dehydrated = true;
+          return Promise.resolve();
+        },
+      });
+      return bag.data;
+    };
+    if (participants.length === 0) return gather();
+    return withDehydrateSpan(
+      {
+        grainId: this.id.toString(),
+        siloId: this.localSiloId(),
+        activationId: this.activationId,
+        ...(target !== undefined ? { targetSilo: target.toString() } : {}),
       },
-    });
-    return bag.data;
+      gather,
+    );
   }
 
-  /** Restore migrated state into the (freshly bound) participants on the target. */
-  applyRehydration(): void {
+  /**
+   * Restore migrated state into the (freshly bound) participants on the
+   * target. Wrapped in a `Rehydrate` span (Lifecycle source) ONLY when the
+   * activation actually has migration participants, mirroring `dehydrate`'s
+   * guard. `previousRegistration`, when given, is recorded as the
+   * `orleans.rehydrate.previousRegistration` tag (the source silo's prior
+   * directory entry for this activation).
+   */
+  async applyRehydration(previousRegistration?: GrainAddress): Promise<void> {
     if (this.rehydrationBag === undefined) return;
+    const participants = migrationParticipantsOf(this.instance);
     const ctx = new MigrationBag(this.rehydrationBag);
-    for (const participant of migrationParticipantsOf(this.instance)) {
-      participant.onRehydrate(ctx);
+    const restore = (): void => {
+      for (const participant of participants) participant.onRehydrate(ctx);
+    };
+    if (participants.length === 0) {
+      restore();
+      return;
     }
+    await withRehydrateSpan(
+      {
+        grainId: this.id.toString(),
+        siloId: this.localSiloId(),
+        activationId: this.activationId,
+        ...(previousRegistration !== undefined
+          ? {
+              previousRegistration: `${previousRegistration.silo.toString()}/${previousRegistration.activationId}`,
+            }
+          : {}),
+      },
+      async () => restore(),
+    );
   }
 
   /**

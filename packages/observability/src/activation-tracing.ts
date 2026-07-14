@@ -18,6 +18,8 @@ export const ActivityNames = {
   StorageRead: "read storage",
   OnDeactivate: "execute OnDeactivateAsync",
   StorageWrite: "write storage",
+  Dehydrate: "dehydrate activation",
+  Rehydrate: "rehydrate activation",
 } as const;
 
 const runtimeTracer = trace.getTracer("Microsoft.Orleans.Runtime");
@@ -131,8 +133,74 @@ export function withStorageWriteSpan<T>(
  * generic `withSpan` helper, which records the exception but leaves status
  * unset.
  */
+/**
+ * Wraps gathering a migrating activation's in-memory state on the SOURCE silo
+ * (Lifecycle source) — `IGrainMigrationParticipant.OnDehydrate` for each
+ * participant. `targetSilo`, when known, is recorded as
+ * `orleans.migration.target.silo`. Callers only invoke this when the
+ * activation actually has migration participants — a grain with none gets no
+ * span at all (matches upstream: dehydrate is a no-op, not an empty span, for
+ * a grain that doesn't implement `IGrainMigrationParticipant`).
+ */
+export function withDehydrateSpan<T>(
+  attrs: { grainId: string; siloId: string; activationId: string; targetSilo?: string },
+  fn: () => Promise<T>,
+): Promise<T> {
+  return withSpan(
+    lifecycleTracer,
+    ActivityNames.Dehydrate,
+    {
+      "orleans.grain.id": attrs.grainId,
+      "orleans.silo.id": attrs.siloId,
+      "orleans.activation.id": attrs.activationId,
+      ...(attrs.targetSilo !== undefined
+        ? { "orleans.migration.target.silo": attrs.targetSilo }
+        : {}),
+    },
+    fn,
+  );
+}
+
+/**
+ * Wraps restoring a migrated activation's in-memory state on the TARGET silo
+ * (Lifecycle source) — `IGrainMigrationParticipant.OnRehydrate` for each
+ * participant. `previousRegistration`, when known, is recorded as
+ * `orleans.rehydrate.previousRegistration` (the source silo's prior directory
+ * entry for this activation). Callers only invoke this when the activation
+ * actually has migration participants, mirroring `withDehydrateSpan`.
+ */
+export function withRehydrateSpan<T>(
+  attrs: {
+    grainId: string;
+    siloId: string;
+    activationId: string;
+    previousRegistration?: string;
+  },
+  fn: () => Promise<T>,
+): Promise<T> {
+  return withSpan(
+    lifecycleTracer,
+    ActivityNames.Rehydrate,
+    {
+      "orleans.grain.id": attrs.grainId,
+      "orleans.silo.id": attrs.siloId,
+      "orleans.activation.id": attrs.activationId,
+      ...(attrs.previousRegistration !== undefined
+        ? { "orleans.rehydrate.previousRegistration": attrs.previousRegistration }
+        : {}),
+    },
+    fn,
+  );
+}
+
 export function withOnDeactivateSpan<T>(
-  attrs: { grainId: string; grainType: string; siloId: string; activationId: string; reason: string },
+  attrs: {
+    grainId: string;
+    grainType: string;
+    siloId: string;
+    activationId: string;
+    reason: string;
+  },
   fn: () => Promise<T>,
 ): Promise<T> {
   return lifecycleTracer.startActiveSpan(
