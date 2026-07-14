@@ -73,10 +73,10 @@ describe("activation migration mechanics", () => {
     await expect(activation.invoke(bump(1))).rejects.toBeInstanceOf(RejectionError);
   });
 
-  it("restores migrated state through applyRehydration", () => {
+  it("restores migrated state through applyRehydration", async () => {
     const { activation, grain } = makeActivation(0);
     activation.rehydrationBag = { count: 9 };
-    activation.applyRehydration();
+    await activation.applyRehydration();
     expect(grain.count).toBe(9);
   });
 });

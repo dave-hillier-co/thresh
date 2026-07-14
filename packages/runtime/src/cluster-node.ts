@@ -1164,7 +1164,7 @@ export class ClusterNode {
     target: SiloAddress,
   ): Promise<boolean> {
     try {
-      const bag = await activation.dehydrate();
+      const bag = await activation.dehydrate(target);
       const sourceAddr: GrainAddress = {
         grainId: activation.id,
         silo: this.options.local,
@@ -1240,6 +1240,7 @@ export class ClusterNode {
       payload.grainId,
       newActivationId(),
       payload.bag,
+      payload.sourceAddr,
     );
     const newAddr: GrainAddress = {
       grainId: payload.grainId,

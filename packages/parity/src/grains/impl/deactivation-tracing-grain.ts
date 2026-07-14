@@ -5,10 +5,17 @@
 import { trace } from "@opentelemetry/api";
 import { grain, persistentState } from "@tsva/core/decorators";
 import { Grain } from "@tsva/core/grain";
+import type {
+  DehydrationContext,
+  IGrainMigrationParticipant,
+  RehydrationContext,
+} from "@tsva/core/grain-migration-participant";
 import type { PersistentState } from "@tsva/core/persistent-state";
 import type { DeactivationReason } from "@tsva/core/reasons";
+import type { SiloAddress } from "@tsva/core/silo-address";
 import {
   IActivationFailureDeactivationGrain,
+  IDeactivationMigrationTracingTestGrain,
   IDeactivationTracingTestGrain,
   IDeactivationWithExceptionTracingTestGrain,
   IDeactivationWithWorkTracingTestGrain,
@@ -16,6 +23,7 @@ import {
 
 export {
   IActivationFailureDeactivationGrain,
+  IDeactivationMigrationTracingTestGrain,
   IDeactivationTracingTestGrain,
   IDeactivationWithExceptionTracingTestGrain,
   IDeactivationWithWorkTracingTestGrain,
@@ -91,5 +99,43 @@ export class ActivationFailureDeactivationGrain
 
   override async onDeactivate(_reason: DeactivationReason): Promise<void> {
     // Never called since activation fails.
+  }
+}
+
+/**
+ * Ported from `DeactivationMigrationTracingTestGrain` (Orleans v10.1.0) — a
+ * migration participant whose `OnDeactivate` span must precede its dehydrate
+ * span and carry the "migrating" reason tag when a sweep migrates it.
+ */
+@grain({
+  name: "UnitTests.Grains.DeactivationMigrationTracingTestGrain",
+  placement: "random",
+  collectionAgeSeconds: 1,
+})
+export class DeactivationMigrationTracingTestGrain
+  extends Grain
+  implements IDeactivationMigrationTracingTestGrain, IGrainMigrationParticipant
+{
+  private state = 0;
+
+  async setState(state: number): Promise<void> {
+    this.state = state;
+  }
+
+  async getState(): Promise<number> {
+    return this.state;
+  }
+
+  async migrateOnIdle(target?: SiloAddress): Promise<void> {
+    this.runtime.migrateOnIdle(target);
+  }
+
+  onDehydrate(context: DehydrationContext): void {
+    context.set("state", this.state);
+  }
+
+  onRehydrate(context: RehydrationContext): void {
+    const state = context.get<number>("state");
+    if (state !== undefined) this.state = state;
   }
 }
