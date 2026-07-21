@@ -18,6 +18,7 @@ import {
   requireTransaction,
 } from "@tsva/runtime/invocation-context";
 import type { SiloLoadSheddingTestHooks } from "@tsva/runtime/load-shedding";
+import type { GrainServiceRegistry } from "@tsva/runtime/grain-service";
 
 export interface GrainRuntimeServices {
   reminders?: () => ReminderRegistry | undefined;
@@ -30,6 +31,8 @@ export interface GrainRuntimeServices {
   loadShedding?: () => SiloLoadSheddingTestHooks | undefined;
   /** Pings a specific silo's control target, for `GrainRuntime.pingSilo()`. */
   siloPing?: (siloAddress: SiloAddress, message?: string) => Promise<void>;
+  /** Resolves this silo's grain-service registry, for `GrainRuntime.getGrainService()`. */
+  grainServices?: () => GrainServiceRegistry | undefined;
 }
 
 /** Per-activation `GrainRuntime`, reached by a grain through `this.runtime`. */
@@ -175,6 +178,16 @@ export class GrainRuntimeImpl implements GrainRuntime {
     const ping = this.services.siloPing;
     if (ping === undefined) throw new Error("silo ping is not configured on this runtime");
     return ping(siloAddress, message);
+  }
+
+  getGrainService<T>(name: string): T {
+    const registry = this.services.grainServices?.();
+    if (registry === undefined) throw new Error("grain services are not configured on this silo");
+    // `GrainServiceRegistry.get` is constrained to `GrainService` (its actual
+    // stored type); `GrainRuntime.getGrainService`'s `T` is unconstrained
+    // (core has no dependency on `@tsva/runtime`), so the cast bridges that —
+    // same shape as `getGrain`'s reliance on the caller supplying the right `T`.
+    return registry.get(name) as unknown as T;
   }
 
   private requireLoadShedding(): SiloLoadSheddingTestHooks {

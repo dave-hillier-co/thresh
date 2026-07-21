@@ -74,6 +74,7 @@ import type { StreamGeneratorConfig } from "@tsva/streams/generator-stream-queue
 import type { PullingStreamProviderHost } from "@tsva/streams/queue-pulling-agent";
 import { ClusterNode } from "@tsva/runtime/cluster-node";
 import type { GrainActivator } from "@tsva/runtime/catalog";
+import { GrainServiceRegistry, type GrainService } from "@tsva/runtime/grain-service";
 import type { LoadSheddingOptions } from "@tsva/runtime/load-shedding";
 import { StaticMembershipService } from "@tsva/runtime/static-membership";
 import { ActivationRebalancerWorker } from "@tsva/runtime/placement/rebalancing/rebalancer-worker";
@@ -176,6 +177,7 @@ export class SiloBuilder {
   private metricsEnabled = false;
   private readonly registrations: Registration[] = [];
   private readonly grainExtensions = new Map<number, () => object>();
+  private readonly grainServiceFactories = new Map<string, () => GrainService>();
   private versioning:
     | { compatibility?: CompatibilityKind; selector?: VersionSelectorKind }
     | undefined;
@@ -727,6 +729,19 @@ export class SiloBuilder {
   }
 
   /**
+   * Register a per-silo grain service (Orleans `ISiloBuilder.AddGrainService<TGrainService>()`):
+   * one instance of `factory()`'s result is built for this silo at startup,
+   * `init`'d then `start`'d before the silo is marked ready, and `stop`'d on
+   * shutdown. Reachable from grain code via `GrainRuntime.getGrainService(name)`.
+   * `name` identifies the service (Orleans resolves by `TGrainService`'s
+   * `GrainType`); registering twice under the same name replaces the factory.
+   */
+  addGrainService(name: string, factory: () => GrainService): this {
+    this.grainServiceFactories.set(name, factory);
+    return this;
+  }
+
+  /**
    * Register a startup task (Orleans `ISiloBuilder.AddStartupTask` / `IStartupTask`):
    * runs after the silo's node has started — so it can call grains — but before
    * the silo is marked ready. Tasks run in registration order.
@@ -756,6 +771,21 @@ export class SiloBuilder {
     const time = this.config.time;
     let reminderService: LocalReminderService | undefined;
     let jobManager: LocalDurableJobManager | undefined;
+    const grainServiceRegistry = new GrainServiceRegistry();
+    for (const [name, factory] of this.grainServiceFactories) {
+      grainServiceRegistry.register(name, factory());
+    }
+    if (this.grainServiceFactories.size > 0) {
+      // `init`+`start` every registered service before the silo is marked
+      // ready (Orleans: grain services start as part of silo startup, before
+      // BecomeActive), and `stop` them on shutdown.
+      this.starters.push(async () => {
+        await grainServiceRegistry.start();
+      });
+      this.closers.push(async () => {
+        grainServiceRegistry.stop();
+      });
+    }
     const membership = this.membership;
 
     const node = new ClusterNode({
@@ -840,6 +870,9 @@ export class SiloBuilder {
       },
       ...(this.reminderTable !== undefined ? { reminderRegistry: () => reminderService } : {}),
       ...(this.jobShardStore !== undefined ? { durableJobScheduler: () => jobManager } : {}),
+      ...(this.grainServiceFactories.size > 0
+        ? { grainServiceRegistry: () => grainServiceRegistry }
+        : {}),
       ...(this.streamProviders.size > 0
         ? {
             streamProvider: (name?: string) =>

@@ -23,6 +23,7 @@ import {
   IGrainManagementExtension,
 } from "@tsva/runtime/grain-management-extension";
 import { GrainRuntimeImpl } from "@tsva/runtime/grain-runtime-impl";
+import type { GrainServiceRegistry } from "@tsva/runtime/grain-service";
 import type { SiloLoadSheddingTestHooks } from "@tsva/runtime/load-shedding";
 import type { TimeProvider } from "@tsva/runtime/time-provider";
 
@@ -89,6 +90,8 @@ export interface CatalogOptions {
   loadShedding?: () => SiloLoadSheddingTestHooks | undefined;
   /** Pings a specific silo's control target, for a grain's `runtime.pingSilo()`. */
   siloPing?: (siloAddress: SiloAddress, message?: string) => Promise<void>;
+  /** Resolves this silo's grain-service registry, for a grain's `runtime.getGrainService()`. */
+  grainServiceRegistry?: () => GrainServiceRegistry | undefined;
   /** Incoming call filters wrapping each grain-method dispatch (silo-wide). */
   incomingCallFilters?: readonly IncomingGrainCallFilter[];
   /**
@@ -430,6 +433,9 @@ export class Catalog {
         ? { loadShedding: this.options.loadShedding }
         : {}),
       ...(this.options.siloPing !== undefined ? { siloPing: this.options.siloPing } : {}),
+      ...(this.options.grainServiceRegistry !== undefined
+        ? { grainServices: this.options.grainServiceRegistry }
+        : {}),
     });
     const instance =
       this.options.grainActivator !== undefined
