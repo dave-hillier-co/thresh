@@ -112,24 +112,47 @@ orleansTest(
   },
 );
 
-// Left gapped: upstream asserts a nested call through a method with *no*
-// `[Transaction]` attribute at all sees no ambient transaction, even when
-// called from inside an active one. This framework's `InvokeMethodOptions`
-// (@tsva/core/invoke-options) documents the opposite as deliberate boundary
-// behaviour: "Absent means the method is non-transactional: an ambient
-// transaction still flows through to nested calls, but this method's state
-// does not participate" — so `getTransactionId()` inside a `"none"`-option
-// method called from within a transaction reports the ambient transaction's
-// id, not `undefined`. Verified directly: every other tier in this same test
-// (suppress/createOrJoin/create/join/supported) behaves exactly as upstream
-// asserts; only the "no attribute" tier's expectation diverges, on
-// `InvokeMethodOptions.transaction`/`GrainFactory.resolveTransaction`
-// boundary semantics this task must not change. Changing that behaviour is
-// out of scope here (see CLAUDE.md task boundaries); tracked as an
-// attribution-boundary divergence rather than an introspection gap.
-orleansTest.gap(
-  "GAP-TRANSACTION-CONTEXT-INTROSPECTION",
+orleansTest(
   "Orleans.Transactions.Tests.TransactionAttributionTest.AllSupportedAttributesFromWithinTransactionTest",
+  async () => {
+    const cluster = await buildCluster();
+    try {
+      const top = topGrain(cluster, "create");
+      const tiers: AttributionTierEntry[][] = [
+        [
+          entry("none"),
+          entry("suppress"),
+          entry("createOrJoin"),
+          entry("create"),
+          entry("join"),
+          entry("supported"),
+        ],
+      ];
+
+      const results = await top.getNestedTransactionIds(0, tiers);
+
+      expect(results).toHaveLength(2);
+
+      const topIds = results[0]!;
+      expect(topIds).toHaveLength(1);
+      expect(topIds[0]).toBeDefined();
+
+      const subIds = results[1]!;
+      expect(subIds).toHaveLength(6);
+      expect(subIds[0]).toBeUndefined(); // no attribute
+      expect(subIds[1]).toBeUndefined(); // suppress
+      expect(subIds[2]).toBeDefined(); // createOrJoin
+      expect(subIds[2]).toBe(topIds[0]); // joins the parent
+      expect(subIds[3]).toBeDefined(); // create
+      expect(subIds[3]).not.toBe(subIds[2]); // distinct fresh transaction
+      expect(subIds[4]).toBeDefined(); // join
+      expect(subIds[4]).toBe(topIds[0]); // joins the parent
+      expect(subIds[5]).toBeDefined(); // supported
+      expect(subIds[5]).toBe(topIds[0]); // joins the parent
+    } finally {
+      await cluster.dispose();
+    }
+  },
 );
 
 orleansTest("Orleans.Transactions.Tests.TransactionAttributionTest.CreateOrJoinTest", async () => {

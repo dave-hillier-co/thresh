@@ -118,10 +118,16 @@ shows per-tag counts). One-line definitions live on the `GapTag` union. Grouped 
       Currently sidestepped in `packages/parity/src/streaming/memory-programmatic-subcribe-tests.test.ts`
       by pinning `initialSilos: 1`; fix properly by sharing named `MemoryStreamProvider` instances
       across a `TestCluster` the way `storage`/`reminderTable`/etc. already are.
-- [ ] **Transactions** — `GAP-TRANSACTION-EXCEPTION-TYPES` (typed abort hierarchy),
-      `GAP-TRANSACTION-CONTEXT-INTROSPECTION`, `GAP-TRANSACTION-EXCLUSIVE-LOCK`,
-      `GAP-TRANSACTION-OVERLOAD-DETECTOR`,
-      `GAP-TRANSACTION-CONSISTENCY-HARNESS` (randomized workload + serializability checker).
+- [x] **Transactions** — all `GAP-TRANSACTION-*` tags closed: typed abort/in-doubt exception
+      hierarchy (`TransactionOrphanCallError`, `TransactionCascadingAbortError`,
+      `TransactionInDoubtError`), ambient-transaction-id introspection
+      (`GrainRuntime.getTransactionId()`), the transaction-rate overload detector
+      (`@tsva/transactions/transaction-overload-detector`), and a randomized-workload +
+      serializable-history checker (`packages/parity/src/transactions/consistency-harness.ts`).
+      One case (`ExclusiveLockTransactionMemoryTests.ConcurrentReadThenWriteWithExclusiveLock_NoLockException`)
+      stays `orleansTest.excluded`: it needs Orleans' non-killing exclusive-lock group-batch
+      scheduling, which would mean redesigning `ReaderWriterLock`'s core wait-die conflict
+      resolution — out of scope (see the test file's header comment).
 - [x] **Journaling & event sourcing** — `GAP-EVENT-SOURCING` (`JournaledGrain` equivalent): done —
       `JournaledGrain<TState,TEvent>` (`packages/core/src/journaled-grain.ts`) plus the
       `LogViewAdaptor` provider (`packages/journaling/src/log-view-adaptor-impl.ts`,

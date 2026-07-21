@@ -205,3 +205,30 @@ export class TransactionCascadingAbortError extends TransactionAbortedError {
     this.name = "TransactionCascadingAbortError";
   }
 }
+
+/**
+ * Raised when a transaction's outcome cannot be determined after the commit
+ * decision was already durably recorded (Orleans `OrleansTransactionInDoubtException`).
+ * Unlike {@link TransactionAbortedError} and its subtypes, this is **not** an
+ * abort: by the time it can happen the elected transaction manager has already
+ * recorded the commit (`TransactionAgent.resolve`'s `recordCommit` step), so
+ * every participant's write *will* eventually be applied — this error means
+ * only that one participant's own commit step failed or threw while applying
+ * it, so the caller cannot tell from this call alone whether that participant
+ * (or others still in flight) finished applying it yet. Deliberately not a
+ * subtype of `TransactionAbortedError`, mirroring upstream's
+ * `OrleansTransactionInDoubtException : OrleansTransactionException` (a
+ * sibling of `OrleansTransactionAbortedException`, not a child of it).
+ */
+export class TransactionInDoubtError extends Error {
+  constructor(
+    readonly transactionId: string,
+    options?: { cause?: unknown },
+  ) {
+    super(
+      `transaction ${transactionId} is in doubt: its commit was recorded but a participant failed while applying it`,
+      options,
+    );
+    this.name = "TransactionInDoubtError";
+  }
+}

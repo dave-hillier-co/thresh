@@ -3,7 +3,14 @@
 // TocFaultTransactionMemoryTests inherits its two [Theory]s from
 // TocFaultTransactionTestRunnerxUnit
 // (src/Orleans.Transactions.TestKit.xUnit/TocFaultTransactionTestRunner.cs).
-import { it } from "vitest";
+import { expect } from "vitest";
+import { defineGrain, useTransactionalState } from "@tsva/core/define-grain";
+import { defineGrainInterface } from "@tsva/core/grain-interface";
+import type { GrainWithStringKey } from "@tsva/core/key-kinds";
+import { TransactionInDoubtError } from "@tsva/core/errors";
+import { TransactionCommitter } from "@tsva/transactions/transaction-committer";
+import type { TransactionCommitOperation } from "@tsva/transactions/transaction-committer";
+import { TestCluster } from "@tsva/testing/test-cluster";
 import { orleansTest } from "@tsva/testing/orleans-test";
 
 // MultiGrainWriteTransactionWithCommitFailure carries
@@ -16,23 +23,154 @@ orleansTest.excluded(
   "Orleans.Transactions.Tests.TocFaultTransactionMemoryTests.MultiGrainWriteTransactionWithCommitFailure",
 );
 
-// MultiGrainWriteTransactionWithCommitException does run upstream. It
-// exercises an `ITransactionCommitterTestGrain` acting as a non-grain "commit
-// service" resource (RemoteCommitService.cs) enlisted directly in the 2PC
-// commit phase, and asserts the failure surfaces as
-// `OrleansTransactionInDoubtException` (src/Orleans.Transactions/
-// OrleansTransactionException.cs) — the "commit outcome unknown because the
-// resource threw during commit, after prepare succeeded" case. This
-// framework's `TransactionAgent` (@tsva/runtime/transaction-agent) drives only
-// grain-hosted `TransactionParticipant`s (@tsva/core/transaction-info) through
-// prepare/commit/abort; there is no non-grain external-resource commit
-// abstraction, and no in-doubt-vs-aborted exception distinction (only the
-// generic `TransactionAbortedError`). Both are missing features, not bugs.
-orleansTest.gap(
-  "GAP-TRANSACTION-EXCEPTION-TYPES",
-  "Orleans.Transactions.Tests.TocFaultTransactionMemoryTests.MultiGrainWriteTransactionWithCommitException",
+// MultiGrainWriteTransactionWithCommitException: an `ITransactionCommitterTestGrain`
+// acts as a non-grain "commit service" resource (upstream `RemoteCommitService`),
+// enlisted directly in the 2PC commit phase via `@tsva/transactions`'
+// `TransactionCommitter` (ported alongside `TransactionInDoubtError`,
+// `@tsva/core/errors`, and `TransactionAgent`'s commit-phase failure handling —
+// see `transaction-committer.ts`/`transaction-agent.ts`). A `ThrowOperation`
+// throws once the manager has already durably recorded the commit, which
+// surfaces as `TransactionInDoubtError` rather than an ordinary abort — the
+// other, already-added grains keep their write regardless.
+
+interface Counter {
+  value: number;
+}
+
+interface CommitTestGrain extends GrainWithStringKey {
+  add(delta: number): Promise<number>;
+  get(): Promise<number>;
+}
+
+/** The non-grain "service" a `ThrowOperation`/`PassOperation` acts against (Orleans `IRemoteCommitService`). */
+interface RemoteCommitService {
+  calls: { transactionId: string; data: string }[];
+}
+
+interface CommitterTestGrain extends GrainWithStringKey {
+  commit(operation: TransactionCommitOperation<RemoteCommitService>): Promise<void>;
+}
+
+interface CommitCoordinatorGrain extends GrainWithStringKey {
+  multiGrainAdd(
+    committerKey: string,
+    operation: TransactionCommitOperation<RemoteCommitService>,
+    grainKeys: string[],
+    delta: number,
+  ): Promise<void>;
+}
+
+/** Orleans `PassOperation`: always succeeds. */
+const passOperation = (data: string): TransactionCommitOperation<RemoteCommitService> => ({
+  commit: (transactionId, service) => {
+    service.calls.push({ transactionId, data });
+    return true;
+  },
+});
+
+/** Orleans `ThrowOperation`: throws during the commit step itself. */
+const throwOperation = (data: string): TransactionCommitOperation<RemoteCommitService> => ({
+  commit: (transactionId, service) => {
+    service.calls.push({ transactionId, data });
+    throw new Error(`transaction ${transactionId} threw with data: ${data}`);
+  },
+});
+
+const CommitTestGrainInterface = defineGrainInterface<CommitTestGrain>("CommitTestGrain", {
+  options: {
+    add: { transaction: "createOrJoin" },
+    get: { transaction: "createOrJoin" },
+  },
+});
+
+const CommitterTestGrainInterface = defineGrainInterface<CommitterTestGrain>("CommitterTestGrain", {
+  options: { commit: { transaction: "join" } },
+});
+
+const CommitCoordinatorGrainInterface = defineGrainInterface<CommitCoordinatorGrain>(
+  "CommitCoordinatorGrain",
+  { options: { multiGrainAdd: { transaction: "create" } } },
 );
 
-// vitest requires at least one runtime test per file; both upstream Facts are
-// excluded/gapped above, so this placeholder keeps the file a valid suite.
-it.skip("(all tests in this file are orleansTest.excluded/gap — see above)", () => undefined);
+const CommitTestGrainImpl = defineGrain<CommitTestGrain>("CommitTestGrain", (ctx) => {
+  const data = useTransactionalState<Counter>(ctx, "data", { initial: () => ({ value: 0 }) });
+  return {
+    add: (delta) =>
+      data.performUpdate((s) => {
+        s.value += delta;
+        return s.value;
+      }),
+    get: () => data.performRead((s) => s.value),
+  };
+});
+
+/** The remote commit service instance, shared across activations like upstream's singleton `RemoteCommitService`. */
+const remoteCommitService: RemoteCommitService = { calls: [] };
+
+const CommitterTestGrainImpl = defineGrain<CommitterTestGrain>("CommitterTestGrain", (ctx) => {
+  const committer = new TransactionCommitter(ctx.id, "committer", remoteCommitService);
+  return {
+    commit: (operation) => {
+      committer.onCommit(operation);
+      return Promise.resolve();
+    },
+  };
+});
+
+const CommitCoordinatorGrainImpl = defineGrain<CommitCoordinatorGrain>(
+  "CommitCoordinatorGrain",
+  (ctx) => ({
+    multiGrainAdd: async (committerKey, operation, grainKeys, delta) => {
+      const committer = ctx.getGrain(CommitterTestGrainInterface, committerKey);
+      await Promise.all([
+        ...grainKeys.map((k) => ctx.getGrain(CommitTestGrainInterface, k).add(delta)),
+        committer.commit(operation),
+      ]);
+    },
+  }),
+);
+
+async function buildCluster(): Promise<TestCluster> {
+  return TestCluster.start({
+    initialSilos: 1,
+    grains: [
+      { ctor: CommitTestGrainImpl, interfaces: [CommitTestGrainInterface] },
+      { ctor: CommitterTestGrainImpl, interfaces: [CommitterTestGrainInterface] },
+      { ctor: CommitCoordinatorGrainImpl, interfaces: [CommitCoordinatorGrainInterface] },
+    ],
+  });
+}
+
+let nextKey = 0;
+const newKey = (prefix: string): string => `${prefix}-${(nextKey += 1)}`;
+
+orleansTest(
+  "Orleans.Transactions.Tests.TocFaultTransactionMemoryTests.MultiGrainWriteTransactionWithCommitException",
+  async () => {
+    const cluster = await buildCluster();
+    try {
+      const expected = 5;
+      const committerKey = newKey("committer");
+      const grainKeys = [newKey("grain"), newKey("grain"), newKey("grain")];
+      const coordinator = cluster.getGrain(CommitCoordinatorGrainInterface, newKey("coord"));
+
+      // Golden path: a PassOperation commits cleanly.
+      await coordinator.multiGrainAdd(committerKey, passOperation("pass"), grainKeys, expected);
+
+      // A ThrowOperation fails only the committer's own commit step, after the
+      // manager already recorded the commit — TransactionInDoubtError, not an
+      // ordinary abort.
+      await expect(
+        coordinator.multiGrainAdd(committerKey, throwOperation("throw"), grainKeys, expected),
+      ).rejects.toBeInstanceOf(TransactionInDoubtError);
+
+      // Every grain's add still landed, in both rounds: the in-doubt failure on
+      // the committer does not roll back the other participants' already-durable writes.
+      for (const key of grainKeys) {
+        expect(await cluster.getGrain(CommitTestGrainInterface, key).get()).toBe(2 * expected);
+      }
+    } finally {
+      await cluster.dispose();
+    }
+  },
+);

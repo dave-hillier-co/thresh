@@ -22,9 +22,12 @@ export interface InvokeMethodOptions {
    */
   responseTimeout?: Duration;
   /**
-   * How this call relates to the ambient transaction. Absent means
-   * the method is non-transactional: an ambient transaction still flows through
-   * to nested calls, but this method's state does not participate.
+   * How this call relates to the ambient transaction. Absent means the method
+   * has no `[Transaction]` attribute at all (Orleans parity): it does not see
+   * the ambient transaction — `GrainRuntime.getTransactionId()` reports
+   * `undefined` inside it, exactly like `"suppress"` — and its own state does
+   * not participate. This differs from an explicit `"supported"`, which does
+   * see and propagate the ambient transaction.
    */
   transaction?: TransactionOption;
 }
