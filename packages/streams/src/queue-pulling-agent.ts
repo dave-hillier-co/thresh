@@ -2,6 +2,7 @@ import type { GrainType } from "@tsva/core/grain-type";
 import type { QueueEntry } from "@tsva/streams/redis-stream-queue";
 import type { HashRange } from "@tsva/streams/queue-ownership";
 import type { StreamDeliver } from "@tsva/streams/stream-deliver";
+import { RecoverableStreamDeliveryError } from "@tsva/streams/stream-recovery";
 
 /** Delivers one pulled event to the stream's subscribers; the agent supplies it. */
 export type DeliverEvent = (streamKey: string, event: unknown, token: number) => Promise<void>;
@@ -172,6 +173,17 @@ export class QueuePullingAgent {
         await this.deliver(streamKey, event, token);
         return true;
       } catch (err) {
+        if (err instanceof RecoverableStreamDeliveryError) {
+          // The consumer is deactivating to resume from its own persisted
+          // checkpoint (see the error's doc) rather than have this event
+          // retried in place. Rewind the queue's committed cursor to that
+          // checkpoint and forget the cached cursor, so the next poll
+          // re-reads from there and redelivers everything the reactivated
+          // consumer needs — not just this one event.
+          await this.queue.commit(err.resumeToken);
+          this.resetCursor();
+          return false; // leave the cursor; caller stops this batch, no advance
+        }
         lastError = err;
         if (attempt < this.maxAttempts) await this.sleep(this.retryBackoffMs(attempt));
       }

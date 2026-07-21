@@ -22,6 +22,7 @@
     "@tsva/messaging": "workspace:*",
     "@tsva/observability": "workspace:*",
     "@tsva/runtime": "workspace:*",
+    "@tsva/streams": "workspace:*",
     "@tsva/testing": "workspace:*",
     "@tsva/transactions": "workspace:*"
   },
