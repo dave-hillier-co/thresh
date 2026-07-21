@@ -9,15 +9,17 @@
 // `ClientConfig.outgoingCallFilters`) rather than any new instrumentation.
 //
 // Split (21 upstream cases):
-//  - 18 ported: pure W3C trace-context PROPAGATION across a client→grain call,
-//    grain-to-grain calls, concurrent calls, malformed/missing headers,
-//    tracestate, a foreign (non-Orleans) ambient span, and cross-silo calls —
-//    all achievable with the existing outgoing/incoming call filters.
-//  - 2 gapped (GAP-TRACING): `ActivationSpanSharesTraceIdWithTriggeringGrainCall`
-//    and `FullTraceHierarchyIsCorrectWhenActivationTriggeredByGrainCall`
-//    require a PlaceGrain/ActivateGrain span (`ActivityNames.ActivateGrain`)
-//    threaded through placement/catalog, which does not exist yet — same gap
-//    as `activation-tracing-tests.test.ts` (left untouched by this port).
+//  - 20 ported: 18 pure W3C trace-context PROPAGATION cases across a
+//    client→grain call, grain-to-grain calls, concurrent calls, malformed/
+//    missing headers, tracestate, a foreign (non-Orleans) ambient span, and
+//    cross-silo calls — all achievable with the existing outgoing/incoming
+//    call filters — plus `ActivationSpanSharesTraceIdWithTriggeringGrainCall`
+//    and `FullTraceHierarchyIsCorrectWhenActivationTriggeredByGrainCall`,
+//    which lean on the ACTIVATION-path span taxonomy
+//    (`@tsva/observability/activation-tracing`'s `ActivateGrain` span, wired
+//    through `ClusterNode.receiveRequest` → `DistributedDispatcher.deliverLocal`
+//    so it shares the triggering call's trace id — see
+//    activation-tracing-tests.test.ts's `ActivationSpanIsCreatedOnFirstCall`).
 //  - 1 excluded: `DiagnoseActivitySourceSampling` is a .NET-specific diagnostic
 //    enumerating `ActivitySource` sampling per source (Application/Runtime/
 //    Lifecycle/Storage) with ZERO assertions in upstream — there is no W3C/OTel
@@ -28,6 +30,7 @@ import { SpanKind, trace } from "@opentelemetry/api";
 import { GrainId } from "@tsva/core/grain-id";
 import { getGrainMetadata } from "@tsva/core/grain-metadata";
 import { SiloAddress } from "@tsva/core/silo-address";
+import { ActivityNames } from "@tsva/observability/activation-tracing";
 import { tracingFilters } from "@tsva/observability/tracing";
 import { orleansTest } from "@tsva/testing/orleans-test";
 import { TestCluster, type TestSiloHandle } from "@tsva/testing/test-cluster";
@@ -60,9 +63,7 @@ describe("UnitTests.General.GrainCallTraceContextPropagationTests", () => {
   beforeAll(async () => {
     cluster = await TestCluster.start({
       initialSilos: 1,
-      grains: [
-        { ctor: TraceContextPropagationGrain, interfaces: [ITraceContextPropagationGrain] },
-      ],
+      grains: [{ ctor: TraceContextPropagationGrain, interfaces: [ITraceContextPropagationGrain] }],
       configureSilo: (builder) => builder.useTracing(),
     });
     client = await createClusterClient(
@@ -86,7 +87,8 @@ describe("UnitTests.General.GrainCallTraceContextPropagationTests", () => {
     async () => {
       const { result, traceId: clientTraceId } = await harness.withParentSpan(
         "client-parent-activity",
-        () => client.getGrain(ITraceContextPropagationGrain, randomIntegerKey()).getTraceContextInfo(),
+        () =>
+          client.getGrain(ITraceContextPropagationGrain, randomIntegerKey()).getTraceContextInfo(),
       );
 
       expect(result.hasActivity).toBe(true);
@@ -134,7 +136,8 @@ describe("UnitTests.General.GrainCallTraceContextPropagationTests", () => {
     async () => {
       const { result, traceId: clientTraceId } = await harness.withParentSpan(
         "client-traceparent-test",
-        () => client.getGrain(ITraceContextPropagationGrain, randomIntegerKey()).getTraceContextInfo(),
+        () =>
+          client.getGrain(ITraceContextPropagationGrain, randomIntegerKey()).getTraceContextInfo(),
       );
 
       expect(result.traceParentFromRequestContext).toBeDefined();
@@ -148,7 +151,8 @@ describe("UnitTests.General.GrainCallTraceContextPropagationTests", () => {
     async () => {
       const { traceId: clientTraceId, spanId: clientParentSpanId } = await harness.withParentSpan(
         "client-linking-test",
-        () => client.getGrain(ITraceContextPropagationGrain, randomIntegerKey()).getTraceContextInfo(),
+        () =>
+          client.getGrain(ITraceContextPropagationGrain, randomIntegerKey()).getTraceContextInfo(),
       );
 
       const spans = harness.finishedSpans();
@@ -191,7 +195,9 @@ describe("UnitTests.General.GrainCallTraceContextPropagationTests", () => {
         () =>
           Promise.all(
             Array.from({ length: 5 }, () =>
-              client.getGrain(ITraceContextPropagationGrain, randomIntegerKey()).getTraceContextInfo(),
+              client
+                .getGrain(ITraceContextPropagationGrain, randomIntegerKey())
+                .getTraceContextInfo(),
             ),
           ),
       );
@@ -244,10 +250,13 @@ describe("UnitTests.General.GrainCallTraceContextPropagationTests", () => {
   orleansTest(
     "UnitTests.General.GrainCallTraceContextPropagationTests.TraceParentReflectsClientOutgoingSpan",
     async () => {
-      const { result, traceId: clientTraceId, spanId: clientParentSpanId } =
-        await harness.withParentSpan("client-traceparent-reflection-test", () =>
-          client.getGrain(ITraceContextPropagationGrain, randomIntegerKey()).getTraceContextInfo(),
-        );
+      const {
+        result,
+        traceId: clientTraceId,
+        spanId: clientParentSpanId,
+      } = await harness.withParentSpan("client-traceparent-reflection-test", () =>
+        client.getGrain(ITraceContextPropagationGrain, randomIntegerKey()).getTraceContextInfo(),
+      );
 
       expect(result.traceParentFromRequestContext).toBeDefined();
       expect(result.traceParentFromRequestContext).toContain(clientTraceId);
@@ -273,7 +282,8 @@ describe("UnitTests.General.GrainCallTraceContextPropagationTests", () => {
       // way (`if (activationSpan is not null) { ... }`).
       const { result, traceId: clientTraceId } = await harness.withParentSpan(
         "client-activation-context-test",
-        () => client.getGrain(ITraceContextPropagationGrain, randomIntegerKey()).getTraceContextInfo(),
+        () =>
+          client.getGrain(ITraceContextPropagationGrain, randomIntegerKey()).getTraceContextInfo(),
       );
 
       expect(result.traceId).toBe(clientTraceId);
@@ -286,7 +296,8 @@ describe("UnitTests.General.GrainCallTraceContextPropagationTests", () => {
       const { result } = await harness.withTraceState(
         "client-tracestate-test",
         "vendor1=value1,vendor2=value2",
-        () => client.getGrain(ITraceContextPropagationGrain, randomIntegerKey()).getTraceContextInfo(),
+        () =>
+          client.getGrain(ITraceContextPropagationGrain, randomIntegerKey()).getTraceContextInfo(),
       );
       expect(result.hasActivity).toBe(true);
 
@@ -299,13 +310,71 @@ describe("UnitTests.General.GrainCallTraceContextPropagationTests", () => {
     },
   );
 
-  orleansTest.gap(
-    "GAP-TRACING",
+  orleansTest(
     "UnitTests.General.GrainCallTraceContextPropagationTests.ActivationSpanSharesTraceIdWithTriggeringGrainCall",
+    async () => {
+      const { result, traceId: clientTraceId } = await harness.withParentSpan(
+        "client-activation-trace-test",
+        // A unique grain id ensures this call triggers a fresh activation.
+        () =>
+          client.getGrain(ITraceContextPropagationGrain, randomIntegerKey()).getTraceContextInfo(),
+      );
+
+      const spans = harness.finishedSpans();
+      const activationSpan = spans.find((s) => s.name === ActivityNames.ActivateGrain);
+
+      expect(activationSpan).toBeDefined();
+      expect(activationSpan!.traceId).toBe(clientTraceId);
+      // The activation span should have a parent (not be a root span) — it
+      // must be part of the incoming grain call's trace, not starting a new one.
+      expect(activationSpan!.parentSpanId).toBeDefined();
+
+      expect(result.traceId).toBe(clientTraceId);
+    },
   );
-  orleansTest.gap(
-    "GAP-TRACING",
+
+  orleansTest(
     "UnitTests.General.GrainCallTraceContextPropagationTests.FullTraceHierarchyIsCorrectWhenActivationTriggeredByGrainCall",
+    async () => {
+      const { traceId: clientTraceId, spanId: clientParentSpanId } = await harness.withParentSpan(
+        "client-hierarchy-test",
+        () =>
+          client.getGrain(ITraceContextPropagationGrain, randomIntegerKey()).getTraceContextInfo(),
+      );
+
+      const spans = harness.finishedSpans();
+
+      const clientOutgoingSpan = spans.find(
+        (s) => s.kind === SpanKind.CLIENT && s.name.includes("getTraceContextInfo"),
+      );
+      const serverIncomingSpan = spans.find(
+        (s) => s.kind === SpanKind.SERVER && s.name.includes("getTraceContextInfo"),
+      );
+      const activationSpan = spans.find((s) => s.name === ActivityNames.ActivateGrain);
+
+      expect(clientOutgoingSpan).toBeDefined();
+      expect(serverIncomingSpan).toBeDefined();
+      expect(activationSpan).toBeDefined();
+
+      expect(clientOutgoingSpan!.traceId).toBe(clientTraceId);
+      expect(serverIncomingSpan!.traceId).toBe(clientTraceId);
+      expect(activationSpan!.traceId).toBe(clientTraceId);
+
+      // Client outgoing span is parented to the test's own parent span.
+      expect(clientOutgoingSpan!.parentSpanId).toBe(clientParentSpanId);
+      // Server span's parent is the client outgoing span.
+      expect(serverIncomingSpan!.parentSpanId).toBe(clientOutgoingSpan!.spanId);
+      // Activation span should have a parent (not be a root span).
+      expect(activationSpan!.parentSpanId).toBeDefined();
+
+      // `TraceContextPropagationGrain` doesn't override `onActivate` (this
+      // port has no analogue of upstream's Grain-base-vs-plain-implementer
+      // distinction the `OnActivate` span's presence would otherwise hinge
+      // on — see activation-tracing-tests.test.ts) so, matching upstream's
+      // own `if (onActivateSpan is not null)` guard, there is none to check.
+      const onActivateSpan = spans.find((s) => s.name === ActivityNames.OnActivate);
+      expect(onActivateSpan).toBeUndefined();
+    },
   );
 
   orleansTest(
@@ -313,7 +382,8 @@ describe("UnitTests.General.GrainCallTraceContextPropagationTests", () => {
     async () => {
       const { result, traceId: clientTraceId } = await harness.withParentSpan(
         "client-diagnostic-test",
-        () => client.getGrain(ITraceContextPropagationGrain, randomIntegerKey()).getTraceContextInfo(),
+        () =>
+          client.getGrain(ITraceContextPropagationGrain, randomIntegerKey()).getTraceContextInfo(),
       );
 
       expect(result.traceParentFromRequestContext).toBeDefined();
@@ -397,13 +467,17 @@ describe("UnitTests.General.GrainCallTraceContextPropagationTests", () => {
       const httpTracer = trace.getTracer("simulated-http");
       let httpTraceId!: string;
       let result!: TraceContextInfo;
-      await httpTracer.startActiveSpan("GET /api/users/{id}", { kind: SpanKind.SERVER }, async (span) => {
-        httpTraceId = span.spanContext().traceId;
-        result = await client
-          .getGrain(ITraceContextPropagationGrain, randomIntegerKey())
-          .getTraceContextInfo();
-        span.end();
-      });
+      await httpTracer.startActiveSpan(
+        "GET /api/users/{id}",
+        { kind: SpanKind.SERVER },
+        async (span) => {
+          httpTraceId = span.spanContext().traceId;
+          result = await client
+            .getGrain(ITraceContextPropagationGrain, randomIntegerKey())
+            .getTraceContextInfo();
+          span.end();
+        },
+      );
 
       expect(result.traceId).toBe(httpTraceId);
     },
@@ -486,7 +560,9 @@ describe("UnitTests.General.GrainCallTraceContextPropagationTests", () => {
           key = randomIntegerKey();
           const nestedKey = key + 1n;
           await crossSiloCluster.getGrain(ITraceContextPropagationGrain, key).getTraceContextInfo();
-          await crossSiloCluster.getGrain(ITraceContextPropagationGrain, nestedKey).getTraceContextInfo();
+          await crossSiloCluster
+            .getGrain(ITraceContextPropagationGrain, nestedKey)
+            .getTraceContextInfo();
           if (
             hostOf(crossSiloCluster, new GrainId(grainType, key)) === siloA &&
             hostOf(crossSiloCluster, new GrainId(grainType, nestedKey)) === siloB
@@ -498,7 +574,10 @@ describe("UnitTests.General.GrainCallTraceContextPropagationTests", () => {
         harness.reset();
         const { result, traceId: clientTraceId } = await harness.withParentSpan(
           "cross-silo-g2g-test",
-          () => crossSiloClient.getGrain(ITraceContextPropagationGrain, key).getNestedTraceContextInfo(),
+          () =>
+            crossSiloClient
+              .getGrain(ITraceContextPropagationGrain, key)
+              .getNestedTraceContextInfo(),
         );
 
         expect(result.local.traceId).toBe(clientTraceId);

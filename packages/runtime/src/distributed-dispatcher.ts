@@ -9,6 +9,7 @@ import type { GrainDirectory } from "@tsva/directory/grain-directory";
 import type { LocationCache } from "@tsva/directory/location-cache";
 import {
   withActivateGrainSpan,
+  withFilterPlacementCandidatesSpan,
   withPlaceGrainSpan,
   withRegisterDirectoryEntrySpan,
 } from "@tsva/observability/activation-tracing";
@@ -126,6 +127,18 @@ export class DistributedDispatcher implements Dispatcher {
     return withPlaceGrainSpan(() => this.claimAndActivateLocally(req));
   }
 
+  /**
+   * Same as `deliverLocal`, but without its own "place grain" span — for use
+   * from inside `placeAndInvoke`, which already owns one that wraps the
+   * filter/strategy decision too (Orleans `PlaceGrainAsync`: one span covers
+   * filtering through activation, not two nested ones).
+   */
+  private async deliverLocalWithinPlacementSpan(req: InvocationRequest): Promise<unknown> {
+    const existing = await this.deps.catalog.resolveLive(req.target);
+    if (existing !== undefined) return existing.invoke(req);
+    return this.claimAndActivateLocally(req);
+  }
+
   private async claimAndActivateLocally(req: InvocationRequest): Promise<unknown> {
     const activationId = newActivationId();
     return withActivateGrainSpan({ grainType: req.target.type }, async () => {
@@ -216,36 +229,46 @@ export class DistributedDispatcher implements Dispatcher {
   }
 
   private async placeAndInvoke(req: InvocationRequest): Promise<unknown> {
-    const ctx: PlacementContext = { localSilo: this.deps.local, ...this.deps.placementContext() };
-    // Hard metadata filters first: prune the candidate set by silo metadata; if
-    // none qualify, placement fails (the grain has a constraint nothing satisfies).
-    let candidates: readonly SiloAddress[] = this.deps.activeSilos();
-    for (const filter of this.deps.filtersFor(req.target.type)) {
-      candidates = filter.filter(req.target.type, candidates, ctx);
-    }
-    if (candidates.length === 0) {
-      throw new RejectionError(
-        `no placement candidates for ${req.target.type} after filtering`,
-        "noCandidates",
-      );
-    }
-    // Version-aware placement: prefer compatible silos within the eligible set,
-    // but fall back to it when none qualify (best-effort — never fails on version).
-    if (this.deps.versionFilter !== undefined) {
-      const compatible = await this.deps.versionFilter(req, candidates);
-      if (compatible.length > 0) candidates = compatible;
-    }
-    // Directed placement: a caller-set RequestContext hint (Orleans
-    // `IPlacementDirector.PlacementHintKey`) wins over the strategy when it
-    // names a live candidate; otherwise fall through to the strategy as before.
-    const strategy = this.deps.placementFor(req.target.type);
-    const targetSilo =
-      resolvePlacementHint(req.headers, candidates) ??
-      strategy.choose(req.target.type, candidates, ctx);
-    this.deps.recordEdge?.(req, targetSilo);
-    return targetSilo.equals(this.deps.local)
-      ? this.deliverLocal(req)
-      : this.deps.remote.send(targetSilo, req);
+    // The whole placement decision — filtering, strategy choice, and (if we
+    // land locally) directory registration + activation — runs inside one
+    // "place grain" span (Runtime source), matching Orleans' `PlaceGrainAsync`
+    // and giving `FilterPlacementCandidates`/`ActivateGrain`/
+    // `RegisterDirectoryEntry` a common parent.
+    return withPlaceGrainSpan(async () => {
+      const ctx: PlacementContext = { localSilo: this.deps.local, ...this.deps.placementContext() };
+      // Hard metadata filters first: prune the candidate set by silo metadata; if
+      // none qualify, placement fails (the grain has a constraint nothing satisfies).
+      let candidates: readonly SiloAddress[] = this.deps.activeSilos();
+      for (const filter of this.deps.filtersFor(req.target.type)) {
+        candidates = withFilterPlacementCandidatesSpan(
+          { filterType: filter.constructor.name },
+          () => filter.filter(req.target.type, candidates, ctx),
+        );
+      }
+      if (candidates.length === 0) {
+        throw new RejectionError(
+          `no placement candidates for ${req.target.type} after filtering`,
+          "noCandidates",
+        );
+      }
+      // Version-aware placement: prefer compatible silos within the eligible set,
+      // but fall back to it when none qualify (best-effort — never fails on version).
+      if (this.deps.versionFilter !== undefined) {
+        const compatible = await this.deps.versionFilter(req, candidates);
+        if (compatible.length > 0) candidates = compatible;
+      }
+      // Directed placement: a caller-set RequestContext hint (Orleans
+      // `IPlacementDirector.PlacementHintKey`) wins over the strategy when it
+      // names a live candidate; otherwise fall through to the strategy as before.
+      const strategy = this.deps.placementFor(req.target.type);
+      const targetSilo =
+        resolvePlacementHint(req.headers, candidates) ??
+        strategy.choose(req.target.type, candidates, ctx);
+      this.deps.recordEdge?.(req, targetSilo);
+      return targetSilo.equals(this.deps.local)
+        ? this.deliverLocalWithinPlacementSpan(req)
+        : this.deps.remote.send(targetSilo, req);
+    });
   }
 }
 

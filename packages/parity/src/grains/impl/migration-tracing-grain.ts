@@ -9,10 +9,23 @@
 // dehydrate/rehydrate spans' negative case is genuinely testable.
 import { grain } from "@tsva/core/decorators";
 import { Grain } from "@tsva/core/grain";
+import type { GrainType } from "@tsva/core/grain-type";
 import type { SiloAddress } from "@tsva/core/silo-address";
-import { ISimpleMigrationTracingGrain } from "@tsva/parity/grains/interfaces/migration-tracing-grain-interfaces";
+import type { PlacementFilter } from "@tsva/runtime/placement/placement-filter";
+import type { PlacementContext } from "@tsva/runtime/placement/placement-strategy";
+import {
+  IMigrationFilterTracingGrain,
+  ISimpleMigrationTracingGrain,
+} from "@tsva/parity/grains/interfaces/migration-tracing-grain-interfaces";
 
-export { ISimpleMigrationTracingGrain };
+export { IMigrationFilterTracingGrain, ISimpleMigrationTracingGrain };
+
+/**
+ * Names the custom director `MigrationPlacementFilterSpanIsParentedUnderPlaceGrainSpan`
+ * registers via `builder.addPlacementFilter(...)` — the port analogue of
+ * upstream's `TracingTestPlacementFilterAttribute`/`TracingTestPlacementFilterStrategy`.
+ */
+export const MIGRATION_TRACING_TEST_PLACEMENT_FILTER = "MigrationTracingTestPlacementFilter";
 
 @grain({
   name: "UnitTests.Grains.SimpleMigrationTracingGrain",
@@ -32,5 +45,46 @@ export class SimpleMigrationTracingGrain extends Grain implements ISimpleMigrati
 
   async migrateOnIdle(target?: SiloAddress): Promise<void> {
     this.runtime.migrateOnIdle(target);
+  }
+}
+
+@grain({
+  name: "UnitTests.Grains.MigrationFilterTracingGrain",
+  placement: "random",
+  collectionAgeSeconds: 1,
+  placementFilters: [{ kind: "custom", name: MIGRATION_TRACING_TEST_PLACEMENT_FILTER, order: 1 }],
+})
+export class MigrationFilterTracingGrain extends Grain implements IMigrationFilterTracingGrain {
+  private state = 0;
+
+  async setState(state: number): Promise<void> {
+    this.state = state;
+  }
+
+  async getState(): Promise<number> {
+    return this.state;
+  }
+
+  async migrateOnIdle(target?: SiloAddress): Promise<void> {
+    this.runtime.migrateOnIdle(target);
+  }
+}
+
+/**
+ * A pass-through placement-filter director for
+ * `MigrationPlacementFilterSpanIsParentedUnderPlaceGrainSpan` — the port
+ * analogue of upstream's `TracingTestPlacementFilterDirector`. Its class
+ * name is asserted verbatim as the `orleans.placement.filter.type` span tag
+ * (this port tags a filter span with `filter.constructor.name`, so the class
+ * is deliberately named to match upstream's `TracingTestPlacementFilterStrategy`
+ * tag value).
+ */
+export class TracingTestPlacementFilterStrategy implements PlacementFilter {
+  filter(
+    _grainType: GrainType,
+    candidates: readonly SiloAddress[],
+    _context: PlacementContext,
+  ): readonly SiloAddress[] {
+    return candidates;
   }
 }
