@@ -22,10 +22,12 @@
 // triggering call and the follow-up call in the SAME `harness.withParentSpan`,
 // this makes no observable difference to the trace-id assertions.
 //
-// Four cases stay GAP-TRACING: `OnDeactivateSpanIsNotCreatedForNonGrainBaseGrain`
-// (every grain here extends the same `Grain` base — this framework has no
-// analogue of Orleans' "implements IGrainBase directly, not via the `Grain`
-// base class" distinction, so the negative case is untestable);
+// Four cases are EXCLUDED (`orleansTest.excluded`, not `orleansTest.gap` —
+// see each call site for its precise reason):
+// `OnDeactivateSpanIsNotCreatedForNonGrainBaseGrain` (every grain here
+// extends the same `Grain` base — this framework has no analogue of Orleans'
+// "implements IGrainBase directly, not via the `Grain` base class"
+// distinction, so the negative case is untestable);
 // `OnDeactivateSpanIsParentedToAsyncEnumerableMethodCall` (no IAsyncEnumerable
 // grain-method span story); `OnDeactivateSpanIsCreatedForInconsistentStateException`
 // (no auto-deactivate-on-`InconsistentStateException` mechanism); and
@@ -236,8 +238,13 @@ describe("UnitTests.General.DeactivationTracingTests", () => {
     },
   );
 
-  orleansTest.gap(
-    "GAP-TRACING",
+  orleansTest.excluded(
+    "every grain in this port extends the same `Grain` base class — there is " +
+      "no analogue of upstream's distinction between a grain implementing " +
+      "`IGrainBase` directly (via the `Grain` base class, which unconditionally " +
+      "wraps `OnDeactivateAsync` in an `OnDeactivate` span) versus one that " +
+      "doesn't (no span). The negative case this test asserts — no span for a " +
+      "non-`Grain`-base grain — is architecturally untestable here",
     "UnitTests.General.DeactivationTracingTests.OnDeactivateSpanIsNotCreatedForNonGrainBaseGrain",
   );
 
@@ -263,12 +270,18 @@ describe("UnitTests.General.DeactivationTracingTests", () => {
     },
   );
 
-  orleansTest.gap(
-    "GAP-TRACING",
+  orleansTest.excluded(
+    "no IAsyncEnumerable grain-method span story in this port (no session/" +
+      "StartEnumeration/MoveNext/DisposeAsync span taxonomy) — the same gap " +
+      "`AsyncEnumerableSpansAreCreatedForMultipleElements` in " +
+      "activation-tracing-tests.test.ts documents; there is no async-enumerable " +
+      "method call for an `OnDeactivate` span to be parented under",
     "UnitTests.General.DeactivationTracingTests.OnDeactivateSpanIsParentedToAsyncEnumerableMethodCall",
   );
-  orleansTest.gap(
-    "GAP-TRACING",
+  orleansTest.excluded(
+    "no auto-deactivate-on-`InconsistentStateException` mechanism in this " +
+      "port — deactivation only happens via `deactivateOnIdle()`/collection, " +
+      "never triggered automatically by a specific application exception type",
     "UnitTests.General.DeactivationTracingTests.OnDeactivateSpanIsCreatedForInconsistentStateException",
   );
 
@@ -287,8 +300,12 @@ describe("UnitTests.General.DeactivationTracingTests", () => {
     },
   );
 
-  orleansTest.gap(
-    "GAP-TRACING",
+  orleansTest.excluded(
+    "no `GrainContext.Deactivate(reason)` grain-facing API in this port — " +
+      "only `deactivateOnIdle()`/`IGrainManagementExtension`, which always " +
+      "carries a fixed `ApplicationRequested` reason, so a grain cannot " +
+      "trigger deactivation with an arbitrary custom reason the way this test " +
+      "requires",
     "UnitTests.General.DeactivationTracingTests.OnDeactivateSpanIsCreatedForGrainContextDeactivate",
   );
 

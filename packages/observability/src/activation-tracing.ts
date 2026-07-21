@@ -50,6 +50,33 @@ export function withPlaceGrainSpan<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 /**
+ * Wraps one placement-filter director's invocation (Runtime source), nested
+ * under the enclosing `PlaceGrain` span via ambient OTel context — one span
+ * per filter in the stack, `filterType` recorded as
+ * `orleans.placement.filter.type` (upstream: the filter strategy's type
+ * name).
+ */
+export function withFilterPlacementCandidatesSpan<T>(
+  attrs: { filterType: string },
+  fn: () => T,
+): T {
+  return runtimeTracer.startActiveSpan(
+    ActivityNames.FilterPlacementCandidates,
+    { attributes: { "orleans.placement.filter.type": attrs.filterType } },
+    (span: Span) => {
+      try {
+        return fn();
+      } catch (err) {
+        span.recordException(err as Error);
+        throw err;
+      } finally {
+        span.end();
+      }
+    },
+  );
+}
+
+/**
  * Wraps bringing up a fresh activation — from winning placement through
  * running its activation hooks (Lifecycle source). `grainType` is recorded
  * as `orleans.grain.type` (upstream: the grain's type tag on the

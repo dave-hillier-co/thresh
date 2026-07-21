@@ -20,10 +20,24 @@
 // second `describe` block below, which drives migration directly via
 // `TestCluster` (no wire `ClientNode`, matching `migration-tests.test.ts` —
 // trace context still propagates in-process via `AsyncLocalStorage`
-// regardless of whether a call crosses the wire client). The rest still need
-// a placement-FILTER system (`FilterPlacementCandidates`/
-// `IPlacementFilterDirector`, GAP-PLACEMENT-FILTER-DIRECTORS) or an
-// IAsyncEnumerable span story — out of scope here — and stay GAP-TRACING.
+// regardless of whether a call crosses the wire client).
+//
+// The placement-FILTER system (`PlacementFilterRegistry`/`PlacementFilter`,
+// GAP-PLACEMENT-FILTER-DIRECTORS) now exists too, and `PlaceGrain`
+// (`DistributedDispatcher.placeAndInvoke`) / migration's own placement
+// decision (`ClusterNode.migrateActivation`) both wrap their filter loop in
+// `FilterPlacementCandidates` spans nested under `PlaceGrain` — closing
+// `MigrationPlacementFilterSpanIsParentedUnderPlaceGrainSpan` below. The two
+// `ActivationSpanIncludesFilter*` cases stay unportable for a DIFFERENT
+// reason (see their `orleansTest.excluded` calls): they also require an
+// `OnActivate` span present for a filtered grain but absent for a plain one,
+// which needs upstream's `Grain`-base-vs-plain-implementer (`IGrainBase`)
+// distinction — this port has no analogue (every grain extends the same
+// `Grain` base), the same reasoning already established for
+// `OnDeactivateSpanIsNotCreatedForNonGrainBaseGrain` in
+// deactivation-tracing-tests.test.ts. The IAsyncEnumerable case stays
+// excluded too — out of scope (no session/span taxonomy for streamed
+// grain-call results).
 //
 // `MigrationSpansAreCreatedForGrainWithPersistentState` (upstream): despite
 // its name, upstream's grain body has NO `IGrainMigrationParticipant` and the
@@ -58,8 +72,12 @@ import {
   MigrationTestGrainWithMemoryStorage,
 } from "@tsva/parity/grains/impl/migration-test-grain";
 import {
+  IMigrationFilterTracingGrain,
   ISimpleMigrationTracingGrain,
+  MIGRATION_TRACING_TEST_PLACEMENT_FILTER,
+  MigrationFilterTracingGrain,
   SimpleMigrationTracingGrain,
+  TracingTestPlacementFilterStrategy,
 } from "@tsva/parity/grains/impl/migration-tracing-grain";
 import { createClusterClient } from "@tsva/parity/support/client";
 import { randomIntegerKey } from "@tsva/parity/support/keys";
@@ -153,12 +171,27 @@ describe("UnitTests.General.ActivationTracingTests", () => {
     },
   );
 
-  orleansTest.gap(
-    "GAP-TRACING",
+  orleansTest.excluded(
+    "requires an `OnActivate` span present for a placement-filtered grain " +
+      "but ABSENT for a plain one — upstream's `FilteredActivityGrain` " +
+      "extends `Grain` (`IGrainBase`, unconditionally spanned) while " +
+      "`ActivityGrain` (the plain-grain contrast case in " +
+      "`ActivationSpanIsCreatedOnFirstCall`, ported above) implements its " +
+      "interface directly with no `Grain` base. Every grain in this port " +
+      "extends the same `Grain` base class — there is no such distinction to " +
+      "hook the span's presence on, so it would have to be either always " +
+      "present or always absent, breaking one assertion or the other; see the " +
+      "identical reasoning for " +
+      "`OnDeactivateSpanIsNotCreatedForNonGrainBaseGrain` in " +
+      "deactivation-tracing-tests.test.ts",
     "UnitTests.General.ActivationTracingTests.ActivationSpanIncludesFilter",
   );
-  orleansTest.gap(
-    "GAP-TRACING",
+  orleansTest.excluded(
+    "same `OnActivate`-span-presence architectural gap as " +
+      "`ActivationSpanIncludesFilter` above, plus it asserts TWO " +
+      "`FilterPlacementCandidates` spans (one per stacked filter) each " +
+      "parented directly to the `PlaceGrain` span — moot without the " +
+      "`OnActivate` span half of the assertion also being portable",
     "UnitTests.General.ActivationTracingTests.ActivationSpanIncludesMultipleFilters",
   );
   orleansTest(
@@ -188,12 +221,11 @@ describe("UnitTests.General.ActivationTracingTests", () => {
       expect(storageReadSpan!.attributes["orleans.grain.id"]).toBeDefined();
     },
   );
-  orleansTest.gap(
-    "GAP-TRACING",
-    "UnitTests.General.ActivationTracingTests.MigrationPlacementFilterSpanIsParentedUnderPlaceGrainSpan",
-  );
-  orleansTest.gap(
-    "GAP-TRACING",
+  orleansTest.excluded(
+    "no IAsyncEnumerable grain-method span story in this port (no session/" +
+      "StartEnumeration/MoveNext/DisposeAsync span taxonomy around streamed " +
+      "grain-call results) — out of scope for the activation/deactivation/" +
+      "placement span taxonomy this GAP-TRACING closure targets",
     "UnitTests.General.ActivationTracingTests.AsyncEnumerableSpansAreCreatedForMultipleElements",
   );
 });
@@ -211,8 +243,15 @@ describe("UnitTests.General.ActivationTracingTests (migration)", () => {
         { ctor: MigrationTestGrain, interfaces: [IMigrationTestGrain] },
         { ctor: MigrationTestGrainWithMemoryStorage, interfaces: [IMigrationTestGrainGrainOfT] },
         { ctor: SimpleMigrationTracingGrain, interfaces: [ISimpleMigrationTracingGrain] },
+        { ctor: MigrationFilterTracingGrain, interfaces: [IMigrationFilterTracingGrain] },
       ],
-      configureSilo: (builder) => builder.useTracing(),
+      configureSilo: (builder) =>
+        builder
+          .useTracing()
+          .addPlacementFilter(
+            MIGRATION_TRACING_TEST_PLACEMENT_FILTER,
+            new TracingTestPlacementFilterStrategy(),
+          ),
     });
   });
 
@@ -316,6 +355,47 @@ describe("UnitTests.General.ActivationTracingTests (migration)", () => {
       const spans = harness.finishedSpans();
       expect(spans.filter((s) => s.name === ActivityNames.Dehydrate).length).toBe(0);
       expect(spans.filter((s) => s.name === ActivityNames.Rehydrate).length).toBe(0);
+    },
+  );
+
+  orleansTest(
+    "UnitTests.General.ActivationTracingTests.MigrationPlacementFilterSpanIsParentedUnderPlaceGrainSpan",
+    async () => {
+      const key = randomIntegerKey();
+      const grainId = new GrainId(getGrainMetadata(MigrationFilterTracingGrain)!.grainType, key);
+      const grain = cluster.getGrain(IMigrationFilterTracingGrain, key);
+      await grain.setState(1);
+      const originalHost = hostOf(cluster, grainId);
+      const targetHost = cluster.silos.find((s) => s !== originalHost)!;
+
+      // Clear activation-time spans: focus on the placement span migration's
+      // `PlaceGrainAsync`-equivalent (`ClusterNode.migrateActivation`) creates.
+      harness.reset();
+
+      const { traceId: testParentTraceId } = await harness.withParentSpan(
+        "test-parent-migration-filter",
+        async () => {
+          await grain.migrateOnIdle(targetHost.address);
+          await forceMigrationSweep(time);
+          await waitFor(() => hostOf(cluster, grainId) === targetHost);
+        },
+      );
+
+      const spans = harness.finishedSpans();
+
+      const placementSpans = spans.filter((s) => s.name === ActivityNames.PlaceGrain);
+      expect(placementSpans.length).toBeGreaterThan(0);
+      const placementSpan = placementSpans[0]!;
+      expect(placementSpan.traceId).toBe(testParentTraceId);
+
+      const filterSpans = spans.filter((s) => s.name === ActivityNames.FilterPlacementCandidates);
+      expect(filterSpans.length).toBeGreaterThan(0);
+      const filterSpan = filterSpans[0]!;
+      expect(filterSpan.traceId).toBe(testParentTraceId);
+      expect(filterSpan.attributes["orleans.placement.filter.type"]).toBe(
+        "TracingTestPlacementFilterStrategy",
+      );
+      expect(filterSpan.parentSpanId).toBe(placementSpan.spanId);
     },
   );
 });

@@ -115,10 +115,19 @@ shows per-tag counts). One-line definitions live on the `GapTag` union. Grouped 
       now a `@tsva/parity` dependency) as a public `GrainDirectory` (Orleans
       `GrainDirectoryResolver.DefaultGrainDirectory`); `grain-directory` parity suite now
       4 ported / 0 gap.
-- [ ] **Misc primitives** — `GAP-TRACING` (trace-context
-      propagation done; remaining: activation/deactivation span taxonomy — `ActivateGrain`/
-      `OnActivate`/`PlaceGrain`/`RegisterDirectoryEntry` spans threaded through placement/catalog/
-      directory/storage/migration).
+- [x] **`GAP-TRACING`** — closed (0 gaps remaining in the scorecard). Activation/deactivation/
+      placement span taxonomy (`ActivateGrain`/`OnActivate`/`PlaceGrain`/`FilterPlacementCandidates`/
+      `RegisterDirectoryEntry`/`StorageRead`/`StorageWrite`/`OnDeactivate`, plus migration's
+      `Dehydrate`/`Rehydrate`) threaded through placement (`DistributedDispatcher.placeAndInvoke`,
+      `ClusterNode.migrateActivation`), catalog/activation, directory registration, and storage —
+      `@tsva/observability/activation-tracing`. Baggage propagation added to
+      `setupTracePropagation()` (`CompositePropagator` of W3C trace-context + baggage). A handful of
+      upstream cases stay `orleansTest.excluded` (not gapped) for genuine architectural reasons: no
+      `Grain`-base-vs-plain-implementer (`IGrainBase`) distinction to hinge `OnActivate`/`OnDeactivate`
+      span presence on (every grain here extends the same `Grain` base), no IAsyncEnumerable
+      grain-method span story, no auto-deactivate-on-exception or `GrainContext.Deactivate(reason)`
+      API, and no `ActivityIdFormat` concept (OTel is W3C-only).
+>>>>>>> parity/tracing-span-taxonomy
 
 ### Bugs found by the parity suite (`GAP-BUG-*`, fix then un-gap the tests)
 

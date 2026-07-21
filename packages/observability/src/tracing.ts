@@ -7,7 +7,11 @@ import {
   type Attributes,
   type Span,
 } from "@opentelemetry/api";
-import { W3CTraceContextPropagator } from "@opentelemetry/core";
+import {
+  CompositePropagator,
+  W3CBaggagePropagator,
+  W3CTraceContextPropagator,
+} from "@opentelemetry/core";
 import type {
   GrainCallContext,
   IncomingGrainCallFilter,
@@ -52,12 +56,18 @@ async function withSpan(
 }
 
 /**
- * Ensure W3C trace context is the propagation format, so trace ids ride the
- * request-context headers across grain calls and silos. Idempotent; the user's
- * OpenTelemetry SDK may set its own propagator instead.
+ * Ensure W3C trace context (AND baggage — Orleans' `ActivityPropagationGrainCallFilter`
+ * carries `Activity.Baggage` across a grain call the same way it carries trace
+ * context) is the propagation format, so both ride the request-context headers
+ * across grain calls and silos. Idempotent; the user's OpenTelemetry SDK may
+ * set its own propagator instead.
  */
 export function setupTracePropagation(): void {
-  propagation.setGlobalPropagator(new W3CTraceContextPropagator());
+  propagation.setGlobalPropagator(
+    new CompositePropagator({
+      propagators: [new W3CTraceContextPropagator(), new W3CBaggagePropagator()],
+    }),
+  );
 }
 
 /**

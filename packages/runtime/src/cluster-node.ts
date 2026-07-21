@@ -83,6 +83,10 @@ import type {
 import { ActivationCollector } from "@tsva/runtime/activation-collector";
 import { ICancellationSourcesExtension } from "@tsva/runtime/cancellation-extension";
 import { Catalog, type GrainActivator, type RegisteredGrain } from "@tsva/runtime/catalog";
+import {
+  withFilterPlacementCandidatesSpan,
+  withPlaceGrainSpan,
+} from "@tsva/observability/activation-tracing";
 import { ClientDirectory } from "@tsva/runtime/client-directory";
 import type { ActivationData } from "@tsva/runtime/activation";
 import { DistributedDispatcher } from "@tsva/runtime/distributed-dispatcher";
@@ -1145,27 +1149,40 @@ export class ClusterNode {
    */
   private async migrateActivation(activation: ActivationData): Promise<boolean> {
     try {
-      const candidates = activeSilos(this.options.membership.current());
-      const context: PlacementContext = {
-        localSilo: this.options.local,
-        activationCount: (silo) => (silo.equals(this.options.local) ? this.catalog.count() : 0),
-        random: this.options.random ?? Math.random,
-      };
-      // An explicit `migrationTarget` (set via `migrateOnIdle(target)`) wins;
-      // otherwise fall back to the caller's ambient placement hint captured
-      // at `requestMigration` time, resolved against the live candidates now.
-      const directed =
-        activation.migrationTarget ??
-        resolvePlacementHintValue(activation.migrationHint, candidates);
-      const target = chooseMigrationTarget(
-        activation.id.type,
-        directed,
-        candidates,
-        this.placementFor(activation.id.type),
-        context,
-      );
-      if (target === undefined) return false;
-      return await this.migrateActivationTo(activation, target);
+      // Mirrors `DistributedDispatcher.placeAndInvoke`: the whole target
+      // decision (filtering + strategy/directed choice) runs inside a "place
+      // grain" span (Orleans `PlaceGrainAsync`, invoked from the migration
+      // path as well as fresh activation), with one `FilterPlacementCandidates`
+      // child span per stacked filter.
+      return await withPlaceGrainSpan(async () => {
+        const context: PlacementContext = {
+          localSilo: this.options.local,
+          activationCount: (silo) => (silo.equals(this.options.local) ? this.catalog.count() : 0),
+          random: this.options.random ?? Math.random,
+        };
+        let candidates: readonly SiloAddress[] = activeSilos(this.options.membership.current());
+        for (const filter of this.filtersFor(activation.id.type)) {
+          candidates = withFilterPlacementCandidatesSpan(
+            { filterType: filter.constructor.name },
+            () => filter.filter(activation.id.type, candidates, context),
+          );
+        }
+        // An explicit `migrationTarget` (set via `migrateOnIdle(target)`) wins;
+        // otherwise fall back to the caller's ambient placement hint captured
+        // at `requestMigration` time, resolved against the live candidates now.
+        const directed =
+          activation.migrationTarget ??
+          resolvePlacementHintValue(activation.migrationHint, candidates);
+        const target = chooseMigrationTarget(
+          activation.id.type,
+          directed,
+          candidates,
+          this.placementFor(activation.id.type),
+          context,
+        );
+        if (target === undefined) return false;
+        return this.migrateActivationTo(activation, target);
+      });
     } catch {
       return false;
     }
