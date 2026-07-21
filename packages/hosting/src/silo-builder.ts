@@ -7,7 +7,7 @@ import type {
 import type { GrainInterface } from "@tsva/core/grain-interface";
 import type { GrainKeyFor } from "@tsva/core/key-kinds";
 import type { MembershipService } from "@tsva/core/membership";
-import type { SiloAddress } from "@tsva/core/silo-address";
+import { SiloAddress } from "@tsva/core/silo-address";
 import type { CompatibilityKind } from "@tsva/core/version-compatibility";
 import type { VersionSelectorKind } from "@tsva/core/version-selector";
 import {
@@ -19,6 +19,7 @@ import type { GrainStorage } from "@tsva/core/grain-storage";
 import { InProcessTransport, type InProcessNetwork } from "@tsva/messaging/in-process-transport";
 import type { Transport } from "@tsva/messaging/transport";
 import { WebSocketTransport } from "@tsva/messaging/web-socket-transport";
+import { createClient as createClientNode, type ClientNode } from "@tsva/client/client-node";
 import type { ReminderTable } from "@tsva/core/reminder";
 import { systemTimeProvider, type TimeProvider } from "@tsva/core/time-provider";
 import { createClient } from "redis";
@@ -135,9 +136,24 @@ interface Registration {
   interfaces: GrainInterface<unknown>[];
 }
 
-/** Grain-factory access handed to startup tasks (Orleans `IGrainFactory`, trimmed to `getGrain`). */
+/**
+ * Grain-factory access handed to startup tasks (Orleans `IGrainFactory`,
+ * trimmed to `getGrain` plus the observer-hosting surface a lifecycle
+ * participant needs — Orleans' `LifecycleObserverCreationTests` exercises
+ * `CreateObjectReference` from exactly this hook).
+ */
 export interface GrainFactoryAccess {
   getGrain<T>(def: GrainInterface<T>, key: GrainKeyFor<T>): T;
+  /**
+   * Host a client-style observer reachable from any grain call made during
+   * this (or a later) startup task. Backed by an embedded `ClientNode`
+   * created lazily on first use, gatewayed through this same silo — so it
+   * requires `useInProcessTransport(network)`: a `WebSocketTransport`-hosted
+   * silo would need a second listening port to host a duplex client
+   * identity, which no startup task provisions, so this throws in that case.
+   */
+  createObjectReference<T>(def: GrainInterface<T>, obj: object): T;
+  deleteObjectReference(ref: object): void;
 }
 
 /**
@@ -184,6 +200,7 @@ export class SiloBuilder {
   private readonly starters: Array<() => Promise<void>> = [];
   private readonly closers: Array<() => Promise<void>> = [];
   private readonly startupTasks: Array<(grains: GrainFactoryAccess) => Promise<void>> = [];
+  private inProcessNetwork: InProcessNetwork | undefined;
   private readonly pullingStreams: PullingStreamProviderHost[] = [];
   private readonly memoryStreams: Array<{
     provider: MemoryStreamProvider;
@@ -684,6 +701,7 @@ export class SiloBuilder {
 
   useInProcessTransport(network: InProcessNetwork): this {
     this.transport = new InProcessTransport(network, this.config.clusterId);
+    this.inProcessNetwork = network;
     return this;
   }
 
@@ -980,6 +998,53 @@ export class SiloBuilder {
       this.closers.push(async () => provider.stop());
     }
 
+    // Backs `GrainFactoryAccess.createObjectReference` for startup tasks:
+    // built lazily (only if a startup task actually runs), reusing this
+    // silo's own in-process network as its gateway. See `GrainFactoryAccess`.
+    let embeddedClient: ClientNode | undefined;
+    const local = this.config.local;
+    const clusterId = this.config.clusterId;
+    const registrations = this.registrations;
+    const inProcessNetwork = this.inProcessNetwork;
+    const closers = this.closers;
+    const ensureEmbeddedClient = async (): Promise<void> => {
+      // Only meaningful with an in-process network to gateway through; a
+      // WebSocketTransport-hosted silo would need a second listening port to
+      // host a duplex client identity, which no startup task provisions —
+      // `createObjectReference` below throws lazily (only if actually
+      // called) rather than failing every startup task on such a silo.
+      if (embeddedClient !== undefined || inProcessNetwork === undefined) return;
+      const embeddedAddress = new SiloAddress(
+        `${local.podName}-embedded-client`,
+        `${local.podUid}-embedded-client`,
+        `${local.endpoint}#embedded-client`,
+      );
+      const client = createClientNode({
+        clusterId,
+        local: embeddedAddress,
+        transport: new InProcessTransport(inProcessNetwork, clusterId),
+        gateway: local,
+      }).registerGrains([...registrations]);
+      await client.connect();
+      closers.push(async () => client.close());
+      embeddedClient = client;
+    };
+    const grainFactoryAccess: GrainFactoryAccess = {
+      getGrain: (def, key) => node.getGrain(def, key),
+      createObjectReference: (def, obj) => {
+        if (embeddedClient === undefined) {
+          throw new Error(
+            "GrainFactoryAccess.createObjectReference from a startup task requires the silo to " +
+              "be built with useInProcessTransport(network); a WebSocketTransport-hosted silo " +
+              "would need a second listening port to host a duplex client identity, which no " +
+              "startup task provisions.",
+          );
+        }
+        return embeddedClient.createObjectReference(def, obj);
+      },
+      deleteObjectReference: (ref) => embeddedClient?.deleteObjectReference(ref),
+    };
+
     return buildSiloHost({
       node,
       serviceId: this.config.serviceId ?? this.config.clusterId,
@@ -992,7 +1057,10 @@ export class SiloBuilder {
       onStart: this.starters,
       onOwnershipChange,
       onStop: this.closers,
-      startupTasks: this.startupTasks.map((fn) => () => fn(node)),
+      startupTasks: this.startupTasks.map((fn) => async () => {
+        await ensureEmbeddedClient(); // no-op without an in-process network
+        await fn(grainFactoryAccess);
+      }),
     });
   }
 }

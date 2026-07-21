@@ -7,6 +7,7 @@
     "./*": "./src/*.ts"
   },
   "dependencies": {
+    "@tsva/client": "workspace:*",
     "@tsva/clustering-k8s": "workspace:*",
     "@tsva/core": "workspace:*",
     "@tsva/directory": "workspace:*",

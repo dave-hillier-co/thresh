@@ -4,29 +4,27 @@ import { orleansTest } from "@tsva/testing/orleans-test";
 import { TestCluster } from "@tsva/testing/test-cluster";
 import { grainReferenceIdentity } from "@tsva/core/grain-reference";
 import type { GrainId } from "@tsva/core/grain-id";
+import type { ClientNode } from "@tsva/client/client-node";
 import { ISimpleGrain, SimpleGrain } from "@tsva/parity/grains/impl/simple-grain";
 import { randomIntegerKey } from "@tsva/parity/support/keys";
-
-// This in-process test harness has no separate "client" process distinct from
-// a silo: `TestCluster.getGrain` proxies calls straight through the primary
-// silo's own `SiloHost`, which is exactly the object `isActive` is checked
-// against for the "locally activated" assertions above. There is therefore no
-// object anywhere in this framework that models Orleans' client-side
-// `ILocalActivationStatusChecker` (which always answers `false` because a
-// client never hosts activations) as something distinct from the silo-side
-// checker.
+import { createClusterClient } from "@tsva/parity/support/client";
 
 describe("DefaultCluster.Tests.LocalActivationStatusCheckerTests", () => {
   let cluster: TestCluster;
+  let client: ClientNode;
 
   beforeAll(async () => {
     cluster = await TestCluster.start({
       initialSilos: 2,
       grains: [{ ctor: SimpleGrain, interfaces: [ISimpleGrain] }],
     });
+    client = await createClusterClient(cluster, [
+      { ctor: SimpleGrain, interfaces: [ISimpleGrain] },
+    ]);
   });
 
   afterAll(async () => {
+    await client.close();
     await cluster.dispose();
   });
 
@@ -65,13 +63,23 @@ describe("DefaultCluster.Tests.LocalActivationStatusCheckerTests", () => {
     },
   );
 
-  orleansTest.gap(
-    "GAP-CLIENT-SILO-SEPARATION",
+  orleansTest(
     "DefaultCluster.Tests.LocalActivationStatusCheckerTests.ClientShouldAlwaysReturnFalseForIsLocallyActivated",
+    async () => {
+      const grain = client.getGrain(ISimpleGrain, randomIntegerKey());
+      await grain.setA(42);
+
+      const grainId = grainIdOf(grain);
+      expect(client.isActive(grainId)).toBe(false);
+    },
   );
 
-  orleansTest.gap(
-    "GAP-CLIENT-SILO-SEPARATION",
+  orleansTest(
     "DefaultCluster.Tests.LocalActivationStatusCheckerTests.ClientShouldReturnFalseForNonActivatedGrain",
+    () => {
+      const grain = client.getGrain(ISimpleGrain, randomIntegerKey());
+      const grainId = grainIdOf(grain);
+      expect(client.isActive(grainId)).toBe(false);
+    },
   );
 });
