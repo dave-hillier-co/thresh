@@ -20,9 +20,7 @@ export type GapTag =
   | "GAP-LOAD-SHEDDING" // overload detector / gateway load shedding exist; no CPU-aware placement scoring (placement never excludes an overloaded/busy silo)
   | "GAP-REBALANCER-CONTROL" // suspend/resume/report-listener control exists (SiloHost); kept for any upstream IActivationRebalancer surface still missing
   | "GAP-REQUEST-CONTEXT" // RequestContext-driven placement hints (IPlacementDirector.PlacementHintKey) now exist; kept for other client-side RequestContext scaffolding still missing (e.g. a grain-side fail-dehydrate injection knob a client would drive via RequestContext)
-  | "GAP-STREAM-CACHE-DIAGNOSTICS" // no pulling-agent cache/eviction model or diagnostic observer
   | "GAP-STREAM-FILTER" // no IStreamFilter server-side delivery filtering
-  | "GAP-STREAM-GENERATOR-ADAPTER" // no synthetic-generator queue-adapter stream provider
   | "GAP-STREAM-PROVIDER-CONFIG" // no config-load-failure distinction / typed stream-provider errors
   | "GAP-STREAM-PROVIDER-WIRING" // streams not wired into TestCluster / no client.getStreamProvider
   | "GAP-TIMER-VALIDATION" // GrainTimer.change() lacks due-time/period range validation

@@ -96,8 +96,16 @@ shows per-tag counts). One-line definitions live on the `GapTag` union. Grouped 
       `GAP-STREAM-PROVIDER-WIRING` (stream delivery — `StreamConsumerInterface`/
       `BroadcastConsumerInterface` — bypasses the incoming-call-filter pipeline in
       `Activation.callMethod`; `TestCluster`/`SiloHost.getStreamProvider` now exist, so the
-      remaining gap is filter coverage, not provider access), `GAP-STREAM-PROVIDER-CONFIG`,
-      `GAP-STREAM-CACHE-DIAGNOSTICS`, `GAP-STREAM-GENERATOR-ADAPTER`. `GAP-BROADCAST-CHANNEL-CLIENT`
+      remaining gap is filter coverage, not provider access), `GAP-STREAM-PROVIDER-CONFIG`.
+      `GAP-STREAM-CACHE-DIAGNOSTICS` closed: `StreamingDiagnosticObserver`
+      (`@tsva/parity/support/streaming-diagnostics`) plus `MemoryStreamProvider.fanOut` now
+      dispatching to every implicit/admin subscriber concurrently instead of one at a time, so a
+      slow-activating subscriber no longer stalls a fast one sharing the same stream. `GAP-STREAM-GENERATOR-ADAPTER`
+      closed: `RecoverableStreamDeliveryError`/`RecoverableCheckpoint`
+      (`packages/streams/src/stream-recovery.ts`, `generated-stream-recovery-tests.test.ts`) — a
+      per-subscription recoverable-cursor mechanism so a fault-injecting collector grain can
+      deactivate and have `QueuePullingAgent` rewind the owning queue to its last checkpoint and
+      redeliver, vs. a non-transient fault permanently skipping just the one event. `GAP-BROADCAST-CHANNEL-CLIENT`
       closed: `ClientNode.getBroadcastChannelProvider`, per-provider `fireAndForgetDelivery`,
       the `@tsva/core/broadcast-channel-diagnostics` event bus, and predicate-based subscriber
       matching wired into `ClusterNode.broadcastGrainTypes`.

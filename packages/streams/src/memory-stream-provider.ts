@@ -305,6 +305,15 @@ export class MemoryStreamProvider implements StreamProvider {
     for (const stream of this.streams.values()) stream.dispose();
   }
 
+  /**
+   * Deliver to every implicit/admin subscriber concurrently rather than one
+   * at a time. A subscriber reached through `deliver` may need to reactivate
+   * (a real, possibly slow, activation) before it can accept the event; a
+   * sequential `await` there would let one slow-activating subscriber stall
+   * every other subscriber sharing the same stream (Orleans
+   * `ResumeAfterSlowSubscriber`). `Promise.allSettled` so one subscriber's
+   * rejection doesn't stop delivery to the rest.
+   */
   private async fanOut(streamId: StreamId, event: unknown, token: number): Promise<void> {
     if (this.streamFilter !== undefined && !this.streamFilter.shouldDeliver(streamId, event))
       return;
@@ -312,12 +321,18 @@ export class MemoryStreamProvider implements StreamProvider {
     const implicit = implicitSubscriberIds(streamKey, this.implicitTypesFor);
     const admin = this.subscriptionManager.subscribersFor(streamKey);
     const seen = new Set<string>();
+    const subscribers = [];
     for (const subscriber of [...implicit, ...admin]) {
       const id = subscriber.toString();
       if (seen.has(id)) continue;
       seen.add(id);
-      await this.deliver(subscriber, streamKey, event, token);
-      emitStreamingEvent({ kind: "itemDelivered", providerName: this.name, streamId });
+      subscribers.push(subscriber);
     }
+    await Promise.allSettled(
+      subscribers.map(async (subscriber) => {
+        await this.deliver(subscriber, streamKey, event, token);
+        emitStreamingEvent({ kind: "itemDelivered", providerName: this.name, streamId });
+      }),
+    );
   }
 }

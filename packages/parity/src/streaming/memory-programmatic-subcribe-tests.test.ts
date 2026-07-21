@@ -31,12 +31,15 @@
 // below, used by `ConsumerUnsubscribeOnAdd`.
 //
 // Upstream also synchronizes several of these tests on `StreamingDiagnosticObserver`,
-// an internal pulling-agent diagnostic hook this framework has no equivalent
-// of (`GAP-STREAM-CACHE-DIAGNOSTICS` covers the broader pulling-agent
-// diagnostics gap). Every closed test below substitutes a deterministic
-// poll (`waitUntil`) for the delivery/removal counts upstream reads off that
-// observer — the memory provider's fan-out is synchronous-enough in-process
-// that a short poll is reliably non-flaky.
+// an internal pulling-agent diagnostic hook. This framework now has a
+// test-side equivalent (`@tsva/parity/support/streaming-diagnostics`, used by
+// `memory-stream-resume-tests.test.ts`/`memory-stream-cache-miss-tests.test.ts`),
+// but it observes item-delivery/stream-inactive events, not the
+// subscription-count events these programmatic-subscribe tests need. Every
+// closed test below instead substitutes a deterministic poll (`waitUntil`)
+// for the delivery/removal counts upstream reads off the observer — the
+// memory provider's fan-out is synchronous-enough in-process that a short
+// poll is reliably non-flaky.
 import { expect } from "vitest";
 import { grain } from "@tsva/core/decorators";
 import { Grain } from "@tsva/core/grain";

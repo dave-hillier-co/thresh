@@ -31,6 +31,7 @@ import { STREAM_SUBSCRIPTION_OBSERVER, type StreamHandler, type StreamId } from 
 import { FakeTimeProvider } from "@tsva/core/test-support/fake-time-provider";
 import { orleansTest } from "@tsva/testing/orleans-test";
 import { TestCluster } from "@tsva/testing/test-cluster";
+import { waitFor } from "@tsva/testing/wait";
 import { randomGuidKey } from "@tsva/parity/support/keys";
 import { StreamingDiagnosticObserver } from "@tsva/parity/support/streaming-diagnostics";
 
@@ -105,6 +106,66 @@ class ImplicitSubscriptionCounterGrain extends Grain implements IImplicitSubscri
 
 function makeInterestingData(): Uint8Array {
   return new Uint8Array([1]);
+}
+
+// Fixtures for ResumeAfterSlowSubscriber (Orleans `IFastImplicitSubscriptionCounterGrain` /
+// `ISlowImplicitSubscriptionCounterGrain`, both `[ImplicitStreamSubscription("FastSlowImplicitSubscriptionCounterGrain")]`
+// on the same shared counter grain base). The slow grain delays its own
+// activation; the test asserts the fast grain's delivery isn't serialized
+// behind it.
+const FAST_SLOW_NAMESPACE = "FastSlowImplicitSubscriptionCounterGrain";
+const SLOW_ACTIVATION_DELAY_MS = 2_000;
+
+interface IFastSlowCounterGrain extends GrainWithGuidKey {
+  getEventCounter(): Promise<number>;
+}
+const IFastImplicitSubscriptionCounterGrain = defineGrainInterface<IFastSlowCounterGrain>(
+  "IFastImplicitSubscriptionCounterGrain",
+  { options: { getEventCounter: { readOnly: true } } },
+);
+const ISlowImplicitSubscriptionCounterGrain = defineGrainInterface<IFastSlowCounterGrain>(
+  "ISlowImplicitSubscriptionCounterGrain",
+  { options: { getEventCounter: { readOnly: true } } },
+);
+
+abstract class FastSlowCounterGrainBase extends Grain implements IFastSlowCounterGrain {
+  private eventCounter = 0;
+
+  async getEventCounter(): Promise<number> {
+    return this.eventCounter;
+  }
+
+  [STREAM_SUBSCRIPTION_OBSERVER](_namespace: string, _key: string): StreamHandler<unknown> {
+    return {
+      onNext: async () => {
+        this.eventCounter += 1;
+      },
+    };
+  }
+}
+
+@grain({ name: "UnitTests.Grains.FastImplicitSubscriptionCounterGrain" })
+@implicitStreamSubscription(FAST_SLOW_NAMESPACE)
+class FastImplicitSubscriptionCounterGrain extends FastSlowCounterGrainBase {}
+
+@grain({ name: "UnitTests.Grains.SlowImplicitSubscriptionCounterGrain" })
+@implicitStreamSubscription(FAST_SLOW_NAMESPACE)
+class SlowImplicitSubscriptionCounterGrain extends FastSlowCounterGrainBase {
+  override async onActivate(reason: Parameters<Grain["onActivate"]>[0]): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, SLOW_ACTIVATION_DELAY_MS));
+    await super.onActivate(reason);
+  }
+}
+
+async function waitUntilFastCounter(
+  grain: IFastSlowCounterGrain,
+  expected: number,
+  timeoutMs: number,
+): Promise<void> {
+  await waitFor(async () => (await grain.getEventCounter()) === expected, {
+    timeoutMs,
+    intervalMs: 10,
+  });
 }
 
 describe("Tester.StreamingTests.MemoryStreamResumeTests", () => {
@@ -270,17 +331,60 @@ describe("Tester.StreamingTests.MemoryStreamResumeTests", () => {
     },
   );
 
-  // Needs publish/delivery decoupling so a slow subscriber's activation does
-  // not block a fast subscriber on the same stream — deferred to a
-  // follow-up slice. This provider's implicit fan-out (`MemoryStream.publishBatch`
-  // → `MemoryStreamProvider.fanOut`) awaits each subscriber's delivery in
-  // turn before `publish()` resolves (see `implicit-subscription-key-type-grain-tests.test.ts`'s
-  // header for why), so a slow-activating subscriber on a shared stream
-  // blocks every other subscriber's delivery too — there is no independent
-  // per-consumer cursor pump for the implicit path the way `MemoryStream.deliverTo`
-  // gives explicit subscribers.
-  orleansTest.gap(
-    "GAP-STREAM-CACHE-DIAGNOSTICS",
+  // `MemoryStreamProvider.fanOut` now dispatches to every implicit/admin
+  // subscriber concurrently (`Promise.allSettled`) instead of awaiting each
+  // in turn, so a slow-activating subscriber sharing a stream with a fast
+  // one no longer stalls the fast one's own delivery — see
+  // `memory-stream-provider.ts`'s `fanOut`. `publish()` itself still only
+  // resolves once every subscriber's delivery settles (the invariant
+  // `implicit-subscription-key-type-grain-tests.test.ts` documents), so this
+  // test — like upstream's real async pulling-agent delivery — doesn't await
+  // `publish()` before checking the fast grain; it polls concurrently with
+  // the in-flight publish, then drains the publish promises once the
+  // assertions are done.
+  orleansTest(
     "Tester.StreamingTests.MemoryStreamResumeTests.ResumeAfterSlowSubscriber",
+    async () => {
+      const fastSlowCluster = await TestCluster.start({
+        grains: [
+          {
+            ctor: FastImplicitSubscriptionCounterGrain,
+            interfaces: [IFastImplicitSubscriptionCounterGrain],
+          },
+          {
+            ctor: SlowImplicitSubscriptionCounterGrain,
+            interfaces: [ISlowImplicitSubscriptionCounterGrain],
+          },
+        ],
+        configureSilo: (builder) => builder.useMemoryStreams(StreamProviderName),
+      });
+      const pendingPublishes: Promise<void>[] = [];
+      try {
+        const key = randomGuidKey();
+        const streamProvider = fastSlowCluster.getStreamProvider(StreamProviderName);
+        if (streamProvider === undefined)
+          throw new Error(`no "${StreamProviderName}" stream provider`);
+        const stream = streamProvider.getStream<Uint8Array>(
+          "FastSlowImplicitSubscriptionCounterGrain",
+          key,
+        );
+        const fastGrain = fastSlowCluster.getGrain(IFastImplicitSubscriptionCounterGrain, key);
+
+        const start = Date.now();
+        pendingPublishes.push(stream.publish(new Uint8Array([1])));
+        // The fast grain's counter must reach 1 well before the slow
+        // grain's activation delay elapses — proving delivery to the fast
+        // subscriber isn't serialized behind the slow one's activation.
+        await waitUntilFastCounter(fastGrain, 1, SLOW_ACTIVATION_DELAY_MS / 2);
+        expect(Date.now() - start).toBeLessThan(SLOW_ACTIVATION_DELAY_MS);
+
+        pendingPublishes.push(stream.publish(new Uint8Array([2])));
+        await waitUntilFastCounter(fastGrain, 2, SLOW_ACTIVATION_DELAY_MS / 2);
+      } finally {
+        await Promise.allSettled(pendingPublishes);
+        await fastSlowCluster.dispose();
+      }
+    },
+    35_000,
   );
 });

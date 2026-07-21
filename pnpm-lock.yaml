@@ -330,6 +330,9 @@ importers:
       '@tsva/runtime':
         specifier: workspace:*
         version: link:../runtime
+      '@tsva/streams':
+        specifier: workspace:*
+        version: link:../streams
       '@tsva/testing':
         specifier: workspace:*
         version: link:../testing
