@@ -209,6 +209,9 @@ importers:
 
   packages/hosting:
     dependencies:
+      '@tsva/client':
+        specifier: workspace:*
+        version: link:../client
       '@tsva/clustering-k8s':
         specifier: workspace:*
         version: link:../clustering-k8s

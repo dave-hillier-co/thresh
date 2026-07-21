@@ -8,6 +8,7 @@ import type {
 } from "@tsva/core/grain-migration-participant";
 import type { DeactivationReason } from "@tsva/core/reasons";
 import type { PersistentState } from "@tsva/core/persistent-state";
+import { RequestContext } from "@tsva/core/request-context";
 import type { SiloAddress } from "@tsva/core/silo-address";
 import {
   IMigrationTestGrain,
@@ -64,6 +65,14 @@ export class MigrationTestGrain
   onDehydrate(context: DehydrationContext): void {
     if (this.failRehydrateNext) {
       context.set("failRehydrate", true);
+    }
+    // Ambient `RequestContext` flag set by the caller before `migrateOnIdle()`
+    // (Orleans `RequestContext.Set("fail_dehydrate", true)`), carried through
+    // to this later call by `ActivationData.requestMigration`'s captured
+    // `migrationRequestContext`. Thrown before `state` is recorded, same as
+    // upstream — the target reactivates fresh, without this grain's state.
+    if (RequestContext.get("fail_dehydrate") === "true") {
+      throw new Error("Failing to dehydrate on-command");
     }
     context.set("state", this.state);
   }

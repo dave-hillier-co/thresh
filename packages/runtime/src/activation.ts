@@ -143,6 +143,17 @@ export class ActivationData implements GrainContext {
    * live candidates at migration time (see `ClusterNode.migrateActivation`).
    */
   migrationHint: string | undefined;
+  /**
+   * The full ambient `RequestContext` bag in scope at `requestMigration` time
+   * (Orleans `IGrainManagementExtension.MigrateOnIdle`'s
+   * `RequestContext.CallContextData`), restored around `onDehydrate` in
+   * {@link dehydrate} — captured for the same reason as `migrationHint`
+   * (the idle sweep that actually dehydrates runs well after the triggering
+   * call's `RequestContext` scope has ended), but carrying every key so a
+   * migration participant can read app-specific ambient data such as a
+   * caller-set "fail this dehydration" flag, not just the placement hint.
+   */
+  migrationRequestContext: Record<string, string> | undefined;
   /** State captured on the source silo to restore on the target; set by the catalog. */
   rehydrationBag: Record<string, unknown> | undefined;
 
@@ -471,6 +482,8 @@ export class ActivationData implements GrainContext {
     // while it's still in scope — the idle sweep that actually migrates runs
     // well after this call's RequestContext scope has ended.
     this.migrationHint = target === undefined ? RequestContext.get(PLACEMENT_HINT_KEY) : undefined;
+    const store = requestContextStore();
+    this.migrationRequestContext = store !== undefined ? { ...store } : undefined;
   }
 
   get wantsMigration(): boolean {
@@ -497,7 +510,18 @@ export class ActivationData implements GrainContext {
         options: {},
         reentrancyId: this.activationId,
         run: () => {
-          for (const participant of participants) participant.onDehydrate(bag);
+          runWithRequestContext(this.migrationRequestContext ?? {}, () => {
+            for (const participant of participants) {
+              try {
+                participant.onDehydrate(bag);
+              } catch {
+                // Orleans (`ActivationData.OnDehydrate`): log-and-continue — a
+                // participant that fails to dehydrate simply contributes no
+                // state to the bag; migration proceeds and the target
+                // reactivates fresh rather than the whole move aborting.
+              }
+            }
+          });
           this.dehydrated = true;
           return Promise.resolve();
         },

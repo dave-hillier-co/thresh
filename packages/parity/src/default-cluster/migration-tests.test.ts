@@ -236,18 +236,37 @@ describe("DefaultCluster.Tests.General.MigrationTests", () => {
     },
   );
 
-  // Same client-side `RequestContext`-as-placement-hint pattern as
-  // `MultiGrainDirectedMigrationTest` above (now ported — placement hints
-  // exist), plus `RequestContext.Set("fail_dehydrate", true)` from the client
-  // to tell the grain to fail its NEXT dehydration. That second half has no
-  // equivalent yet: `MigrationTestGrain.onDehydrate` has no fail-dehydrate
-  // knob (contrast `failNextRehydrate`/`onRehydrate`'s `failRehydrate`
-  // flag, used by `FailRehydrationTest` below). Adding one is a small,
-  // separate grain-side change, not attempted here.
-  orleansTest.gap(
-    "GAP-REQUEST-CONTEXT",
-    "DefaultCluster.Tests.General.MigrationTests.FailDehydrationTest",
-  );
+  // Client-side `RequestContext.set("fail_dehydrate", "true")` (Orleans
+  // `RequestContext.Set("fail_dehydrate", true)`) tells the grain to fail its
+  // next dehydration. `requestMigration` captures the whole ambient
+  // `RequestContext` bag at `migrateOnIdle` call time (not just the placement
+  // hint), the same way it always captured `migrationHint` — because the idle
+  // sweep that actually dehydrates runs well after this call's own
+  // `RequestContext` scope has ended — and `dehydrate` restores that bag
+  // around `onDehydrate` (see `ActivationData.migrationRequestContext`,
+  // `packages/runtime/src/activation.ts`). A participant that throws from
+  // `onDehydrate` is swallowed (Orleans: log-and-continue), so migration still
+  // proceeds but the bag it hands to the target carries no state.
+  orleansTest("DefaultCluster.Tests.General.MigrationTests.FailDehydrationTest", async () => {
+    const key = randomIntegerKey();
+    const grain = cluster.getGrain(IMigrationTestGrain, key);
+    const grainId = new GrainId(migrationGrainType, key);
+    const expectedState = Math.floor(Math.random() * 1_000_000);
+
+    await grain.setState(expectedState);
+    const originalHost = hostOf(cluster, grainId);
+    const targetHost = cluster.silos.find((s) => s !== originalHost)!;
+
+    RequestContext.set("fail_dehydrate", "true");
+    await grain.migrateOnIdle(targetHost.address);
+    await forceMigrationSweep(time);
+    await waitFor(() => hostOf(cluster, grainId) === targetHost);
+
+    expect(hostOf(cluster, grainId)).toBe(targetHost);
+    // Dehydration failed before `state` was recorded in the bag, so the
+    // target reactivated fresh, without this grain's state.
+    expect(await grain.getState()).not.toBe(expectedState);
+  });
 
   // After a failed `onRehydrate` the target's directory entry still points at
   // the (now-invalid) migrated activation. The next call routes there via the

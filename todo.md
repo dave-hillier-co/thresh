@@ -29,8 +29,10 @@ vertical slices (see [`CLAUDE.md`](CLAUDE.md)).
 - [ ] **Transaction TM confirmation-worker keepalive** — pair with the lock-acquisition deadline so
       the TM periodically pings remote participants to resolve in-doubt prepared records after a TM
       crash, rather than relying on one-shot recovery at next activation.
-- [ ] **Grain observers / typed client callbacks** — `CreateObjectReference<T>()` surface for
-      server-to-client push, including W3C `traceparent` propagation back to the client.
+- [ ] **Grain observers / typed client callbacks** — `CreateObjectReference<T>()`/
+      `deleteObjectReference` (`ClientNode`, and now `GrainFactoryAccess` for silo startup tasks
+      via an embedded `ClientNode` — `SiloBuilder.build()`, requires `useInProcessTransport`) exist
+      for server-to-client push; still missing: W3C `traceparent` propagation back to the client.
 - [x] **`StatelessWorker` placement enforcement** — the catalog now scales a stateless-worker grain
       id to multiple local activations on demand (up to `maxLocalWorkers`), routed synchronously
       (no directory) from `DistributedDispatcher`/`LocalDispatcher`; ordinary grains keep exactly
@@ -64,8 +66,14 @@ Each `GAP-*` tag below skips ported tests; implementing the feature un-gaps them
 shows per-tag counts). One-line definitions live on the `GapTag` union. Grouped by area:
 
 - [ ] **Activation & lifecycle** — `GAP-GRAIN-SERVICE`, `GAP-STORAGE-FACET`.
-- [ ] **Request context** — `GAP-REQUEST-CONTEXT` (expose on `@tsva/core` public surface),
-      `GAP-CLIENT-REQUEST-CONTEXT`, `GAP-CALL-FILTER-CLIENT-LAYER`, `GAP-CLIENT-SILO-SEPARATION`.
+- [ ] **Request context** — `GAP-CLIENT-REQUEST-CONTEXT`, `GAP-CALL-FILTER-CLIENT-LAYER`.
+      `GAP-REQUEST-CONTEXT` closed: `ActivationData.requestMigration` now captures the whole
+      ambient `RequestContext` bag (not just the placement hint) and `dehydrate` restores it around
+      `onDehydrate`, so a migration participant can read caller-set ambient data (e.g.
+      `FailDehydrationTest`'s `fail_dehydrate` flag); a participant that throws is swallowed
+      (Orleans: log-and-continue) rather than aborting the whole migration.
+      `GAP-CLIENT-SILO-SEPARATION` closed: `ClientNode.isActive` always answers `false` (a client
+      never hosts grain activations), mirroring `SiloHost.isActive`'s silo-side check.
 - [ ] **Timers** — `GAP-TIMER-VALIDATION` (callback-initiated Change/dispose portions).
 - [ ] **Placement & rebalancing** — `GAP-REBALANCER-CONTROL`, `GAP-ACTIVATION-REPARTITIONING`,
       `GAP-LOAD-SHEDDING`.

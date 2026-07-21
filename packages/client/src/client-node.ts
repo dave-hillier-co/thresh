@@ -212,6 +212,18 @@ export class ClientNode implements Dispatcher {
   }
 
   /**
+   * Orleans `ILocalActivationStatusChecker.IsLocallyActivated` from the
+   * client's perspective: a client never hosts grain activations (only
+   * observer/local objects, a distinct id space — see `createObjectReference`),
+   * so this always answers `false`, regardless of `id` or of what any silo in
+   * the cluster is doing. Mirrors `SiloHost.isActive`'s silo-side check, which
+   * this client is never the answer to.
+   */
+  isActive(_id: GrainId): boolean {
+    return false;
+  }
+
+  /**
    * A `GrainCancellationTokenSource` whose `canceller` reaches any recorded
    * target grain's `ICancellationSourcesExtension`, wherever it lives
    * (`TestCluster.newCancellationTokenSource`'s client-side counterpart): the
