@@ -21,6 +21,7 @@ import type { TransactionInfo } from "@tsva/core/transaction-info";
 import {
   GrainCallTimeoutError,
   TransactionAbortedError,
+  TransactionInDoubtError,
   TransactionsDisabledError,
 } from "@tsva/core/errors";
 import type { Dispatcher } from "@tsva/runtime/dispatcher";
@@ -301,8 +302,14 @@ export class GrainFactory {
         return { transaction: undefined, beginsHere: false };
       case "suppress":
         return { transaction: undefined, beginsHere: false };
-      case "supported":
+      // No `[Transaction]` attribute at all (Orleans: a method the transaction
+      // call filter never sees) does *not* see the ambient transaction, unlike
+      // an explicit `"supported"`, which does — see
+      // TransactionAttributionTestRunner.AllSupportedAttributesFromWithinTransactionTest
+      // upstream ("No attribute - should have no transaction context").
       case undefined:
+        return { transaction: undefined, beginsHere: false };
+      case "supported":
       default:
         return { transaction: ambient, beginsHere: false };
     }
@@ -376,6 +383,13 @@ export class GrainFactory {
       await agent.resolve(transaction);
       return result;
     } catch (error) {
+      // `TransactionInDoubtError` (@tsva/core/errors) means the commit was
+      // already durably decided before this failure happened — the opposite
+      // of an abort. Nothing to roll back (there is nothing to undo, and
+      // every participant's write will still land), and it must surface
+      // as-is rather than folded into the generic abort-wrapping below,
+      // which would misreport a committed transaction as aborted.
+      if (error instanceof TransactionInDoubtError) throw error;
       await agent.abort(transaction);
       // A failure already shaped as a transaction abort (a read-only
       // violation, an orphan call, a wait-die/lock-upgrade death, or the

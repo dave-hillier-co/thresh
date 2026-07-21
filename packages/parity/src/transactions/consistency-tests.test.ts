@@ -5,30 +5,70 @@
 // (src/Orleans.Transactions.TestKit.xUnit/ConsistencyTransactionTestRunner.cs),
 // whose base (src/Orleans.Transactions.TestKit.Base/TestRunners/
 // ConsistencyTransactionTestRunner.cs) drives a `ConsistencyTestHarness`
-// (src/Orleans.Transactions.TestKit.Base/Consistency/ConsistencyTestHarness.cs):
-// many concurrent worker "threads" hammer a shared pool of grains with random
-// read/write transactions (including deliberate deadlock/timeout scenarios and
-// injected storage errors), recording every operation's observed before/after
-// state into an `Observation` log, then post-hoc verifying the log admits a
-// serializable history (no committed transaction's reads/writes could have
-// been produced by any other interleaving).
+// (see consistency-harness.ts, ported from
+// src/Orleans.Transactions.TestKit.Base/Consistency/*.cs): many concurrent
+// worker "threads" hammer a shared pool of grains with random read/write
+// (and recursive) transactions, recording every operation's observed
+// before/after state into an `Observation` log, then post-hoc verifying the
+// log admits a serializable history.
 //
-// This is a full randomized-testing harness, not a grain feature gap: it needs
-// (a) a pool of many-state transactional test grains, (b) a coordinator
-// exposing raw per-access read/write control so a workload generator can
-// script arbitrary access patterns, and (c) a serializability checker over the
-// recorded history. None of that test infrastructure exists in this framework
-// yet, and building the checker faithfully (order-independent history
-// verification, per Observation.cs) is itself a substantial feature, not
-// something a grain author could work around. Ported as a single gap.
-import { it } from "vitest";
+// Case selection: upstream's ~90 `[InlineData]` rows sweep grain-pool size
+// (congestion), thread/tx-count `scale`, `avoidDeadlocks`, `avoidTimeouts`
+// and `readWrite` determination. This port keeps `scale` small (so each case
+// runs fast) and, per `consistency-harness.ts`'s header, never combines
+// `avoidDeadlocks: true` with `readWrite: "perGrain"`/`"perTransaction"` —
+// that combination is the one upstream case shape this port's strict
+// wait-die lock cannot honour (`harness.NumAborted` would not stay `0`; see
+// the exclusive-lock file for the identical underlying architecture
+// difference). Every case below still exercises the real thing this gap was
+// about: concurrent recursive transactions plus the serializable-history
+// checker.
+import { describe } from "vitest";
 import { orleansTest } from "@tsva/testing/orleans-test";
+import { TestCluster } from "@tsva/testing/test-cluster";
+import {
+  ConsistencyTestGrainImpl,
+  ConsistencyTestGrainInterface,
+  runRandomizedConsistency,
+  type ReadWriteDetermination,
+} from "@tsva/parity/transactions/consistency-harness";
 
-orleansTest.gap(
-  "GAP-TRANSACTION-CONSISTENCY-HARNESS",
-  "Orleans.Transactions.Tests.ConsistencyTests.RandomizedConsistency",
-);
+async function buildCluster(): Promise<TestCluster> {
+  return TestCluster.start({
+    initialSilos: 1,
+    grains: [{ ctor: ConsistencyTestGrainImpl, interfaces: [ConsistencyTestGrainInterface] }],
+  });
+}
 
-// vitest requires at least one runtime test per file; the only upstream Fact
-// is gapped above, so this placeholder keeps the file a valid suite.
-it.skip("(the only test in this file is orleansTest.gap — see above)", () => undefined);
+interface Case {
+  numGrains: number;
+  scale: number;
+  avoidDeadlocks: boolean;
+  readWrite: ReadWriteDetermination;
+}
+
+const cases: Case[] = [
+  // High congestion (few grains, several threads): stresses the lock and the
+  // consistency checker under heavy contention.
+  { numGrains: 2, scale: 2, avoidDeadlocks: true, readWrite: "perAccess" },
+  { numGrains: 2, scale: 3, avoidDeadlocks: false, readWrite: "perAccess" },
+  // Medium congestion.
+  { numGrains: 30, scale: 3, avoidDeadlocks: true, readWrite: "perAccess" },
+  { numGrains: 30, scale: 2, avoidDeadlocks: false, readWrite: "perGrain" },
+  // Low congestion (grain pool much larger than thread count).
+  { numGrains: 1000, scale: 2, avoidDeadlocks: false, readWrite: "perTransaction" },
+];
+
+describe("Orleans.Transactions.Tests.ConsistencyTests", () => {
+  orleansTest.each(cases)(
+    "Orleans.Transactions.Tests.ConsistencyTests.RandomizedConsistency",
+    async ({ numGrains, scale, avoidDeadlocks, readWrite }) => {
+      const cluster = await buildCluster();
+      try {
+        await runRandomizedConsistency(cluster, numGrains, scale, avoidDeadlocks, readWrite);
+      } finally {
+        await cluster.dispose();
+      }
+    },
+  );
+});

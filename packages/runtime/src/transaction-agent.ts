@@ -1,4 +1,8 @@
-import { TransactionAbortedError, TransactionOrphanCallError } from "@tsva/core/errors";
+import {
+  TransactionAbortedError,
+  TransactionInDoubtError,
+  TransactionOrphanCallError,
+} from "@tsva/core/errors";
 import { Guid } from "@tsva/core/guid";
 import type {
   EnlistedParticipant,
@@ -80,7 +84,20 @@ export class TransactionAgent {
       // atomic commit point. A crash after this leaves participants in-doubt,
       // and recovery resolves them to commit by querying the TM.
       if (manager !== undefined) await this.recordCommit(manager, info, writeParticipants);
-      await Promise.all(enlisted.map((e) => this.commit(e, info)));
+      // Past this point the commit is durably decided: every participant's
+      // write *will* eventually apply. A participant whose own commit step
+      // throws here (e.g. an external, non-grain resource enlisted via
+      // `TransactionParticipant.commit`, Orleans `ITransactionalResource`)
+      // does not undo anyone else's already-applied commit — it only leaves
+      // the caller unable to confirm this call itself finished applying
+      // everywhere, hence the distinct, non-abort `TransactionInDoubtError`
+      // (Orleans `OrleansTransactionInDoubtException`) rather than the
+      // generic `TransactionAbortedError`.
+      const results = await Promise.allSettled(enlisted.map((e) => this.commit(e, info)));
+      const failed = results.find((r): r is PromiseRejectedResult => r.status === "rejected");
+      if (failed !== undefined) {
+        throw new TransactionInDoubtError(info.id, { cause: failed.reason });
+      }
       return;
     }
     await this.abort(info);
