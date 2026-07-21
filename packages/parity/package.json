@@ -17,6 +17,7 @@
     "@opentelemetry/sdk-trace-base": "^2.7.1",
     "@tsva/client": "workspace:*",
     "@tsva/core": "workspace:*",
+    "@tsva/directory": "workspace:*",
     "@tsva/durable-jobs": "workspace:*",
     "@tsva/hosting": "workspace:*",
     "@tsva/messaging": "workspace:*",
