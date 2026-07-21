@@ -10,6 +10,7 @@
 // (`GetPrimaryKeyLong`, `GetLabel`) is preserved exactly.
 import { describe, expect } from "vitest";
 import { orleansTest } from "@tsva/testing/orleans-test";
+import { IManagementGrain } from "@tsva/core/management-grain";
 import { TestCluster, type TestSiloHandle } from "@tsva/testing/test-cluster";
 import {
   ILivenessTestGrain,
@@ -50,12 +51,40 @@ async function doLivenessOracleTest2(
 }
 
 describe("UnitTests.MembershipTests.LivenessTests_MembershipGrain", () => {
-  // Upstream reads back every silo's `SiloStatus` from `IManagementGrain`
-  // (GAP-MGMT-GRAIN: no management grain / silo-control system targets exist
-  // in this harness).
-  orleansTest.gap(
-    "GAP-MGMT-GRAIN",
+  // Upstream reads back every silo's `SiloStatus` from `IManagementGrain`,
+  // stops the target silo, then asserts it now reads back as ShuttingDown,
+  // Stopping, or Dead while the others stay Active. This harness's
+  // `TestCluster.stopSilo` removes the stopped silo from the membership view
+  // outright (`StaticMembershipService.removeSilo`) rather than tombstoning
+  // it with a terminal status, so the adapted assertion below checks that the
+  // stopped silo simply drops out of `getHosts()` and the survivors stay
+  // Active — the same "silo is gone, the rest are unaffected" behaviour,
+  // expressed the way this harness's membership model represents it.
+  orleansTest(
     "UnitTests.MembershipTests.LivenessTests_MembershipGrain.Liveness_Grain_1",
+    async () => {
+      const cluster = await TestCluster.start({
+        initialSilos: 2,
+        grains: [{ ctor: LivenessTestGrain, interfaces: [ILivenessTestGrain] }],
+      });
+      try {
+        const silo3 = await cluster.startAdditionalSilo();
+        const mgmt = cluster.getGrain(IManagementGrain, 0n);
+
+        let statuses = await mgmt.getHosts(false);
+        expect(statuses.size).toBe(3);
+        for (const status of statuses.values()) expect(status).toBe("active");
+
+        await cluster.stopSilo(silo3);
+
+        statuses = await mgmt.getHosts(false);
+        expect(statuses.size).toBe(2);
+        expect([...statuses.keys()].some((a) => a.equals(silo3.address))).toBe(false);
+        for (const status of statuses.values()) expect(status).toBe("active");
+      } finally {
+        await cluster.dispose();
+      }
+    },
   );
 
   orleansTest(

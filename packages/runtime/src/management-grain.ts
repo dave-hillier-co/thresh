@@ -5,7 +5,11 @@ import type { GrainId } from "@tsva/core/grain-id";
 import { setGrainOptions } from "@tsva/core/grain-metadata";
 import { grainReferenceIdentity } from "@tsva/core/grain-reference";
 import type { GrainType } from "@tsva/core/grain-type";
-import { IManagementGrain, type SimpleGrainStatistic } from "@tsva/core/management-grain";
+import {
+  IManagementGrain,
+  type DetailedGrainStatistic,
+  type SimpleGrainStatistic,
+} from "@tsva/core/management-grain";
 import type { MembershipSnapshot, SiloMember, SiloStatus } from "@tsva/core/membership";
 import type { SiloAddress } from "@tsva/core/silo-address";
 
@@ -26,6 +30,11 @@ export interface ManagementContext {
   membershipSnapshot(): MembershipSnapshot;
   /** Per-grain-type activation counts amalgamated across every active silo. */
   gatherGrainStats(): Promise<SimpleGrainStatistic[]>;
+  /**
+   * One entry per live activation amalgamated across every active silo,
+   * optionally restricted to `types` (Orleans `GetDetailedGrainStatistics`).
+   */
+  gatherDetailedGrainStats(types?: string[]): Promise<DetailedGrainStatistic[]>;
   /** The grain directory's current activation address for `id`, if any — no side effect (doesn't activate). */
   lookupActivation(id: GrainId): Promise<GrainAddress | undefined>;
   /** Whether `type` is registered with `[StatelessWorker]`-equivalent placement. */
@@ -80,6 +89,13 @@ export function createManagementGrainType(ctx: ManagementContext): new () => Gra
       _hostsIds?: SiloAddress[] | null,
     ): Promise<SimpleGrainStatistic[]> {
       return ctx.gatherGrainStats();
+    }
+
+    async getDetailedGrainStatistics(
+      types?: string[] | null,
+      _hostsIds?: SiloAddress[] | null,
+    ): Promise<DetailedGrainStatistic[]> {
+      return ctx.gatherDetailedGrainStats(types ?? undefined);
     }
 
     async getActivationAddress(reference: unknown): Promise<GrainAddress | null> {

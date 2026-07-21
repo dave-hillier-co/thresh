@@ -50,7 +50,11 @@ import {
 } from "@tsva/core/channel-namespace-predicate";
 import { StreamConsumerInterface, type Controllable, type StreamProvider } from "@tsva/core/stream";
 import type { InvocationRequest } from "@tsva/core/request";
-import { IManagementGrain, type SimpleGrainStatistic } from "@tsva/core/management-grain";
+import {
+  IManagementGrain,
+  type DetailedGrainStatistic,
+  type SimpleGrainStatistic,
+} from "@tsva/core/management-grain";
 import type { SiloAddress } from "@tsva/core/silo-address";
 import {
   participantKey,
@@ -526,6 +530,7 @@ export class ClusterNode {
       createManagementGrainType({
         membershipSnapshot: () => this.options.membership.current(),
         gatherGrainStats: () => this.gatherClusterGrainStats(),
+        gatherDetailedGrainStats: (types) => this.gatherClusterDetailedGrainStatistics(types),
         lookupActivation: (id) => this.directory.lookup(id),
         isStatelessWorker: (type) => this.grainTypes.get(type)?.metadata.options.stateless === true,
         activationCountFor: (id) => this.gatherGrainActivationCount(id),
@@ -1522,6 +1527,10 @@ export class ClusterNode {
       void this.handleStatsRequest(message);
       return;
     }
+    if (message.system === "detailedstats") {
+      void this.handleDetailedStatsRequest(message);
+      return;
+    }
     if (message.system === "actcount") {
       void this.handleActivationCountRequest(message);
       return;
@@ -1728,6 +1737,60 @@ export class ClusterNode {
           : await this.sendStatsQuery(silo).catch(() => [] as [GrainType, number][]);
         for (const [grainType, activationCount] of entries) {
           results.push({ grainType, silo, activationCount });
+        }
+      }),
+    );
+    return results;
+  }
+
+  /** Ask a peer for its per-activation detailed stats as a `system: "detailedstats"` request. */
+  private async sendDetailedStatsQuery(
+    silo: SiloAddress,
+    types: string[] | undefined,
+  ): Promise<GrainId[]> {
+    return (await this.sendSystemMessage(
+      silo,
+      "detailedstats",
+      new GrainId("detailedstats", silo.ringKey),
+      this.serializer.serialize(types ?? null),
+    )) as GrainId[];
+  }
+
+  private async handleDetailedStatsRequest(message: Message): Promise<void> {
+    const replyTo = message.sendingSilo;
+    if (replyTo === undefined) return;
+    const types = this.serializer.deserialize<string[] | null>(message.body);
+    const ids = this.localDetailedGrainIds(types ?? undefined);
+    await this.reply(
+      replyTo,
+      responseTo(message, "success", this.serializer.serialize(ids), this.options.local),
+    );
+  }
+
+  /** This silo's live activation ids, optionally restricted to `types`. */
+  private localDetailedGrainIds(types: string[] | undefined): GrainId[] {
+    const live = this.catalog.liveActivations();
+    const filtered = types === undefined ? live : live.filter((a) => types.includes(a.id.type));
+    return filtered.map((a) => a.id);
+  }
+
+  /**
+   * One entry per live activation amalgamated across the active cluster,
+   * optionally restricted to `types` (Orleans
+   * `IManagementGrain.GetDetailedGrainStatistics`), unlike
+   * `gatherClusterGrainStats` which only amalgamates a per-(type, silo)
+   * count.
+   */
+  async gatherClusterDetailedGrainStatistics(types?: string[]): Promise<DetailedGrainStatistic[]> {
+    const active = activeSilos(this.options.membership.current());
+    const results: DetailedGrainStatistic[] = [];
+    await Promise.all(
+      active.map(async (silo) => {
+        const ids = silo.equals(this.options.local)
+          ? this.localDetailedGrainIds(types)
+          : await this.sendDetailedStatsQuery(silo, types).catch(() => [] as GrainId[]);
+        for (const grainId of ids) {
+          results.push({ grainType: grainId.type, silo, grainId });
         }
       }),
     );

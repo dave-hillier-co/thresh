@@ -1,6 +1,7 @@
 import type { Duration } from "./duration";
 import type { GrainAddress } from "./grain-address";
 import { defineGrainInterface } from "./grain-interface";
+import type { GrainId } from "./grain-id";
 import type { GrainWithIntegerKey } from "./key-kinds";
 import type { SiloMember, SiloStatus } from "./membership";
 import type { SiloAddress } from "./silo-address";
@@ -14,6 +15,20 @@ export interface SimpleGrainStatistic {
   grainType: string;
   silo: SiloAddress;
   activationCount: number;
+}
+
+/**
+ * Orleans' `Orleans.Runtime.DetailedGrainStatistic`: one live activation's
+ * identity and host, unlike `SimpleGrainStatistic` which only amalgamates a
+ * per-(type, silo) count. `GetDetailedGrainStatistics` returns one of these
+ * per live activation across the cluster — e.g. the activation-rebalancing
+ * parity tests use it to count per-silo activations of one grain type
+ * directly, rather than reading the aggregate count.
+ */
+export interface DetailedGrainStatistic {
+  grainType: string;
+  silo: SiloAddress;
+  grainId: GrainId;
 }
 
 /**
@@ -45,6 +60,17 @@ export interface IManagementGrain extends GrainWithIntegerKey {
    * cluster.
    */
   getSimpleGrainStatistics(hostsIds?: SiloAddress[] | null): Promise<SimpleGrainStatistic[]>;
+  /**
+   * Detailed, per-activation grain statistics amalgamated across every active
+   * silo (Orleans `GetDetailedGrainStatistics`). `types`, given, restricts the
+   * result to those grain types; `hostsIds` is accepted for signature parity
+   * with upstream but not consulted — every ported test queries the whole
+   * cluster.
+   */
+  getDetailedGrainStatistics(
+    types?: string[] | null,
+    hostsIds?: SiloAddress[] | null,
+  ): Promise<DetailedGrainStatistic[]>;
   /**
    * The activation address of a grain, or `null` if it has none (Orleans
    * `GetActivationAddress`, `ValueTask<SiloAddress>`, `null` when
