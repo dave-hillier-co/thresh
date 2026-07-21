@@ -15,6 +15,14 @@ export interface PlacementContext {
   siloMetadata?: (silo: SiloAddress) => Readonly<Record<string, string>> | undefined;
   /** Resource signals for resource-optimized placement; local from the catalog, remote from membership. */
   resourceStats?: (silo: SiloAddress) => SiloResourceStats | undefined;
+  /**
+   * Whether a silo is currently shedding load (Orleans `SiloRuntimeStatistics.IsOverloaded`,
+   * consulted by `ActivationCountPlacementDirector.SelectSiloPowerOfK`, which excludes an
+   * overloaded silo from candidate selection outright). Local reads the silo's own
+   * `OverloadDetector`; a peer's comes from its last pushed load-stats snapshot.
+   * Undefined (or the accessor itself being absent) means "not known to be overloaded".
+   */
+  isOverloaded?: (silo: SiloAddress) => boolean;
   /** Injectable RNG so placement is deterministic in tests. */
   random?: () => number;
 }

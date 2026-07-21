@@ -30,6 +30,15 @@ export interface GrainRuntimeServices {
   loadShedding?: () => SiloLoadSheddingTestHooks | undefined;
   /** Pings a specific silo's control target, for `GrainRuntime.pingSilo()`. */
   siloPing?: (siloAddress: SiloAddress, message?: string) => Promise<void>;
+  /**
+   * Whether this activation's grain type is a `[StatelessWorker]` (Orleans
+   * `ActivationData.IsStatelessWorker`). A stateless-worker id may have several
+   * concurrent activations, so nothing here can bind a resource to "the"
+   * activation — `getStreamProvider` consults this to reject a subscription
+   * attempt the same way Orleans' `SiloStreamProviderRuntime.BindExtension`
+   * does (`InvalidOperationException`).
+   */
+  isStatelessWorker?: () => boolean;
 }
 
 /** Per-activation `GrainRuntime`, reached by a grain through `this.runtime`. */
@@ -80,6 +89,13 @@ export class GrainRuntimeImpl implements GrainRuntime {
   }
 
   getStreamProvider(name?: string): StreamProvider {
+    if (this.services.isStatelessWorker?.() === true) {
+      throw new Error(
+        "A stream provider cannot be used from a [StatelessWorker] grain: a stream " +
+          "subscription must bind to a single activation, but a stateless worker may have " +
+          "several concurrent ones.",
+      );
+    }
     const base = this.services.streams?.(name);
     if (base === undefined) throw new Error("streams are not configured on this silo");
     // Pulling-agent providers deliver through the dispatcher to a handler bound on
@@ -155,20 +171,20 @@ export class GrainRuntimeImpl implements GrainRuntime {
     this.requireLoadShedding().enableOverloadDetection(enabled);
   }
 
-  latchCpuUsage(value: number): void {
-    this.requireLoadShedding().latchCpuUsage(value);
+  latchCpuUsage(value: number): Promise<void> {
+    return this.requireLoadShedding().latchCpuUsage(value);
   }
 
-  unlatchCpuUsage(): void {
-    this.requireLoadShedding().unlatchCpuUsage();
+  unlatchCpuUsage(): Promise<void> {
+    return this.requireLoadShedding().unlatchCpuUsage();
   }
 
-  latchOverloaded(): void {
-    this.requireLoadShedding().latchOverloaded();
+  latchOverloaded(): Promise<void> {
+    return this.requireLoadShedding().latchOverloaded();
   }
 
-  unlatchOverloaded(): void {
-    this.requireLoadShedding().unlatchOverloaded();
+  unlatchOverloaded(): Promise<void> {
+    return this.requireLoadShedding().unlatchOverloaded();
   }
 
   pingSilo(siloAddress: SiloAddress, message?: string): Promise<void> {

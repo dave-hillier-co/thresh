@@ -430,6 +430,7 @@ export class Catalog {
         ? { loadShedding: this.options.loadShedding }
         : {}),
       ...(this.options.siloPing !== undefined ? { siloPing: this.options.siloPing } : {}),
+      isStatelessWorker: () => reg.metadata.options.stateless === true,
     });
     const instance =
       this.options.grainActivator !== undefined

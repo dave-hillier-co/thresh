@@ -2,30 +2,104 @@
 //
 // The four elasticity tests are `[SkippableFact(Skip = "...")]` upstream
 // (https://github.com/dotnet/orleans/issues/4008) — skipped there too. The
-// remaining two (`LoadAwareGrainShouldNotAttemptToCreateActivationsOn*`) now
-// have their headline dependency — an `OverloadDetector`/latchable
-// CPU-usage source, and a gateway that sheds load — ported (GAP-LOAD-SHEDDING,
-// see `load-shedding-test.test.ts`). Their setup routes through
-// `GetGrainAtSilo`, upstream's helper for pinning a fresh grain onto a
-// specific NEWLY STARTED silo via
-// `RequestContext.Set(IPlacementDirector.PlacementHintKey, silo)` — that
-// RequestContext-driven placement hint now exists (GAP-REQUEST-CONTEXT
-// closed; see `@tsva/runtime/placement/placement-hint`), so `GetGrainAtSilo`
-// itself is no longer the blocker. What still blocks these two is that this
-// framework's load-aware placement strategy never consults the
-// overload/CPU-latch state at all: it is only wired into the GATEWAY's
-// load-shedding rejection path (`ClusterNode.receiveRequest` /
-// `GatewayTooBusyException`), not into `OnAddActivation`'s candidate
-// selection — so an overloaded/busy silo is never excluded as a placement
-// candidate. Closing these also needs `IActivationCountBasedPlacementTestGrain`
-// (load-aware placement test grain) and its
-// `LatchOverloaded`/`UnlatchOverloaded`/`LatchCpuUsage`/`UnlatchCpuUsage`/
-// `GetLocation` members, none of which are ported yet. Still tagged
-// GAP-LOAD-SHEDDING, the tag with the `todo.md` entry tracking this pair.
-import { describe } from "vitest";
+// remaining two (`LoadAwareGrainShouldNotAttemptToCreateActivationsOn*`) are
+// ported below: this framework's load-aware placement strategy
+// (`ActivationCountPlacement`) now excludes a silo `PlacementContext.isOverloaded`
+// flags before sampling candidates (mirrors Orleans
+// `ActivationCountPlacementDirector.SelectSiloPowerOfK`'s
+// `if (localSiloStat.SiloStats.IsOverloaded) continue;`), and that flag is kept
+// current across silos by `ClusterNode.publishLoadStats` — a forced push
+// (mirroring Orleans' test-only `PropagateStatisticsToCluster`) run after every
+// `IActivationCountBasedPlacementTestGrain` latch/unlatch call, so a peer silo's
+// placement decision sees the change immediately rather than waiting on a
+// periodic gossip interval this framework does not otherwise run. Setup routes
+// through `getGrainAtSilo` (`@tsva/parity/support/get-grain-at-silo`), the port
+// of upstream's `GetGrainAtSilo` helper, which pins a fresh grain onto a
+// specific NEWLY STARTED silo via the `RequestContext`-driven placement hint
+// (`IPlacementDirector.PlacementHintKey`, ex-GAP-REQUEST-CONTEXT).
+import { afterAll, beforeAll, describe, expect } from "vitest";
 import { orleansTest } from "@tsva/testing/orleans-test";
+import { TestCluster, type TestSiloHandle } from "@tsva/testing/test-cluster";
+import {
+  ActivationCountBasedPlacementTestGrain,
+  IActivationCountBasedPlacementTestGrain,
+  IPreferLocalPlacementTestGrain,
+  IRandomPlacementTestGrain,
+  PreferLocalPlacementTestGrain,
+  RandomPlacementTestGrain,
+} from "@tsva/parity/grains/impl/placement-test-grain";
+import { getGrainAtSilo } from "@tsva/parity/support/get-grain-at-silo";
+import { randomGuidKey } from "@tsva/parity/support/keys";
+import type { IPlacementTestGrain } from "@tsva/parity/grains/interfaces/placement-test-grain-interfaces";
+
+const SAMPLE_SIZE = 10;
 
 describe("UnitTests.General.ElasticPlacementTests", () => {
+  let cluster: TestCluster;
+
+  beforeAll(async () => {
+    cluster = await TestCluster.start({
+      initialSilos: 2,
+      grains: [
+        { ctor: RandomPlacementTestGrain, interfaces: [IRandomPlacementTestGrain] },
+        { ctor: PreferLocalPlacementTestGrain, interfaces: [IPreferLocalPlacementTestGrain] },
+        {
+          ctor: ActivationCountBasedPlacementTestGrain,
+          interfaces: [IActivationCountBasedPlacementTestGrain],
+        },
+      ],
+      loadShedding: { loadSheddingEnabled: true },
+    });
+  });
+
+  afterAll(async () => {
+    await cluster.dispose();
+  });
+
+  /** Upstream `ElasticPlacementTests.ElasticityGrainPlacementTest`. */
+  async function elasticityGrainPlacementTest(
+    taint: (grain: IPlacementTestGrain) => Promise<void>,
+    restore: (grain: IPlacementTestGrain) => Promise<void>,
+  ): Promise<void> {
+    const taintedSilo: TestSiloHandle = await cluster.startAdditionalSilo();
+    const taintedGrain = await getGrainAtSilo(cluster, taintedSilo.address);
+
+    try {
+      await taint(taintedGrain);
+
+      const places: string[] = [];
+      for (let i = 0; i < SAMPLE_SIZE; i += 1) {
+        const grain = cluster.getGrain(IActivationCountBasedPlacementTestGrain, randomGuidKey());
+        places.push(await grain.getRuntimeInstanceId());
+      }
+
+      expect(places).not.toContain(taintedSilo.address.toString());
+    } finally {
+      await restore(taintedGrain);
+    }
+  }
+
+  orleansTest(
+    "UnitTests.General.ElasticPlacementTests.LoadAwareGrainShouldNotAttemptToCreateActivationsOnOverloadedSilo",
+    async () => {
+      await elasticityGrainPlacementTest(
+        (g) => g.latchOverloaded(),
+        (g) => g.unlatchOverloaded(),
+      );
+    },
+  );
+
+  orleansTest(
+    "UnitTests.General.ElasticPlacementTests.LoadAwareGrainShouldNotAttemptToCreateActivationsOnBusySilos",
+    async () => {
+      // a CPU usage of 100% will disqualify a silo from getting new grains.
+      await elasticityGrainPlacementTest(
+        (g) => g.latchCpuUsage(100.0),
+        (g) => g.unlatchCpuUsage(),
+      );
+    },
+  );
+
   orleansTest.excluded(
     "skipped upstream (https://github.com/dotnet/orleans/issues/4008)",
     "UnitTests.General.ElasticPlacementTests.ElasticityTest_CatchingUp",
@@ -44,15 +118,5 @@ describe("UnitTests.General.ElasticPlacementTests", () => {
   orleansTest.excluded(
     "skipped upstream (https://github.com/dotnet/orleans/issues/4008)",
     "UnitTests.General.ElasticPlacementTests.ElasticityTest_AllSilosOverloaded",
-  );
-
-  orleansTest.gap(
-    "GAP-LOAD-SHEDDING",
-    "UnitTests.General.ElasticPlacementTests.LoadAwareGrainShouldNotAttemptToCreateActivationsOnOverloadedSilo",
-  );
-
-  orleansTest.gap(
-    "GAP-LOAD-SHEDDING",
-    "UnitTests.General.ElasticPlacementTests.LoadAwareGrainShouldNotAttemptToCreateActivationsOnBusySilos",
   );
 });

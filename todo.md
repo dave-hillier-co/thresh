@@ -35,8 +35,10 @@ vertical slices (see [`CLAUDE.md`](CLAUDE.md)).
       id to multiple local activations on demand (up to `maxLocalWorkers`), routed synchronously
       (no directory) from `DistributedDispatcher`/`LocalDispatcher`; ordinary grains keep exactly
       one activation per id. `IManagementGrain.getGrainActivationCount`/`forceActivationCollection`
-      added to observe/force-collect it. GAP-STATELESS-WORKER's remaining 3 skips are unrelated
-      (stream-provider wiring, 2 placement-test cases) — see their own gap comments.
+      added to observe/force-collect it. `GrainRuntime.getStreamProvider` now rejects a
+      `[StatelessWorker]` activation outright (a subscription must bind to one activation), and
+      `IStatelessWorkerPlacementTestGrain`/`IOtherStatelessWorkerPlacementTestGrain` test grains are
+      ported — `GAP-STATELESS-WORKER` is fully closed (0 remaining gaps).
 - [ ] **`@readOnly` runtime check** — at least a dev-mode mutation guard that detects state writes
       from a `@readOnly` call and surfaces the violation.
 - [ ] **Directory handoff ACK & cleanup** — ACK-delete loop on snapshot handoff so retained
@@ -67,8 +69,11 @@ shows per-tag counts). One-line definitions live on the `GapTag` union. Grouped 
 - [ ] **Request context** — `GAP-REQUEST-CONTEXT` (expose on `@tsva/core` public surface),
       `GAP-CLIENT-REQUEST-CONTEXT`, `GAP-CALL-FILTER-CLIENT-LAYER`, `GAP-CLIENT-SILO-SEPARATION`.
 - [ ] **Timers** — `GAP-TIMER-VALIDATION` (callback-initiated Change/dispose portions).
-- [ ] **Placement & rebalancing** — `GAP-REBALANCER-CONTROL`, `GAP-ACTIVATION-REPARTITIONING`,
-      `GAP-LOAD-SHEDDING`.
+- [ ] **Placement & rebalancing** — `GAP-REBALANCER-CONTROL`, `GAP-ACTIVATION-REPARTITIONING`.
+      `GAP-LOAD-SHEDDING` closed: `ActivationCountPlacement` (this port's load-aware strategy) now
+      excludes an overloaded/busy silo from candidate selection via `PlacementContext.isOverloaded`,
+      kept current cluster-wide by `ClusterNode.publishLoadStats` (a forced push after every
+      latch/unlatch test-hook call, mirroring Orleans' `PropagateStatisticsToCluster`).
 - [ ] **Streams** — the memory stream provider now delivers to implicit subscribers, supports
       batch publish/delivery, and has an administrative `StreamSubscriptionManager`
       (`GAP-STREAM-IMPLICIT-MEMORY`/`GAP-STREAM-BATCHING`/`GAP-STREAM-SUBSCRIPTION-MANAGER` closed).
