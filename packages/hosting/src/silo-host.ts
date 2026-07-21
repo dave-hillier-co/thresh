@@ -3,6 +3,7 @@ import type { GrainInterface } from "@tsva/core/grain-interface";
 import type { GrainKeyFor } from "@tsva/core/key-kinds";
 import type { MembershipService } from "@tsva/core/membership";
 import type { StreamProvider } from "@tsva/core/stream";
+import type { GrainDirectory } from "@tsva/directory/grain-directory";
 import type { ClusterNode } from "@tsva/runtime/cluster-node";
 import type { SiloLoadSheddingTestHooks } from "@tsva/runtime/load-shedding";
 import type {
@@ -89,6 +90,16 @@ export class SiloHost {
   /** The named stream provider this silo hosts, or `undefined` if none is configured by that name. */
   getStreamProvider(name?: string): StreamProvider | undefined {
     return this.parts.node.streamProvider(name);
+  }
+
+  /**
+   * This silo's `IGrainDirectory` (Orleans
+   * `Services.GetRequiredService<GrainDirectoryResolver>().DefaultGrainDirectory`):
+   * the pluggable CAS register/lookup/unregister surface, for tests that exercise
+   * the directory contract directly rather than only through grain placement.
+   */
+  get directory(): GrainDirectory {
+    return this.parts.node.grainDirectory();
   }
 
   /**

@@ -61,6 +61,7 @@ import { TransactionResourceInterface } from "@tsva/core/transaction-resource";
 import { ConsistentHashRing } from "@tsva/directory/consistent-hash-ring";
 import type { DirectoryPeer } from "@tsva/directory/directory-peer";
 import { DistributedGrainDirectory } from "@tsva/directory/distributed-grain-directory";
+import type { GrainDirectory } from "@tsva/directory/grain-directory";
 import { LocalDirectoryPartition } from "@tsva/directory/local-directory-partition";
 import { LocationCache } from "@tsva/directory/location-cache";
 import { ConnectionManager } from "@tsva/messaging/connection-manager";
@@ -854,6 +855,17 @@ export class ClusterNode {
   directoryCacheStats(): { hits: number; misses: number } {
     const { hits, misses } = this.cache.stats;
     return { hits, misses };
+  }
+
+  /**
+   * This silo's `IGrainDirectory` (Orleans
+   * `GrainDirectoryResolver.DefaultGrainDirectory`, reached in upstream tests via
+   * `SiloHost.Services.GetRequiredService<GrainDirectoryResolver>()`): the pluggable
+   * CAS register/lookup/unregister surface, exposed for direct testing rather than
+   * only reachable indirectly through grain placement.
+   */
+  grainDirectory(): GrainDirectory {
+    return this.directory;
   }
 
   async start(): Promise<void> {

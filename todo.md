@@ -100,7 +100,12 @@ shows per-tag counts). One-line definitions live on the `GapTag` union. Grouped 
       `journaled-grain-binder.ts`), built on the existing journal-storage substrate and wired into
       the silo builder's `stateBinder`. `CountersGrain`/`LogTestGrain`/`PersonGrain` ported as real
       journaled grains; `event-sourcing` parity suite now 21 ported / 0 gap.
-- [ ] **Misc primitives** — `GAP-GRAIN-DIRECTORY-API`, `GAP-TRACING` (trace-context
+- [x] **Grain directory API** — `GAP-GRAIN-DIRECTORY-API`: done — `ClusterNode.grainDirectory()` /
+      `SiloHost.directory` expose the silo's real `DistributedGrainDirectory` (`@tsva/directory`,
+      now a `@tsva/parity` dependency) as a public `GrainDirectory` (Orleans
+      `GrainDirectoryResolver.DefaultGrainDirectory`); `grain-directory` parity suite now
+      4 ported / 0 gap.
+- [ ] **Misc primitives** — `GAP-TRACING` (trace-context
       propagation done; remaining: activation/deactivation span taxonomy — `ActivateGrain`/
       `OnActivate`/`PlaceGrain`/`RegisterDirectoryEntry` spans threaded through placement/catalog/
       directory/storage/migration).

@@ -309,6 +309,9 @@ importers:
       '@tsva/core':
         specifier: workspace:*
         version: link:../core
+      '@tsva/directory':
+        specifier: workspace:*
+        version: link:../directory
       '@tsva/durable-jobs':
         specifier: workspace:*
         version: link:../durable-jobs
