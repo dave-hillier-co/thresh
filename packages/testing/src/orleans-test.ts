@@ -11,14 +11,14 @@ export type GapTag =
   | "GAP-STATELESS-WORKER" // StatelessWorker placement parsed but not enforced
   | "GAP-READONLY-ENFORCEMENT" // @readOnly is advisory; mutations are not rejected
   | "GAP-OBSERVERS" // no grain observers / client object references
-  | "GAP-MGMT-GRAIN" // no management grain / silo-control system targets
+  | "GAP-MGMT-GRAIN" // `IManagementGrain` now covers getHosts/getDetailedHosts/getSimpleGrainStatistics/getDetailedGrainStatistics/getActivationAddress/getGrainActivationCount/forceActivationCollection/sendControlCommandToProvider; kept for any upstream member still missing (e.g. GetRuntimeStatistics, ForceGarbageCollection)
   | "GAP-SERIALIZER-POLYMORPHISM" // serializer lacks polymorphism/cycles
   | "GAP-STREAM-FAILURE-HANDLER" // streams lack IStreamFailureHandler
   | "GAP-ACTIVATION-REPARTITIONING" // no activation-repartitioning subsystem (communication-graph driven)
   | "GAP-CLIENT-SILO-SEPARATION" // no separate client process distinct from a silo in the harness
   | "GAP-GRAIN-DIRECTORY-API" // internal directory not exposed via a pluggable IGrainDirectory API
   | "GAP-LOAD-SHEDDING" // overload detector / gateway load shedding exist; no CPU-aware placement scoring (placement never excludes an overloaded/busy silo)
-  | "GAP-REBALANCER-CONTROL" // no rebalancer suspend/resume/report-listener control API
+  | "GAP-REBALANCER-CONTROL" // suspend/resume/report-listener control exists (SiloHost); kept for any upstream IActivationRebalancer surface still missing
   | "GAP-REQUEST-CONTEXT" // RequestContext-driven placement hints (IPlacementDirector.PlacementHintKey) now exist; kept for other client-side RequestContext scaffolding still missing (e.g. a grain-side fail-dehydrate injection knob a client would drive via RequestContext)
   | "GAP-STREAM-CACHE-DIAGNOSTICS" // no pulling-agent cache/eviction model or diagnostic observer
   | "GAP-STREAM-FILTER" // no IStreamFilter server-side delivery filtering

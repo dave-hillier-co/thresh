@@ -39,6 +39,12 @@ vertical slices (see [`CLAUDE.md`](CLAUDE.md)).
       one activation per id. `IManagementGrain.getGrainActivationCount`/`forceActivationCollection`
       added to observe/force-collect it. GAP-STATELESS-WORKER's remaining 3 skips are unrelated
       (stream-provider wiring, 2 placement-test cases) — see their own gap comments.
+- [x] **`IManagementGrain.getDetailedGrainStatistics`** — one entry per live activation
+      (grain type, silo, grain id) amalgamated across the active cluster, alongside the existing
+      `getHosts`/`getDetailedHosts`/`getSimpleGrainStatistics`/`getActivationAddress`/
+      `getGrainActivationCount`/`forceActivationCollection`/`sendControlCommandToProvider` surface
+      (GAP-MGMT-GRAIN closed — the tag stays defined for any future upstream `IManagementGrain`
+      member this port doesn't cover yet, e.g. `GetRuntimeStatistics`/`ForceGarbageCollection`).
 - [ ] **`@readOnly` runtime check** — at least a dev-mode mutation guard that detects state writes
       from a `@readOnly` call and surfaces the violation.
 - [ ] **Directory handoff ACK & cleanup** — ACK-delete loop on snapshot handoff so retained
@@ -77,8 +83,12 @@ shows per-tag counts). One-line definitions live on the `GapTag` union. Grouped 
       `GAP-CLIENT-SILO-SEPARATION` closed: `ClientNode.isActive` always answers `false` (a client
       never hosts grain activations), mirroring `SiloHost.isActive`'s silo-side check.
 - [ ] **Timers** — `GAP-TIMER-VALIDATION` (callback-initiated Change/dispose portions).
-- [ ] **Placement & rebalancing** — `GAP-REBALANCER-CONTROL`, `GAP-ACTIVATION-REPARTITIONING`,
-      `GAP-LOAD-SHEDDING`.
+- [ ] **Placement & rebalancing** — `GAP-ACTIVATION-REPARTITIONING`, `GAP-LOAD-SHEDDING`.
+      `GAP-REBALANCER-CONTROL` closed: `ActivationRebalancerWorker.report()`'s `host` is now the
+      currently elected leader's ring key (computed identically from the shared membership view on
+      every silo's own worker instance, not the instance's own address), so any silo's
+      `SiloHost.getRebalancingReport()` agrees on the same elected host — no system-target routing
+      layer needed since leader election here is already deterministic from membership alone.
 - [ ] **Streams** — the memory stream provider now delivers to implicit subscribers, supports
       batch publish/delivery, and has an administrative `StreamSubscriptionManager`
       (`GAP-STREAM-IMPLICIT-MEMORY`/`GAP-STREAM-BATCHING`/`GAP-STREAM-SUBSCRIPTION-MANAGER` closed).

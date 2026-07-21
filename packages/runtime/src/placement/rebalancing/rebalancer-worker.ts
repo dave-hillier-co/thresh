@@ -151,10 +151,21 @@ export class ActivationRebalancerWorker {
     this.listeners.delete(listener);
   }
 
-  /** The latest observable status (Orleans `RebalancingReport`). */
+  /**
+   * The latest observable status (Orleans `RebalancingReport`). `host` is
+   * always the currently elected leader's ring key — computed the same way
+   * on every silo's worker instance from the shared membership view, not
+   * this instance's own address — so any silo can discover which one is
+   * actually driving the cycle (Orleans reaches this via a per-silo
+   * `IActivationRebalancerMonitor` system target that caches the elected
+   * `ActivationRebalancerWorker`'s broadcast report; this framework has no
+   * system-target routing layer, but the leader address is deterministic
+   * from membership alone, so every instance can compute it locally without
+   * one — see `GAP-REBALANCER-CONTROL`).
+   */
   report(): RebalancingReport {
     return {
-      host: this.options.local.ringKey,
+      host: (this.leader() ?? this.options.local).ringKey,
       status: this.status,
       clusterImbalance: this.latestImbalance,
       dispersed: this.dispersed,
