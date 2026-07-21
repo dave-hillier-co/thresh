@@ -3,17 +3,46 @@
 // Upstream observes placement via `GetRuntimeInstanceId()`/`GetEndpoint()`, a
 // grain reporting its own hosting silo address — now available via
 // `GrainRuntime.localSiloAddress()`, so the ported tests below call the
-// grain's own `getRuntimeInstanceId()` directly, same as upstream.
+// grain's own `getRuntimeInstanceId()` directly, same as upstream (in place
+// of `GetEndpoint()`'s `IPEndPoint`, which has no equivalent here).
+//
+// The two stateless-worker tests were gapped under GAP-STATELESS-WORKER
+// pending a test grain; core stateless-worker enforcement (catalog scaling to
+// `maxLocalWorkers`, routing without a directory lookup) was already done —
+// see `packages/runtime/src/runtime/stateless-worker-activation-tests.test.ts`.
+// `IStatelessWorkerPlacementTestGrain`/`IOtherStatelessWorkerPlacementTestGrain`
+// (`packages/parity/src/grains/impl/placement-test-grain.ts`) now exist, so
+// both are ported below.
 import { afterAll, beforeAll, describe, expect } from "vitest";
 import { orleansTest } from "@tsva/testing/orleans-test";
 import { TestCluster } from "@tsva/testing/test-cluster";
 import {
+  IOtherStatelessWorkerPlacementTestGrain,
   IPreferLocalPlacementTestGrain,
   IRandomPlacementTestGrain,
+  IStatelessWorkerPlacementTestGrain,
+  OtherStatelessWorkerPlacementTestGrain,
   PreferLocalPlacementTestGrain,
   RandomPlacementTestGrain,
+  StatelessWorkerPlacementTestGrain,
 } from "@tsva/parity/grains/impl/placement-test-grain";
+import type { IPlacementTestGrain } from "@tsva/parity/grains/interfaces/placement-test-grain-interfaces";
 import { randomGuidKey } from "@tsva/parity/support/keys";
+
+/** Upstream `GrainPlacementTests.CollectActivationIds`. */
+async function collectActivationIds(
+  grain: IPlacementTestGrain,
+  sampleSize: number,
+): Promise<string[]> {
+  const tasks = Array.from({ length: sampleSize }, () => grain.getActivationId());
+  return Promise.all(tasks);
+}
+
+/** Upstream `GrainPlacementTests.ActivationCount`. */
+async function activationCount(grain: IPlacementTestGrain, sampleSize: number): Promise<number> {
+  const activations = await collectActivationIds(grain, sampleSize);
+  return new Set(activations).size;
+}
 
 describe("UnitTests.General.GrainPlacementTests", () => {
   let cluster: TestCluster;
@@ -24,6 +53,14 @@ describe("UnitTests.General.GrainPlacementTests", () => {
       grains: [
         { ctor: RandomPlacementTestGrain, interfaces: [IRandomPlacementTestGrain] },
         { ctor: PreferLocalPlacementTestGrain, interfaces: [IPreferLocalPlacementTestGrain] },
+        {
+          ctor: StatelessWorkerPlacementTestGrain,
+          interfaces: [IStatelessWorkerPlacementTestGrain],
+        },
+        {
+          ctor: OtherStatelessWorkerPlacementTestGrain,
+          interfaces: [IOtherStatelessWorkerPlacementTestGrain],
+        },
       ],
     });
   });
@@ -87,13 +124,41 @@ describe("UnitTests.General.GrainPlacementTests", () => {
     },
   );
 
-  orleansTest.gap(
-    "GAP-STATELESS-WORKER",
+  orleansTest(
     "UnitTests.General.GrainPlacementTests.StatelessWorkerShouldCreateSpecifiedActivationCount",
+    async () => {
+      {
+        // note: this amount should agree with both the specified minimum and
+        // maximum in the StatelessWorkerPlacement declared on
+        // IStatelessWorkerPlacementTestGrain (maxLocalWorkers: 1).
+        const expected = 1;
+        const grain = cluster.getGrain(IStatelessWorkerPlacementTestGrain, randomGuidKey());
+        const actual = await activationCount(grain, expected * 50);
+        expect(actual).toBeLessThanOrEqual(expected);
+      }
+
+      {
+        const expected = 2;
+        const grain = cluster.getGrain(IOtherStatelessWorkerPlacementTestGrain, randomGuidKey());
+        const actual = await activationCount(grain, expected * 50);
+        expect(actual).toBeLessThanOrEqual(expected);
+      }
+    },
   );
 
-  orleansTest.gap(
-    "GAP-STATELESS-WORKER",
+  orleansTest(
     "UnitTests.General.GrainPlacementTests.StatelessWorkerGrainShouldCreateActivationsOnLocalSilo",
+    async () => {
+      const sampleSize = 5;
+      const key = randomGuidKey();
+      const proxy = cluster.getGrain(IRandomPlacementTestGrain, randomGuidKey());
+      await proxy.startLocalGrains([key]);
+      const expected = await proxy.getRuntimeInstanceId();
+      // Locally placed grains are multi-activation and stateless. This means
+      // that we have to sample the value of the result, rather than simply
+      // ask for it once, in order to get a consensus of the result.
+      const actual = await proxy.sampleLocalGrainEndpoint(key, sampleSize);
+      expect(actual.every((place) => place === expected)).toBe(true);
+    },
   );
 });

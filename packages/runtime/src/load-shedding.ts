@@ -60,13 +60,21 @@ export class TestHooksEnvironmentStatisticsProvider {
  * load-shedding tests' immediate latch/unlatch toggling observable without a
  * `ForceRefresh()` step.
  */
-/** A silo's load-shedding test-hook surface (Orleans `IPlacementTestGrain`'s Latch/Unlatch methods). */
+/**
+ * A silo's load-shedding test-hook surface (Orleans `IPlacementTestGrain`'s
+ * Latch/Unlatch methods). The four latch/unlatch operations return a promise
+ * that resolves once the new state has been pushed to every other live silo
+ * (Orleans' test-only `PropagateStatisticsToCluster`, forcing an immediate
+ * `DeploymentLoadPublisher` gossip round rather than waiting for the next
+ * periodic interval) — awaiting it is what makes the change visible to
+ * load-aware placement decisions made on a peer silo right after.
+ */
 export interface SiloLoadSheddingTestHooks {
   enableOverloadDetection(enabled: boolean): void;
-  latchCpuUsage(value: number): void;
-  unlatchCpuUsage(): void;
-  latchOverloaded(): void;
-  unlatchOverloaded(): void;
+  latchCpuUsage(value: number): Promise<void>;
+  unlatchCpuUsage(): Promise<void>;
+  latchOverloaded(): Promise<void>;
+  unlatchOverloaded(): Promise<void>;
 }
 
 export class OverloadDetector {
@@ -82,6 +90,8 @@ export class OverloadDetector {
 
   get isOverloaded(): boolean {
     if (!this.enabled) return false;
-    return this.statistics.getEnvironmentStatistics().cpuUsagePercentage > this.options.cpuThreshold;
+    return (
+      this.statistics.getEnvironmentStatistics().cpuUsagePercentage > this.options.cpuThreshold
+    );
   }
 }

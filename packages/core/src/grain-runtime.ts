@@ -104,18 +104,21 @@ export interface GrainRuntime {
    * Force this activation's hosting silo's reported CPU usage to `value`
    * until `unlatchCpuUsage()` (Orleans test-hook `IPlacementTestGrain.LatchCpuUsage`,
    * backed by `TestHooksEnvironmentStatisticsProvider.LatchHardwareStatistics`).
+   * Resolves once every other live silo has observed the new reading (Orleans'
+   * `PropagateStatisticsToCluster`), so load-aware placement elsewhere sees it
+   * immediately rather than after the next gossip interval.
    */
-  latchCpuUsage(value: number): void;
+  latchCpuUsage(value: number): Promise<void>;
   /** Clear a CPU-usage latch set by `latchCpuUsage` (Orleans `UnlatchCpuUsage`). */
-  unlatchCpuUsage(): void;
+  unlatchCpuUsage(): Promise<void>;
   /**
    * Force this activation's hosting silo into the overloaded state (Orleans
    * test-hook `IPlacementTestGrain.LatchOverloaded`): equivalent to latching
    * CPU usage just above `LoadSheddingOptions.cpuThreshold`.
    */
-  latchOverloaded(): void;
+  latchOverloaded(): Promise<void>;
   /** Clear an overload latch set by `latchOverloaded` (Orleans `UnlatchOverloaded`). */
-  unlatchOverloaded(): void;
+  unlatchOverloaded(): Promise<void>;
   /**
    * Ping a specific silo's control target (Orleans `ISiloControl.Ping`): a
    * health-check no-op that completes when the target silo is reachable.

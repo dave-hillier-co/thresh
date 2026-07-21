@@ -356,6 +356,20 @@ export class ClusterNode {
   private readonly environmentStatistics = new TestHooksEnvironmentStatisticsProvider();
   /** Decides whether this silo is currently shedding load (Orleans `OverloadDetector`). */
   private readonly overloadDetector: OverloadDetector;
+  /**
+   * A peer's last-pushed load snapshot, keyed by ring key (Orleans
+   * `DeploymentLoadPublisher`'s subscriber cache, fed by
+   * `SiloStatisticsChangeNotification`). There is no periodic gossip timer
+   * here — a snapshot lands only when `publishLoadStats` pushes one, which
+   * `siloTestHooks()` does synchronously after every latch/unlatch (mirrors
+   * Orleans' test-only `PropagateStatisticsToCluster`, which forces an
+   * immediate `ForceRuntimeStatisticsCollection` rather than waiting for the
+   * next periodic interval).
+   */
+  private readonly remoteLoadStats = new Map<
+    string,
+    { activationCount: number; isOverloaded: boolean }
+  >();
   private ring: ConsistentHashRing;
   private listener: Listener | undefined;
 
@@ -605,14 +619,25 @@ export class ClusterNode {
       enableOverloadDetection: (enabled) => {
         this.overloadDetector.enabled = enabled;
       },
-      latchCpuUsage: (value) => this.environmentStatistics.latchCpuUsage(value),
-      unlatchCpuUsage: () => this.environmentStatistics.unlatchHardwareStatistics(),
+      latchCpuUsage: (value) => {
+        this.environmentStatistics.latchCpuUsage(value);
+        return this.publishLoadStats();
+      },
+      unlatchCpuUsage: () => {
+        this.environmentStatistics.unlatchHardwareStatistics();
+        return this.publishLoadStats();
+      },
       // "Overloaded" is just a CPU reading above the configured threshold —
       // there is no separate boolean the detector consults (Orleans mirrors
       // this: `LatchOverloaded` also just latches CPU to `cpuThreshold + 1`).
-      latchOverloaded: () =>
-        this.environmentStatistics.latchCpuUsage(this.loadSheddingCpuThreshold() + 1),
-      unlatchOverloaded: () => this.environmentStatistics.unlatchHardwareStatistics(),
+      latchOverloaded: () => {
+        this.environmentStatistics.latchCpuUsage(this.loadSheddingCpuThreshold() + 1);
+        return this.publishLoadStats();
+      },
+      unlatchOverloaded: () => {
+        this.environmentStatistics.unlatchHardwareStatistics();
+        return this.publishLoadStats();
+      },
     };
   }
 
@@ -1112,6 +1137,10 @@ export class ClusterNode {
       siloMetadata: (silo) => (isLocal(silo) ? localMeta : byKey.get(silo.ringKey)?.metadata),
       resourceStats: (silo) =>
         isLocal(silo) ? { activationCount: this.catalog.count() } : undefined,
+      isOverloaded: (silo) =>
+        isLocal(silo)
+          ? this.overloadDetector.isOverloaded
+          : (this.remoteLoadStats.get(silo.ringKey)?.isOverloaded ?? false),
       random: this.options.random ?? Math.random,
     };
   }
@@ -1558,6 +1587,10 @@ export class ClusterNode {
       void this.handleLoadRequest(message);
       return;
     }
+    if (message.system === "loadstats") {
+      void this.handleLoadStatsRequest(message);
+      return;
+    }
     if (message.system === "stats") {
       void this.handleStatsRequest(message);
       return;
@@ -1678,6 +1711,56 @@ export class ClusterNode {
         this.serializer.serialize(this.localManifestEntries()),
         this.options.local,
       ),
+    );
+  }
+
+  // ── Load-aware placement (Orleans `DeploymentLoadPublisher`) ────────────────
+
+  /**
+   * Push this silo's current load snapshot (activation count + overloaded flag)
+   * to every other active silo, as `system: "loadstats"` requests, and wait for
+   * all of them to land — the test-only stand-in for Orleans'
+   * `DeploymentLoadPublisher` periodic gossip, forced immediately (mirrors
+   * `PropagateStatisticsToCluster`'s `ForceRuntimeStatisticsCollection` call)
+   * so `IActivationCountBasedPlacementTestGrain.LatchOverloaded`/`LatchCpuUsage`
+   * are immediately visible to placement decisions on every other silo.
+   * Best-effort: an unreachable peer is skipped rather than failing the call.
+   */
+  async publishLoadStats(): Promise<void> {
+    const peers = activeSilos(this.options.membership.current()).filter(
+      (s) => !s.equals(this.options.local),
+    );
+    const stats = {
+      activationCount: this.catalog.count(),
+      isOverloaded: this.overloadDetector.isOverloaded,
+    };
+    await Promise.all(
+      peers.map((peer) => this.sendLoadStatsPush(peer, stats).catch(() => undefined)),
+    );
+  }
+
+  private async sendLoadStatsPush(
+    silo: SiloAddress,
+    stats: { activationCount: number; isOverloaded: boolean },
+  ): Promise<void> {
+    await this.sendSystemMessage(
+      silo,
+      "loadstats",
+      new GrainId("loadstats", silo.ringKey),
+      this.serializer.serialize(stats),
+    );
+  }
+
+  private async handleLoadStatsRequest(message: Message): Promise<void> {
+    const replyTo = message.sendingSilo;
+    if (replyTo === undefined) return;
+    const stats = this.serializer.deserialize<{ activationCount: number; isOverloaded: boolean }>(
+      message.body,
+    );
+    this.remoteLoadStats.set(replyTo.ringKey, stats);
+    await this.reply(
+      replyTo,
+      responseTo(message, "success", this.serializer.serialize(null), this.options.local),
     );
   }
 

@@ -436,6 +436,7 @@ export class Catalog {
       ...(this.options.grainServiceRegistry !== undefined
         ? { grainServices: this.options.grainServiceRegistry }
         : {}),
+      isStatelessWorker: () => reg.metadata.options.stateless === true,
     });
     const instance =
       this.options.grainActivator !== undefined

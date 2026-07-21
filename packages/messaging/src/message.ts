@@ -62,6 +62,7 @@ export interface Message {
     | "migration"
     | "manifest"
     | "load"
+    | "loadstats"
     | "stats"
     | "detailedstats"
     | "actcount"

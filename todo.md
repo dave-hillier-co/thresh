@@ -37,8 +37,10 @@ vertical slices (see [`CLAUDE.md`](CLAUDE.md)).
       id to multiple local activations on demand (up to `maxLocalWorkers`), routed synchronously
       (no directory) from `DistributedDispatcher`/`LocalDispatcher`; ordinary grains keep exactly
       one activation per id. `IManagementGrain.getGrainActivationCount`/`forceActivationCollection`
-      added to observe/force-collect it. GAP-STATELESS-WORKER's remaining 3 skips are unrelated
-      (stream-provider wiring, 2 placement-test cases) — see their own gap comments.
+      added to observe/force-collect it. `GrainRuntime.getStreamProvider` now rejects a
+      `[StatelessWorker]` activation outright (a subscription must bind to one activation), and
+      `IStatelessWorkerPlacementTestGrain`/`IOtherStatelessWorkerPlacementTestGrain` test grains are
+      ported — `GAP-STATELESS-WORKER` is fully closed (0 remaining gaps).
 - [x] **`IManagementGrain.getDetailedGrainStatistics`** — one entry per live activation
       (grain type, silo, grain id) amalgamated across the active cluster, alongside the existing
       `getHosts`/`getDetailedHosts`/`getSimpleGrainStatistics`/`getActivationAddress`/
@@ -83,12 +85,16 @@ shows per-tag counts). One-line definitions live on the `GapTag` union. Grouped 
       `GAP-CLIENT-SILO-SEPARATION` closed: `ClientNode.isActive` always answers `false` (a client
       never hosts grain activations), mirroring `SiloHost.isActive`'s silo-side check.
 - [ ] **Timers** — `GAP-TIMER-VALIDATION` (callback-initiated Change/dispose portions).
-- [ ] **Placement & rebalancing** — `GAP-ACTIVATION-REPARTITIONING`, `GAP-LOAD-SHEDDING`.
+- [ ] **Placement & rebalancing** — `GAP-ACTIVATION-REPARTITIONING`.
       `GAP-REBALANCER-CONTROL` closed: `ActivationRebalancerWorker.report()`'s `host` is now the
       currently elected leader's ring key (computed identically from the shared membership view on
       every silo's own worker instance, not the instance's own address), so any silo's
       `SiloHost.getRebalancingReport()` agrees on the same elected host — no system-target routing
       layer needed since leader election here is already deterministic from membership alone.
+      `GAP-LOAD-SHEDDING` closed: `ActivationCountPlacement` (this port's load-aware strategy) now
+      excludes an overloaded/busy silo from candidate selection via `PlacementContext.isOverloaded`,
+      kept current cluster-wide by `ClusterNode.publishLoadStats` (a forced push after every
+      latch/unlatch test-hook call, mirroring Orleans' `PropagateStatisticsToCluster`).
 - [ ] **Streams** — the memory stream provider now delivers to implicit subscribers, supports
       batch publish/delivery, and has an administrative `StreamSubscriptionManager`
       (`GAP-STREAM-IMPLICIT-MEMORY`/`GAP-STREAM-BATCHING`/`GAP-STREAM-SUBSCRIPTION-MANAGER` closed).
@@ -151,7 +157,6 @@ shows per-tag counts). One-line definitions live on the `GapTag` union. Grouped 
       span presence on (every grain here extends the same `Grain` base), no IAsyncEnumerable
       grain-method span story, no auto-deactivate-on-exception or `GrainContext.Deactivate(reason)`
       API, and no `ActivityIdFormat` concept (OTel is W3C-only).
->>>>>>> parity/tracing-span-taxonomy
 
 ### Bugs found by the parity suite (`GAP-BUG-*`, fix then un-gap the tests)
 

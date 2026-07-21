@@ -8,6 +8,14 @@ import type {
 /**
  * Power-of-k load balancing: sample k live silos and pick the least loaded by
  * activation count. Balances load without a global coordinator.
+ *
+ * Mirrors Orleans `ActivationCountPlacementDirector.SelectSiloPowerOfK`: a
+ * silo currently shedding load (`ctx.isOverloaded`) is excluded from the
+ * candidate pool outright, before sampling — never a target for a new
+ * activation, however lightly loaded its activation count looks. If every
+ * candidate is overloaded, falls back to the unfiltered set rather than
+ * failing placement outright (there is no `SiloUnavailableException`
+ * equivalent wired through this strategy yet).
  */
 export class ActivationCountPlacement implements PlacementStrategy {
   constructor(private readonly k: number = 2) {}
@@ -19,7 +27,11 @@ export class ActivationCountPlacement implements PlacementStrategy {
   ): SiloAddress {
     if (candidates.length === 0) throw new Error("no placement candidates");
     const load = ctx.activationCount ?? (() => 0);
-    const sample = this.sample(candidates, ctx.random ?? Math.random);
+    const overloaded = ctx.isOverloaded;
+    const eligible =
+      overloaded === undefined ? candidates : candidates.filter((c) => !overloaded(c));
+    const pool = eligible.length > 0 ? eligible : candidates;
+    const sample = this.sample(pool, ctx.random ?? Math.random);
     return sample.reduce((best, c) => (load(c) < load(best) ? c : best));
   }
 
