@@ -87,6 +87,7 @@ import type { ActivationData } from "@tsva/runtime/activation";
 import { DistributedDispatcher } from "@tsva/runtime/distributed-dispatcher";
 import { BroadcastChannelProviderImpl } from "@tsva/runtime/broadcast-channel-provider";
 import { GrainFactory } from "@tsva/runtime/grain-factory";
+import type { GrainServiceRegistry } from "@tsva/runtime/grain-service";
 import { createManagementGrainType } from "@tsva/runtime/management-grain";
 import { chooseMigrationTarget } from "@tsva/runtime/placement/choose-migration-target";
 import {
@@ -162,6 +163,8 @@ export interface ClusterNodeOptions {
   reminderRegistry?: () => ReminderRegistry | undefined;
   /** Resolves the durable-job scheduler a grain's `scheduleJob` delegates to. */
   durableJobScheduler?: () => DurableJobScheduler | undefined;
+  /** Resolves this silo's grain-service registry, for a grain's `runtime.getGrainService()`. */
+  grainServiceRegistry?: () => GrainServiceRegistry | undefined;
   /** Resolves the stream provider a grain's `getStreamProvider` returns. */
   streamProvider?: (name?: string) => StreamProvider | undefined;
   /**
@@ -450,6 +453,9 @@ export class ClusterNode {
         : {}),
       ...(options.durableJobScheduler !== undefined
         ? { durableJobScheduler: options.durableJobScheduler }
+        : {}),
+      ...(options.grainServiceRegistry !== undefined
+        ? { grainServiceRegistry: options.grainServiceRegistry }
         : {}),
       ...(options.streamProvider !== undefined ? { streamProvider: options.streamProvider } : {}),
       ...(this.broadcastProviderNames.length > 0

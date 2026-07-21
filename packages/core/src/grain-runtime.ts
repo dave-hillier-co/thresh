@@ -123,4 +123,13 @@ export interface GrainRuntime {
    * rejects if the silo is unreachable.
    */
   pingSilo(siloAddress: SiloAddress, message?: string): Promise<void>;
+  /**
+   * Get a per-silo grain-service instance by the name it was registered
+   * under (Orleans `GrainServiceClient<T>.GetGrainService`, simplified to
+   * same-silo resolution — see `GrainService`'s doc in
+   * `@tsva/runtime/grain-service` for the ring-ownership deviation this
+   * implies). Throws if no grain service was registered under `name` on this
+   * silo.
+   */
+  getGrainService<T>(name: string): T;
 }

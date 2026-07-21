@@ -63,7 +63,9 @@ transaction behaviour here remains covered by `packages/hosting`'s transactions-
 Each `GAP-*` tag below skips ported tests; implementing the feature un-gaps them (the scorecard
 shows per-tag counts). One-line definitions live on the `GapTag` union. Grouped by area:
 
-- [ ] **Activation & lifecycle** — `GAP-GRAIN-SERVICE`, `GAP-STORAGE-FACET`.
+- [x] **Activation & lifecycle** — `GAP-GRAIN-SERVICE` closed: per-silo `GrainService` base class +
+      `GrainServiceRegistry`, reached from a grain via `GrainRuntime.getGrainService` (built on the
+      same seams as grain extensions). `GAP-STORAGE-FACET` was already stale (no longer a `GapTag`).
 - [ ] **Request context** — `GAP-REQUEST-CONTEXT` (expose on `@tsva/core` public surface),
       `GAP-CLIENT-REQUEST-CONTEXT`, `GAP-CALL-FILTER-CLIENT-LAYER`, `GAP-CLIENT-SILO-SEPARATION`.
 - [ ] **Timers** — `GAP-TIMER-VALIDATION` (callback-initiated Change/dispose portions).
