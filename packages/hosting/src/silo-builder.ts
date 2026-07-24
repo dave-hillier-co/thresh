@@ -60,7 +60,10 @@ import {
 import type { JobShardStore } from "@tsva/durable-jobs/job-shard-store";
 import { MemoryJobShardStore } from "@tsva/durable-jobs/memory-job-shard-store";
 import { RedisJobShardStore } from "@tsva/durable-jobs/redis-job-shard-store";
-import { LocalReminderService } from "@tsva/reminders/local-reminder-service";
+import {
+  LocalReminderService,
+  type ReminderServiceOptions,
+} from "@tsva/reminders/local-reminder-service";
 import { MemoryReminderTable } from "@tsva/reminders/memory-reminder-table";
 import { PostgresReminderTable } from "@tsva/reminders/postgres-reminder-table";
 import { RedisReminderTable } from "@tsva/reminders/redis-reminder-table";
@@ -163,6 +166,7 @@ export class SiloBuilder {
   private grainFacets: GrainFacetRegistry | undefined;
   private placementFilters: PlacementFilterRegistry | undefined;
   private reminderTable: ReminderTable | undefined;
+  private reminderServiceOptions: ReminderServiceOptions | undefined;
   private jobShardStore: JobShardStore | undefined;
   private durableJobsOptions: DurableJobsOptions = {};
   private rebalancing: { options: RebalancerOptions; sessionCyclePeriodMs: number } | undefined;
@@ -210,23 +214,32 @@ export class SiloBuilder {
     return client;
   }
 
-  /** Enable durable reminders backed by the given table (in-memory by default). */
-  useReminders(table: ReminderTable = new MemoryReminderTable()): this {
+  /**
+   * Enable durable reminders backed by the given table (in-memory by default).
+   * `options` mirrors Orleans `ReminderOptions` (e.g. `minimumPeriod`).
+   */
+  useReminders(table: ReminderTable = new MemoryReminderTable(), options?: ReminderServiceOptions): this {
     this.reminderTable = table;
+    this.reminderServiceOptions = options;
     return this;
   }
 
   /**
    * Enable durable reminders backed by Redis. The client connects when the silo
    * starts and disconnects when it stops; `keyPrefix` namespaces keys (defaults
-   * to `"tsva"`).
+   * to `"tsva"`). `serviceOptions` mirrors Orleans `ReminderOptions` (e.g.
+   * `minimumPeriod`).
    */
-  useRedisReminders(options: { url: string; keyPrefix?: string }): this {
+  useRedisReminders(
+    options: { url: string; keyPrefix?: string },
+    serviceOptions?: ReminderServiceOptions,
+  ): this {
     const client = this.createManagedRedisClient(options);
     this.reminderTable = new RedisReminderTable(
       client,
       toConfigOption("keyPrefix", options.keyPrefix),
     );
+    this.reminderServiceOptions = serviceOptions;
     return this;
   }
 
@@ -864,6 +877,7 @@ export class SiloBuilder {
         (grainId, name, status) => node.deliverReminder(grainId, name, status),
         node.ownedHashRanges(),
         (this.config.reminderRefreshSeconds ?? 60) * 1000,
+        this.reminderServiceOptions ?? {},
       );
     }
 
