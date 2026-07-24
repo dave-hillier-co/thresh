@@ -54,7 +54,7 @@ export interface Message {
   /**
    * Marks a system request (directory, migration, manifest, load, stats,
    * detailedstats, actcount, forcecollect, provctl, rebalance, repartition,
-   * or siloping) or the client-directory gossip (`client`, oneWay only) vs a
+   * siloping, or durablejob) or the client-directory gossip (`client`, oneWay only) vs a
    * grain call.
    */
   system?:
@@ -71,6 +71,7 @@ export interface Message {
     | "rebalance"
     | "repartition"
     | "siloping"
+    | "durablejob"
     | "client"
     | undefined;
 

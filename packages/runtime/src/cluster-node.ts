@@ -31,6 +31,7 @@ import type { GrainReferenceIdentity } from "@tsva/core/grain-reference";
 import { RemindableInterface, type ReminderRegistry, type TickStatus } from "@tsva/core/reminder";
 import {
   DurableJobConsumerInterface,
+  type DurableJob,
   type DurableJobRunResult,
   type DurableJobScheduler,
   type JobRunContext,
@@ -408,6 +409,14 @@ export class ClusterNode {
     string,
     { activationCount: number; isOverloaded: boolean }
   >();
+  /**
+   * In-flight durable-job deliveries keyed by RunId (Orleans
+   * `DurableJobReceiverExtension._runningJobs`): coalesces concurrent
+   * re-deliveries of the same attempt onto the single in-progress dispatch
+   * rather than running the turn twice. Entries are removed once the
+   * delivery settles.
+   */
+  private readonly inFlightDurableJobs = new Map<string, Promise<DurableJobRunResult>>();
   private ring: ConsistentHashRing;
   private listener: Listener | undefined;
 
@@ -874,16 +883,31 @@ export class ClusterNode {
    * system call — so the job runs as a turn wherever the grain is placed,
    * reactivating it if idle, exactly like reminder delivery. Returns
    * the handler's run result for the shard executor to act on.
+   *
+   * Concurrent deliveries carrying the same RunId (e.g. a supervising executor
+   * re-delivering after a slow or lost reply) coalesce onto the single
+   * in-flight dispatch rather than running the turn twice (Orleans
+   * `DurableJobReceiverExtension._runningJobs`).
    */
   async deliverDurableJob(job: JobRunContext): Promise<DurableJobRunResult> {
-    return (await this.dispatcher.invoke({
-      target: job.target,
-      interfaceId: DurableJobConsumerInterface.id,
-      method: "runJob",
-      args: [job],
-      options: {},
-      reentrancyId: newChainId(),
-    })) as DurableJobRunResult;
+    const existing = this.inFlightDurableJobs.get(job.runId);
+    if (existing !== undefined) return existing;
+    const dispatch = (async () => {
+      return (await this.dispatcher.invoke({
+        target: job.target,
+        interfaceId: DurableJobConsumerInterface.id,
+        method: "runJob",
+        args: [job],
+        options: {},
+        reentrancyId: newChainId(),
+      })) as DurableJobRunResult;
+    })();
+    this.inFlightDurableJobs.set(job.runId, dispatch);
+    try {
+      return await dispatch;
+    } finally {
+      this.inFlightDurableJobs.delete(job.runId);
+    }
   }
 
   /**
@@ -1409,6 +1433,42 @@ export class ClusterNode {
     )) as boolean;
   }
 
+  /**
+   * Forward an already-persisted durable job to the silo that owns its shard
+   * (this silo's `LocalDurableJobManager` failed to claim it). Returns whether
+   * the target accepted it into a live executor.
+   */
+  async forwardDurableJob(target: SiloAddress, job: DurableJob): Promise<boolean> {
+    return (await this.sendSystemMessage(
+      target,
+      "durablejob",
+      job.target,
+      this.serializer.serialize(job),
+    )) as boolean;
+  }
+
+  private async handleDurableJobForward(message: Message): Promise<void> {
+    const replyTo = message.sendingSilo;
+    if (replyTo === undefined) return;
+    try {
+      const job = this.serializer.deserialize<DurableJob>(message.body);
+      const scheduler = this.options.durableJobScheduler?.();
+      const accepted =
+        scheduler?.receiveForwardedJob !== undefined
+          ? await scheduler.receiveForwardedJob(job)
+          : false;
+      await this.reply(
+        replyTo,
+        responseTo(message, "success", this.serializer.serialize(accepted), this.options.local),
+      );
+    } catch (err) {
+      const body = this.serializer.serialize({
+        message: err instanceof Error ? err.message : String(err),
+      });
+      await this.reply(replyTo, responseTo(message, "error", body, this.options.local));
+    }
+  }
+
   private async handleMigration(message: Message): Promise<void> {
     const replyTo = message.sendingSilo;
     if (replyTo === undefined) return;
@@ -1701,6 +1761,10 @@ export class ClusterNode {
     }
     if (message.system === "migration") {
       void this.handleMigration(message);
+      return;
+    }
+    if (message.system === "durablejob") {
+      void this.handleDurableJobForward(message);
       return;
     }
     if (message.system === "manifest") {

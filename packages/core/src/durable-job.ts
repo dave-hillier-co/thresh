@@ -102,6 +102,15 @@ export interface DurableJobReceiver {
 export interface DurableJobScheduler {
   scheduleJob(request: ScheduleJobRequest): Promise<DurableJob>;
   cancelJob(job: { id: string; shardKey: number }): Promise<void>;
+  /**
+   * Receive a job forwarded by another silo that scheduled it but does not own
+   * (or could not claim) its time shard here. The job is already persisted by
+   * the sender; this only needs to get it into this silo's live executor for
+   * the shard, claiming the shard first if unclaimed. Returns whether the job
+   * was accepted into a live executor here. Cross-silo forwarding only — not
+   * called by grain code.
+   */
+  receiveForwardedJob?(job: DurableJob): Promise<boolean>;
 }
 
 /** The grain's durable-job handler, bound to it, or `undefined` if it declares none. */

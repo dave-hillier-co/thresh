@@ -4,6 +4,7 @@ import { completed, pollAfter, type DurableJob } from "@tsva/core/durable-job";
 import { defineGrainInterface } from "@tsva/core/grain-interface";
 import { GrainId } from "@tsva/core/grain-id";
 import type { GrainWithStringKey } from "@tsva/core/key-kinds";
+import { PLACEMENT_HINT_KEY, RequestContext } from "@tsva/core/request-context";
 import { SiloAddress } from "@tsva/core/silo-address";
 import { FakeTimeProvider } from "@tsva/core/test-support/fake-time-provider";
 import { InProcessNetwork } from "@tsva/messaging/in-process-transport";
@@ -277,6 +278,56 @@ describe("durable jobs multi-silo failover", () => {
       expect(runs.get("wf:ok")).toBe(1);
       expect(job.name).toBe("ok");
     } finally {
+      await siloB.stop();
+    }
+  });
+
+  it("delivers a job scheduled from a silo that does not own the target time-shard", async () => {
+    runs.clear();
+    const store = new MemoryJobShardStore();
+    const time = new FakeTimeProvider();
+    const net = new InProcessNetwork();
+    const membership = new StaticMembershipService(a, [a, b]);
+    const membershipB = new StaticMembershipService(b, [a, b]);
+
+    const buildAt = (addr: SiloAddress, ms: StaticMembershipService) =>
+      createSilo({ clusterId: "c1", local: addr, time })
+        .useMembership(ms)
+        .useInProcessTransport(net)
+        .useMemoryDurableJobs(store)
+        .registerGrain(WorkerGrain, { interfaces: [IWorker] })
+        .registerGrain(SchedulerGrain, { interfaces: [IScheduler] })
+        .build();
+
+    const siloA = buildAt(a, membership);
+    const siloB = buildAt(b, membershipB);
+    await siloA.start();
+    await siloB.start();
+
+    try {
+      // Pin "s1"'s activation to silo A and schedule a job there: A claims and
+      // owns that job's time shard.
+      RequestContext.set(PLACEMENT_HINT_KEY, a.toString());
+      const dueMs = time.now() + 100_000;
+      await siloA.getGrain(IScheduler, "s1").schedule("owned-by-a", "ok", dueMs);
+      await flush();
+
+      // Pin a second scheduler activation to silo B — the non-owner of that
+      // shard — and schedule a job due in the very same shard from there.
+      RequestContext.set(PLACEMENT_HINT_KEY, b.toString());
+      await siloB.getGrain(IScheduler, "s2").schedule("scheduled-from-b", "ok", dueMs);
+      await flush();
+
+      time.advance(100_000);
+      await flush(10);
+
+      // Both jobs fire even though the second was scheduled from the silo
+      // that never owned (and never claimed) the shard.
+      expect(runs.get("owned-by-a:ok")).toBe(1);
+      expect(runs.get("scheduled-from-b:ok")).toBe(1);
+    } finally {
+      RequestContext.clear();
+      await siloA.stop();
       await siloB.stop();
     }
   });

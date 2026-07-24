@@ -59,6 +59,13 @@ export class LocalDurableJobManager {
     private readonly options: ResolvedDurableJobsOptions,
     ownership: ShardOwnershipContext,
     private readonly overload?: OverloadSignal,
+    /**
+     * Forward a job to the silo that owns its shard (Orleans mirrors this by
+     * co-locating the SystemTarget on the owner; this port instead ships the
+     * already-persisted job over a cluster message). Absent in single-silo
+     * setups and tests, where every shard is always owned locally.
+     */
+    private readonly forwardJob?: (ownerRingKey: string, job: DurableJob) => Promise<boolean>,
   ) {
     this.limiter = new ConcurrencyLimiter(options.maxConcurrentJobsPerSilo);
     this.ownership = ownership;
@@ -75,7 +82,10 @@ export class LocalDurableJobManager {
   /**
    * Schedule a job: assign its shard, persist it, and — if this silo owns (or
    * claims) that shard — add it to the live executor so it fires at its due time.
-   * Returns the durable job (with its assigned id and shard).
+   * If another (live) silo already owns the shard, forward the job to it so it
+   * still gets enqueued somewhere rather than only sitting in the store until
+   * its owner happens to reconcile. Returns the durable job (with its assigned
+   * id and shard).
    */
   async scheduleJob(request: ScheduleJobRequest): Promise<DurableJob> {
     const shardKey = shardKeyFor(request.dueTime.getTime(), this.options.shardDurationMs);
@@ -89,8 +99,33 @@ export class LocalDurableJobManager {
     };
     await this.store.persistAdd(job);
     const executor = await this.ensureOwned(shardKey);
-    executor?.enqueue(job);
+    if (executor !== undefined) {
+      executor.enqueue(job);
+    } else {
+      await this.forwardToShardOwner(shardKey, job);
+    }
     return job;
+  }
+
+  /**
+   * Receive a job forwarded by another silo that scheduled it but did not own
+   * the shard here (already persisted by the sender). Get it into this silo's
+   * live executor for the shard, claiming the shard first if it is still
+   * unclaimed. Returns whether it was accepted into a live executor here.
+   */
+  async receiveForwardedJob(job: DurableJob): Promise<boolean> {
+    const executor = await this.ensureOwned(job.shardKey);
+    executor?.enqueue(job);
+    return executor !== undefined;
+  }
+
+  /** Look up the shard's current owner in the store and forward the job to it, if live. */
+  private async forwardToShardOwner(shardKey: number, job: DurableJob): Promise<void> {
+    if (this.forwardJob === undefined) return;
+    const shards = await this.store.listShards();
+    const owner = shards.find((s) => s.shardKey === shardKey)?.owner;
+    if (owner === undefined || owner === this.ownership.localRingKey) return;
+    await this.forwardJob(owner, job).catch(() => undefined);
   }
 
   /** Cancel a scheduled job (best-effort): remove it from its shard and the store. */
