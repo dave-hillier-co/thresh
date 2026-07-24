@@ -8,6 +8,7 @@ import {
   type StreamFilter,
   type StreamHandler,
   type StreamId,
+  type StreamProducerHandle,
   type StreamProvider,
   type StreamSubscriptionHandle,
   type StreamSubscriptionManager,
@@ -17,7 +18,9 @@ import { emitStreamingEvent } from "@tsva/core/streaming-diagnostics";
 import { systemTimeProvider, type TimeProvider, type TimerHandle } from "@tsva/core/time-provider";
 import { implicitSubscriberIds } from "@tsva/streams/implicit-subscriptions";
 import { MemorySubscriptionManager } from "@tsva/streams/memory-subscription-manager";
+import { StreamProducerRegistry } from "@tsva/streams/stream-producer-registry";
 import type { StreamDeliver } from "@tsva/streams/stream-deliver";
+import { StreamProviderConfigurationError } from "@tsva/streams/stream-provider-config-error";
 
 interface StreamEvent<T> {
   token: number;
@@ -231,8 +234,13 @@ export class MemoryStreamProvider implements StreamProvider {
   // concern, and implicit subscription is the only path this provider routes
   // through anything resembling one).
   private streamFilter: StreamFilter | undefined;
+  private readonly producers = new StreamProducerRegistry();
 
-  constructor(readonly name: string = "default") {}
+  constructor(readonly name: string = "default") {
+    if (name.length === 0) {
+      throw new StreamProviderConfigurationError(name, "provider name must not be empty");
+    }
+  }
 
   /** Wire how a published event reaches an implicit subscriber's activation. */
   setDeliver(deliver: StreamDeliver): void {
@@ -298,6 +306,11 @@ export class MemoryStreamProvider implements StreamProvider {
 
   getStreamSubscriptionManager(): StreamSubscriptionManager {
     return this.subscriptionManager;
+  }
+
+  /** Orleans' pub-sub `RegisterProducer` — see `StreamProducerHandle`. */
+  async registerProducer(namespace: string, key: GrainKey): Promise<StreamProducerHandle> {
+    return this.producers.register(this.name, namespace, key);
   }
 
   /** Cancel every stream's inactivity timer (silo shutdown) so none leak past disposal. */

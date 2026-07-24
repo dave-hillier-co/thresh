@@ -15,6 +15,7 @@
     "@tsva/persistence": "workspace:*",
     "@tsva/reminders": "workspace:*",
     "@tsva/runtime": "workspace:*",
+    "@tsva/streams": "workspace:*",
     "@tsva/transactions": "workspace:*"
   },
   "devDependencies": {

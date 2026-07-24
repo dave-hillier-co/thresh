@@ -10,8 +10,6 @@ current-state evidence (what already exists, what is missing, file pointers).
 
 - [ ] [#21](https://github.com/dave-hillier-co/ts-virtual-actors/issues/21) Versioned,
       registry-based serializer (versioning, surrogates, polymorphism, `Set`, cycle guard).
-- [ ] [#22](https://github.com/dave-hillier-co/ts-virtual-actors/issues/22) Stream
-      `IStreamFailureHandler` provider wiring, durable poison store & producer registration.
 - [ ] [#23](https://github.com/dave-hillier-co/ts-virtual-actors/issues/23) Transaction TM
       confirmation-worker keepalive.
 - [ ] [#24](https://github.com/dave-hillier-co/ts-virtual-actors/issues/24) Grain observers —
@@ -22,10 +20,6 @@ current-state evidence (what already exists, what is missing, file pointers).
       ACK-delete loop, recovery retry & register version gate.
 - [ ] [#31](https://github.com/dave-hillier-co/ts-virtual-actors/issues/31) Timers —
       callback-initiated `change()`/`dispose()` (`operationType`).
-- [ ] [#32](https://github.com/dave-hillier-co/ts-virtual-actors/issues/32) Typed stream-provider
-      config errors.
-- [ ] [#33](https://github.com/dave-hillier-co/ts-virtual-actors/issues/33) Share named
-      `MemoryStreamProvider` instances across `TestCluster` (currently per-silo).
 - [ ] Ambient cancellation follow-ups from #18 (core slice landed: `@tsva/core/abort`,
       `InvocationRequest.deadline`, `AbortSignal` threaded through `InvocationContext`,
       `Dispatcher`/`TurnScheduler`/`ActivationData`, `GrainRuntime.getCancellationSignal()`, and

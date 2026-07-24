@@ -115,6 +115,18 @@ export interface StreamFilter {
   shouldDeliver(streamId: StreamId, item: unknown, filterData?: string): boolean;
 }
 
+/**
+ * A live, explicit producer registration on a stream (Orleans' pub-sub
+ * `RegisterProducer` side, mirrored here for administrative visibility — e.g.
+ * an operator or test inspecting which grains are currently producing to a
+ * given stream). Registration is purely bookkeeping: `AsyncStream.publish`
+ * works identically whether or not a producer ever registers one of these.
+ */
+export interface StreamProducerHandle {
+  readonly streamId: StreamId;
+  unregister(): Promise<void>;
+}
+
 export interface StreamProvider {
   getStream<T>(namespace: string, key: GrainKey): AsyncStream<T>;
   /**
@@ -124,6 +136,14 @@ export interface StreamProvider {
    * `@implicitStreamSubscription`.
    */
   getStreamSubscriptionManager?(): StreamSubscriptionManager | undefined;
+  /**
+   * Explicitly register as a producer for a stream (Orleans' pub-sub
+   * `RegisterProducer`), returning a handle to `unregister()` when done
+   * producing. Optional: a provider that has no notion of tracked producers
+   * (or that registers them implicitly on first `getStream`/`publish`) can
+   * omit it.
+   */
+  registerProducer?(namespace: string, key: GrainKey): Promise<StreamProducerHandle>;
 }
 
 /** Orleans `IStreamProvider.TryGetStreamSubscriptionManager(out manager)`, as a lookup. */
