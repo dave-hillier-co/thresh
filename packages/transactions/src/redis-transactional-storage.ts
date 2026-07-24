@@ -19,6 +19,7 @@ import {
 type RedisClient = {
   hGetAll(key: string): Promise<Record<string, string>>;
   eval(script: string, options: { keys: string[]; arguments: string[] }): Promise<unknown>;
+  withAbortSignal(signal: AbortSignal): RedisClient;
 };
 
 export interface RedisTransactionalStorageOptions {
@@ -64,8 +65,9 @@ export class RedisTransactionalStorage implements TransactionalStateStorage {
   async load(
     stateName: string,
     grainId: GrainId,
+    signal?: AbortSignal,
   ): Promise<TransactionalStorageLoadResponse<unknown>> {
-    const hash = await this.client.hGetAll(this.key(stateName, grainId));
+    const hash = await this.clientFor(signal).hGetAll(this.key(stateName, grainId));
     if (hash.etag === undefined) {
       return {
         etag: undefined,
@@ -93,16 +95,18 @@ export class RedisTransactionalStorage implements TransactionalStateStorage {
     statesToPrepare: ReadonlyArray<PendingTransactionState<unknown>>,
     commitUpTo: number | undefined,
     abortAfter: number | undefined,
+    signal?: AbortSignal,
   ): Promise<string> {
     const key = this.key(stateName, grainId);
-    const hash = await this.client.hGetAll(key);
+    const client = this.clientFor(signal);
+    const hash = await client.hGetAll(key);
     const record =
       hash.data !== undefined ? deserializeValue<StoredRecord<unknown>>(hash.data) : emptyRecord();
     applyStore(record, metadata, statesToPrepare, commitUpTo, abortAfter);
 
     const etag = randomUUID();
     try {
-      await this.client.eval(WRITE, {
+      await client.eval(WRITE, {
         keys: [key],
         arguments: [expectedETag ?? "", serializeValue(record), etag],
       });
@@ -119,6 +123,11 @@ export class RedisTransactionalStorage implements TransactionalStateStorage {
       throw err;
     }
     return etag;
+  }
+
+  /** The client to issue this call on: scoped to `signal` (node-redis's own abort hook) when given. */
+  private clientFor(signal: AbortSignal | undefined): RedisClient {
+    return signal === undefined ? this.client : this.client.withAbortSignal(signal);
   }
 
   private key(stateName: string, grainId: GrainId): string {

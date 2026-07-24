@@ -10,9 +10,6 @@ implementations explicitly left undone are listed below.
 
 ## Follow-ups from the issue burn-down
 
-- [ ] **Ambient cancellation remainders (from #18)** — journal/transactional-storage provider
-      signatures still lack a `signal` param, and `getGrain` proxy calls have no per-call deadline
-      API (today only `Dispatcher.invoke`'s `opts` exposes `deadlineMs`/`signal`).
 - [ ] **Transactional keepalive lifecycle (from #23)** — no hosting-layer caller invokes
       `unbindTransactionalStates` on grain deactivation (`ClusterNode.onDeactivated` is not
       extensible for this), so a long-idle activation with an unresolved transactional record
