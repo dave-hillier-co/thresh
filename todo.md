@@ -39,9 +39,6 @@ vertical slices (see [`CLAUDE.md`](CLAUDE.md)).
       (stream-provider wiring, 2 placement-test cases) — see their own gap comments.
 - [ ] **`@readOnly` runtime check** — at least a dev-mode mutation guard that detects state writes
       from a `@readOnly` call and surfaces the violation.
-- [ ] **Directory handoff ACK & cleanup** — ACK-delete loop on snapshot handoff so retained
-      snapshots are expired when a successor crashes pre-pull; add retry-with-backoff on recovery
-      pulls and gate concurrent registers on a `recoveryMembershipVersion`.
 
 ## Orleans test-suite port (parity suite)
 
@@ -124,8 +121,6 @@ shows per-tag counts). One-line definitions live on the `GapTag` union. Grouped 
       exposed only at the registry level.
 - [ ] **Reminders — plumb `ReminderOptions` (including `minimumPeriod`) through the silo builder**
       so hosts can configure the minimum without constructing `LocalReminderService` by hand.
-- [ ] **Directory — apply silo-liveness gate to `register`** (Orleans `RegisterCore` treats an
-      existing entry whose silo is dead as overwritable).
 - [ ] **Client — per-attempt deadline** so the cumulative `callTimeoutMs` accounts for time spent
       in gateway-failover backoff.
 - [ ] **Durable jobs — in-grain `RunId` dedup** on the delivery path

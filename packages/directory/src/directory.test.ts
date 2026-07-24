@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { newActivationId } from "@tsva/core/activation-id";
+import { RejectionError } from "@tsva/core/errors";
 import type { GrainAddress } from "@tsva/core/grain-address";
 import { GrainId } from "@tsva/core/grain-id";
 import { SiloAddress } from "@tsva/core/silo-address";
@@ -48,6 +49,56 @@ describe("LocalDirectoryPartition", () => {
     const attempt = addr("x", siloB);
     dir.register(current);
     expect(dir.register(attempt, wrongPrevious)).toBe(current);
+  });
+
+  it("treats an entry owned by a dead silo as overwritable, without needing the exact previous (Orleans RegisterCore)", () => {
+    const dir = new LocalDirectoryPartition((silo) => !silo.equals(siloA));
+    const dead = addr("x", siloA);
+    const fresh = addr("x", siloB);
+    dir.register(dead);
+    expect(dir.register(fresh)).toBe(fresh);
+    expect(dir.lookup(fresh.grainId)).toEqual(fresh);
+  });
+
+  it("still applies the CAS rule when the existing entry's silo is live", () => {
+    const dir = new LocalDirectoryPartition(() => true);
+    const first = addr("x", siloA);
+    const second = addr("x", siloB);
+    dir.register(first);
+    expect(dir.register(second)).toBe(first);
+  });
+
+  it("rejects a brand-new registration from a caller behind an in-flight recovery, so it retries against a fresher view", () => {
+    const dir = new LocalDirectoryPartition();
+    dir.beginRecovery(5);
+    const fresh = addr("x", siloA);
+    expect(() => dir.register(fresh, undefined, 4)).toThrow(RejectionError);
+    expect(dir.lookup(fresh.grainId)).toBeUndefined();
+  });
+
+  it("allows a brand-new registration once the caller's version catches up to the recovery", () => {
+    const dir = new LocalDirectoryPartition();
+    dir.beginRecovery(5);
+    const fresh = addr("x", siloA);
+    expect(dir.register(fresh, undefined, 5)).toBe(fresh);
+  });
+
+  it("allows recovery itself (no caller version) to register during its own in-flight window", () => {
+    const dir = new LocalDirectoryPartition();
+    dir.beginRecovery(5);
+    const recovered = addr("x", siloA);
+    expect(dir.register(recovered)).toBe(recovered);
+  });
+
+  it("clears the recovery gate once ended, and a stale endRecovery for a superseded version is a no-op", () => {
+    const dir = new LocalDirectoryPartition();
+    dir.beginRecovery(5);
+    dir.endRecovery(4); // stale call for an earlier recovery — must not clear version 5's gate
+    expect(dir.recoveryMembershipVersion).toBe(5);
+    dir.endRecovery(5);
+    expect(dir.recoveryMembershipVersion).toBeUndefined();
+    const fresh = addr("x", siloA);
+    expect(dir.register(fresh, undefined, 0)).toBe(fresh);
   });
 
   it("unregisters only the matching activation", () => {
