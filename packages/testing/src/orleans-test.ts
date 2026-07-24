@@ -9,7 +9,7 @@ import { it } from "vitest";
 export type GapTag =
   // Missing features (each maps to a todo.md parity-gap item).
   | "GAP-STATELESS-WORKER" // StatelessWorker placement parsed but not enforced
-  | "GAP-READONLY-ENFORCEMENT" // @readOnly is advisory; mutations are not rejected
+  | "GAP-READONLY-ENFORCEMENT" // @readOnly is advisory by default; the opt-in dev-mode guard (ActivationData.readOnlyStateGuard) only covers @persistentState fields, not reducer/durable/transactional state
   | "GAP-OBSERVERS" // no grain observers / client object references
   | "GAP-MGMT-GRAIN" // no management grain / silo-control system targets
   | "GAP-SERIALIZER-POLYMORPHISM" // serializer lacks polymorphism/cycles

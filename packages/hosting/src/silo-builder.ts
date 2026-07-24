@@ -127,6 +127,18 @@ export interface SiloConfig {
    * to shedding disabled; see `ClusterNodeOptions.loadShedding`.
    */
   loadShedding?: Partial<LoadSheddingOptions>;
+  /**
+   * Dev-mode `@readOnly` mutation guard (`GAP-READONLY-ENFORCEMENT`): when
+   * `true`, a grain's `@persistentState` fields are proxy-guarded for the
+   * duration of any `readOnly` call, and a mutation attempt — replacing
+   * `value`, mutating a property reached through it, or calling
+   * `write()`/`clear()` — throws `ReadOnlyStateViolationError` instead of
+   * silently succeeding. Opt-in and `false` by default (leave it off in
+   * production: the deep proxy costs a wrap per `readOnly` turn), for
+   * catching a mistaken write in dev/test where `@readOnly` is otherwise only
+   * advisory.
+   */
+  readOnlyStateGuard?: boolean;
 }
 
 interface Registration {
@@ -784,6 +796,9 @@ export class SiloBuilder {
         : {}),
       ...(this.config.metadata !== undefined ? { metadata: this.config.metadata } : {}),
       ...(this.config.loadShedding !== undefined ? { loadShedding: this.config.loadShedding } : {}),
+      ...(this.config.readOnlyStateGuard !== undefined
+        ? { readOnlyStateGuard: this.config.readOnlyStateGuard }
+        : {}),
       ...(this.repartitioning !== undefined ? { repartitioning: this.repartitioning } : {}),
       transactionsEnabled: transactionalStorage !== undefined,
       ...(this.broadcastProviders.size > 0

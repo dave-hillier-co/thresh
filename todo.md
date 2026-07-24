@@ -37,8 +37,10 @@ vertical slices (see [`CLAUDE.md`](CLAUDE.md)).
       one activation per id. `IManagementGrain.getGrainActivationCount`/`forceActivationCollection`
       added to observe/force-collect it. GAP-STATELESS-WORKER's remaining 3 skips are unrelated
       (stream-provider wiring, 2 placement-test cases) — see their own gap comments.
-- [ ] **`@readOnly` runtime check** — at least a dev-mode mutation guard that detects state writes
-      from a `@readOnly` call and surfaces the violation.
+- [x] **`@readOnly` runtime check** — opt-in dev-mode mutation guard (`SiloConfig.readOnlyStateGuard`,
+      default off): proxy-wraps `@persistentState` fields for the duration of a `readOnly` turn and
+      throws `ReadOnlyStateViolationError` on a write, in-place mutation, or `write()`/`clear()` call.
+      Reducer/durable/transactional state facets are not covered yet (GAP-READONLY-ENFORCEMENT).
 - [ ] **Directory handoff ACK & cleanup** — ACK-delete loop on snapshot handoff so retained
       snapshots are expired when a successor crashes pre-pull; add retry-with-backoff on recovery
       pulls and gate concurrent registers on a `recoveryMembershipVersion`.

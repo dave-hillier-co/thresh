@@ -47,6 +47,8 @@ import {
   type IncomingGrainCallContext,
   type IncomingGrainCallFilter,
 } from "@tsva/core/grain-call-filter";
+import { getPersistentFields } from "@tsva/core/persistent-state-metadata";
+import { guardPersistentStateForReadOnly } from "@tsva/core/persistent-state-readonly-guard";
 import type { InvocationRequest } from "@tsva/core/request";
 import {
   PLACEMENT_HINT_KEY,
@@ -131,6 +133,18 @@ export class ActivationData implements GrainContext {
 
   /** Incoming grain-call filters wrapping each grain-method dispatch; set by the catalog. */
   incomingCallFilters: readonly IncomingGrainCallFilter[] = [];
+
+  /**
+   * Dev-mode `@readOnly` mutation guard (`GAP-READONLY-ENFORCEMENT`), opt-in
+   * and off by default — set by the catalog from the silo builder's flag.
+   * When `true`, every `@persistentState` field is swapped for a
+   * `guardPersistentStateForReadOnly` wrapper for the duration of a turn
+   * whose `InvokeMethodOptions.readOnly` is `true`, so a mutation attempt
+   * throws `ReadOnlyStateViolationError` instead of silently succeeding; the
+   * real facet is restored once the turn ends. Zero overhead when `false`
+   * (the default): no field swap, no proxy, nothing to check.
+   */
+  readOnlyStateGuard = false;
 
   /** When migrating: the directed target silo (undefined lets placement choose). */
   migrationTarget: SiloAddress | undefined;
@@ -262,17 +276,26 @@ export class ActivationData implements GrainContext {
           // downstream calls. Scoped via `runWithRequestContext` (the SAME
           // ambient store a non-grain/client caller uses), nested inside
           // `invocationContext.run` so both are in scope for the turn.
-          return runWithRequestContext(req.headers !== undefined ? { ...req.headers } : {}, () =>
-            invocationContext.run(
-              {
-                senderId: req.sender,
-                ownerId: this.id,
-                reentrancyId: req.reentrancyId,
-                transaction: req.transaction,
-              },
-              () => this.callMethod(req),
-            ),
+          const restoreReadOnlyGuard =
+            this.readOnlyStateGuard && req.options?.readOnly === true
+              ? this.applyReadOnlyGuard()
+              : undefined;
+          const invocation = runWithRequestContext(
+            req.headers !== undefined ? { ...req.headers } : {},
+            () =>
+              invocationContext.run(
+                {
+                  senderId: req.sender,
+                  ownerId: this.id,
+                  reentrancyId: req.reentrancyId,
+                  transaction: req.transaction,
+                },
+                () => this.callMethod(req),
+              ),
           );
+          return restoreReadOnlyGuard === undefined
+            ? invocation
+            : invocation.finally(restoreReadOnlyGuard);
         },
       })
       .finally(() => this.touch());
@@ -585,6 +608,30 @@ export class ActivationData implements GrainContext {
 
   private touch(): void {
     this.lastActiveMs = this.time.now();
+  }
+
+  /**
+   * Swap each `@persistentState` field on the instance for a
+   * `guardPersistentStateForReadOnly` wrapper, returning a closure that puts
+   * the real facets back. Called only when `readOnlyStateGuard` is enabled
+   * AND the turn is `readOnly` — see `invoke()` — so a plain call, or any
+   * call on a silo that never opted in, never allocates a proxy.
+   */
+  private applyReadOnlyGuard(): () => void {
+    const fields = getPersistentFields(this.instance);
+    if (fields.length === 0) return () => undefined;
+    const record = this.instance as unknown as Record<string, unknown>;
+    const saved = fields.map((field) => [field, record[field.fieldName]] as const);
+    for (const [field, original] of saved) {
+      if (original === undefined) continue;
+      record[field.fieldName] = guardPersistentStateForReadOnly(
+        original as Parameters<typeof guardPersistentStateForReadOnly>[0],
+        field.stateName,
+      );
+    }
+    return () => {
+      for (const [field, original] of saved) record[field.fieldName] = original;
+    };
   }
 
   private async callMethod(req: InvocationRequest): Promise<unknown> {
