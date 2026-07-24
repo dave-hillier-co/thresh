@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "@tsva/core": "workspace:*",
+    "@tsva/observability": "workspace:*",
     "pg": "^8.21.0",
     "redis": "^5.12.1"
   }

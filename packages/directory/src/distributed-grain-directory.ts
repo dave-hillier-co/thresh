@@ -2,6 +2,11 @@ import { RejectionError } from "@tsva/core/errors";
 import type { GrainAddress } from "@tsva/core/grain-address";
 import type { GrainId } from "@tsva/core/grain-id";
 import type { SiloAddress } from "@tsva/core/silo-address";
+import {
+  recordDirectoryLookup,
+  recordDirectoryRegistration,
+  type DirectoryLocality,
+} from "@tsva/observability/directory-metrics";
 import type { ConsistentHashRing } from "@tsva/directory/consistent-hash-ring";
 import type { DirectoryPeer } from "@tsva/directory/directory-peer";
 import type { GrainDirectory } from "@tsva/directory/grain-directory";
@@ -38,6 +43,7 @@ export class DistributedGrainDirectory implements GrainDirectory {
       grainId,
       () => this.partition.lookup(grainId),
       (owner) => this.peer.lookup(owner, grainId),
+      recordDirectoryLookup,
     );
   }
 
@@ -46,6 +52,7 @@ export class DistributedGrainDirectory implements GrainDirectory {
       addr.grainId,
       () => this.partition.register(addr, previous),
       (owner) => this.peer.register(owner, addr, previous),
+      recordDirectoryRegistration,
     );
   }
 
@@ -76,13 +83,16 @@ export class DistributedGrainDirectory implements GrainDirectory {
     grainId: GrainId,
     onOwned: () => T | Promise<T>,
     onRemote: (owner: SiloAddress) => Promise<T>,
+    record: (locality: DirectoryLocality) => void = () => undefined,
   ): Promise<T> {
     for (let attempt = 0; ; attempt++) {
       const owner = this.ring().ownerOf(grainId);
       if (owner.equals(this.local)) {
+        record("local");
         await this.onOwnedAccess(grainId);
         return onOwned();
       }
+      record("remote");
       try {
         return await onRemote(owner);
       } catch (err) {
