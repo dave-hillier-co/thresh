@@ -2,6 +2,7 @@ import { durationToMs, type Duration } from "@tsva/core/duration";
 import type { GrainId } from "@tsva/core/grain-id";
 import { isHashInRanges, type HashRange } from "@tsva/core/hash-ring";
 import { noopLogger, type Logger } from "@tsva/core/logger";
+import { recordReminderFired, recordReminderMissed } from "@tsva/observability/reminder-metrics";
 import type {
   ReminderEntry,
   ReminderRegistry,
@@ -188,13 +189,16 @@ export class LocalReminderService implements ReminderRegistry {
       period: entry.period,
       currentTickAt: new Date(this.time.now()),
     };
-    void this.onFire(entry.grainId, entry.name, status).catch((error: unknown) => {
-      this.logger.error("reminder delivery failed", {
-        error,
-        grainId: entry.grainId.toString(),
-        name: entry.name,
+    void this.onFire(entry.grainId, entry.name, status)
+      .then(() => recordReminderFired({ "tsva.reminder.name": entry.name }))
+      .catch((error: unknown) => {
+        recordReminderMissed({ "tsva.reminder.name": entry.name });
+        this.logger.error("reminder delivery failed", {
+          error,
+          grainId: entry.grainId.toString(),
+          name: entry.name,
+        });
       });
-    });
   }
 
   private cancel(key: string): void {

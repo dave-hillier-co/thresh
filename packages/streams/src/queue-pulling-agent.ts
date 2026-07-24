@@ -1,4 +1,9 @@
 import type { GrainType } from "@tsva/core/grain-type";
+import {
+  recordAgentPoll,
+  recordStreamDelivered,
+  recordStreamFailed,
+} from "@tsva/observability/stream-metrics";
 import type { QueueEntry } from "@tsva/streams/redis-stream-queue";
 import type { HashRange } from "@tsva/streams/queue-ownership";
 import type { StreamDeliver } from "@tsva/streams/stream-deliver";
@@ -140,6 +145,7 @@ export class QueuePullingAgent {
   private async pump(): Promise<void> {
     if (this.pumping || !this.running) return;
     this.pumping = true;
+    recordAgentPoll();
     try {
       // Resume from the durably committed cursor on first pump (covers a
       // successor that took the queue over from another silo).
@@ -171,6 +177,7 @@ export class QueuePullingAgent {
       if (!this.running) return false;
       try {
         await this.deliver(streamKey, event, token);
+        recordStreamDelivered({ "tsva.stream.key": streamKey });
         return true;
       } catch (err) {
         if (err instanceof RecoverableStreamDeliveryError) {
@@ -190,6 +197,7 @@ export class QueuePullingAgent {
     }
     // Retry budget exhausted: notify the failure handler, then advance past the
     // event so a single poison entry does not stall the rest of the queue.
+    recordStreamFailed({ "tsva.stream.key": streamKey });
     try {
       await this.failureHandler?.onDeliveryFailure(
         streamKey,

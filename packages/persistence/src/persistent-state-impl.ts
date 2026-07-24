@@ -7,6 +7,7 @@ import type {
 import type { GrainStorage, StateHolder } from "@tsva/core/grain-storage";
 import type { PersistentState } from "@tsva/core/persistent-state";
 import { withStorageReadSpan, withStorageWriteSpan } from "@tsva/observability/activation-tracing";
+import { withStorageOpMetrics } from "@tsva/observability/storage-metrics";
 
 /**
  * Binds a named state to a grain identity and a storage provider. Keeps the
@@ -46,29 +47,41 @@ export class PersistentStateImpl<T> implements PersistentState<T>, IGrainMigrati
   }
 
   async read(signal?: AbortSignal): Promise<void> {
-    await withStorageReadSpan(
-      {
-        provider: this.storage.constructor.name,
-        stateName: this.stateName,
-        grainId: this.grainId.toString(),
-      },
-      () => this.storage.read(this.stateName, this.grainId, this.holder, signal),
+    const attrs = {
+      provider: this.storage.constructor.name,
+      stateName: this.stateName,
+      grainId: this.grainId.toString(),
+    };
+    await withStorageOpMetrics({ ...attrs, operation: "read" }, () =>
+      withStorageReadSpan(attrs, () =>
+        this.storage.read(this.stateName, this.grainId, this.holder, signal),
+      ),
     );
   }
 
   async write(signal?: AbortSignal): Promise<void> {
-    await withStorageWriteSpan(
-      {
-        provider: this.storage.constructor.name,
-        stateName: this.stateName,
-        grainId: this.grainId.toString(),
-      },
-      () => this.storage.write(this.stateName, this.grainId, this.holder, signal),
+    const attrs = {
+      provider: this.storage.constructor.name,
+      stateName: this.stateName,
+      grainId: this.grainId.toString(),
+    };
+    await withStorageOpMetrics({ ...attrs, operation: "write" }, () =>
+      withStorageWriteSpan(attrs, () =>
+        this.storage.write(this.stateName, this.grainId, this.holder, signal),
+      ),
     );
   }
 
   async clear(signal?: AbortSignal): Promise<void> {
-    await this.storage.clear(this.stateName, this.grainId, this.holder, signal);
+    await withStorageOpMetrics(
+      {
+        provider: this.storage.constructor.name,
+        stateName: this.stateName,
+        grainId: this.grainId.toString(),
+        operation: "clear",
+      },
+      () => this.storage.clear(this.stateName, this.grainId, this.holder, signal),
+    );
     this.holder.value = this.defaultValue();
   }
 

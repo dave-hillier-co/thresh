@@ -1,5 +1,7 @@
 import type { GrainId } from "@tsva/core/grain-id";
 import type { SiloAddress } from "@tsva/core/silo-address";
+import { recordMessageSent, recordQueueLatency } from "@tsva/observability/messaging-metrics";
+import type { Message } from "@tsva/messaging/message";
 import type { Connection, Transport } from "@tsva/messaging/transport";
 
 /**
@@ -23,12 +25,17 @@ export class ConnectionManager {
     const key = to.endpoint;
     let conn = this.connections.get(key);
     if (conn === undefined) {
+      const dialStart = Date.now();
       conn = this.transport
         .connect(to, {
           protocolVersion: 1,
           siloAddress: this.self,
           clusterId: this.clusterId,
           ...(this.clientId ? { clientId: this.clientId } : {}),
+        })
+        .then((connection) => {
+          recordQueueLatency(Date.now() - dialStart, { "tsva.peer": key });
+          return instrumented(connection, key);
         })
         .catch((err: unknown) => {
           this.connections.delete(key); // don't cache a failed connect
@@ -51,6 +58,17 @@ export class ConnectionManager {
     this.connections.clear();
     await Promise.all(all.map(closeQuietly));
   }
+}
+
+/** Wraps a freshly dialed connection's `send` to record the `tsva.messaging.sent` counter. */
+function instrumented(connection: Connection, peer: string): Connection {
+  return {
+    send: (message: Message) => {
+      recordMessageSent({ "tsva.peer": peer, "tsva.message.direction": message.direction });
+      connection.send(message);
+    },
+    close: (reason?: string) => connection.close(reason),
+  };
 }
 
 async function closeQuietly(conn: Promise<Connection>): Promise<void> {

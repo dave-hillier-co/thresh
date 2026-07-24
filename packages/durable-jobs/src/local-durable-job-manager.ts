@@ -1,7 +1,13 @@
 import { durationToMs, type Duration } from "@tsva/core/duration";
-import type { DurableJob, DurableJobsOptions, ScheduleJobRequest, ShouldRetry } from "@tsva/core/durable-job";
+import type {
+  DurableJob,
+  DurableJobsOptions,
+  ScheduleJobRequest,
+  ShouldRetry,
+} from "@tsva/core/durable-job";
 import { Guid } from "@tsva/core/guid";
 import type { TimeProvider } from "@tsva/core/time-provider";
+import { registerDurableJobQueueDepth } from "@tsva/observability/durable-job-metrics";
 import { claimBudget, defaultShouldRetry, shardKeyFor } from "@tsva/durable-jobs/job-model";
 import type { JobShardStore } from "@tsva/durable-jobs/job-shard-store";
 import {
@@ -44,6 +50,7 @@ export class LocalDurableJobManager {
   private readonly executors = new Map<number, ShardExecutor>();
   private readonly limiter: ConcurrencyLimiter;
   private ownership: ShardOwnershipContext;
+  private readonly unregisterQueueDepth: () => void;
 
   constructor(
     private readonly store: JobShardStore,
@@ -55,6 +62,9 @@ export class LocalDurableJobManager {
   ) {
     this.limiter = new ConcurrencyLimiter(options.maxConcurrentJobsPerSilo);
     this.ownership = ownership;
+    this.unregisterQueueDepth = registerDurableJobQueueDepth(() =>
+      [...this.executors.values()].reduce((sum, executor) => sum + executor.size, 0),
+    );
   }
 
   /** The shard keys this silo currently runs an executor for (for tests/metrics). */
@@ -146,6 +156,7 @@ export class LocalDurableJobManager {
       await this.store.releaseShard(shardKey, this.ownership.localRingKey).catch(() => undefined);
       this.stopExecutor(shardKey);
     }
+    this.unregisterQueueDepth();
   }
 
   /** Ensure this silo owns the shard (claiming it if free) and has a running executor. */

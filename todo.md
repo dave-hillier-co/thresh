@@ -8,9 +8,6 @@ current-state evidence (what already exists, what is missing, file pointers).
 
 ## Parity gaps
 
-- [ ] [#20](https://github.com/dave-hillier-co/ts-virtual-actors/issues/20) Runtime
-      instrumentation breadth — OTel wiring for messaging, reminders, streams, durable-jobs,
-      directory.
 - [ ] [#21](https://github.com/dave-hillier-co/ts-virtual-actors/issues/21) Versioned,
       registry-based serializer (versioning, surrogates, polymorphism, `Set`, cycle guard).
 - [ ] [#22](https://github.com/dave-hillier-co/ts-virtual-actors/issues/22) Stream

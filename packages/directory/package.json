@@ -7,6 +7,7 @@
     "./*": "./src/*.ts"
   },
   "dependencies": {
-    "@tsva/core": "workspace:*"
+    "@tsva/core": "workspace:*",
+    "@tsva/observability": "workspace:*"
   }
 }

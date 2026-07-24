@@ -7,6 +7,11 @@ import type {
 } from "@tsva/core/durable-job";
 import { Guid } from "@tsva/core/guid";
 import type { TimeProvider, TimerHandle } from "@tsva/core/time-provider";
+import {
+  recordJobCompleted,
+  recordJobFailed,
+  recordJobStarted,
+} from "@tsva/observability/durable-job-metrics";
 import { InMemoryJobQueue, type QueuedJob } from "@tsva/durable-jobs/job-model";
 import type { JobShardStore } from "@tsva/durable-jobs/job-shard-store";
 
@@ -259,7 +264,10 @@ export class ShardExecutor {
     const { slowStartIntervalMs, maxConcurrentJobsPerSilo, overloadBackoffMs } = this.options;
     let delay: number;
     if (this.concurrency < maxConcurrentJobsPerSilo && slowStartIntervalMs > 0) {
-      const elapsedIntervals = Math.max(0, Math.floor((now - this.startedAtMs) / slowStartIntervalMs));
+      const elapsedIntervals = Math.max(
+        0,
+        Math.floor((now - this.startedAtMs) / slowStartIntervalMs),
+      );
       const nextBoundaryMs = this.startedAtMs + (elapsedIntervals + 1) * slowStartIntervalMs;
       delay = Math.max(1, nextBoundaryMs - now);
     } else {
@@ -287,6 +295,7 @@ export class ShardExecutor {
       // recoverable — the next claimer's `load()` will skip and clean up.
       const runId = Guid.newGuid().toString();
       await this.store.persistRunStart(this.shardKey, durable.id, runId).catch(() => undefined);
+      recordJobStarted({ "tsva.job.name": durable.name });
       const context: JobRunContext = {
         id: durable.id,
         name: durable.name,
@@ -325,6 +334,7 @@ export class ShardExecutor {
       await this.store.persistRunComplete(this.shardKey, job.id, runId).catch(() => undefined);
       this.jobs.delete(job.id);
       await this.store.persistRemove(this.shardKey, job.id).catch(() => undefined);
+      recordJobCompleted({ "tsva.job.id": job.id });
       return;
     }
     if (result.kind === "pollAfter") {
@@ -334,6 +344,7 @@ export class ShardExecutor {
       return;
     }
     // failed: consult the retry policy with the number of attempts made so far.
+    recordJobFailed({ "tsva.job.id": job.id });
     const backoff = this.options.shouldRetry(attempt, result.error);
     if (backoff === undefined) {
       this.jobs.delete(job.id);

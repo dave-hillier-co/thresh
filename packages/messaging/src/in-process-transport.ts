@@ -1,5 +1,6 @@
 import { RejectionError } from "@tsva/core/errors";
 import type { SiloAddress } from "@tsva/core/silo-address";
+import { recordMessageReceived } from "@tsva/observability/messaging-metrics";
 import type { Message } from "@tsva/messaging/message";
 import type {
   Connection,
@@ -57,7 +58,13 @@ export class InProcessTransport implements Transport {
     onAccept?: ConnectionAcceptHandler,
   ): Promise<Listener> {
     this.network.register({
-      onMessage,
+      onMessage: (message, from) => {
+        recordMessageReceived({
+          "tsva.peer": from.endpoint,
+          "tsva.message.direction": message.direction,
+        });
+        return onMessage(message, from);
+      },
       clusterId: this.clusterId,
       address,
       ...(onAccept && { onAccept }),

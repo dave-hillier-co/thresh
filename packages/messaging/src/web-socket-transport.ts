@@ -2,6 +2,7 @@ import { once } from "node:events";
 import { WebSocket, WebSocketServer } from "ws";
 import { RejectionError } from "@tsva/core/errors";
 import { SiloAddress } from "@tsva/core/silo-address";
+import { recordMessageReceived } from "@tsva/observability/messaging-metrics";
 import type { Message } from "@tsva/messaging/message";
 import { MessagePackSerializer } from "@tsva/messaging/msgpack-serializer";
 import type {
@@ -77,7 +78,12 @@ export class WebSocketTransport implements Transport {
           }
           return;
         }
-        void onMessage(this.serializer.deserialize<Message>(bytes), from);
+        const message = this.serializer.deserialize<Message>(bytes);
+        recordMessageReceived({
+          "tsva.peer": from.endpoint,
+          "tsva.message.direction": message.direction,
+        });
+        void onMessage(message, from);
       });
     });
 
