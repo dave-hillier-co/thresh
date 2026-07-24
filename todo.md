@@ -14,8 +14,6 @@ current-state evidence (what already exists, what is missing, file pointers).
       `IStreamFailureHandler` provider wiring, durable poison store & producer registration.
 - [ ] [#23](https://github.com/dave-hillier-co/ts-virtual-actors/issues/23) Transaction TM
       confirmation-worker keepalive.
-- [ ] [#26](https://github.com/dave-hillier-co/ts-virtual-actors/issues/26) Directory handoff
-      ACK-delete loop, recovery retry & register version gate.
 - [ ] [#31](https://github.com/dave-hillier-co/ts-virtual-actors/issues/31) Timers —
       callback-initiated `change()`/`dispose()` (`operationType`).
 - [ ] Ambient cancellation follow-ups from #18 (core slice landed: `@tsva/core/abort`,
@@ -52,8 +50,6 @@ current-state evidence (what already exists, what is missing, file pointers).
 
 - [ ] [#34](https://github.com/dave-hillier-co/ts-virtual-actors/issues/34) Reminders — plumb
       `ReminderOptions` (`minimumPeriod`) through the silo builder.
-- [ ] [#35](https://github.com/dave-hillier-co/ts-virtual-actors/issues/35) Directory —
-      silo-liveness gate on `register` (Orleans `RegisterCore` parity).
 - [ ] [#36](https://github.com/dave-hillier-co/ts-virtual-actors/issues/36) Client — per-attempt
       deadline so `callTimeoutMs` bounds total wall-clock across gateway failover.
 - [ ] [#37](https://github.com/dave-hillier-co/ts-virtual-actors/issues/37) Durable jobs —
