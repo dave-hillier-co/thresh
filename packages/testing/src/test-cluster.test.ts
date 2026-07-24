@@ -25,6 +25,51 @@ class CounterGrain extends Grain implements ICounter {
 
 const counterId = (key: string) => new GrainId("TestClusterCounter" as GrainType, key);
 
+// Regression coverage for the teardown race (#27): `onDeactivate` making a
+// cross-silo call must still land while the peer's transport is up, whether
+// the deactivation is driven by a single `stopSilo()` or by `dispose()`
+// tearing down every silo. `notifications` lives outside grain state so it
+// survives the watcher's own silo being stopped.
+let notifications: string[] = [];
+let watcherTargetKey = "watcher";
+
+interface IWatcherGrain extends GrainWithStringKey {
+  ping(): Promise<void>;
+  notify(fromKey: string): Promise<void>;
+}
+const IWatcherGrain = defineGrainInterface<IWatcherGrain>("TeardownRaceWatcher");
+
+@grain({ name: "TeardownRaceWatcher" })
+class WatcherGrain extends Grain implements IWatcherGrain {
+  async ping(): Promise<void> {
+    // Activation-only call, so a test can place the watcher before wiring notifiers to it.
+  }
+
+  async notify(fromKey: string): Promise<void> {
+    notifications.push(fromKey);
+  }
+}
+
+interface INotifierGrain extends GrainWithStringKey {
+  touch(): Promise<void>;
+}
+const INotifierGrain = defineGrainInterface<INotifierGrain>("TeardownRaceNotifier");
+
+@grain({ name: "TeardownRaceNotifier" })
+class NotifierGrain extends Grain implements INotifierGrain {
+  async touch(): Promise<void> {
+    // Activate; the interesting behaviour is entirely in onDeactivate below.
+  }
+
+  override async onDeactivate(): Promise<void> {
+    const watcher = this.getGrain(IWatcherGrain, watcherTargetKey);
+    await watcher.notify(String(this.id.key));
+  }
+}
+
+const notifierId = (key: string) => new GrainId("TeardownRaceNotifier" as GrainType, key);
+const watcherId = (key: string) => new GrainId("TeardownRaceWatcher" as GrainType, key);
+
 describe("TestCluster", () => {
   it("starts N silos and serves a grain with one activation across the cluster", async () => {
     const cluster = await TestCluster.start({
@@ -96,6 +141,77 @@ describe("TestCluster", () => {
       expect(await cluster.getGrain(ICounter, "after-stop").increment()).toBe(1);
     } finally {
       await cluster.dispose();
+    }
+  });
+
+  it("stopSilo lets onDeactivate finish a cross-silo call before the transport closes", async () => {
+    notifications = [];
+    const cluster = await TestCluster.start({
+      initialSilos: 2,
+      grains: [
+        { ctor: WatcherGrain, interfaces: [IWatcherGrain] },
+        { ctor: NotifierGrain, interfaces: [INotifierGrain] },
+      ],
+    });
+    try {
+      watcherTargetKey = "watcher";
+      await cluster.getGrain(IWatcherGrain, "watcher").ping();
+      const watcherSilo = cluster.silos.find((s) => s.host.isActive(watcherId("watcher")))!;
+      const otherSilo = cluster.silos.find((s) => s !== watcherSilo)!;
+
+      // Land the notifier on the silo that does *not* host the watcher, so its
+      // onDeactivate must reach across silos.
+      const keys = Array.from({ length: 8 }, (_, i) => `stop-${i}`);
+      for (const key of keys) await cluster.getGrain(INotifierGrain, key).touch();
+      const crossSiloKey = keys.find((key) => otherSilo.host.isActive(notifierId(key)));
+      expect(crossSiloKey).toBeDefined();
+
+      await cluster.stopSilo(otherSilo);
+
+      expect(notifications).toContain(crossSiloKey);
+    } finally {
+      await cluster.dispose();
+    }
+  });
+
+  it("dispose() stops silos in order, so an earlier silo's onDeactivate can still reach a later one", async () => {
+    notifications = [];
+    const cluster = await TestCluster.start({
+      initialSilos: 2,
+      grains: [
+        { ctor: WatcherGrain, interfaces: [IWatcherGrain] },
+        { ctor: NotifierGrain, interfaces: [INotifierGrain] },
+      ],
+    });
+
+    // dispose() stops `cluster.silos` in order, so a notifier hosted on
+    // `silos[0]` deactivates while `silos[1]` (hosting the watcher) is still
+    // up; a notifier hosted on `silos[1]` would race its own watcher's
+    // teardown, which is a separate, pre-existing hazard this issue doesn't
+    // cover — so pin the watcher onto the later silo and only assert on
+    // notifiers hosted on the earlier one.
+    const lastSilo = cluster.silos[cluster.silos.length - 1]!;
+    let watcherKey: string | undefined;
+    for (let i = 0; i < 20 && watcherKey === undefined; i += 1) {
+      const candidate = `watcher-${i}`;
+      await cluster.getGrain(IWatcherGrain, candidate).ping();
+      if (lastSilo.host.isActive(watcherId(candidate))) {
+        watcherKey = candidate;
+      }
+    }
+    expect(watcherKey).toBeDefined();
+    watcherTargetKey = watcherKey!;
+
+    const earlySilo = cluster.silos.find((s) => s !== lastSilo)!;
+    const keys = Array.from({ length: 12 }, (_, i) => `dispose-${i}`);
+    for (const key of keys) await cluster.getGrain(INotifierGrain, key).touch();
+    const crossSiloKeys = keys.filter((key) => earlySilo.host.isActive(notifierId(key)));
+    expect(crossSiloKeys.length).toBeGreaterThan(0);
+
+    await cluster.dispose();
+
+    for (const key of crossSiloKeys) {
+      expect(notifications).toContain(key);
     }
   });
 });

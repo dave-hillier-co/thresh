@@ -228,12 +228,25 @@ export class TestCluster {
     return this.startAdditionalSilo();
   }
 
+  /**
+   * Stop every live silo in a deterministic order — mirroring `stopSilo`'s
+   * stop-then-`removeSilo` sequencing per silo — rather than tearing them all
+   * down concurrently. A bare `Promise.all` would race: a silo mid-`stop()`
+   * runs `onDeactivate` hooks that can make cross-silo calls (the
+   * `ActivateDeactivateWatcherGrain` pattern), and if every silo's transport
+   * were closing at once, that call could land on a peer whose listener is
+   * already gone. Stopping one at a time, and updating membership between
+   * each, keeps the remaining silos reachable until it is their own turn.
+   */
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
     const remaining = this.live;
     this.live = [];
-    await Promise.all(remaining.map((s) => s.host.stop().catch(() => undefined)));
+    for (const silo of remaining) {
+      await silo.host.stop().catch(() => undefined);
+      this.shared?.removeSilo(silo.address);
+    }
   }
 
   private take(handle: TestSiloHandle): InternalSilo {
