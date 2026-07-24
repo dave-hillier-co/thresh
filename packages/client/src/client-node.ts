@@ -3,7 +3,12 @@ import {
   broadcastPublisherGrainId,
   type BroadcastChannelProvider,
 } from "@tsva/core/broadcast-channel";
-import { GatewayTooBusyException, GrainCallError, RejectionError } from "@tsva/core/errors";
+import {
+  GatewayTooBusyException,
+  GrainCallError,
+  GrainCallTimeoutError,
+  RejectionError,
+} from "@tsva/core/errors";
 import { createClientId, createObserverId, isObserverGrainId } from "@tsva/core/client-grain-id";
 import type { Grain } from "@tsva/core/grain";
 import {
@@ -72,6 +77,13 @@ export interface ClientConfig {
    */
   delay?: (ms: number) => Promise<void>;
   /**
+   * Injectable wall clock `invoke` reads to enforce `callTimeoutMs` as a
+   * cumulative budget across retries and backoff. Defaults to `Date.now`;
+   * tests substitute a fake alongside `delay` to keep elapsed time
+   * deterministic.
+   */
+  now?: () => number;
+  /**
    * The client's own identity, used to mint observer references
    * (`createObjectReference`). Defaults to a fresh random client id; tests
    * override it for deterministic assertions.
@@ -132,6 +144,7 @@ export class ClientNode implements Dispatcher {
   private readonly callTimeoutMs: number;
   private readonly gateways: GatewayManager;
   private readonly delay: (ms: number) => Promise<void>;
+  private readonly now: () => number;
   private readonly clientId: GrainId;
   private readonly localObjects = new Map<string, LocalObjectEntry>();
   /**
@@ -171,6 +184,7 @@ export class ClientNode implements Dispatcher {
     }
     this.gateways = new GatewayManager(provider);
     this.delay = config.delay ?? defaultDelay;
+    this.now = config.now ?? (() => Date.now());
   }
 
   /**
@@ -304,20 +318,39 @@ export class ClientNode implements Dispatcher {
    * the gateway list once and retry. An error *carried in a response* (a grain
    * throw, or a rejection from the gateway's routing) is the call's real outcome
    * and propagates — failover would not change it.
+   *
+   * `callTimeoutMs` is a cumulative wall-clock budget for the whole call, not a
+   * per-attempt allowance (Orleans deadline propagation): elapsed time is
+   * tracked across every attempt and every backoff delay via the injectable
+   * `now()`, and each attempt's correlation timeout is whatever of the budget
+   * remains. Once the budget is exhausted — whether between attempts or while
+   * one is outstanding — the call fails with a `GrainCallTimeoutError` naming
+   * how many attempts were made, rather than retrying forever.
    */
   async invoke(req: InvocationRequest): Promise<unknown> {
+    const deadline = this.now() + this.callTimeoutMs;
     let refreshed = false;
     let lastError: unknown;
     let backoffMs = MINIMUM_INTERCONNECT_DELAY_MS;
     let hadFailure = false;
+    let attempts = 0;
+    const timeoutError = (): GrainCallTimeoutError =>
+      new GrainCallTimeoutError(
+        `grain call timed out after ${this.callTimeoutMs}ms (${attempts} attempt${attempts === 1 ? "" : "s"} made)`,
+      );
     for (;;) {
       // Wait between failed attempts so the loop does not busy-spin when every
       // gateway is unreachable (Orleans uses MINIMUM_INTERCONNECT_DELAY = 100ms
-      // between connect attempts; we double up to a 2s cap).
+      // between connect attempts; we double up to a 2s cap). The wait itself
+      // counts against the overall budget.
       if (hadFailure) {
-        await this.delay(backoffMs);
+        const remaining = deadline - this.now();
+        if (remaining <= 0) throw timeoutError();
+        await this.delay(Math.min(backoffMs, remaining));
         backoffMs = Math.min(backoffMs * 2, MAX_INTERCONNECT_DELAY_MS);
       }
+      const remainingBudget = deadline - this.now();
+      if (remainingBudget <= 0) throw timeoutError();
       let gateway = this.gateways.next();
       if (gateway === undefined && !refreshed) {
         await this.gateways.refresh();
@@ -329,6 +362,7 @@ export class ClientNode implements Dispatcher {
       }
 
       let response: Message;
+      attempts++;
       try {
         const conn = await this.connections.get(gateway);
         const correlationId = nextCorrelationId();
@@ -350,10 +384,13 @@ export class ClientNode implements Dispatcher {
           conn.send(message);
           return undefined;
         }
-        const pending = this.correlation.register(correlationId, this.callTimeoutMs);
+        const perAttemptTimeout = deadline - this.now();
+        if (perAttemptTimeout <= 0) throw timeoutError();
+        const pending = this.correlation.register(correlationId, perAttemptTimeout);
         conn.send(message);
         response = await pending;
       } catch (err) {
+        if (this.now() >= deadline) throw timeoutError();
         // The gateway is unreachable (connect/send threw, or the reply timed out):
         // drop it and try another.
         this.gateways.markAsDead(gateway);
