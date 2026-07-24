@@ -275,4 +275,109 @@ describe("TransactionalStateImpl (Slice 2)", () => {
     expect(await inTransaction(check, () => state.performRead((s) => s.cents))).toBe(105);
     await agent.resolve(check);
   });
+
+  /** A deterministic fake clock in the same shape the lock-deadline test above uses. */
+  function fakeClock(): TimeProvider & { advance(ms: number): Promise<void> } {
+    let current = 0;
+    const timers = new Map<number, { at: number; fire: () => void }>();
+    let nextId = 1;
+    const fireDue = () => {
+      for (const [id, t] of [...timers]) {
+        if (t.at <= current) {
+          timers.delete(id);
+          t.fire();
+        }
+      }
+    };
+    return {
+      now: () => current,
+      setTimer: (handler, delayMs): TimerHandle => {
+        const id = nextId++;
+        timers.set(id, { at: current + delayMs, fire: handler });
+        return id;
+      },
+      clearTimer: (handle) => {
+        timers.delete(handle as number);
+      },
+      advance: async (ms: number) => {
+        current += ms;
+        fireDue();
+        await Promise.resolve();
+        await Promise.resolve();
+      },
+    };
+  }
+
+  it("re-resolves an in-doubt pending record via a periodic confirmation worker after the TM crashes", async () => {
+    // A prepared-but-uncommitted record whose TM is a different, remote
+    // participant — simulating a crash right after prepare, before commit.
+    const clock = fakeClock();
+    const storage = new MemoryTransactionalStorage();
+    const manager = { grainId: grainId("tm"), stateName: "balance" };
+
+    const seed = new TransactionalStateImpl<Balance>(
+      "balance",
+      grainId("a"),
+      () => ({ cents: 100 }),
+      storage,
+      undefined,
+      undefined,
+      clock,
+    );
+    await seed.load();
+    const tx = agent.startTransaction();
+    await inTransaction(tx, () => seed.performUpdate((s) => (s.cents = 250)));
+    await seed.prepare(tx.id, tx.timeStamp, manager);
+    // Crash: never commits/aborts, leaving the prepared record in-doubt.
+
+    // The reactivated facet's resolver: unreachable on the first attempt (the
+    // TM's silo is still down), answers "committed" on the second.
+    let calls = 0;
+    const resolveStatus = async (): Promise<boolean> => {
+      calls += 1;
+      if (calls === 1) throw new Error("TM unreachable");
+      return true;
+    };
+
+    const recovered = new TransactionalStateImpl<Balance>(
+      "balance",
+      grainId("a"),
+      () => ({ cents: 100 }),
+      storage,
+      resolveStatus,
+      { confirmationIntervalMs: 1_000, confirmationMaxIntervalMs: 5_000 },
+      clock,
+    );
+    await recovered.load();
+
+    // Recovery attempted once during load() and failed; the record is still
+    // in-doubt (not yet visible as committed) and no second attempt has run yet.
+    expect(calls).toBe(1);
+    const beforeRetry = agent.startTransaction();
+    expect(await inTransaction(beforeRetry, () => recovered.performRead((s) => s.cents))).toBe(100);
+    await agent.resolve(beforeRetry);
+
+    // Drive the confirmation worker's backoff delay: it retries and this time
+    // the TM answers "committed".
+    await clock.advance(1_000);
+    expect(calls).toBe(2);
+
+    const after = agent.startTransaction();
+    expect(await inTransaction(after, () => recovered.performRead((s) => s.cents))).toBe(250);
+    await agent.resolve(after);
+
+    // Resolved: the worker doesn't keep firing, and a fresh activation sees no
+    // pending record left to recover.
+    recovered.unload();
+    const reloaded = new TransactionalStateImpl<Balance>(
+      "balance",
+      grainId("a"),
+      () => ({ cents: 100 }),
+      storage,
+    );
+    await reloaded.load();
+    const check = agent.startTransaction();
+    expect(await inTransaction(check, () => reloaded.performRead((s) => s.cents))).toBe(250);
+    await agent.resolve(check);
+  });
 });

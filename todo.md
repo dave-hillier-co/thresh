@@ -26,9 +26,13 @@ vertical slices (see [`CLAUDE.md`](CLAUDE.md)).
       failure handler from `RedisPullingStreamProvider` to the agent, and persist poison events to
       a durable failure store (Orleans `AzureTableStorageStreamFailureHandler` equivalent). Add
       explicit producer registration.
-- [ ] **Transaction TM confirmation-worker keepalive** — pair with the lock-acquisition deadline so
-      the TM periodically pings remote participants to resolve in-doubt prepared records after a TM
-      crash, rather than relying on one-shot recovery at next activation.
+- [x] **Transaction TM confirmation-worker keepalive** — `TransactionalStateImpl` now retries a
+      recovery query with backoff (injectable clock) when an in-doubt pending record's TM is
+      unreachable at `load()`, instead of leaving it in-doubt until the next activation;
+      `unload()`/`unbindTransactionalStates` stop the worker. Follow-up: no hosting-layer caller
+      invokes `unbindTransactionalStates` on grain deactivation yet (`ClusterNode.onDeactivated` is
+      not extensible for this), so a long-idle activation with an unresolved record keeps its timer
+      running until the process exits.
 - [ ] **Grain observers / typed client callbacks** — `CreateObjectReference<T>()` surface for
       server-to-client push, including W3C `traceparent` propagation back to the client.
 - [x] **`StatelessWorker` placement enforcement** — the catalog now scales a stateless-worker grain
