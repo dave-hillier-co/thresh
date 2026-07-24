@@ -14,8 +14,6 @@ current-state evidence (what already exists, what is missing, file pointers).
       `IStreamFailureHandler` provider wiring, durable poison store & producer registration.
 - [ ] [#23](https://github.com/dave-hillier-co/ts-virtual-actors/issues/23) Transaction TM
       confirmation-worker keepalive.
-- [ ] [#25](https://github.com/dave-hillier-co/ts-virtual-actors/issues/25) `@readOnly` dev-mode
-      mutation guard for grain state.
 - [ ] [#26](https://github.com/dave-hillier-co/ts-virtual-actors/issues/26) Directory handoff
       ACK-delete loop, recovery retry & register version gate.
 - [ ] [#31](https://github.com/dave-hillier-co/ts-virtual-actors/issues/31) Timers —
@@ -30,6 +28,11 @@ current-state evidence (what already exists, what is missing, file pointers).
       (`ClusterNode.onDeactivated` is not extensible for this), so a long-idle activation with an
       unresolved transactional record keeps its confirmation-worker timer running until the
       process exits (follow-up from #23).
+- [x] **`@readOnly` runtime check** — opt-in dev-mode mutation guard (`SiloConfig.readOnlyStateGuard`,
+      default off): proxy-wraps `@persistentState` fields for the duration of a `readOnly` turn and
+      throws `ReadOnlyStateViolationError` on a write, in-place mutation, or `write()`/`clear()` call.
+      Reducer/durable/transactional state facets are not covered yet (GAP-READONLY-ENFORCEMENT).
+      Closes #25.
 
 ## Bugs
 

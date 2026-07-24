@@ -186,6 +186,14 @@ export interface ClusterNodeOptions {
   broadcastProviders?: readonly (string | ({ name: string } & BroadcastChannelOptions))[];
   /** Incoming grain-call filters wrapping each grain-method dispatch (silo-wide). */
   incomingCallFilters?: readonly IncomingGrainCallFilter[];
+  /**
+   * Dev-mode `@readOnly` mutation guard (`GAP-READONLY-ENFORCEMENT`): when
+   * `true`, a `readOnly` turn's `@persistentState` fields are proxy-guarded
+   * for the turn's duration, rejecting a mutation attempt with
+   * `ReadOnlyStateViolationError` instead of silently succeeding. Opt-in and
+   * `false` by default — zero overhead unless a silo turns it on.
+   */
+  readOnlyStateGuard?: boolean;
   /** Auto-install factories for `GrainExtension` interfaces, keyed by interface id (Orleans `AddGrainExtension`). */
   grainExtensionFactories?: ReadonlyMap<number, () => object>;
   /** Outgoing grain-call filters wrapping each outbound call at the proxy (silo-wide). */
@@ -494,6 +502,9 @@ export class ClusterNode {
         : {}),
       ...(options.incomingCallFilters !== undefined
         ? { incomingCallFilters: options.incomingCallFilters }
+        : {}),
+      ...(options.readOnlyStateGuard !== undefined
+        ? { readOnlyStateGuard: options.readOnlyStateGuard }
         : {}),
       ...(options.grainActivator !== undefined ? { grainActivator: options.grainActivator } : {}),
       ...(options.grainExtensionFactories !== undefined

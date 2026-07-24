@@ -227,6 +227,23 @@ export class TransactionOrphanCallError extends TransactionAbortedError {
 }
 
 /**
+ * Raised when a `@readOnly` call attempts to mutate a grain's persistent
+ * state — replacing `value` wholesale, mutating a property reached through
+ * it, or calling `write()`/`clear()` — while the silo's dev-mode read-only
+ * guard is enabled (opt-in, off by default; see
+ * `guardPersistentStateForReadOnly`). Mirrors
+ * `TransactionReadOnlyViolatedError`'s intent for transactional state, but
+ * for ordinary (non-transactional) grain state, where nothing otherwise
+ * rejects the write.
+ */
+export class ReadOnlyStateViolationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ReadOnlyStateViolationError";
+  }
+}
+
+/**
  * Raised when a transaction is aborted purely because some other,
  * transitively related transaction it read state from has already aborted
  * (Orleans `OrleansCascadingAbortException`, a subtype of
