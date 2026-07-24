@@ -16,6 +16,7 @@ const checks = new Map<string, number>();
 
 interface IBilling extends GrainWithStringKey {
   scheduleSelfCheck(): Promise<void>;
+  scheduleWithPeriodSeconds(periodSeconds: number): Promise<void>;
   checkCount(): Promise<number>;
 }
 const IBilling = defineGrainInterface<IBilling>("IBilling.reminders");
@@ -24,6 +25,13 @@ const IBilling = defineGrainInterface<IBilling>("IBilling.reminders");
 class BillingGrain extends Grain implements IBilling, Remindable {
   async scheduleSelfCheck(): Promise<void> {
     await this.runtime.registerReminder("self-check", { seconds: 60 }, { seconds: 60 });
+  }
+  async scheduleWithPeriodSeconds(periodSeconds: number): Promise<void> {
+    await this.runtime.registerReminder(
+      "self-check",
+      { seconds: periodSeconds },
+      { seconds: periodSeconds },
+    );
   }
   async checkCount(): Promise<number> {
     return checks.get(String(this.id.key)) ?? 0;
@@ -54,6 +62,24 @@ describe("reminders end-to-end", () => {
       time.advance(180_000); // three 60s periods
       await new Promise((r) => setTimeout(r, 0));
       expect(await silo.getGrain(IBilling, "acct").checkCount()).toBe(3);
+    } finally {
+      await silo.stop();
+    }
+  });
+
+  it("rejects a reminder period below the builder-configured minimumPeriod", async () => {
+    const time = new FakeTimeProvider();
+    const silo = createSilo({ clusterId: "c1", local, time })
+      .useStaticMembership([local])
+      .useInProcessTransport(new InProcessNetwork())
+      .useReminders(new MemoryReminderTable(), { minimumPeriod: { seconds: 60 } })
+      .registerGrain(BillingGrain, { interfaces: [IBilling] })
+      .build();
+    await silo.start();
+    try {
+      await expect(
+        silo.getGrain(IBilling, "acct").scheduleWithPeriodSeconds(1),
+      ).rejects.toThrow(/below the minimum allowed/);
     } finally {
       await silo.stop();
     }
