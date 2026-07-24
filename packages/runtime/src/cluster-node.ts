@@ -876,9 +876,12 @@ export class ClusterNode {
 
   async stop(): Promise<void> {
     this.collector.stop();
+    // Deactivate before tearing down transport: onDeactivate hooks may make cross-silo
+    // calls (e.g. notifying a watcher grain on another silo), which need the listener and
+    // outbound connections still up. Only close them once every activation has drained.
+    await this.catalog.deactivateAll({ code: "shutting-down", description: "node stopping" });
     await this.listener?.close();
     await this.connections.closeAll();
-    await this.catalog.deactivateAll({ code: "shutting-down", description: "node stopping" });
   }
 
   /**
