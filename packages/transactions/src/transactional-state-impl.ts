@@ -12,7 +12,7 @@ import type {
   TransactionalStorageLoadResponse,
 } from "@tsva/core/transactional-storage";
 import { requireTransaction } from "@tsva/runtime/invocation-context";
-import { systemTimeProvider, type TimeProvider } from "@tsva/core/time-provider";
+import { systemTimeProvider, type TimeProvider, type TimerHandle } from "@tsva/core/time-provider";
 import { TransactionReadOnlyViolatedError } from "@tsva/core/errors";
 import { ReaderWriterLock } from "@tsva/transactions/reader-writer-lock";
 import { EMPTY_METADATA } from "@tsva/transactions/transactional-storage-apply";
@@ -45,17 +45,26 @@ export type ResolveStatus = (manager: ParticipantId, transactionId: string) => P
  * runs the two-phase protocol against a durable {@link TransactionalStateStorage}:
  * `prepare` stages a pending record (with the elected TM), `commit` promotes it,
  * `abort` drops it. The committed version is loaded on activation; an in-doubt
- * pending record left by a mid-commit crash is resolved against its TM.
+ * pending record left by a mid-commit crash is resolved against its TM. If the
+ * TM cannot be reached at that point (e.g. it crashed too), a periodic
+ * confirmation worker keeps retrying the recovery query with backoff — rather
+ * than leaving the record in-doubt until the next activation — until it
+ * resolves or {@link unload} stops it.
  */
 export class TransactionalStateImpl<T> implements TransactionalState<T>, TransactionParticipant {
   private readonly key: string;
   private readonly lock: ReaderWriterLock;
   private readonly options: TransactionsOptions;
+  private readonly time: TimeProvider;
   private committed!: T;
   private committedSequenceId = 0;
   private etag: string | undefined;
   private metadata: TransactionalStateMetadata = EMPTY_METADATA;
   private tentative: Tentative<T> | undefined;
+  /** Pending records whose TM could not be reached during recovery, awaiting the confirmation worker. */
+  private readonly inDoubt = new Map<string, PendingTransactionState<T>>();
+  private confirmationTimer: TimerHandle | undefined;
+  private confirmationDelayMs = 0;
 
   constructor(
     private readonly stateName: string,
@@ -68,6 +77,7 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
   ) {
     this.key = `${grainId.toString()}/${stateName}`;
     this.options = { ...defaultTransactionsOptions, ...options };
+    this.time = time;
     this.lock = new ReaderWriterLock(time);
   }
 
@@ -105,6 +115,19 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
     // states) means the initial value; otherwise the loaded committed snapshot.
     this.committed = response.committedSequenceId === 0 ? this.initial() : response.committedState;
     if (response.pendingStates.length > 0) await this.recover(response.pendingStates);
+  }
+
+  /**
+   * Stop the confirmation worker, if running. Call on deactivation: an idle
+   * activation shouldn't keep retrying against a TM forever — the next
+   * activation's `load()` re-attempts recovery from scratch.
+   */
+  unload(): void {
+    if (this.confirmationTimer !== undefined) {
+      this.time.clearTimer(this.confirmationTimer);
+      this.confirmationTimer = undefined;
+    }
+    this.confirmationDelayMs = 0;
   }
 
   async performRead<R>(read: (state: T) => R, options?: PerformReadOptions): Promise<R> {
@@ -211,31 +234,74 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
   /**
    * Resolve in-doubt pending records left by a mid-commit crash: ask each one's
    * TM whether it committed, then promote it to committed or drop it. Without a
-   * resolver (e.g. a direct unit test) the records are left untouched.
+   * resolver (e.g. a direct unit test) the records are left untouched. A record
+   * whose TM cannot be reached (the TM itself crashed) is queued for the
+   * confirmation worker instead of failing `load()`.
    */
   private async recover(pendingStates: readonly PendingTransactionState<T>[]): Promise<void> {
     if (this.resolveStatus === undefined) return;
-    for (const pending of pendingStates) {
-      const manager = pending.transactionManager;
-      // If this resource is the TM, read its own commit record directly — routing
-      // a status query to ourselves while activating would deadlock.
-      const isSelf =
-        manager !== undefined &&
-        manager.grainId.equals(this.grainId) &&
-        manager.stateName === this.stateName;
-      let committed = false;
-      if (manager !== undefined) {
-        committed = isSelf
-          ? this.status(pending.transactionId)
-          : await this.resolveStatus(manager, pending.transactionId);
+    for (const pending of pendingStates) await this.resolveOne(pending);
+    if (this.inDoubt.size > 0) this.scheduleConfirmationWorker();
+  }
+
+  /**
+   * Attempt to resolve a single in-doubt record. Returns whether it resolved
+   * (committed or aborted, either way persisted); a `false` return means the TM
+   * is unreachable and the record remains queued in {@link inDoubt}.
+   */
+  private async resolveOne(pending: PendingTransactionState<T>): Promise<boolean> {
+    const manager = pending.transactionManager;
+    // If this resource is the TM, read its own commit record directly — routing
+    // a status query to ourselves while activating would deadlock.
+    const isSelf =
+      manager !== undefined &&
+      manager.grainId.equals(this.grainId) &&
+      manager.stateName === this.stateName;
+    let committed = false;
+    if (manager !== undefined && !isSelf) {
+      try {
+        committed = await this.resolveStatus!(manager, pending.transactionId);
+      } catch {
+        // TM unreachable (e.g. crashed too): stay in-doubt for the confirmation worker.
+        this.inDoubt.set(pending.transactionId, pending);
+        return false;
       }
-      if (committed) {
-        await this.storeState([], pending.sequenceId);
-        this.committed = pending.state;
-        this.committedSequenceId = pending.sequenceId;
-      } else {
-        await this.storeState([], undefined, this.committedSequenceId);
-      }
+    } else if (isSelf) {
+      committed = this.status(pending.transactionId);
+    }
+    if (committed) {
+      await this.storeState([], pending.sequenceId);
+      this.committed = pending.state;
+      this.committedSequenceId = pending.sequenceId;
+    } else {
+      await this.storeState([], undefined, this.committedSequenceId);
+    }
+    this.inDoubt.delete(pending.transactionId);
+    return true;
+  }
+
+  /** Schedule the next confirmation-worker pass, backing off exponentially up to the configured cap. */
+  private scheduleConfirmationWorker(): void {
+    if (this.confirmationTimer !== undefined) return; // already scheduled
+    const base = this.options.confirmationIntervalMs;
+    const max = this.options.confirmationMaxIntervalMs;
+    this.confirmationDelayMs = Math.min(
+      max,
+      this.confirmationDelayMs === 0 ? base : this.confirmationDelayMs * 2,
+    );
+    this.confirmationTimer = this.time.setTimer(() => {
+      this.confirmationTimer = undefined;
+      void this.runConfirmationPass();
+    }, this.confirmationDelayMs);
+  }
+
+  /** Re-query the TM for every still in-doubt record; reschedule while any remain unresolved. */
+  private async runConfirmationPass(): Promise<void> {
+    for (const pending of [...this.inDoubt.values()]) await this.resolveOne(pending);
+    if (this.inDoubt.size > 0) {
+      this.scheduleConfirmationWorker();
+    } else {
+      this.confirmationDelayMs = 0;
     }
   }
 

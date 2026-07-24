@@ -10,8 +10,6 @@ current-state evidence (what already exists, what is missing, file pointers).
 
 - [ ] [#21](https://github.com/dave-hillier-co/ts-virtual-actors/issues/21) Versioned,
       registry-based serializer (versioning, surrogates, polymorphism, `Set`, cycle guard).
-- [ ] [#23](https://github.com/dave-hillier-co/ts-virtual-actors/issues/23) Transaction TM
-      confirmation-worker keepalive.
 - [ ] [#24](https://github.com/dave-hillier-co/ts-virtual-actors/issues/24) Grain observers —
       `traceparent`/tracing filters on server→client push.
 - [ ] [#25](https://github.com/dave-hillier-co/ts-virtual-actors/issues/25) `@readOnly` dev-mode
@@ -26,6 +24,10 @@ current-state evidence (what already exists, what is missing, file pointers).
       `GrainStorage`/`PersistentState`) — journal/transactional-storage provider signatures still
       lack a `signal` param, and `getGrain` proxy calls have no friendlier per-call deadline API
       (today only `Dispatcher.invoke`'s `opts` exposes `deadlineMs`/`signal`).
+- [ ] No hosting-layer caller invokes `unbindTransactionalStates` on grain deactivation yet
+      (`ClusterNode.onDeactivated` is not extensible for this), so a long-idle activation with an
+      unresolved transactional record keeps its confirmation-worker timer running until the
+      process exits (follow-up from #23).
 
 ## Bugs
 
