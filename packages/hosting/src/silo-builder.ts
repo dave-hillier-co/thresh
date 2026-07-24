@@ -905,6 +905,15 @@ export class SiloBuilder {
           localRingKey: this.config.local.ringKey,
           activeRingKeys: activeSilos(membership.current()).map((s) => s.ringKey),
         },
+        undefined,
+        // Cross-silo scheduling: forward a job this silo persisted but doesn't
+        // own the shard for to whichever active silo the membership view says
+        // holds that ring key, so it still gets delivered.
+        async (ownerRingKey, job) => {
+          const target = activeSilos(membership.current()).find((s) => s.ringKey === ownerRingKey);
+          if (target === undefined) return false;
+          return node.forwardDurableJob(target, job);
+        },
       );
       const manager = jobManager;
       onOwnershipChange.push(async () => {
