@@ -14,10 +14,6 @@ vertical slices (see [`CLAUDE.md`](CLAUDE.md)).
       per-activation queue with soft/hard limits (`MaxEnqueuedRequestsSoftLimit`/`HardLimit`),
       `MaxRequestProcessingTime` stuck-turn detection, and an enforced `DeactivationTimeout` that
       force-invalidates the activation so one bad grain cannot OOM or block silo shutdown.
-- [ ] **Runtime instrumentation breadth** — wire the OTel meters already exposed by
-      `@tsva/observability` into the catalog, directory, persistence, messaging, reminders, streams
-      and durable-jobs runtimes, and add `exception.type` / `exception.message` /
-      `exception.stacktrace` attributes to spans.
 - [ ] **Versioned, registry-based serializer** — replace the 6-tag value codec with a versioned
       serializer that supports surrogate types, polymorphism resolution, `Map`/`Set`,
       circular-reference handling and per-field version tags so rolling upgrades and event-sourced
