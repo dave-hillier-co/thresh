@@ -5,14 +5,9 @@ this file is the index. See [`EPICS.md`](EPICS.md) for the status board and
 [`docs/deviations.md`](docs/deviations.md) for how the design differs from Orleans. Test-first,
 vertical slices (see [`CLAUDE.md`](CLAUDE.md)).
 
-Issues #18–#37 were implemented and closed in the 2026-07-24 burn-down; the remainders their
-implementations explicitly left undone are listed below.
-
-## Follow-ups from the issue burn-down
-
-- [ ] **`@readOnly` guard breadth (from #25)** — the dev-mode mutation guard
-      (`SiloConfig.readOnlyStateGuard`, default off) proxy-wraps `@persistentState` facets only;
-      reducer, durable and transactional state facets are not yet covered.
+Issues #18–#37 were implemented and closed in the 2026-07-24 burn-down, including the follow-up
+remainders their implementations initially left undone (storage cancellation signals, per-call
+deadline API, keepalive unbind on deactivation, and full-facet `@readOnly` guard coverage).
 
 ## Beyond parity
 

@@ -10,7 +10,7 @@ import { it } from "vitest";
  */
 export type GapTag =
   | "GAP-STATELESS-WORKER" // StatelessWorker placement parsed but not enforced
-  | "GAP-READONLY-ENFORCEMENT" // @readOnly is advisory by default; the opt-in dev-mode guard (ActivationData.readOnlyStateGuard) only covers @persistentState fields, not reducer/durable/transactional state
+  | "GAP-READONLY-ENFORCEMENT" // @readOnly is advisory by default; the opt-in dev-mode guard (ActivationData.readOnlyStateGuard) now covers persistent, reducer, durable-journaling and transactional state facets, but is off unless a silo opts in
   | "GAP-OBSERVERS" // no grain observers / client object references
   | "GAP-MGMT-GRAIN" // `IManagementGrain` now covers getHosts/getDetailedHosts/getSimpleGrainStatistics/getDetailedGrainStatistics/getActivationAddress/getGrainActivationCount/forceActivationCollection/sendControlCommandToProvider; kept for any upstream member still missing (e.g. GetRuntimeStatistics, ForceGarbageCollection)
   | "GAP-SERIALIZER-POLYMORPHISM" // serializer lacks polymorphism/cycles
