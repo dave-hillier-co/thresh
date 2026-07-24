@@ -61,12 +61,11 @@ for how the design differs from Orleans.
   stuck-turn detection (`MaxRequestProcessingTime`) and no enforced `onDeactivate` timeout.
 - **Serializer versioning & polymorphism** — the value codec has no schema version, surrogate
   types, polymorphism resolution, `Map`/`Set` support or circular-reference guard.
-- **Grain observers** — no typed observer/client-callback surface (`CreateObjectReference<T>()`).
-  The `IGrainExtension` mechanism itself exists (cancellation and the built-in
-  `IGrainManagementExtension.deactivateOnIdle()`), but nothing yet uses it for observer push.
-- **`StatelessWorker` enforcement** — the option is parsed but not honored (single-activation
-  semantics still apply).
-- **`@readOnly` runtime check** — advisory only; no mutation check even in dev.
+- **Grain observers** — `CreateObjectReference<T>()`/`deleteObjectReference` server-to-client
+  push exists; still missing W3C `traceparent` propagation (and default tracing-filter wiring)
+  on the server→client direction.
+- **`@readOnly` runtime check** — advisory for grain state (read-only transactions are
+  enforced); no mutation check even in dev.
 - **Directory handoff ACK & cleanup** — handoff snapshots are best-effort pull with no ACK-delete
   loop; retained indefinitely if a successor crashes pre-pull.
 - **Transaction TM confirmation-worker keepalive** — in-doubt prepared records on remote
