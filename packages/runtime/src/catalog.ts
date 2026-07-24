@@ -96,8 +96,9 @@ export interface CatalogOptions {
   incomingCallFilters?: readonly IncomingGrainCallFilter[];
   /**
    * Dev-mode `@readOnly` mutation guard (`GAP-READONLY-ENFORCEMENT`): when
-   * `true`, every activation's `@persistentState` fields are proxy-guarded for
-   * the duration of a `readOnly` turn, rejecting a mutation attempt with
+   * `true`, every activation's persistent, reducer, durable-journaling and
+   * transactional state facets are proxy-guarded for the duration of a
+   * `readOnly` turn, rejecting a mutation attempt with
    * `ReadOnlyStateViolationError`. Opt-in and `false` by default (production
    * default is off — the silo builder is the place to flip it on for dev/test).
    */

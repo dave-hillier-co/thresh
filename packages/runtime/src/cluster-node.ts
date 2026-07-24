@@ -209,10 +209,11 @@ export interface ClusterNodeOptions {
   incomingCallFilters?: readonly IncomingGrainCallFilter[];
   /**
    * Dev-mode `@readOnly` mutation guard (`GAP-READONLY-ENFORCEMENT`): when
-   * `true`, a `readOnly` turn's `@persistentState` fields are proxy-guarded
-   * for the turn's duration, rejecting a mutation attempt with
-   * `ReadOnlyStateViolationError` instead of silently succeeding. Opt-in and
-   * `false` by default — zero overhead unless a silo turns it on.
+   * `true`, a `readOnly` turn's persistent, reducer, durable-journaling and
+   * transactional state facets are proxy-guarded for the turn's duration,
+   * rejecting a mutation attempt with `ReadOnlyStateViolationError` instead
+   * of silently succeeding. Opt-in and `false` by default — zero overhead
+   * unless a silo turns it on.
    */
   readOnlyStateGuard?: boolean;
   /** Auto-install factories for `GrainExtension` interfaces, keyed by interface id (Orleans `AddGrainExtension`). */

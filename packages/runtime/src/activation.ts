@@ -51,6 +51,11 @@ import {
 import { combineSignals } from "@tsva/core/abort";
 import { getPersistentFields } from "@tsva/core/persistent-state-metadata";
 import { guardPersistentStateForReadOnly } from "@tsva/core/persistent-state-readonly-guard";
+import { getReducerFields } from "@tsva/core/reducer-state-metadata";
+import { guardReducerStateForReadOnly } from "@tsva/core/reducer-state-readonly-guard";
+import { getDurableFields } from "@tsva/core/durable-state-metadata";
+import { guardDurableFieldForReadOnly } from "@tsva/core/durable-state-readonly-guard";
+import { guardTransactionalStateForReadOnly } from "@tsva/core/transactional-state-readonly-guard";
 import type { InvocationRequest } from "@tsva/core/request";
 import {
   PLACEMENT_HINT_KEY,
@@ -166,12 +171,16 @@ export class ActivationData implements GrainContext {
   /**
    * Dev-mode `@readOnly` mutation guard (`GAP-READONLY-ENFORCEMENT`), opt-in
    * and off by default — set by the catalog from the silo builder's flag.
-   * When `true`, every `@persistentState` field is swapped for a
-   * `guardPersistentStateForReadOnly` wrapper for the duration of a turn
-   * whose `InvokeMethodOptions.readOnly` is `true`, so a mutation attempt
-   * throws `ReadOnlyStateViolationError` instead of silently succeeding; the
-   * real facet is restored once the turn ends. Zero overhead when `false`
-   * (the default): no field swap, no proxy, nothing to check.
+   * When `true`, every `@persistentState`, `@reducerState`, durable-journaling
+   * (`@durableState`/`@durableDictionary`/`@durableList`/`@durableQueue`/
+   * `@durableSet`) and `@transactionalState` field is swapped for a guarded
+   * wrapper (`guardPersistentStateForReadOnly`, `guardReducerStateForReadOnly`,
+   * `guardDurableFieldForReadOnly`, `guardTransactionalStateForReadOnly`) for
+   * the duration of a turn whose `InvokeMethodOptions.readOnly` is `true`, so
+   * a mutation attempt throws `ReadOnlyStateViolationError` instead of
+   * silently succeeding; the real facets are restored once the turn ends.
+   * Zero overhead when `false` (the default): no field swap, no proxy,
+   * nothing to check.
    */
   readOnlyStateGuard = false;
 
@@ -740,26 +749,59 @@ export class ActivationData implements GrainContext {
   }
 
   /**
-   * Swap each `@persistentState` field on the instance for a
-   * `guardPersistentStateForReadOnly` wrapper, returning a closure that puts
-   * the real facets back. Called only when `readOnlyStateGuard` is enabled
-   * AND the turn is `readOnly` — see `invoke()` — so a plain call, or any
-   * call on a silo that never opted in, never allocates a proxy.
+   * Swap every `@persistentState`, `@reducerState`, durable-journaling and
+   * `@transactionalState` field on the instance for a guarded wrapper,
+   * returning a closure that puts the real facets back. Called only when
+   * `readOnlyStateGuard` is enabled AND the turn is `readOnly` — see
+   * `invoke()` — so a plain call, or any call on a silo that never opted in,
+   * never allocates a proxy. Transaction-resource system calls (`prepare`/
+   * `commit`/`abort`/`status`, routed through `invokeTransactionResource`)
+   * are unaffected: they run as exclusive (non-`readOnly`) turns, and the
+   * scheduler never runs an exclusive turn concurrently with a `readOnly`
+   * one (see `TurnScheduler`), so by the time one starts this closure has
+   * already restored the real transactional-state facet.
    */
   private applyReadOnlyGuard(): () => void {
-    const fields = getPersistentFields(this.instance);
-    if (fields.length === 0) return () => undefined;
     const record = this.instance as unknown as Record<string, unknown>;
-    const saved = fields.map((field) => [field, record[field.fieldName]] as const);
-    for (const [field, original] of saved) {
+    const saved: Array<readonly [string, unknown]> = [];
+
+    for (const field of getPersistentFields(this.instance)) {
+      const original = record[field.fieldName];
       if (original === undefined) continue;
+      saved.push([field.fieldName, original]);
       record[field.fieldName] = guardPersistentStateForReadOnly(
         original as Parameters<typeof guardPersistentStateForReadOnly>[0],
         field.stateName,
       );
     }
+    for (const field of getReducerFields(this.instance)) {
+      const original = record[field.fieldName];
+      if (original === undefined) continue;
+      saved.push([field.fieldName, original]);
+      record[field.fieldName] = guardReducerStateForReadOnly(
+        original as Parameters<typeof guardReducerStateForReadOnly>[0],
+        field.stateName,
+      );
+    }
+    for (const field of getDurableFields(this.instance)) {
+      const original = record[field.fieldName];
+      if (original === undefined) continue;
+      saved.push([field.fieldName, original]);
+      record[field.fieldName] = guardDurableFieldForReadOnly(field.kind, original, field.stateName);
+    }
+    for (const field of getTransactionalFields(this.instance)) {
+      const original = record[field.fieldName];
+      if (original === undefined) continue;
+      saved.push([field.fieldName, original]);
+      record[field.fieldName] = guardTransactionalStateForReadOnly(
+        original as Parameters<typeof guardTransactionalStateForReadOnly>[0],
+        field.stateName,
+      );
+    }
+
+    if (saved.length === 0) return () => undefined;
     return () => {
-      for (const [field, original] of saved) record[field.fieldName] = original;
+      for (const [fieldName, original] of saved) record[fieldName] = original;
     };
   }
 
