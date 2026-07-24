@@ -49,27 +49,32 @@ for how the design differs from Orleans.
   `useActivationRebalancing(options?)` builder surface + `RebalancingReport` + convergence e2e; the
   cluster self-levels skewed load toward balance.
 
-## 🚧 Partial — parity gaps in flight
+## ✅ Shipped in the 2026-07-24 issue burn-down (#18–#37)
 
-- **Observability** — request context, OpenTelemetry tracing surface, W3C `traceparent`
-  propagation and structured logging are wired on the call-filter seam (no-op without an SDK), but
-  the runtime itself (catalog, directory, persistence, messaging, reminders, streams) is not yet
-  instrumented with the meter set, and spans do not yet carry `exception.*` attributes.
-- **Cancellation & per-call deadlines** — Orleans threads `CancellationToken` through every call,
-  deactivation, and storage operation; the TS port does not yet.
-- **Scheduler back-pressure & deactivation timeout** — per-activation queues are unbounded; no
-  stuck-turn detection (`MaxRequestProcessingTime`) and no enforced `onDeactivate` timeout.
-- **Serializer versioning & polymorphism** — the value codec has no schema version, surrogate
-  types, polymorphism resolution, `Map`/`Set` support or circular-reference guard.
-- **Grain observers** — `CreateObjectReference<T>()`/`deleteObjectReference` server-to-client
-  push exists; still missing W3C `traceparent` propagation (and default tracing-filter wiring)
-  on the server→client direction.
-- **`@readOnly` runtime check** — advisory for grain state (read-only transactions are
-  enforced); no mutation check even in dev.
-- **Directory handoff ACK & cleanup** — handoff snapshots are best-effort pull with no ACK-delete
-  loop; retained indefinitely if a successor crashes pre-pull.
-- **Transaction TM confirmation-worker keepalive** — in-doubt prepared records on remote
-  participants are only resolved once at activation; no periodic TM ping.
+- **Observability breadth** — OTel meters across messaging, reminders, streams, durable-jobs,
+  directory and storage ops (`tsva.*`, no-op safe), alongside the existing call filters,
+  activation-path spans and `traceparent`/baggage propagation — now including the
+  server→client observer-push direction.
+- **Ambient cancellation & per-call deadlines** — `@tsva/core/abort`, `AbortSignal` + deadline
+  threaded through invocation context, dispatchers, turn scheduler (admission-time preemption),
+  `onDeactivate(reason, signal?)` and grain storage; composes with the explicit
+  `GrainCancellationToken` mechanism. Remainders in `todo.md`.
+- **Scheduler back-pressure & deactivation timeout** — bounded per-activation queues
+  (soft-warn/hard-reject with `LimitExceededException`), stuck-turn watchdog, and an enforced
+  `deactivationTimeout` that force-invalidates a hung activation.
+- **Versioned serializer** — `$tsvv` schema version, surrogate registry with polymorphism
+  resolution, `Set` support and a circular-reference guard; legacy payloads decode unchanged.
+- **`@readOnly` dev-mode mutation guard** — `SiloConfig.readOnlyStateGuard` (persistent-state
+  facets; breadth remainder in `todo.md`).
+- **Directory hardening** — handoff ACK-delete, recovery retry/backoff, register gated on silo
+  liveness (Orleans `RegisterCore` parity).
+- **Transaction TM confirmation-worker keepalive** — periodic re-resolution of in-doubt
+  prepared records with backoff.
+- **Stream failure handling** — provider-wired failure handler, durable poison store, explicit
+  producer registration, typed config errors, cluster-shared memory streams in `TestCluster`.
+- **Fixes** — silo stop deactivates before closing transport (TestCluster teardown race),
+  durable-jobs cross-silo forwarding + in-grain `RunId` dedup, callback-initiated timer
+  change/dispose, `ReminderOptions` through the builder, client cumulative call deadline.
 
 ## 📐 Designed (not yet implemented)
 
