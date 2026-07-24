@@ -10,8 +10,10 @@ current-state evidence (what already exists, what is missing, file pointers).
 
 - [ ] [#21](https://github.com/dave-hillier-co/ts-virtual-actors/issues/21) Versioned,
       registry-based serializer (versioning, surrogates, polymorphism, `Set`, cycle guard).
-- [ ] [#24](https://github.com/dave-hillier-co/ts-virtual-actors/issues/24) Grain observers —
-      `traceparent`/tracing filters on server→client push.
+- [ ] [#22](https://github.com/dave-hillier-co/ts-virtual-actors/issues/22) Stream
+      `IStreamFailureHandler` provider wiring, durable poison store & producer registration.
+- [ ] [#23](https://github.com/dave-hillier-co/ts-virtual-actors/issues/23) Transaction TM
+      confirmation-worker keepalive.
 - [ ] [#25](https://github.com/dave-hillier-co/ts-virtual-actors/issues/25) `@readOnly` dev-mode
       mutation guard for grain state.
 - [ ] [#26](https://github.com/dave-hillier-co/ts-virtual-actors/issues/26) Directory handoff

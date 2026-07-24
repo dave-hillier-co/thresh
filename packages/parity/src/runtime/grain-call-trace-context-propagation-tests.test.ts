@@ -25,15 +25,17 @@
 //    Lifecycle/Storage) with ZERO assertions in upstream — there is no W3C/OTel
 //    analogue of per-`ActivitySource` listener sampling to check, and nothing
 //    here would exercise propagation beyond what the other 18 already cover.
-import { afterAll, beforeAll, beforeEach, describe, expect } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { SpanKind, trace } from "@opentelemetry/api";
 import { GrainId } from "@tsva/core/grain-id";
 import { getGrainMetadata } from "@tsva/core/grain-metadata";
 import { SiloAddress } from "@tsva/core/silo-address";
+import { requestContext } from "@tsva/runtime/invocation-context";
 import { ActivityNames } from "@tsva/observability/activation-tracing";
 import { tracingFilters } from "@tsva/observability/tracing";
 import { orleansTest } from "@tsva/testing/orleans-test";
 import { TestCluster, type TestSiloHandle } from "@tsva/testing/test-cluster";
+import { waitFor } from "@tsva/testing/wait";
 import { InProcessTransport } from "@tsva/messaging/in-process-transport";
 import { createClient, type ClientNode } from "@tsva/client/client-node";
 import {
@@ -41,6 +43,11 @@ import {
   TraceContextPropagationGrain,
 } from "@tsva/parity/grains/impl/trace-context-propagation-grain";
 import type { TraceContextInfo } from "@tsva/parity/grains/interfaces/trace-context-propagation-grain-interfaces";
+import { SimpleObserverableGrain } from "@tsva/parity/grains/impl/simple-observerable-grain";
+import {
+  ISimpleGrainObserver,
+  ISimpleObserverableGrain,
+} from "@tsva/parity/grains/interfaces/simple-observerable-grain-interfaces";
 import { createClusterClient } from "@tsva/parity/support/client";
 import { randomIntegerKey } from "@tsva/parity/support/keys";
 import { createTracingHarness } from "@tsva/parity/support/tracing";
@@ -63,7 +70,13 @@ describe("UnitTests.General.GrainCallTraceContextPropagationTests", () => {
   beforeAll(async () => {
     cluster = await TestCluster.start({
       initialSilos: 1,
-      grains: [{ ctor: TraceContextPropagationGrain, interfaces: [ITraceContextPropagationGrain] }],
+      grains: [
+        { ctor: TraceContextPropagationGrain, interfaces: [ITraceContextPropagationGrain] },
+        // Also registered here (not just on a per-test client) so the
+        // server-to-client observer-push case below shares this describe's
+        // single `harness`/global tracer-provider registration.
+        { ctor: SimpleObserverableGrain, interfaces: [ISimpleObserverableGrain] },
+      ],
       configureSilo: (builder) => builder.useTracing(),
     });
     client = await createClusterClient(
@@ -588,4 +601,73 @@ describe("UnitTests.General.GrainCallTraceContextPropagationTests", () => {
       }
     },
   );
+
+  // Not a ported upstream case — GAP-TRACING's third leg (issue #24): the
+  // ported cases above cover client→grain and grain-to-grain; this covers
+  // the third direction, silo→client, a grain notifying a client-hosted
+  // observer (`ClientNode.createObjectReference`). The outgoing call runs
+  // through the SAME `GrainFactory.outgoingCallFilters` as any other
+  // grain-issued call (`SiloBuilder.useTracing()` wires `tracingFilters().outgoing`
+  // there), so it already injects `traceparent`; what this exercises is the
+  // CLIENT side picking that header up via its own `incomingCallFilters`
+  // (`ClientConfig.incomingCallFilters`, the client-side mirror of the
+  // silo's incoming filter pipeline — see `ClientNode.dispatchToLocalObject`).
+  it("propagates the triggering call's W3C traceparent into a client-hosted observer, opening a client-side SERVER span", async () => {
+    // Wires `tracingFilters().incoming` as this SEPARATE client's
+    // `incomingCallFilters` — the client-side analogue of
+    // `SiloBuilder.useTracing()` — so a call INTO this client's hosted
+    // observer opens a SERVER span from the propagated context, exactly
+    // like a grain's own incoming filter does. A dedicated client (distinct
+    // from the describe's shared `client`) keeps this test's observer
+    // registration isolated.
+    const observerClient = await createClusterClient(
+      cluster,
+      [{ ctor: SimpleObserverableGrain, interfaces: [ISimpleObserverableGrain] }],
+      [tracingFilters().incoming],
+      [tracingFilters().outgoing],
+    );
+    let observedTraceParent: string | undefined;
+    const ref = observerClient.createObjectReference(ISimpleGrainObserver, {
+      stateChanged: async () => {
+        observedTraceParent = requestContext.get("traceparent");
+      },
+    });
+    try {
+      const grain = observerClient.getGrain(ISimpleObserverableGrain, randomIntegerKey());
+
+      const { traceId: clientTraceId } = await harness.withParentSpan(
+        "observer-push-parent",
+        async () => {
+          await grain.subscribe(ref);
+          // Triggers the grain's `notify()`, a silo-issued outgoing call to
+          // the observer reference — inheriting the ambient span this turn
+          // runs under (Orleans parity: an outgoing call made from inside a
+          // grain turn shares the turn's trace).
+          await grain.setA(3);
+        },
+      );
+
+      await waitFor(() => observedTraceParent !== undefined);
+      expect(observedTraceParent).toContain(clientTraceId);
+
+      const observerServerSpan = harness
+        .finishedSpans()
+        .find((s) => s.kind === SpanKind.SERVER && s.name.includes("stateChanged"));
+      expect(observerServerSpan).toBeDefined();
+      expect(observerServerSpan!.traceId).toBe(clientTraceId);
+
+      const siloOutgoingSpan = harness
+        .finishedSpans()
+        .find((s) => s.kind === SpanKind.CLIENT && s.name.includes("stateChanged"));
+      expect(siloOutgoingSpan).toBeDefined();
+      expect(siloOutgoingSpan!.traceId).toBe(clientTraceId);
+      // The client's SERVER span is parented to the silo's outgoing CLIENT
+      // span for the SAME call — the same client/server pairing the ported
+      // client→grain and grain-to-grain cases assert above.
+      expect(observerServerSpan!.parentSpanId).toBe(siloOutgoingSpan!.spanId);
+    } finally {
+      observerClient.deleteObjectReference(ref);
+      await observerClient.close();
+    }
+  });
 });

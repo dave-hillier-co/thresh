@@ -1111,6 +1111,8 @@ export class SiloBuilder {
     const registrations = this.registrations;
     const inProcessNetwork = this.inProcessNetwork;
     const closers = this.closers;
+    const incomingCallFilters = this.incomingCallFilters;
+    const outgoingCallFilters = this.outgoingCallFilters;
     const ensureEmbeddedClient = async (): Promise<void> => {
       // Only meaningful with an in-process network to gateway through; a
       // WebSocketTransport-hosted silo would need a second listening port to
@@ -1128,6 +1130,16 @@ export class SiloBuilder {
         local: embeddedAddress,
         transport: new InProcessTransport(inProcessNetwork, clusterId),
         gateway: local,
+        // Symmetrical with the node's own filters (`ClusterNode`'s
+        // `incomingCallFilters`/`outgoingCallFilters` above): a call INTO an
+        // object this embedded client hosts (e.g. `useTracing()`'s SERVER
+        // span via `tracingFilters().incoming`) and a call this client
+        // issues itself both run the same filter pipeline the silo's own
+        // grain calls do, so tracing (and any other registered filter)
+        // covers `GrainFactoryAccess.createObjectReference` the same way it
+        // covers ordinary grain calls.
+        ...(incomingCallFilters.length > 0 ? { incomingCallFilters } : {}),
+        ...(outgoingCallFilters.length > 0 ? { outgoingCallFilters } : {}),
       }).registerGrains([...registrations]);
       await client.connect();
       closers.push(async () => client.close());
