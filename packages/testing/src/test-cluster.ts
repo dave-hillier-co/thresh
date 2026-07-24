@@ -68,6 +68,18 @@ export interface TestClusterOptions {
   defaultResponseTimeout?: Duration;
   /** Load-shedding config applied to every silo in this cluster (Orleans `Configure<LoadSheddingOptions>`). */
   loadShedding?: Partial<LoadSheddingOptions>;
+  /** Injectable RNG forwarded to every silo, for deterministic placement in tests. */
+  random?: () => number;
+  /** Idle-deactivation threshold for grains without their own `collectionAgeSeconds`, forwarded to every silo. */
+  collectionAgeSeconds?: number;
+  /** How often the idle-collection sweep runs on every silo (defaults to 60s). */
+  collectionIntervalSeconds?: number;
+  /**
+   * The shared transport network silos are built on. Defaults to a plain
+   * `InProcessNetwork`; pass a subclass (e.g. one that counts messages) for
+   * tests that need to observe traffic on the wire.
+   */
+  network?: InProcessNetwork;
 }
 
 export interface TestSiloHandle {
@@ -104,7 +116,7 @@ export class TestCluster {
   ) {}
 
   static async start(options: TestClusterOptions = {}): Promise<TestCluster> {
-    const cluster = new TestCluster(options, new InProcessNetwork());
+    const cluster = new TestCluster(options, options.network ?? new InProcessNetwork());
     const count = options.initialSilos ?? 2;
     for (let i = 0; i < count; i += 1) cluster.buildSilo();
     await Promise.all(cluster.live.map((s) => s.host.start()));
@@ -157,11 +169,14 @@ export class TestCluster {
    * target grain's `ICancellationSourcesExtension`, wherever it lives: the
    * dispatcher routes the extension call to the hosting silo the same way it
    * routes an ordinary grain call, so this works whether the target
-   * activated on the primary silo or a peer.
+   * activated on the primary silo or a peer. Cancels are issued `from` the
+   * given silo (defaults to `primary`) — pass the same silo a test calls the
+   * target grain from to observe same-silo (no-wire) vs. cross-silo
+   * propagation.
    */
-  newCancellationTokenSource(): GrainCancellationTokenSource {
+  newCancellationTokenSource(from: TestSiloHandle = this.primary): GrainCancellationTokenSource {
     return new GrainCancellationTokenSource(async (target: GrainId, tokenId: string) => {
-      const ext = this.primary.host.getExtensionReference(ICancellationSourcesExtension, target);
+      const ext = from.host.getExtensionReference(ICancellationSourcesExtension, target);
       await ext.cancelRemoteToken(tokenId);
     });
   }
@@ -241,6 +256,13 @@ export class TestCluster {
         : {}),
       ...(this.options.loadShedding !== undefined
         ? { loadShedding: this.options.loadShedding }
+        : {}),
+      ...(this.options.random !== undefined ? { random: this.options.random } : {}),
+      ...(this.options.collectionAgeSeconds !== undefined
+        ? { collectionAgeSeconds: this.options.collectionAgeSeconds }
+        : {}),
+      ...(this.options.collectionIntervalSeconds !== undefined
+        ? { collectionIntervalSeconds: this.options.collectionIntervalSeconds }
         : {}),
     })
       .useMembership(membership)

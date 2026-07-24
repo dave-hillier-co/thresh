@@ -4,11 +4,7 @@ import { GrainId } from "@tsva/core/grain-id";
 import { defineGrainInterface } from "@tsva/core/grain-interface";
 import type { GrainType } from "@tsva/core/grain-type";
 import type { GrainWithStringKey } from "@tsva/core/key-kinds";
-import { SiloAddress } from "@tsva/core/silo-address";
-import { InProcessNetwork } from "@tsva/messaging/in-process-transport";
-import { StaticMembershipService } from "@tsva/runtime/static-membership";
-import { createSilo } from "@tsva/hosting/silo-builder";
-import type { SiloHost } from "@tsva/hosting/silo-host";
+import { TestCluster } from "@tsva/testing/test-cluster";
 
 interface Balance {
   cents: number;
@@ -72,72 +68,57 @@ const TellerGrain = defineGrain<Teller>(
   { placement: "preferLocal" },
 );
 
-const addrs = [0, 1].map((n) => new SiloAddress(`silo-${n}`, `uid-${n}`, `silo-${n}:11111`));
 const accountId = (key: string) => new GrainId("ClusterTxAccount" as GrainType, key);
 
 function buildCluster() {
-  const net = new InProcessNetwork();
-  const membership = new StaticMembershipService(addrs[0]!, addrs);
-  const silos: SiloHost[] = addrs.map((local) =>
-    createSilo({ clusterId: "tx-cluster", local })
-      .useMembership(membership)
-      .useInProcessTransport(net)
-      .registerGrain(AccountGrain, { interfaces: [Account] })
-      .registerGrain(TellerGrain, { interfaces: [Teller] })
-      .build(),
-  );
-  return {
-    silos,
-    start: async () => {
-      for (const s of silos) await s.start();
-    },
-    stop: async () => {
-      await Promise.all(silos.map((s) => s.stop()));
-    },
-  };
+  return TestCluster.start({
+    clusterId: "tx-cluster",
+    grains: [
+      { ctor: AccountGrain, interfaces: [Account] },
+      { ctor: TellerGrain, interfaces: [Teller] },
+    ],
+  });
 }
 
 describe("cross-silo transactions (Slice 4c)", () => {
   it("commits a transfer spanning grains on two different silos", async () => {
-    const cluster = buildCluster();
-    await cluster.start();
+    const cluster = await buildCluster();
     try {
       // Place A on silo-0 and B on silo-1 via preferLocal first-touch.
-      await cluster.silos[0]!.getGrain(Teller, "t0").fund("A", 100);
-      await cluster.silos[1]!.getGrain(Teller, "t1").fund("B", 0);
-      expect(cluster.silos[0]!.isActive(accountId("A"))).toBe(true);
-      expect(cluster.silos[1]!.isActive(accountId("B"))).toBe(true);
+      await cluster.silos[0]!.host.getGrain(Teller, "t0").fund("A", 100);
+      await cluster.silos[1]!.host.getGrain(Teller, "t1").fund("B", 0);
+      expect(cluster.silos[0]!.host.isActive(accountId("A"))).toBe(true);
+      expect(cluster.silos[1]!.host.isActive(accountId("B"))).toBe(true);
 
       // Transfer initiated on silo-0 spans A (local) and B (remote on silo-1).
-      await cluster.silos[0]!.getGrain(Teller, "t0").transfer("A", "B", 30);
+      await cluster.silos[0]!.host.getGrain(Teller, "t0").transfer("A", "B", 30);
 
-      expect(await cluster.silos[0]!.getGrain(Account, "A").balance()).toBe(70);
-      expect(await cluster.silos[0]!.getGrain(Account, "B").balance()).toBe(30);
+      expect(await cluster.silos[0]!.host.getGrain(Account, "A").balance()).toBe(70);
+      expect(await cluster.silos[0]!.host.getGrain(Account, "B").balance()).toBe(30);
     } finally {
-      await cluster.stop();
+      await cluster.dispose();
     }
   });
 
   it("aborts a cross-silo transfer on overdraft, releasing the remote participant", async () => {
-    const cluster = buildCluster();
-    await cluster.start();
+    const cluster = await buildCluster();
     try {
-      await cluster.silos[0]!.getGrain(Teller, "t0").fund("A", 50);
-      await cluster.silos[1]!.getGrain(Teller, "t1").fund("B", 0);
+      await cluster.silos[0]!.host.getGrain(Teller, "t0").fund("A", 50);
+      await cluster.silos[1]!.host.getGrain(Teller, "t1").fund("B", 0);
 
       await expect(
-        cluster.silos[0]!.getGrain(Teller, "t0").transfer("A", "B", 100),
+        cluster.silos[0]!.host.getGrain(Teller, "t0").transfer("A", "B", 100),
       ).rejects.toThrow(/insufficient/);
 
       // Both sides rolled back; the remote credit to B was undone and its lock released
       // (a subsequent transfer succeeds, which it could not if B stayed locked).
-      expect(await cluster.silos[0]!.getGrain(Account, "A").balance()).toBe(50);
-      expect(await cluster.silos[0]!.getGrain(Account, "B").balance()).toBe(0);
-      await cluster.silos[0]!.getGrain(Teller, "t0").transfer("A", "B", 20);
-      expect(await cluster.silos[0]!.getGrain(Account, "A").balance()).toBe(30);
-      expect(await cluster.silos[0]!.getGrain(Account, "B").balance()).toBe(20);
+      expect(await cluster.silos[0]!.host.getGrain(Account, "A").balance()).toBe(50);
+      expect(await cluster.silos[0]!.host.getGrain(Account, "B").balance()).toBe(0);
+      await cluster.silos[0]!.host.getGrain(Teller, "t0").transfer("A", "B", 20);
+      expect(await cluster.silos[0]!.host.getGrain(Account, "A").balance()).toBe(30);
+      expect(await cluster.silos[0]!.host.getGrain(Account, "B").balance()).toBe(20);
     } finally {
-      await cluster.stop();
+      await cluster.dispose();
     }
   });
 });

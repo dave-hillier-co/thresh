@@ -12,5 +12,8 @@
     "@tsva/directory": "workspace:*",
     "@tsva/messaging": "workspace:*",
     "@tsva/observability": "workspace:*"
+  },
+  "devDependencies": {
+    "@tsva/testing": "workspace:*"
   }
 }

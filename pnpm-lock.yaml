@@ -251,6 +251,10 @@ importers:
       redis:
         specifier: ^5.12.1
         version: 5.12.1(@opentelemetry/api@1.9.1)
+    devDependencies:
+      '@tsva/testing':
+        specifier: workspace:*
+        version: link:../testing
 
   packages/journaling:
     dependencies:
@@ -382,6 +386,10 @@ importers:
       '@tsva/observability':
         specifier: workspace:*
         version: link:../observability
+    devDependencies:
+      '@tsva/testing':
+        specifier: workspace:*
+        version: link:../testing
 
   packages/streams:
     dependencies:

@@ -4,14 +4,12 @@ import { Grain } from "@tsva/core/grain";
 import { GrainId } from "@tsva/core/grain-id";
 import { defineGrainInterface } from "@tsva/core/grain-interface";
 import type { GrainWithStringKey } from "@tsva/core/key-kinds";
-import type { MembershipService } from "@tsva/core/membership";
-import { SiloAddress } from "@tsva/core/silo-address";
+import type { SiloAddress } from "@tsva/core/silo-address";
 import type { CompatibilityKind } from "@tsva/core/version-compatibility";
 import type { VersionSelectorKind } from "@tsva/core/version-selector";
-import { InProcessNetwork, InProcessTransport } from "@tsva/messaging/in-process-transport";
+import { InProcessNetwork } from "@tsva/messaging/in-process-transport";
 import type { Message } from "@tsva/messaging/message";
-import { ClusterNode } from "@tsva/runtime/cluster-node";
-import { StaticMembershipService } from "@tsva/runtime/static-membership";
+import { TestCluster } from "@tsva/testing/test-cluster";
 
 interface ICounter extends GrainWithStringKey {
   increment(by: number): Promise<number>;
@@ -29,26 +27,7 @@ class CounterGrain extends Grain implements ICounter {
   }
 }
 
-const CLUSTER = "cv";
-const silo = (n: number) => new SiloAddress(`silo-${n}`, `uid-${n}`, `silo-${n}:11111`);
 const COUNTER = (key: string) => new GrainId("Counter", key);
-
-/** Reports each node's own localSilo() while sharing one membership view. */
-class MembershipView implements MembershipService {
-  constructor(
-    private readonly shared: StaticMembershipService,
-    private readonly local: SiloAddress,
-  ) {}
-  current() {
-    return this.shared.current();
-  }
-  updates() {
-    return this.shared.updates();
-  }
-  localSilo() {
-    return this.local;
-  }
-}
 
 /** In-process network that counts manifest-exchange requests it carries. */
 class SpyNetwork extends InProcessNetwork {
@@ -67,135 +46,136 @@ interface ClusterOptions {
   random?: () => number;
 }
 
-function buildCluster(opts: ClusterOptions) {
+async function buildCluster(opts: ClusterOptions) {
   const network = new SpyNetwork();
-  const addresses = opts.versions.map((_, i) => silo(i));
-  const membership = new StaticMembershipService(addresses[0]!, addresses);
-
-  const nodes = addresses.map((local, i) => {
-    const node = new ClusterNode({
-      local,
-      clusterId: CLUSTER,
-      membership: new MembershipView(membership, local),
-      transport: new InProcessTransport(network, CLUSTER),
-      random: opts.random ?? (() => 0),
-      ...(opts.compatibility !== undefined ? { versionCompatibility: opts.compatibility } : {}),
-      ...(opts.selector !== undefined ? { versionSelector: opts.selector } : {}),
-    });
-    const v = opts.versions[i];
-    if (v !== undefined) node.registerGrain(CounterGrain, { interfaces: [ICounterAt(v)] });
-    return node;
-  });
-
-  return {
-    nodes,
+  const cluster = await TestCluster.start({
+    clusterId: "cv",
+    initialSilos: opts.versions.length,
     network,
-    membership,
-    hostsOf: (id: GrainId) => nodes.filter((n) => n.isActive(id)),
-    start: async () => {
-      for (const n of nodes) await n.start();
+    random: opts.random ?? (() => 0),
+    configureSilo: (builder, { index }) => {
+      if (opts.compatibility !== undefined || opts.selector !== undefined) {
+        builder.useVersioning({
+          ...(opts.compatibility !== undefined ? { compatibility: opts.compatibility } : {}),
+          ...(opts.selector !== undefined ? { selector: opts.selector } : {}),
+        });
+      }
+      const v = opts.versions[index];
+      if (v !== undefined) builder.registerGrain(CounterGrain, { interfaces: [ICounterAt(v)] });
     },
-    stop: async () => {
-      for (const n of nodes) await n.stop();
-    },
+  });
+  return {
+    cluster,
+    network,
+    hostsOf: (id: GrainId) => cluster.silos.filter((s) => s.host.isActive(id)),
   };
 }
 
 describe("grain-interface versioning — version-aware placement", () => {
   it("places a v2 caller's activation only on a v2-capable silo", async () => {
-    const cluster = buildCluster({ versions: [1, 2], compatibility: "backwardCompatible" });
-    await cluster.start();
+    const { cluster, hostsOf } = await buildCluster({
+      versions: [1, 2],
+      compatibility: "backwardCompatible",
+    });
     try {
       // The v2 caller is silo-1; only silo-1 implements v2.
-      const result = await cluster.nodes[1]!.getGrain(ICounterAt(2), "k").increment(1);
+      const result = await cluster.silos[1]!.host.getGrain(ICounterAt(2), "k").increment(1);
       expect(result).toBe(1);
-      expect(cluster.hostsOf(COUNTER("k"))).toEqual([cluster.nodes[1]]);
+      expect(hostsOf(COUNTER("k"))).toEqual([cluster.silos[1]]);
     } finally {
-      await cluster.stop();
+      await cluster.dispose();
     }
   });
 
   it("lets a v1 caller use a v2 silo (backward compatibility)", async () => {
-    const cluster = buildCluster({ versions: [2], compatibility: "backwardCompatible" });
-    await cluster.start();
+    const { cluster, hostsOf } = await buildCluster({
+      versions: [2],
+      compatibility: "backwardCompatible",
+    });
     try {
-      const result = await cluster.nodes[0]!.getGrain(ICounterAt(1), "k").increment(4);
+      const result = await cluster.silos[0]!.host.getGrain(ICounterAt(1), "k").increment(4);
       expect(result).toBe(4);
-      expect(cluster.hostsOf(COUNTER("k"))).toEqual([cluster.nodes[0]]);
+      expect(hostsOf(COUNTER("k"))).toEqual([cluster.silos[0]]);
     } finally {
-      await cluster.stop();
+      await cluster.dispose();
     }
   });
 
   it("strict mode places only on the exact version when one exists", async () => {
-    const cluster = buildCluster({ versions: [1, 2], compatibility: "strict" });
-    await cluster.start();
+    const { cluster, hostsOf } = await buildCluster({ versions: [1, 2], compatibility: "strict" });
     try {
-      await cluster.nodes[1]!.getGrain(ICounterAt(2), "k").increment(1);
-      expect(cluster.hostsOf(COUNTER("k"))).toEqual([cluster.nodes[1]]);
+      await cluster.silos[1]!.host.getGrain(ICounterAt(2), "k").increment(1);
+      expect(hostsOf(COUNTER("k"))).toEqual([cluster.silos[1]]);
     } finally {
-      await cluster.stop();
+      await cluster.dispose();
     }
   });
 
   it("strict mode falls back to any silo (best-effort) when none is compatible", async () => {
     // Only a v1 silo is alive; a v2 caller has no strict match → place anyway.
-    const cluster = buildCluster({ versions: [1], compatibility: "strict" });
-    await cluster.start();
+    const { cluster, hostsOf } = await buildCluster({ versions: [1], compatibility: "strict" });
     try {
-      const result = await cluster.nodes[0]!.getGrain(ICounterAt(2), "k").increment(2);
+      const result = await cluster.silos[0]!.host.getGrain(ICounterAt(2), "k").increment(2);
       expect(result).toBe(2);
-      expect(cluster.hostsOf(COUNTER("k"))).toEqual([cluster.nodes[0]]);
+      expect(hostsOf(COUNTER("k"))).toEqual([cluster.silos[0]]);
     } finally {
-      await cluster.stop();
+      await cluster.dispose();
     }
   });
 
   it("the latest selector steers placement to the newest silo", async () => {
-    const cluster = buildCluster({ versions: [1, 2, 3], selector: "latest", random: () => 0 });
-    await cluster.start();
+    const { cluster, hostsOf } = await buildCluster({
+      versions: [1, 2, 3],
+      selector: "latest",
+      random: () => 0,
+    });
     try {
-      await cluster.nodes[0]!.getGrain(ICounterAt(1), "k").increment(1);
-      expect(cluster.hostsOf(COUNTER("k"))).toEqual([cluster.nodes[2]]); // v3 silo
+      await cluster.silos[0]!.host.getGrain(ICounterAt(1), "k").increment(1);
+      expect(hostsOf(COUNTER("k"))).toEqual([cluster.silos[2]]); // v3 silo
     } finally {
-      await cluster.stop();
+      await cluster.dispose();
     }
   });
 
   it("the minimum selector steers placement to the oldest silo", async () => {
-    const cluster = buildCluster({ versions: [1, 2, 3], selector: "minimum", random: () => 0 });
-    await cluster.start();
+    const { cluster, hostsOf } = await buildCluster({
+      versions: [1, 2, 3],
+      selector: "minimum",
+      random: () => 0,
+    });
     try {
-      await cluster.nodes[0]!.getGrain(ICounterAt(1), "k").increment(1);
-      expect(cluster.hostsOf(COUNTER("k"))).toEqual([cluster.nodes[0]]); // v1 silo
+      await cluster.silos[0]!.host.getGrain(ICounterAt(1), "k").increment(1);
+      expect(hostsOf(COUNTER("k"))).toEqual([cluster.silos[0]]); // v1 silo
     } finally {
-      await cluster.stop();
+      await cluster.dispose();
     }
   });
 
   it("the all selector keeps every compatible silo as a candidate", async () => {
     // random -> index 1 of the three compatible candidates, reachable only if all are kept.
-    const cluster = buildCluster({ versions: [1, 2, 3], selector: "all", random: () => 0.5 });
-    await cluster.start();
+    const { cluster, hostsOf } = await buildCluster({
+      versions: [1, 2, 3],
+      selector: "all",
+      random: () => 0.5,
+    });
     try {
-      await cluster.nodes[0]!.getGrain(ICounterAt(1), "k").increment(1);
-      expect(cluster.hostsOf(COUNTER("k"))).toEqual([cluster.nodes[1]]); // v2 silo (middle)
+      await cluster.silos[0]!.host.getGrain(ICounterAt(1), "k").increment(1);
+      expect(hostsOf(COUNTER("k"))).toEqual([cluster.silos[1]]); // v2 silo (middle)
     } finally {
-      await cluster.stop();
+      await cluster.dispose();
     }
   });
 
   it("is inert in a v1-only cluster with no policy: no manifest exchange, routing unchanged", async () => {
-    const cluster = buildCluster({ versions: [1, 1, 1] });
-    await cluster.start();
+    const { cluster, hostsOf, network } = await buildCluster({ versions: [1, 1, 1] });
     try {
       // random -> silo-0 places the grain there; a call from silo-1 routes to it.
-      const result = await cluster.nodes[1]!.getGrain(ICounterAt(1), "shared").increment(5);
+      const result = await cluster.silos[1]!.host.getGrain(ICounterAt(1), "shared").increment(5);
       expect(result).toBe(5);
-      expect(cluster.hostsOf(COUNTER("shared"))).toEqual([cluster.nodes[0]]);
-      expect(cluster.network.manifestRequests).toBe(0);
+      expect(hostsOf(COUNTER("shared"))).toEqual([cluster.silos[0]]);
+      expect(network.manifestRequests).toBe(0);
     } finally {
-      await cluster.stop();
+      await cluster.dispose();
     }
   });
 });
