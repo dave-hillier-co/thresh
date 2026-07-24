@@ -1,20 +1,19 @@
 import { it } from "vitest";
 
 /**
- * Parity-gap tags: each names a feature the ported test needs that this
- * framework does not have yet. Every tag has a matching entry in `todo.md`;
- * the parity scorecard rolls skipped tests up by tag, so the taxonomy doubles
- * as the parity backlog.
+ * Parity-gap tags: each names a feature a ported-but-unfinished test needs
+ * that this framework does not have yet. The parity scorecard rolls skipped
+ * tests up by tag, so the taxonomy doubles as the parity backlog; a tag with
+ * no test currently using it is kept only while it still names a plausible
+ * future gap, and is pruned once its feature ships or no port is expected to
+ * need it.
  */
 export type GapTag =
-  // Missing features (each maps to a todo.md parity-gap item).
   | "GAP-STATELESS-WORKER" // StatelessWorker placement parsed but not enforced
-  | "GAP-READONLY-ENFORCEMENT" // @readOnly is advisory; mutations are not rejected
+  | "GAP-READONLY-ENFORCEMENT" // @readOnly only relaxes turn scheduling; mutations inside a read-only call are not rejected
   | "GAP-OBSERVERS" // no grain observers / client object references
   | "GAP-MGMT-GRAIN" // no management grain / silo-control system targets
   | "GAP-SERIALIZER-POLYMORPHISM" // serializer lacks polymorphism/cycles
-  | "GAP-STREAM-FAILURE-HANDLER" // streams lack IStreamFailureHandler
-  | "GAP-ACTIVATION-REPARTITIONING" // no activation-repartitioning subsystem (communication-graph driven)
   | "GAP-CLIENT-SILO-SEPARATION" // no separate client process distinct from a silo in the harness
   | "GAP-GRAIN-DIRECTORY-API" // internal directory not exposed via a pluggable IGrainDirectory API
   | "GAP-GRAIN-SERVICE" // no per-silo grain-service registration/lifecycle mechanism
@@ -22,17 +21,13 @@ export type GapTag =
   | "GAP-REBALANCER-CONTROL" // no rebalancer suspend/resume/report-listener control API
   | "GAP-REQUEST-CONTEXT" // RequestContext-driven placement hints (IPlacementDirector.PlacementHintKey) now exist; kept for other client-side RequestContext scaffolding still missing (e.g. a grain-side fail-dehydrate injection knob a client would drive via RequestContext)
   | "GAP-STREAM-CACHE-DIAGNOSTICS" // no pulling-agent cache/eviction model or diagnostic observer
-  | "GAP-STREAM-FILTER" // no IStreamFilter server-side delivery filtering
   | "GAP-STREAM-GENERATOR-ADAPTER" // no synthetic-generator queue-adapter stream provider
   | "GAP-STREAM-PROVIDER-CONFIG" // no config-load-failure distinction / typed stream-provider errors
-  | "GAP-STREAM-PROVIDER-WIRING" // streams not wired into TestCluster / no client.getStreamProvider
-  | "GAP-TIMER-VALIDATION" // GrainTimer.change() lacks due-time/period range validation
   | "GAP-TRACING" // no ActivitySource/span instrumentation on activation/call paths
   | "GAP-TRANSACTION-CONSISTENCY-HARNESS" // no randomized workload + serializable-history checker
   | "GAP-TRANSACTION-CONTEXT-INTROSPECTION" // no public API to read the ambient transaction id
   | "GAP-TRANSACTION-EXCEPTION-TYPES" // only a generic TransactionAbortedError, no typed hierarchy
-  | "GAP-TRANSACTION-EXCLUSIVE-LOCK" // no shared-vs-exclusive lock distinction on transactional state
-  | "GAP-TRANSACTION-OVERLOAD-DETECTOR"; // no transaction-rate load shedding
+  | "GAP-TRANSACTION-EXCLUSIVE-LOCK"; // no shared-vs-exclusive lock distinction on transactional state
 
 type TestBody = () => void | Promise<void>;
 
