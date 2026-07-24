@@ -189,6 +189,13 @@ export interface ClusterNodeOptions {
     grainId: GrainId,
     mode?: "activate" | "rehydrate",
   ) => Promise<void>;
+  /**
+   * Unbind state on deactivation (provided by the hosting layer), the mirror
+   * image of `stateBinder` — e.g. stopping a transactional-state facet's
+   * confirmation-worker timer so it doesn't keep retrying against its TM
+   * after the activation carrying it has gone idle.
+   */
+  stateUnbinder?: (instance: Grain, grainId: GrainId) => void;
   /** Resolves the reminder registry a grain's `registerReminder` delegates to. */
   reminderRegistry?: () => ReminderRegistry | undefined;
   /** Resolves the durable-job scheduler a grain's `scheduleJob` delegates to. */
@@ -532,6 +539,7 @@ export class ClusterNode {
           tokenId,
         ),
       ...(options.stateBinder !== undefined ? { activateState: options.stateBinder } : {}),
+      ...(options.stateUnbinder !== undefined ? { deactivateState: options.stateUnbinder } : {}),
       ...(options.reminderRegistry !== undefined
         ? { reminderRegistry: options.reminderRegistry }
         : {}),

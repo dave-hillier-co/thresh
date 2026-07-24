@@ -1,5 +1,6 @@
 import type { GrainId } from "@tsva/core/grain-id";
 import { getTransactionalFields } from "@tsva/core/transactional-state-metadata";
+import type { TimeProvider } from "@tsva/core/time-provider";
 import {
   TransactionalStateImpl,
   type ResolveStatus,
@@ -15,13 +16,16 @@ const boundStates = new WeakMap<object, TransactionalStateImpl<unknown>[]>();
  * version, before `onActivate`. `resolveStatus` (when provided by the host) lets
  * a facet resolve an in-doubt pending record against its TM on activation; if
  * the TM is unreachable, the facet's confirmation worker keeps retrying until
- * {@link unbindTransactionalStates} stops it (call on deactivation).
+ * {@link unbindTransactionalStates} stops it (call on deactivation). `time`
+ * (when provided by the host) is the confirmation worker's clock, so tests
+ * can drive its backoff deterministically instead of the system clock.
  */
 export async function bindTransactionalStates(
   instance: object,
   grainId: GrainId,
   registry: TransactionalStorageRegistry,
   resolveStatus?: ResolveStatus,
+  time?: TimeProvider,
 ): Promise<void> {
   const states = boundStates.get(instance) ?? [];
   for (const field of getTransactionalFields(instance)) {
@@ -32,6 +36,8 @@ export async function bindTransactionalStates(
       field.initial,
       storage,
       resolveStatus,
+      undefined,
+      time,
     );
     (instance as Record<string, unknown>)[field.fieldName] = state;
     await state.load();

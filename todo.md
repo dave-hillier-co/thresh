@@ -10,10 +10,6 @@ implementations explicitly left undone are listed below.
 
 ## Follow-ups from the issue burn-down
 
-- [ ] **Transactional keepalive lifecycle (from #23)** — no hosting-layer caller invokes
-      `unbindTransactionalStates` on grain deactivation (`ClusterNode.onDeactivated` is not
-      extensible for this), so a long-idle activation with an unresolved transactional record
-      keeps its confirmation-worker timer running until the process exits.
 - [ ] **`@readOnly` guard breadth (from #25)** — the dev-mode mutation guard
       (`SiloConfig.readOnlyStateGuard`, default off) proxy-wraps `@persistentState` facets only;
       reducer, durable and transactional state facets are not yet covered.

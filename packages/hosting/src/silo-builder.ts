@@ -34,7 +34,10 @@ import { bindGrainFacets } from "@tsva/persistence/grain-facet-activator";
 import { GrainFacetRegistry, type GrainFacetFactory } from "@tsva/persistence/grain-facet-registry";
 import { PlacementFilterRegistry } from "@tsva/runtime/placement/placement-filter-registry";
 import type { PlacementFilter } from "@tsva/runtime/placement/placement-filter";
-import { bindTransactionalStates } from "@tsva/transactions/transactional-state-activator";
+import {
+  bindTransactionalStates,
+  unbindTransactionalStates,
+} from "@tsva/transactions/transactional-state-activator";
 import type { Logger } from "@tsva/core/logger";
 import { setupTracePropagation, tracingFilters } from "@tsva/observability/tracing";
 import { metricsFilters } from "@tsva/observability/metrics";
@@ -1010,14 +1013,25 @@ export class SiloBuilder {
           });
         }
         if (transactionalStorage !== undefined) {
-          await bindTransactionalStates(instance, grainId, transactionalStorage, (manager, txId) =>
-            node.resolveTransactionStatus(manager, txId),
+          await bindTransactionalStates(
+            instance,
+            grainId,
+            transactionalStorage,
+            (manager, txId) => node.resolveTransactionStatus(manager, txId),
+            time,
           );
         }
         if (grainFacets !== undefined) {
           await bindGrainFacets(instance, grainId, grainFacets);
         }
       },
+      // Mirror image of `stateBinder`: stop a transactional-state facet's
+      // confirmation-worker timer when its activation deactivates, so an idle
+      // activation with an unresolved in-doubt record doesn't keep pinging its
+      // TM forever (GAP: unbindTransactionalStates was previously never
+      // called — see #23 follow-up). A no-op for an instance with no bound
+      // facets (or when transactions are disabled), so this always runs.
+      stateUnbinder: (instance) => unbindTransactionalStates(instance),
       ...(this.reminderTable !== undefined ? { reminderRegistry: () => reminderService } : {}),
       ...(this.jobShardStore !== undefined ? { durableJobScheduler: () => jobManager } : {}),
       ...(this.grainServiceFactories.size > 0

@@ -74,6 +74,15 @@ export interface CatalogOptions {
     grainId: GrainId,
     mode?: "activate" | "rehydrate",
   ) => Promise<void>;
+  /**
+   * Unbind state after deactivation (provided by the hosting layer), the
+   * mirror image of {@link activateState} — e.g. stopping a transactional-state
+   * facet's confirmation-worker timer so an idle activation doesn't keep it
+   * running. Called once per deactivated activation (idle collection, an
+   * explicit `deactivateOnIdle()`, or silo shutdown), after `onDeactivate` has
+   * run and the activation is finalized.
+   */
+  deactivateState?: (instance: Grain, grainId: GrainId) => void;
   /** Migrate an idle activation to another silo; resolves to whether it moved. */
   migrate?: (activation: ActivationData) => Promise<boolean>;
   /** Resolves the reminder registry a grain's `registerReminder` delegates to. */
@@ -263,6 +272,7 @@ export class Catalog {
     if (this.options.grainActivator?.disposeInstance !== undefined) {
       await this.options.grainActivator.disposeInstance(existing.instance, existing.id);
     }
+    this.options.deactivateState?.(existing.instance, existing.id);
     this.options.onDeactivated?.(existing);
   }
 
@@ -524,6 +534,7 @@ export class Catalog {
     if (this.options.grainActivator?.disposeInstance !== undefined) {
       await this.options.grainActivator.disposeInstance(activation.instance, activation.id);
     }
+    this.options.deactivateState?.(activation.instance, activation.id);
     this.options.onDeactivated?.(activation);
   }
 
@@ -563,6 +574,7 @@ export class Catalog {
       if (this.options.grainActivator?.disposeInstance !== undefined) {
         await this.options.grainActivator.disposeInstance(a.instance, a.id);
       }
+      this.options.deactivateState?.(a.instance, a.id);
       this.options.onDeactivated?.(a);
     }
   }
