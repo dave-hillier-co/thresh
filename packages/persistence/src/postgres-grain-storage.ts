@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Pool } from "pg";
+import { raceSignal } from "@tsva/core/abort";
 import { InconsistentStateError } from "@tsva/core/errors";
 import type { GrainId } from "@tsva/core/grain-id";
 import type { GrainStorage, StateHolder } from "@tsva/core/grain-storage";
@@ -56,10 +57,25 @@ export class PostgresGrainStorage implements GrainStorage {
     }
   }
 
-  async read<T>(stateName: string, grainId: GrainId, state: StateHolder<T>): Promise<void> {
-    const res = await this.pool.query<{ data: string; etag: string }>(
-      `SELECT data, etag FROM ${this.table} WHERE grain_id = $1 AND state_name = $2`,
-      [grainId.toString(), stateName],
+  /**
+   * `signal`, when given, only abandons the WAIT for an in-flight query
+   * (`@tsva/core/abort`'s `raceSignal`) — node-postgres's `Pool.query` has no
+   * abort hook in this major version, so the query itself keeps running
+   * server-side; unlike `RedisGrainStorage`, which cancels for real via
+   * node-redis's `withAbortSignal`.
+   */
+  async read<T>(
+    stateName: string,
+    grainId: GrainId,
+    state: StateHolder<T>,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const res = await raceSignal(
+      this.pool.query<{ data: string; etag: string }>(
+        `SELECT data, etag FROM ${this.table} WHERE grain_id = $1 AND state_name = $2`,
+        [grainId.toString(), stateName],
+      ),
+      signal,
     );
     const row = res.rows[0];
     if (row === undefined) {
@@ -72,19 +88,27 @@ export class PostgresGrainStorage implements GrainStorage {
     state.exists = true;
   }
 
-  async write<T>(stateName: string, grainId: GrainId, state: StateHolder<T>): Promise<void> {
+  async write<T>(
+    stateName: string,
+    grainId: GrainId,
+    state: StateHolder<T>,
+    signal?: AbortSignal,
+  ): Promise<void> {
     const etag = randomUUID();
     // No row -> insert succeeds regardless of expected etag (matches the memory
     // provider). An existing row only updates when the caller's etag still
     // matches; a blind (`''`, never a UUID) or stale etag updates zero rows.
-    const res = await this.pool.query<{ etag: string }>(
-      `INSERT INTO ${this.table} (grain_id, state_name, data, etag)
+    const res = await raceSignal(
+      this.pool.query<{ etag: string }>(
+        `INSERT INTO ${this.table} (grain_id, state_name, data, etag)
        VALUES ($1, $2, $3, $4)
        ON CONFLICT (grain_id, state_name) DO UPDATE
          SET data = EXCLUDED.data, etag = EXCLUDED.etag
          WHERE ${this.table}.etag = $5
        RETURNING etag`,
-      [grainId.toString(), stateName, serializeValue(state.value), etag, state.etag ?? ""],
+        [grainId.toString(), stateName, serializeValue(state.value), etag, state.etag ?? ""],
+      ),
+      signal,
     );
     if (res.rows.length === 0) {
       throw await this.conflict("writing", stateName, grainId, state.etag);
@@ -93,16 +117,22 @@ export class PostgresGrainStorage implements GrainStorage {
     state.exists = true;
   }
 
-  async clear<T>(stateName: string, grainId: GrainId, state: StateHolder<T>): Promise<void> {
+  async clear<T>(
+    stateName: string,
+    grainId: GrainId,
+    state: StateHolder<T>,
+    signal?: AbortSignal,
+  ): Promise<void> {
     // One atomic statement reports whether a row existed and whether the
     // etag-guarded delete fired: an absent row is a no-op; a present row that
     // did not delete (blank or stale etag) is a conflict.
-    const res = await this.pool.query<{
-      stored_etag: string | null;
-      present: boolean;
-      deleted: boolean;
-    }>(
-      `WITH existing AS (
+    const res = await raceSignal(
+      this.pool.query<{
+        stored_etag: string | null;
+        present: boolean;
+        deleted: boolean;
+      }>(
+        `WITH existing AS (
          SELECT etag FROM ${this.table} WHERE grain_id = $1 AND state_name = $2
        ), deleted AS (
          DELETE FROM ${this.table} WHERE grain_id = $1 AND state_name = $2 AND etag = $3
@@ -111,7 +141,9 @@ export class PostgresGrainStorage implements GrainStorage {
        SELECT (SELECT etag FROM existing) AS stored_etag,
               EXISTS (SELECT 1 FROM existing) AS present,
               EXISTS (SELECT 1 FROM deleted) AS deleted`,
-      [grainId.toString(), stateName, state.etag ?? ""],
+        [grainId.toString(), stateName, state.etag ?? ""],
+      ),
+      signal,
     );
     const row = res.rows[0]!;
     if (row.present && !row.deleted) {

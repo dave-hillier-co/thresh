@@ -41,7 +41,7 @@ export interface GrainSetup extends GrainContext {
 /** Lifecycle hooks a behaviour may return; both are optional and awaited by the runtime. */
 export interface GrainLifecycle {
   onActivate(reason: ActivationReason): void | Promise<void>;
-  onDeactivate(reason: DeactivationReason): void | Promise<void>;
+  onDeactivate(reason: DeactivationReason, signal?: AbortSignal): void | Promise<void>;
 }
 
 /**

@@ -37,4 +37,14 @@ export interface InvocationRequest {
   transaction?: TransactionInfo;
   /** Ambient request-context headers propagated along the call chain (Orleans `RequestContext`). */
   headers?: Record<string, string>;
+  /**
+   * Absolute deadline (epoch ms) for this call chain, if one is ambient
+   * (Orleans has no direct analogue — JS-only ambient cancellation; see
+   * `docs/deviations.md`). Wire-safe (a plain timestamp, unlike an
+   * `AbortSignal`), so it rides a cross-silo forward and each hop derives its
+   * own local `AbortSignal` from it (`@tsva/runtime/dispatcher`). Propagated
+   * unchanged down a call chain like `transaction`, so the FIRST deadline set
+   * on a chain governs every downstream hop.
+   */
+  deadline?: number;
 }

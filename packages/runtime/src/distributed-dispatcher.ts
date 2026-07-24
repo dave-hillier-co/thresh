@@ -13,7 +13,11 @@ import {
   withRegisterDirectoryEntrySpan,
 } from "@tsva/observability/activation-tracing";
 import type { Catalog } from "@tsva/runtime/catalog";
-import type { Dispatcher } from "@tsva/runtime/dispatcher";
+import {
+  withCallDeadline,
+  type Dispatcher,
+  type InvokeCallOptions,
+} from "@tsva/runtime/dispatcher";
 import type { PlacementFilter } from "@tsva/runtime/placement/placement-filter";
 import { resolvePlacementHint } from "@tsva/runtime/placement/placement-hint";
 import type {
@@ -78,9 +82,16 @@ export interface DistributedDispatcherDeps {
 export class DistributedDispatcher implements Dispatcher {
   constructor(private readonly deps: DistributedDispatcherDeps) {}
 
-  async invoke(req: InvocationRequest): Promise<unknown> {
-    if (this.deps.clientRouter?.isClientTarget(req.target))
-      return this.deps.clientRouter.route(req);
+  async invoke(req: InvocationRequest, opts?: InvokeCallOptions): Promise<unknown> {
+    // Resolved once, up front, so a fresh `opts.deadlineMs` is embedded into
+    // `req.deadline` before any placement/forwarding decision below — it must
+    // ride a distributed forward too, but `opts.signal` itself never can (see
+    // `InvokeCallOptions`), so it is threaded only through the local-delivery
+    // paths below and dropped at every `remote.send`.
+    const withDeadline = withCallDeadline(req, opts);
+
+    if (this.deps.clientRouter?.isClientTarget(withDeadline.target))
+      return this.deps.clientRouter.route(withDeadline);
 
     // [StatelessWorker] grains are placement-local (`StatelessWorkerPlacement`
     // always resolves to the calling silo) and never directory-registered —
@@ -89,33 +100,33 @@ export class DistributedDispatcher implements Dispatcher {
     // straight to the catalog's pick-or-scale instead of the cache/directory
     // funnel; this also means a stateless-worker call always resolves on
     // whichever silo makes it, exactly like Orleans.
-    if (this.deps.catalog.isStatelessWorkerType(req.target.type)) {
-      return this.deps.catalog.pickOrScaleWorker(req.target).invoke(req);
+    if (this.deps.catalog.isStatelessWorkerType(withDeadline.target.type)) {
+      return this.deps.catalog.pickOrScaleWorker(withDeadline.target).invoke(withDeadline, opts);
     }
 
-    const cached = this.deps.cache.get(req.target);
+    const cached = this.deps.cache.get(withDeadline.target);
     if (cached !== undefined) {
       try {
-        return await this.routeTo(cached, req);
+        return await this.routeTo(cached, withDeadline, opts);
       } catch (err) {
         if (!isStaleRejection(err)) throw err;
-        this.deps.cache.invalidate(req.target); // stale entry: re-resolve below
+        this.deps.cache.invalidate(withDeadline.target); // stale entry: re-resolve below
       }
     }
 
-    const found = await this.deps.directory.lookup(req.target);
+    const found = await this.deps.directory.lookup(withDeadline.target);
     if (found !== undefined) {
       this.deps.cache.put(found);
-      return this.routeTo(found, req);
+      return this.routeTo(found, withDeadline, opts);
     }
 
-    return this.placeAndInvoke(req);
+    return this.placeAndInvoke(withDeadline, opts);
   }
 
   /** A request that arrived here: ensure a local activation, or forward to the CAS winner. */
-  async deliverLocal(req: InvocationRequest): Promise<unknown> {
+  async deliverLocal(req: InvocationRequest, opts?: InvokeCallOptions): Promise<unknown> {
     const existing = await this.deps.catalog.resolveLive(req.target);
-    if (existing !== undefined) return existing.invoke(req);
+    if (existing !== undefined) return existing.invoke(req, opts);
 
     // Placement + directory registration + (if we won) activation all run
     // inside a "place grain" span (Runtime source), so they share the trace
@@ -123,10 +134,13 @@ export class DistributedDispatcher implements Dispatcher {
     // `ClusterNode.receiveRequest`). Nested inside it, "activate grain"
     // (Lifecycle source) wraps registration through activation, so
     // "register directory entry" (Runtime source) is a child span of it.
-    return withPlaceGrainSpan(() => this.claimAndActivateLocally(req));
+    return withPlaceGrainSpan(() => this.claimAndActivateLocally(req, opts));
   }
 
-  private async claimAndActivateLocally(req: InvocationRequest): Promise<unknown> {
+  private async claimAndActivateLocally(
+    req: InvocationRequest,
+    opts?: InvokeCallOptions,
+  ): Promise<unknown> {
     const activationId = newActivationId();
     return withActivateGrainSpan({ grainType: req.target.type }, async () => {
       const winner = await withRegisterDirectoryEntrySpan({ grainId: req.target.toString() }, () =>
@@ -140,7 +154,7 @@ export class DistributedDispatcher implements Dispatcher {
 
       // We won the CAS: activate here.
       if (winner.silo.equals(this.deps.local) && winner.activationId === activationId) {
-        return this.activateLocalAndInvoke(req, activationId);
+        return this.activateLocalAndInvoke(req, activationId, opts);
       }
 
       // The directory points back at this silo but at a different activation id.
@@ -152,7 +166,7 @@ export class DistributedDispatcher implements Dispatcher {
           act.state !== "invalid" &&
           act.activationId === winner.activationId
         ) {
-          return act.invoke(req);
+          return act.invoke(req, opts);
         }
         // The entry points at a dead/absent local activation (a failed activation
         // its owner has not yet unregistered, or a failed migration). Remove the
@@ -161,7 +175,7 @@ export class DistributedDispatcher implements Dispatcher {
         // into an unbounded self-forward loop (OOM).
         await this.deps.directory.unregister(winner);
         this.deps.cache.invalidate(req.target);
-        return this.deliverLocal(req);
+        return this.deliverLocal(req, opts);
       }
 
       return this.deps.remote.send(winner.silo, req);
@@ -181,11 +195,12 @@ export class DistributedDispatcher implements Dispatcher {
   private async activateLocalAndInvoke(
     req: InvocationRequest,
     activationId: string,
+    opts?: InvokeCallOptions,
   ): Promise<unknown> {
     let act: Awaited<ReturnType<Catalog["activateLocal"]>> | undefined;
     try {
       act = await this.deps.catalog.activateLocal(req.target, activationId);
-      return await act.invoke(req);
+      return await act.invoke(req, opts);
     } catch (err) {
       if (act === undefined || act.activationFailed) {
         await this.deps.directory.unregister({
@@ -199,7 +214,11 @@ export class DistributedDispatcher implements Dispatcher {
     }
   }
 
-  private async routeTo(addr: GrainAddress, req: InvocationRequest): Promise<unknown> {
+  private async routeTo(
+    addr: GrainAddress,
+    req: InvocationRequest,
+    opts?: InvokeCallOptions,
+  ): Promise<unknown> {
     this.deps.recordEdge?.(req, addr.silo);
     if (!addr.silo.equals(this.deps.local)) return this.deps.remote.send(addr.silo, req);
     const act = await this.deps.catalog.resolveLive(req.target);
@@ -210,12 +229,12 @@ export class DistributedDispatcher implements Dispatcher {
       // against and loops forever against the dead entry — (re)activate locally.
       // `deliverLocal` registers a fresh activation, repairs a stale self-pointer,
       // or forwards if the grain in fact lives on another silo.
-      return this.deliverLocal(req);
+      return this.deliverLocal(req, opts);
     }
-    return act.invoke(req);
+    return act.invoke(req, opts);
   }
 
-  private async placeAndInvoke(req: InvocationRequest): Promise<unknown> {
+  private async placeAndInvoke(req: InvocationRequest, opts?: InvokeCallOptions): Promise<unknown> {
     const ctx: PlacementContext = { localSilo: this.deps.local, ...this.deps.placementContext() };
     // Hard metadata filters first: prune the candidate set by silo metadata; if
     // none qualify, placement fails (the grain has a constraint nothing satisfies).
@@ -244,7 +263,7 @@ export class DistributedDispatcher implements Dispatcher {
       strategy.choose(req.target.type, candidates, ctx);
     this.deps.recordEdge?.(req, targetSilo);
     return targetSilo.equals(this.deps.local)
-      ? this.deliverLocal(req)
+      ? this.deliverLocal(req, opts)
       : this.deps.remote.send(targetSilo, req);
   }
 }

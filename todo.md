@@ -6,10 +6,18 @@ vertical slices (see [`CLAUDE.md`](CLAUDE.md)).
 
 ## Parity gaps
 
-- [ ] **Cancellation tokens & per-call deadlines end-to-end** — thread a `CancellationToken`
-      through the dispatcher, turn scheduler, persistence/storage providers and the deactivation
-      path so hung methods, slow downstreams and shutdown can be interrupted. Prerequisite for the
-      `onDeactivate` timeout, TM cancel and stream redelivery backoff.
+- [ ] **Cancellation tokens & per-call deadlines end-to-end (#18)** — core slice done: `AbortSignal`/
+      `InvocationRequest.deadline` threaded through `InvocationContext`, `Dispatcher`/
+      `LocalDispatcher`/`DistributedDispatcher` (`InvokeCallOptions`), `TurnScheduler` (preempts a
+      still-queued turn only — a running one always finishes), `GrainRuntime
+      .getCancellationSignal()`, `onDeactivate(reason, signal?)`, and `GrainStorage`/
+      `PersistentState` (honoured by `RedisGrainStorage` via node-redis's `withAbortSignal`;
+      `PostgresGrainStorage` only abandons the wait via `raceSignal`, since `pg`'s `Pool.query` has
+      no abort hook). `GrainCancellationToken` composes into `getCancellationSignal()` but stays
+      cooperative-only (never preempts admission) to avoid changing its existing semantics. Left:
+      journal/transactional-storage provider signatures, a friendlier per-call deadline API on
+      `getGrain` calls (today only `Dispatcher.invoke`'s `opts` exposes it), and the scheduler
+      back-pressure/`onDeactivate` timeout item below that builds on this.
 - [ ] **Scheduler back-pressure, stuck-turn detection & `onDeactivate` timeout** — bounded
       per-activation queue with soft/hard limits (`MaxEnqueuedRequestsSoftLimit`/`HardLimit`),
       `MaxRequestProcessingTime` stuck-turn detection, and an enforced `DeactivationTimeout` that

@@ -1,3 +1,4 @@
+import { GrainCallAbortedError } from "@tsva/core/errors";
 import type { InvokeMethodOptions } from "@tsva/core/invoke-options";
 import type { MayInterleavePredicate } from "@tsva/core/grain-metadata";
 
@@ -13,6 +14,17 @@ export interface Turn<R> {
   /** The grain method this turn dispatches, if any (system turns have none). */
   readonly method?: string;
   readonly args?: readonly unknown[];
+  /**
+   * Ambient cancellation for this turn (Orleans has no analogue — JS-only
+   * cooperative cancellation, see `docs/deviations.md`). Checked only at
+   * admission: a turn whose signal has fired before it would start is
+   * rejected with `GrainCallAbortedError` instead of running at all. Once a
+   * turn HAS started it always runs to completion — there is no thread to
+   * preempt it with — so firing `signal` after that point has no effect here
+   * (the grain method body may still observe it cooperatively via
+   * `GrainRuntime.getCancellationSignal()`).
+   */
+  readonly signal?: AbortSignal;
   run(): Promise<R>;
 }
 
@@ -159,6 +171,13 @@ export class TurnScheduler {
   }
 
   private start(item: QueuedTurn): void {
+    // Admission-time-only cancellation check (see `Turn.signal`'s doc): a
+    // turn that never got to run is simply rejected here, never added to
+    // `running` and never counted as the "first turn" for `barrierFirstTurn`.
+    if (item.turn.signal?.aborted === true) {
+      item.reject(new GrainCallAbortedError());
+      return;
+    }
     const running: RunningTurn = {
       options: item.turn.options,
       reentrancyId: item.turn.reentrancyId,

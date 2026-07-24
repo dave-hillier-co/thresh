@@ -23,7 +23,7 @@ import {
   TransactionAbortedError,
   TransactionsDisabledError,
 } from "@tsva/core/errors";
-import type { Dispatcher } from "@tsva/runtime/dispatcher";
+import type { Dispatcher, InvokeCallOptions } from "@tsva/runtime/dispatcher";
 import { invocationContext } from "@tsva/runtime/invocation-context";
 import { systemTimeProvider, type TimeProvider } from "@tsva/runtime/time-provider";
 import type { TransactionAgent } from "@tsva/runtime/transaction-agent";
@@ -158,6 +158,14 @@ export class GrainFactory {
               options,
               ambient?.transaction,
             );
+            // Ambient cancellation propagates to this outgoing call the same way
+            // the transaction does: `deadline` (wire-safe) rides `req` so it
+            // survives a cross-silo forward; `signal` cannot cross the wire (see
+            // `InvokeCallOptions`), so it is only ever meaningful for the LOCAL
+            // leg of this call (delivering to a local activation, or the local
+            // step of a distributed dispatch before it places remotely).
+            const callOpts: InvokeCallOptions | undefined =
+              ambient?.signal === undefined ? undefined : { signal: ambient.signal };
             // The dispatch (with the transaction boundary) is the terminal step;
             // it reads `callArgs`/`callHeaders` so an outgoing filter's rewrites
             // (arguments, injected trace context) take effect on the request.
@@ -177,10 +185,11 @@ export class GrainFactory {
                 ...(ambient?.ownerId !== undefined ? { callingGrain: ambient.ownerId } : {}),
                 ...(transaction !== undefined ? { transaction } : {}),
                 ...(Object.keys(callHeaders).length > 0 ? { headers: callHeaders } : {}),
+                ...(ambient?.deadline !== undefined ? { deadline: ambient.deadline } : {}),
               };
               return beginsHere
-                ? this.runRootTransaction(transaction!, req)
-                : this.dispatcher!.invoke(req);
+                ? this.runRootTransaction(transaction!, req, callOpts)
+                : this.dispatcher!.invoke(req, callOpts);
             };
             // The ambient RequestContext bag (Orleans `RequestContext`) — the
             // SAME store whether this call originates from inside a grain turn
@@ -369,10 +378,11 @@ export class GrainFactory {
   private async runRootTransaction(
     transaction: TransactionInfo,
     req: InvocationRequest,
+    opts?: InvokeCallOptions,
   ): Promise<unknown> {
     const agent = this.requireAgent();
     try {
-      const result = await this.dispatcher!.invoke(req);
+      const result = await this.dispatcher!.invoke(req, opts);
       await agent.resolve(transaction);
       return result;
     } catch (error) {

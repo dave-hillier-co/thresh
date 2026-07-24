@@ -81,3 +81,30 @@ describe("DistributedDispatcher placement filters", () => {
     expect((send.mock.calls[0]![0] as SiloAddress).ringKey).toBe("silo-2");
   });
 });
+
+// GAP-CANCELLATION-DISPATCHER (issue #18): `opts.deadlineMs` must be resolved
+// into a wire-safe `req.deadline` BEFORE a remote forward, since an
+// `AbortSignal` (`opts.signal`) cannot cross the wire but a plain timestamp
+// can — this is what lets a downstream silo derive its own local signal.
+describe("DistributedDispatcher ambient deadline (issue #18)", () => {
+  it("embeds opts.deadlineMs into req.deadline before forwarding remotely", async () => {
+    const { deps: d, send } = deps(); // default random 0.9 -> silo-2 (remote)
+    const before = Date.now();
+
+    await new DistributedDispatcher(d).invoke(request(), { deadlineMs: 10_000 });
+
+    expect(send).toHaveBeenCalledTimes(1);
+    const forwarded = send.mock.calls[0]![1] as InvocationRequest;
+    expect(forwarded.deadline).toBeGreaterThanOrEqual(before + 10_000);
+  });
+
+  it("does not override a req.deadline the caller already set", async () => {
+    const { deps: d, send } = deps();
+    const req = { ...request(), deadline: 123 };
+
+    await new DistributedDispatcher(d).invoke(req, { deadlineMs: 10_000 });
+
+    const forwarded = send.mock.calls[0]![1] as InvocationRequest;
+    expect(forwarded.deadline).toBe(123);
+  });
+});

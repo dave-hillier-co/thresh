@@ -13,7 +13,31 @@ export interface StateHolder<T> {
  * when to call it. Writes are conditional on the etag the grain last read.
  */
 export interface GrainStorage {
-  read<T>(stateName: string, grainId: GrainId, state: StateHolder<T>): Promise<void>;
-  write<T>(stateName: string, grainId: GrainId, state: StateHolder<T>): Promise<void>;
-  clear<T>(stateName: string, grainId: GrainId, state: StateHolder<T>): Promise<void>;
+  /**
+   * `signal`, when given, is an ambient cancellation/deadline signal for this
+   * call (Orleans has no analogue — see `docs/deviations.md`). A provider
+   * honours it on a best-effort basis against its own network calls (e.g.
+   * `RedisGrainStorage` via node-redis's `withAbortSignal`); a provider that
+   * cannot cancel mid-flight (e.g. `PostgresGrainStorage`, whose client has no
+   * abort hook) may instead only abandon the *wait* for an already-sent call
+   * (`@tsva/core/abort`'s `raceSignal`), or ignore it entirely.
+   */
+  read<T>(
+    stateName: string,
+    grainId: GrainId,
+    state: StateHolder<T>,
+    signal?: AbortSignal,
+  ): Promise<void>;
+  write<T>(
+    stateName: string,
+    grainId: GrainId,
+    state: StateHolder<T>,
+    signal?: AbortSignal,
+  ): Promise<void>;
+  clear<T>(
+    stateName: string,
+    grainId: GrainId,
+    state: StateHolder<T>,
+    signal?: AbortSignal,
+  ): Promise<void>;
 }

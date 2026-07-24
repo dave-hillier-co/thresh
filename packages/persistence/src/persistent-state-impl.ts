@@ -45,30 +45,30 @@ export class PersistentStateImpl<T> implements PersistentState<T>, IGrainMigrati
     return this.holder.exists;
   }
 
-  async read(): Promise<void> {
+  async read(signal?: AbortSignal): Promise<void> {
     await withStorageReadSpan(
       {
         provider: this.storage.constructor.name,
         stateName: this.stateName,
         grainId: this.grainId.toString(),
       },
-      () => this.storage.read(this.stateName, this.grainId, this.holder),
+      () => this.storage.read(this.stateName, this.grainId, this.holder, signal),
     );
   }
 
-  async write(): Promise<void> {
+  async write(signal?: AbortSignal): Promise<void> {
     await withStorageWriteSpan(
       {
         provider: this.storage.constructor.name,
         stateName: this.stateName,
         grainId: this.grainId.toString(),
       },
-      () => this.storage.write(this.stateName, this.grainId, this.holder),
+      () => this.storage.write(this.stateName, this.grainId, this.holder, signal),
     );
   }
 
-  async clear(): Promise<void> {
-    await this.storage.clear(this.stateName, this.grainId, this.holder);
+  async clear(signal?: AbortSignal): Promise<void> {
+    await this.storage.clear(this.stateName, this.grainId, this.holder, signal);
     this.holder.value = this.defaultValue();
   }
 

@@ -65,6 +65,19 @@ export interface GrainRuntime {
    */
   setRequestContext(key: string, value: string): void;
   /**
+   * The ambient cancellation signal for this turn, or `undefined` if none
+   * applies (Orleans has no analogue — JS-only cooperative cancellation; see
+   * `docs/deviations.md`). Composed from whatever of these are in play: the
+   * caller's `InvokeCallOptions.signal`/per-call deadline
+   * (`@tsva/runtime/dispatcher`) and any `GrainCancellationToken` bound
+   * during this call. Aborting it does NOT stop an already-started turn — JS
+   * has no thread interruption — so this is for grain code that wants to
+   * observe cancellation cooperatively mid-turn (e.g. pass it to a
+   * cancellable `fetch`); a still-queued turn is preempted automatically
+   * (`TurnScheduler`).
+   */
+  getCancellationSignal(): AbortSignal | undefined;
+  /**
    * The id of the transaction this turn runs inside, or `undefined` outside
    * any transaction (Orleans `TransactionContext.GetTransactionInfo()?.Id`).
    * Whether one is present is decided by the invoked method's
