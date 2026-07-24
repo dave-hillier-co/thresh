@@ -1,5 +1,8 @@
 import type { InvokeMethodOptions } from "@tsva/core/invoke-options";
 import type { MayInterleavePredicate } from "@tsva/core/grain-metadata";
+import { LimitExceededException } from "@tsva/core/errors";
+import { type Logger, noopLogger } from "@tsva/core/logger";
+import { systemTimeProvider, type TimeProvider, type TimerHandle } from "@tsva/core/time-provider";
 
 /**
  * One unit of work admitted to a grain's activation. A turn is the whole
@@ -35,6 +38,37 @@ export interface TurnSchedulerOptions {
    * activation layer opts into this explicitly.
    */
   barrierFirstTurn?: boolean;
+  /**
+   * Warn (via `logger`) once the queue reaches this many WAITING turns
+   * (running turns don't count) — Orleans `WorkItemGroup`
+   * (`SchedulingOptions.MaxEnqueuedRequestsSoftLimit`). Advisory only: the
+   * turn is still admitted. `undefined` (the default) disables the check.
+   */
+  maxEnqueuedRequestsSoftLimit?: number;
+  /**
+   * Reject a newly scheduled turn with `LimitExceededException` once the
+   * queue already holds this many WAITING turns (Orleans `WorkItemGroup`
+   * `SchedulingOptions.MaxEnqueuedRequestsHardLimit`) — a bounded
+   * per-activation mailbox so one stuck grain can't grow memory without
+   * limit. `undefined` (the default) disables the check: the queue stays
+   * unbounded.
+   */
+  maxEnqueuedRequestsHardLimit?: number;
+  /**
+   * Log a warning if a running turn is still in flight past this many ms
+   * (Orleans `ActivationData`'s `MaxRequestProcessingTime` stuck-turn
+   * detection). Advisory only, like upstream: JS has no thread-interruption
+   * primitive, so this cannot abort the turn — it only flags it so an
+   * operator (or a future cancellation-aware caller) notices. `undefined`
+   * (the default) disables the watchdog.
+   */
+  maxRequestProcessingTimeMs?: number;
+  /** Clock the stuck-turn watchdog schedules against; defaults to the system clock. */
+  time?: TimeProvider;
+  /** Sink for soft-limit/stuck-turn warnings; defaults to discarding them. */
+  logger?: Logger;
+  /** Included on every warning log line to identify the owning activation. */
+  grainId?: string;
 }
 
 interface QueuedTurn {
@@ -69,11 +103,23 @@ export class TurnScheduler {
   private readonly barrierFirstTurn: boolean;
   private firstTurnSeen = false;
   private firstTurnSettled = false;
+  private readonly softLimit: number | undefined;
+  private readonly hardLimit: number | undefined;
+  private readonly maxRequestProcessingTimeMs: number | undefined;
+  private readonly time: TimeProvider;
+  private readonly logger: Logger;
+  private readonly grainId: string | undefined;
 
   constructor(options: TurnSchedulerOptions = {}) {
     this.reentrant = options.reentrant ?? false;
     this.mayInterleavePredicate = options.mayInterleave;
     this.barrierFirstTurn = options.barrierFirstTurn ?? false;
+    this.softLimit = options.maxEnqueuedRequestsSoftLimit;
+    this.hardLimit = options.maxEnqueuedRequestsHardLimit;
+    this.maxRequestProcessingTimeMs = options.maxRequestProcessingTimeMs;
+    this.time = options.time ?? systemTimeProvider;
+    this.logger = options.logger ?? noopLogger;
+    this.grainId = options.grainId;
   }
 
   /**
@@ -101,6 +147,22 @@ export class TurnScheduler {
   }
 
   schedule<R>(turn: Turn<R>): Promise<R> {
+    if (this.hardLimit !== undefined && this.queue.length >= this.hardLimit) {
+      return Promise.reject(
+        new LimitExceededException(
+          "MaxEnqueuedRequestsHardLimit",
+          this.queue.length,
+          this.hardLimit,
+        ),
+      );
+    }
+    if (this.softLimit !== undefined && this.queue.length >= this.softLimit) {
+      this.logger.warn("activation turn queue exceeded MaxEnqueuedRequestsSoftLimit", {
+        ...(this.grainId !== undefined ? { grainId: this.grainId } : {}),
+        queueLength: this.queue.length,
+        softLimit: this.softLimit,
+      });
+    }
     return new Promise<R>((resolve, reject) => {
       this.queue.push({
         turn: turn as Turn<unknown>,
@@ -167,16 +229,40 @@ export class TurnScheduler {
     this.firstTurnSeen = true;
     this.running.add(running);
     if (running.reentrancyId !== undefined) this.enterSection(running.reentrancyId);
+    const watchdog = this.armStuckTurnWatchdog(item.turn);
 
     Promise.resolve()
       .then(() => item.turn.run())
       .then(item.resolve, item.reject)
       .finally(() => {
+        if (watchdog !== undefined) this.time.clearTimer(watchdog);
         this.running.delete(running);
         if (running.reentrancyId !== undefined) this.leaveSection(running.reentrancyId);
         if (isFirstTurn) this.firstTurnSettled = true;
         this.pump();
       });
+  }
+
+  /**
+   * Schedule a one-shot warning if `turn` is still running once
+   * `maxRequestProcessingTimeMs` elapses (Orleans' `MaxRequestProcessingTime`
+   * stuck-turn detection). There is no way to actually abort a running
+   * `async` function from outside it in JS — Orleans itself can't
+   * force-kill a thread either — so this only ever logs; the caller is
+   * responsible for interrupting long-running work cooperatively (e.g. via a
+   * cancellation token).
+   */
+  private armStuckTurnWatchdog(turn: Turn<unknown>): TimerHandle | undefined {
+    if (this.maxRequestProcessingTimeMs === undefined) return undefined;
+    const startedAtMs = this.time.now();
+    return this.time.setTimer(() => {
+      this.logger.warn("activation turn exceeded MaxRequestProcessingTime", {
+        ...(this.grainId !== undefined ? { grainId: this.grainId } : {}),
+        ...(turn.method !== undefined ? { method: turn.method } : {}),
+        elapsedMs: this.time.now() - startedAtMs,
+        maxRequestProcessingTimeMs: this.maxRequestProcessingTimeMs,
+      });
+    }, this.maxRequestProcessingTimeMs);
   }
 
   private enterSection(id: string): void {

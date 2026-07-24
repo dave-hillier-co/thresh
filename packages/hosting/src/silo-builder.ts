@@ -73,6 +73,7 @@ import {
 import type { StreamGeneratorConfig } from "@tsva/streams/generator-stream-queue";
 import type { PullingStreamProviderHost } from "@tsva/streams/queue-pulling-agent";
 import { ClusterNode } from "@tsva/runtime/cluster-node";
+import type { ActivationOptions } from "@tsva/runtime/activation";
 import type { GrainActivator } from "@tsva/runtime/catalog";
 import type { LoadSheddingOptions } from "@tsva/runtime/load-shedding";
 import { StaticMembershipService } from "@tsva/runtime/static-membership";
@@ -127,7 +128,41 @@ export interface SiloConfig {
    * to shedding disabled; see `ClusterNodeOptions.loadShedding`.
    */
   loadShedding?: Partial<LoadSheddingOptions>;
+  /**
+   * Per-activation turn-scheduler back-pressure/watchdog config (Orleans
+   * `SchedulingOptions`). Any field left unset falls back to this builder's
+   * Orleans-inspired default (see `DEFAULT_SCHEDULING_OPTIONS`) rather than
+   * being disabled — unlike `ClusterNodeOptions.activationOptions`, which is
+   * off entirely unless configured.
+   */
+  scheduling?: {
+    /** Warn once an activation's turn queue reaches this length. Default 1,000. */
+    maxEnqueuedRequestsSoftLimit?: number;
+    /** Reject a newly scheduled turn once an activation's queue is at this length. Default 10,000. */
+    maxEnqueuedRequestsHardLimit?: number;
+    /** Warn once a running turn exceeds this duration. Default 30s. */
+    maxRequestProcessingTime?: Duration;
+  };
+  /**
+   * Orleans `CollectionOptions.DeactivationTimeout`: force deactivation to
+   * proceed once `onDeactivate` has run this long, even if the hook itself
+   * hasn't settled. Defaults to 30s; pass `false` to disable (wait
+   * indefinitely, the pre-existing behaviour).
+   */
+  deactivationTimeout?: Duration | false;
 }
+
+/**
+ * Orleans-inspired defaults for `SiloConfig.scheduling` /
+ * `deactivationTimeout` — not verified against the exact upstream
+ * `SchedulingOptions`/`CollectionOptions` constants, but in the same spirit:
+ * generous enough that no well-behaved grain ever trips them, tight enough
+ * that a stuck one is caught rather than growing without bound.
+ */
+const DEFAULT_MAX_ENQUEUED_REQUESTS_SOFT_LIMIT = 1_000;
+const DEFAULT_MAX_ENQUEUED_REQUESTS_HARD_LIMIT = 10_000;
+const DEFAULT_MAX_REQUEST_PROCESSING_TIME_MS = 30_000;
+const DEFAULT_DEACTIVATION_TIMEOUT_MS = 30_000;
 
 interface Registration {
   ctor: new () => Grain;
@@ -190,6 +225,7 @@ export class SiloBuilder {
   private readonly streamFilters: Array<{ providerName: string; filter: StreamFilter }> = [];
   private readonly broadcastProviders = new Map<string, BroadcastChannelOptions>();
   private transactionsDisabled = false;
+  private logger: Logger | undefined;
 
   constructor(private readonly config: SiloConfig) {}
 
@@ -517,6 +553,7 @@ export class SiloBuilder {
    */
   useLogging(logger: Logger): this {
     this.incomingCallFilters.push(loggingFilter(logger));
+    this.logger = logger;
     return this;
   }
 
@@ -758,6 +795,28 @@ export class SiloBuilder {
     let jobManager: LocalDurableJobManager | undefined;
     const membership = this.membership;
 
+    const activationOptions: ActivationOptions = {
+      maxEnqueuedRequestsSoftLimit:
+        this.config.scheduling?.maxEnqueuedRequestsSoftLimit ??
+        DEFAULT_MAX_ENQUEUED_REQUESTS_SOFT_LIMIT,
+      maxEnqueuedRequestsHardLimit:
+        this.config.scheduling?.maxEnqueuedRequestsHardLimit ??
+        DEFAULT_MAX_ENQUEUED_REQUESTS_HARD_LIMIT,
+      maxRequestProcessingTimeMs:
+        this.config.scheduling?.maxRequestProcessingTime !== undefined
+          ? durationToMs(this.config.scheduling.maxRequestProcessingTime)
+          : DEFAULT_MAX_REQUEST_PROCESSING_TIME_MS,
+      ...(this.config.deactivationTimeout !== false
+        ? {
+            deactivationTimeoutMs:
+              this.config.deactivationTimeout !== undefined
+                ? durationToMs(this.config.deactivationTimeout)
+                : DEFAULT_DEACTIVATION_TIMEOUT_MS,
+          }
+        : {}),
+      ...(this.logger !== undefined ? { logger: this.logger } : {}),
+    };
+
     const node = new ClusterNode({
       local: this.config.local,
       clusterId: this.config.clusterId,
@@ -785,6 +844,7 @@ export class SiloBuilder {
       ...(this.config.metadata !== undefined ? { metadata: this.config.metadata } : {}),
       ...(this.config.loadShedding !== undefined ? { loadShedding: this.config.loadShedding } : {}),
       ...(this.repartitioning !== undefined ? { repartitioning: this.repartitioning } : {}),
+      activationOptions,
       transactionsEnabled: transactionalStorage !== undefined,
       ...(this.broadcastProviders.size > 0
         ? {
