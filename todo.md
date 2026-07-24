@@ -8,8 +8,6 @@ current-state evidence (what already exists, what is missing, file pointers).
 
 ## Parity gaps
 
-- [ ] [#19](https://github.com/dave-hillier-co/ts-virtual-actors/issues/19) Scheduler
-      back-pressure, stuck-turn detection & enforced `onDeactivate` timeout.
 - [ ] [#20](https://github.com/dave-hillier-co/ts-virtual-actors/issues/20) Runtime
       instrumentation breadth — OTel wiring for messaging, reminders, streams, durable-jobs,
       directory.

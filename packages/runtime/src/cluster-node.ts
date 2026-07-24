@@ -92,7 +92,7 @@ import {
   withPlaceGrainSpan,
 } from "@tsva/observability/activation-tracing";
 import { ClientDirectory } from "@tsva/runtime/client-directory";
-import type { ActivationData } from "@tsva/runtime/activation";
+import type { ActivationData, ActivationOptions } from "@tsva/runtime/activation";
 import { DistributedDispatcher } from "@tsva/runtime/distributed-dispatcher";
 import { BroadcastChannelProviderImpl } from "@tsva/runtime/broadcast-channel-provider";
 import { GrainFactory } from "@tsva/runtime/grain-factory";
@@ -241,6 +241,14 @@ export interface ClusterNodeOptions {
     /** Defaults to `rebalancerCompatibleTolerance(membership)`. */
     toleranceRule?: ImbalanceToleranceRule;
   };
+  /**
+   * Turn-scheduler back-pressure/watchdog and deactivation-timeout knobs
+   * (Orleans `SchedulingOptions` + `CollectionOptions.DeactivationTimeout`),
+   * applied to every activation on this silo. Unset (the default) keeps
+   * every activation's queue unbounded and its deactivation untimed; see
+   * `SiloBuilder`, which turns these on with Orleans-like defaults.
+   */
+  activationOptions?: ActivationOptions;
 }
 
 interface RejectionPayload {
@@ -490,6 +498,9 @@ export class ClusterNode {
       ...(options.grainActivator !== undefined ? { grainActivator: options.grainActivator } : {}),
       ...(options.grainExtensionFactories !== undefined
         ? { grainExtensionFactories: options.grainExtensionFactories }
+        : {}),
+      ...(options.activationOptions !== undefined
+        ? { activationOptions: options.activationOptions }
         : {}),
       loadShedding: () => this.siloTestHooks(),
       siloPing: (target, message) => this.pingSilo(target, message),

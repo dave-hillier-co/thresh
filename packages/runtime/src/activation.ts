@@ -27,6 +27,7 @@ import { MigrationBag } from "@tsva/core/grain-migration-participant";
 import type { GrainRuntime } from "@tsva/core/grain-runtime";
 import type { GrainTimer, TimerOptions } from "@tsva/core/grain-timer";
 import type { InvokeMethodOptions } from "@tsva/core/invoke-options";
+import { type Logger, noopLogger } from "@tsva/core/logger";
 import {
   formatDeactivationReason,
   type ActivationReason,
@@ -77,6 +78,31 @@ import {
 } from "@tsva/observability/activation-tracing";
 
 export type ActivationState = "creating" | "activating" | "valid" | "deactivating" | "invalid";
+
+/**
+ * Turn-scheduler and deactivation knobs (Orleans `SchedulingOptions` +
+ * `CollectionOptions.DeactivationTimeout`). Every field is opt-in
+ * (`undefined` keeps prior unbounded/untimed behaviour) so a caller that
+ * builds an `ActivationData` directly — every test in this package does —
+ * keeps working unchanged; the silo builder is what actually turns these on
+ * with Orleans-like defaults for a hosted silo.
+ */
+export interface ActivationOptions {
+  /** Orleans `WorkItemGroup`: warn once the turn queue reaches this length. */
+  maxEnqueuedRequestsSoftLimit?: number;
+  /** Orleans `WorkItemGroup`: reject a newly scheduled turn once the queue is at this length. */
+  maxEnqueuedRequestsHardLimit?: number;
+  /** Orleans `MaxRequestProcessingTime`: warn once a running turn exceeds this many ms. */
+  maxRequestProcessingTimeMs?: number;
+  /**
+   * Orleans `CollectionOptions.DeactivationTimeout`: force deactivation to
+   * proceed once `onDeactivate` has run this long, even if the hook itself
+   * hasn't settled — see {@link ActivationData.awaitWithDeactivationTimeout}.
+   */
+  deactivationTimeoutMs?: number;
+  /** Sink for soft-limit/stuck-turn/deactivation-timeout warnings; defaults to discarding them. */
+  logger?: Logger;
+}
 
 /** Split a `namespace/key` string; with no slash the whole string is the namespace and key is empty. */
 function parseNamespaceKey(key: string): [namespace: string, key: string] {
@@ -187,19 +213,40 @@ export class ActivationData implements GrainContext {
    */
   private extensionFactories?: Map<number, (activation: ActivationData) => object>;
 
+  private readonly deactivationTimeoutMs: number | undefined;
+  private readonly logger: Logger;
+
   constructor(
     id: GrainId,
     private readonly time: TimeProvider,
     private readonly collectionAgeMs: number,
     reentrant: boolean,
     activationId: ActivationId = newActivationId(),
+    options: ActivationOptions = {},
   ) {
     this.id = id;
     this.activationId = activationId;
+    this.deactivationTimeoutMs = options.deactivationTimeoutMs;
+    this.logger = options.logger ?? noopLogger;
     // Even a fully reentrant grain must finish activating (running state
     // binding, then `onActivate`) before any request is dispatched — Orleans
     // never interleaves a request with `OnActivateAsync`.
-    this.scheduler = new TurnScheduler({ reentrant, barrierFirstTurn: true });
+    this.scheduler = new TurnScheduler({
+      reentrant,
+      barrierFirstTurn: true,
+      time,
+      logger: this.logger,
+      grainId: id.toString(),
+      ...(options.maxEnqueuedRequestsSoftLimit !== undefined
+        ? { maxEnqueuedRequestsSoftLimit: options.maxEnqueuedRequestsSoftLimit }
+        : {}),
+      ...(options.maxEnqueuedRequestsHardLimit !== undefined
+        ? { maxEnqueuedRequestsHardLimit: options.maxEnqueuedRequestsHardLimit }
+        : {}),
+      ...(options.maxRequestProcessingTimeMs !== undefined
+        ? { maxRequestProcessingTimeMs: options.maxRequestProcessingTimeMs }
+        : {}),
+    });
     this.lastActiveMs = time.now();
   }
 
@@ -445,7 +492,7 @@ export class ActivationData implements GrainContext {
     this.state = "deactivating";
     for (const timer of this.timers) timer.dispose();
     this.timers.clear();
-    await this.scheduler
+    const hookPromise = this.scheduler
       .schedule({
         options: {},
         run: () =>
@@ -461,6 +508,41 @@ export class ActivationData implements GrainContext {
           ),
       })
       .catch(() => undefined);
+    await this.awaitWithDeactivationTimeout(hookPromise);
+  }
+
+  /**
+   * Await `hookPromise` (the scheduled `onDeactivate` turn), but never longer
+   * than `deactivationTimeoutMs` (Orleans `CollectionOptions.DeactivationTimeout`,
+   * enforced upstream via `cts.CancelAfter(DeactivationTimeout)`). JS has no
+   * way to abort an in-flight `async` function without a cooperating
+   * cancellation signal, so a hung hook keeps running in the background after
+   * this returns — but the caller (`deactivate()`) proceeds to
+   * force-invalidate the activation (directory unregister, cleanup) instead
+   * of blocking forever on it. A no-op (waits indefinitely) when no timeout
+   * is configured, matching the pre-existing behaviour.
+   */
+  private async awaitWithDeactivationTimeout(hookPromise: Promise<void>): Promise<void> {
+    if (this.deactivationTimeoutMs === undefined) {
+      await hookPromise;
+      return;
+    }
+    const timeoutMs = this.deactivationTimeoutMs;
+    let timedOut = false;
+    const timeout = new Promise<void>((resolve) => {
+      const handle = this.time.setTimer(() => {
+        timedOut = true;
+        resolve();
+      }, timeoutMs);
+      void hookPromise.finally(() => this.time.clearTimer(handle));
+    });
+    await Promise.race([hookPromise, timeout]);
+    if (timedOut) {
+      this.logger.warn("onDeactivate exceeded DeactivationTimeout; forcing deactivation", {
+        grainId: this.id.toString(),
+        deactivationTimeoutMs: timeoutMs,
+      });
+    }
   }
 
   /**

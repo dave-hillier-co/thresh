@@ -22,6 +22,29 @@ class CounterGrain extends Grain implements ICounter {
   }
 }
 
+interface IBlocker extends GrainWithStringKey {
+  block(): Promise<string>;
+}
+const IBlocker = defineGrainInterface<IBlocker>("IBlocker.hosting");
+
+/** Module-scoped so the test can hold a call open until it decides to release it. */
+let blockerGate: { resolve: () => void; promise: Promise<void> };
+function resetBlockerGate(): void {
+  let resolve!: () => void;
+  const promise = new Promise<void>((res) => {
+    resolve = res;
+  });
+  blockerGate = { resolve, promise };
+}
+
+@grain()
+class BlockerGrain extends Grain implements IBlocker {
+  async block(): Promise<string> {
+    await blockerGate.promise;
+    return "done";
+  }
+}
+
 const local = new SiloAddress("silo-0", "uid-0", "silo-0:11111");
 
 function buildHost() {
@@ -61,5 +84,36 @@ describe("createSilo / SiloHost", () => {
     expect(() =>
       createSilo({ clusterId: "c1", local }).useStaticMembership([local]).build(),
     ).toThrow(/transport/);
+  });
+});
+
+describe("createSilo scheduler back-pressure (Orleans SchedulingOptions parity)", () => {
+  it("rejects a call once a configured maxEnqueuedRequestsHardLimit is exceeded", async () => {
+    resetBlockerGate();
+    const host = createSilo({
+      clusterId: "c1",
+      local,
+      scheduling: { maxEnqueuedRequestsHardLimit: 1 },
+    })
+      .useStaticMembership([local])
+      .useInProcessTransport(new InProcessNetwork())
+      .useMessagePackSerialization()
+      .registerGrain(BlockerGrain, { interfaces: [IBlocker] })
+      .build();
+    await host.start();
+    try {
+      const blocker = host.getGrain(IBlocker, "x");
+      // Fire several concurrent calls at the same activation: with the queue
+      // capped at 1, at least one must be rejected as over the hard limit
+      // rather than growing the queue without bound; whichever are admitted
+      // still complete once the gate opens.
+      const calls = Array.from({ length: 5 }, () => blocker.block());
+      blockerGate.resolve();
+      const results = await Promise.allSettled(calls);
+      expect(results.some((r) => r.status === "rejected")).toBe(true);
+      expect(results.some((r) => r.status === "fulfilled" && r.value === "done")).toBe(true);
+    } finally {
+      await host.stop();
+    }
   });
 });

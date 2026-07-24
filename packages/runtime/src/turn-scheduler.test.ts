@@ -1,6 +1,24 @@
 import { describe, expect, it } from "vitest";
 import { GrainCallAbortedError } from "@tsva/core/errors";
 import { TurnScheduler } from "@tsva/runtime/turn-scheduler";
+import { LimitExceededException } from "@tsva/core/errors";
+import type { Logger, LogFields } from "@tsva/core/logger";
+import { FakeTimeProvider } from "@tsva/runtime/test-support/fake-time-provider";
+
+function recordingLogger(): { logger: Logger; warnings: Array<[string, LogFields | undefined]> } {
+  const warnings: Array<[string, LogFields | undefined]> = [];
+  return {
+    warnings,
+    logger: {
+      debug() {},
+      info() {},
+      warn(message, fields) {
+        warnings.push([message, fields]);
+      },
+      error() {},
+    },
+  };
+}
 
 function deferred<T = void>() {
   let resolve!: (value: T) => void;
@@ -288,6 +306,100 @@ describe("TurnScheduler", () => {
       await expect(
         sched.schedule({ options: {}, signal: controller.signal, run: async () => "never" }),
       ).rejects.toBeInstanceOf(GrainCallAbortedError);
+    });
+  });
+
+  describe("back-pressure (Orleans MaxEnqueuedRequestsSoftLimit/HardLimit)", () => {
+    it("admits turns under the hard limit without warning below the soft limit", async () => {
+      const { logger, warnings } = recordingLogger();
+      const sched = new TurnScheduler({
+        maxEnqueuedRequestsSoftLimit: 5,
+        maxEnqueuedRequestsHardLimit: 10,
+        logger,
+      });
+      const w = deferred();
+      void sched.schedule({ options: {}, run: () => w.promise }); // running, not queued
+      const p = sched.schedule({ options: {}, run: async () => "ok" });
+      await flush();
+      expect(warnings).toEqual([]);
+      w.resolve();
+      await expect(p).resolves.toBe("ok");
+    });
+
+    it("warns once the queue reaches the soft limit but still admits the turn", async () => {
+      const { logger, warnings } = recordingLogger();
+      const sched = new TurnScheduler({ maxEnqueuedRequestsSoftLimit: 1, logger });
+      const w = deferred();
+      void sched.schedule({ options: {}, run: () => w.promise }); // running
+      void sched.schedule({ options: {}, run: async () => undefined }); // queued: 0 >= soft(1)? no -> 1st queued admits w/o warn
+      const p = sched.schedule({ options: {}, run: async () => "third" }); // queue already has 1 >= soft(1): warn
+      await flush();
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]![0]).toContain("MaxEnqueuedRequestsSoftLimit");
+      w.resolve();
+      await expect(p).resolves.toBe("third");
+    });
+
+    it("rejects with LimitExceededException once the queue is at the hard limit", async () => {
+      const sched = new TurnScheduler({ maxEnqueuedRequestsHardLimit: 1 });
+      const w = deferred();
+      void sched.schedule({ options: {}, run: () => w.promise }); // running
+      void sched.schedule({ options: {}, run: async () => undefined }); // queued (queue.length 0 -> 1)
+      await expect(
+        sched.schedule({ options: {}, run: async () => undefined }),
+      ).rejects.toBeInstanceOf(LimitExceededException);
+      w.resolve();
+    });
+
+    it("LimitExceededException carries the limit name and values, mirroring Orleans", async () => {
+      const sched = new TurnScheduler({ maxEnqueuedRequestsHardLimit: 0 });
+      try {
+        await sched.schedule({ options: {}, run: async () => undefined });
+        expect.unreachable();
+      } catch (err) {
+        expect(err).toBeInstanceOf(LimitExceededException);
+        const e = err as LimitExceededException;
+        expect(e.limitName).toBe("MaxEnqueuedRequestsHardLimit");
+        expect(e.maxValue).toBe(0);
+      }
+    });
+  });
+
+  describe("stuck-turn detection (Orleans MaxRequestProcessingTime)", () => {
+    it("warns once a running turn exceeds the processing-time limit", async () => {
+      const time = new FakeTimeProvider();
+      const { logger, warnings } = recordingLogger();
+      const sched = new TurnScheduler({ maxRequestProcessingTimeMs: 1000, time, logger });
+      const w = deferred();
+      void sched.schedule({ options: {}, method: "slow", run: () => w.promise });
+      await flush();
+      expect(warnings).toEqual([]);
+      time.advance(1000);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]![0]).toContain("MaxRequestProcessingTime");
+      expect(warnings[0]![1]).toMatchObject({ method: "slow" });
+      w.resolve();
+    });
+
+    it("does not warn once the turn settles before the limit", async () => {
+      const time = new FakeTimeProvider();
+      const { logger, warnings } = recordingLogger();
+      const sched = new TurnScheduler({ maxRequestProcessingTimeMs: 1000, time, logger });
+      await sched.schedule({ options: {}, run: async () => undefined });
+      await flush();
+      time.advance(1000);
+      expect(warnings).toEqual([]);
+    });
+
+    it("does nothing when no limit is configured", async () => {
+      const time = new FakeTimeProvider();
+      const { logger, warnings } = recordingLogger();
+      const sched = new TurnScheduler({ time, logger });
+      const w = deferred();
+      void sched.schedule({ options: {}, run: () => w.promise });
+      time.advance(1_000_000);
+      expect(warnings).toEqual([]);
+      w.resolve();
     });
   });
 

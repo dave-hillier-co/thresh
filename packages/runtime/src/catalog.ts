@@ -12,7 +12,7 @@ import type { ReminderRegistry } from "@tsva/core/reminder";
 import type { DurableJobScheduler } from "@tsva/core/durable-job";
 import type { SiloAddress } from "@tsva/core/silo-address";
 import type { StreamProvider } from "@tsva/core/stream";
-import { ActivationData } from "@tsva/runtime/activation";
+import { ActivationData, type ActivationOptions } from "@tsva/runtime/activation";
 import {
   cancellationExtensionFactory,
   ICancellationSourcesExtension,
@@ -110,6 +110,15 @@ export interface CatalogOptions {
    * behaviour), it just can't cascade past this silo.
    */
   cancellationCanceller?: (target: GrainId, tokenId: string) => Promise<void>;
+  /**
+   * Turn-scheduler back-pressure/watchdog and deactivation-timeout knobs
+   * (Orleans `SchedulingOptions` + `CollectionOptions.DeactivationTimeout`),
+   * applied to every activation this catalog creates. Unset (the default)
+   * keeps every activation's queue unbounded and its deactivation untimed —
+   * the silo builder is what actually turns these on with Orleans-like
+   * defaults for a hosted silo.
+   */
+  activationOptions?: ActivationOptions;
 }
 
 /** Registry of live activations on this silo, keyed by grain id. */
@@ -414,6 +423,7 @@ export class Catalog {
       ageSeconds * 1000,
       reg.metadata.reentrant,
       activationId,
+      this.options.activationOptions ?? {},
     );
     activation.runtime = new GrainRuntimeImpl(this.options.factory, activation, {
       ...(this.options.reminderRegistry !== undefined

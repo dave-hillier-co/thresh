@@ -83,6 +83,25 @@ export class TransactionsDisabledError extends Error {
 }
 
 /**
+ * Raised when a per-activation admission limit configured on the turn
+ * scheduler is exceeded (Orleans `LimitExceededException`, thrown by
+ * `WorkItemGroup` when `SchedulingOptions.MaxEnqueuedRequestsHardLimit` is
+ * hit) — here, a turn arrives when the activation's queue is already at
+ * `TurnSchedulerOptions.maxEnqueuedRequestsHardLimit`. Transient: the caller
+ * should back off and retry, ideally once the activation has drained.
+ */
+export class LimitExceededException extends Error {
+  constructor(
+    readonly limitName: string,
+    readonly currentValue: number,
+    readonly maxValue: number,
+  ) {
+    super(`limit ${limitName} of ${maxValue} exceeded, current value ${currentValue}`);
+    this.name = "LimitExceededException";
+  }
+}
+
+/**
  * Raised when a gateway silo is currently overloaded (Orleans
  * `GatewayTooBusyException`): its `OverloadDetector` reports the silo's CPU
  * usage above `LoadSheddingOptions.cpuThreshold`, so it refuses to accept a
