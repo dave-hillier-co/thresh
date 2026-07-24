@@ -61,10 +61,11 @@ export class RedisJournalStorage implements JournalStorage {
     this.keyPrefix = options.keyPrefix ?? "tsva";
   }
 
-  async read(logName: string, grainId: GrainId): Promise<JournalSegment> {
-    const versionRaw = await this.client.get(this.versionKey(logName, grainId));
+  async read(logName: string, grainId: GrainId, signal?: AbortSignal): Promise<JournalSegment> {
+    const client = this.clientFor(signal);
+    const versionRaw = await client.get(this.versionKey(logName, grainId));
     if (versionRaw === null) return { entries: [], version: undefined };
-    const entries = await this.client.lRange(this.entriesKey(logName, grainId), 0, -1);
+    const entries = await client.lRange(this.entriesKey(logName, grainId), 0, -1);
     return { entries, version: Number(versionRaw) };
   }
 
@@ -73,8 +74,9 @@ export class RedisJournalStorage implements JournalStorage {
     grainId: GrainId,
     entries: readonly JournalEntry[],
     expectedVersion: number | undefined,
+    signal?: AbortSignal,
   ): Promise<number> {
-    return this.eval(APPEND, logName, grainId, entries, expectedVersion);
+    return this.eval(APPEND, logName, grainId, entries, expectedVersion, signal);
   }
 
   async replace(
@@ -82,12 +84,21 @@ export class RedisJournalStorage implements JournalStorage {
     grainId: GrainId,
     entries: readonly JournalEntry[],
     expectedVersion: number | undefined,
+    signal?: AbortSignal,
   ): Promise<number> {
-    return this.eval(REPLACE, logName, grainId, entries, expectedVersion);
+    return this.eval(REPLACE, logName, grainId, entries, expectedVersion, signal);
   }
 
-  async clear(logName: string, grainId: GrainId): Promise<void> {
-    await this.client.del([this.entriesKey(logName, grainId), this.versionKey(logName, grainId)]);
+  async clear(logName: string, grainId: GrainId, signal?: AbortSignal): Promise<void> {
+    await this.clientFor(signal).del([
+      this.entriesKey(logName, grainId),
+      this.versionKey(logName, grainId),
+    ]);
+  }
+
+  /** The client to issue this call on: scoped to `signal` (node-redis's own abort hook) when given. */
+  private clientFor(signal: AbortSignal | undefined): RedisClient {
+    return signal === undefined ? this.client : this.client.withAbortSignal(signal);
   }
 
   private async eval(
@@ -96,9 +107,10 @@ export class RedisJournalStorage implements JournalStorage {
     grainId: GrainId,
     entries: readonly JournalEntry[],
     expectedVersion: number | undefined,
+    signal: AbortSignal | undefined,
   ): Promise<number> {
     try {
-      const result = await this.client.eval(script, {
+      const result = await this.clientFor(signal).eval(script, {
         keys: [this.entriesKey(logName, grainId), this.versionKey(logName, grainId)],
         arguments: [expectedVersion === undefined ? "" : String(expectedVersion), ...entries],
       });

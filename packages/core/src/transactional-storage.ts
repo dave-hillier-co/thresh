@@ -45,8 +45,19 @@ export interface TransactionalStorageLoadResponse<T> {
   pendingStates: PendingTransactionState<T>[];
 }
 
+/**
+ * `signal`, when given, is an ambient cancellation/deadline signal for a call
+ * (see `GrainStorage`'s doc — same contract). A provider honours it on a
+ * best-effort basis against its own network calls; a provider that cannot
+ * cancel mid-flight may instead only abandon the *wait* for an already-sent
+ * call (`@tsva/core/abort`'s `raceSignal`), or ignore it entirely.
+ */
 export interface TransactionalStateStorage<T = unknown> {
-  load(stateName: string, grainId: GrainId): Promise<TransactionalStorageLoadResponse<T>>;
+  load(
+    stateName: string,
+    grainId: GrainId,
+    signal?: AbortSignal,
+  ): Promise<TransactionalStorageLoadResponse<T>>;
 
   /**
    * Atomically: prepare the given pending states; if `commitUpTo` is set, commit
@@ -62,5 +73,6 @@ export interface TransactionalStateStorage<T = unknown> {
     statesToPrepare: ReadonlyArray<PendingTransactionState<T>>,
     commitUpTo: number | undefined,
     abortAfter: number | undefined,
+    signal?: AbortSignal,
   ): Promise<string>;
 }

@@ -124,6 +124,49 @@ describe.skipIf(admin === undefined)("Redis transactional storage", () => {
     );
   });
 
+  // GAP-CANCELLATION-STORAGE (issue #18): an ambient signal threads through to
+  // node-redis's own `withAbortSignal`, so an already-aborted signal cancels
+  // the call for real rather than merely abandoning the wait for it.
+  describe("ambient AbortSignal (issue #18)", () => {
+    it("rejects load() when the signal is already aborted", async () => {
+      const storage = new RedisTransactionalStorage(admin!, { keyPrefix });
+      const grainId = new GrainId("Acct" as GrainType, randomUUID());
+      const controller = new AbortController();
+      controller.abort();
+      await expect(storage.load("s", grainId, controller.signal)).rejects.toBeDefined();
+    });
+
+    it("rejects store() when the signal is already aborted", async () => {
+      const storage = new RedisTransactionalStorage(admin!, { keyPrefix });
+      const grainId = new GrainId("Acct" as GrainType, randomUUID());
+      const meta = { timeStamp: 1, commitRecords: {} };
+      const controller = new AbortController();
+      controller.abort();
+      await expect(
+        storage.store("s", grainId, undefined, meta, [], undefined, undefined, controller.signal),
+      ).rejects.toBeDefined();
+    });
+
+    it("still succeeds when the signal never fires", async () => {
+      const storage = new RedisTransactionalStorage(admin!, { keyPrefix });
+      const grainId = new GrainId("Acct" as GrainType, randomUUID());
+      const meta = { timeStamp: 1, commitRecords: {} };
+      const controller = new AbortController();
+      const etag = await storage.store(
+        "s",
+        grainId,
+        undefined,
+        meta,
+        [],
+        undefined,
+        undefined,
+        controller.signal,
+      );
+      const loaded = await storage.load("s", grainId, controller.signal);
+      expect(loaded.etag).toBe(etag);
+    });
+  });
+
   it("keeps committed transactional state across a silo restart via Redis", async () => {
     const first = buildSilo();
     await first.start();

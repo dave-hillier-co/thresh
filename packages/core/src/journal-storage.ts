@@ -19,10 +19,16 @@ export interface JournalSegment {
  * (`undefined` = "no log yet"), carrying `GrainStorage`'s etag optimistic-
  * concurrency contract over to a log. A losing writer raises
  * `InconsistentStateError` (see `@tsva/core/errors`).
+ *
+ * `signal`, when given, is an ambient cancellation/deadline signal for a call
+ * (see `GrainStorage`'s doc — same contract). A provider honours it on a
+ * best-effort basis against its own network calls; a provider that cannot
+ * cancel mid-flight may instead only abandon the *wait* for an already-sent
+ * call (`@tsva/core/abort`'s `raceSignal`), or ignore it entirely.
  */
 export interface JournalStorage {
   /** Read the whole log for `(logName, grainId)`. */
-  read(logName: string, grainId: GrainId): Promise<JournalSegment>;
+  read(logName: string, grainId: GrainId, signal?: AbortSignal): Promise<JournalSegment>;
 
   /**
    * Append `entries` to the end of the log iff the stored version equals
@@ -34,6 +40,7 @@ export interface JournalStorage {
     grainId: GrainId,
     entries: readonly JournalEntry[],
     expectedVersion: number | undefined,
+    signal?: AbortSignal,
   ): Promise<number>;
 
   /**
@@ -46,8 +53,9 @@ export interface JournalStorage {
     grainId: GrainId,
     entries: readonly JournalEntry[],
     expectedVersion: number | undefined,
+    signal?: AbortSignal,
   ): Promise<number>;
 
   /** Delete the log entirely. */
-  clear(logName: string, grainId: GrainId): Promise<void>;
+  clear(logName: string, grainId: GrainId, signal?: AbortSignal): Promise<void>;
 }

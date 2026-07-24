@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { combineSignals } from "@tsva/core/abort";
 import type { GrainId } from "@tsva/core/grain-id";
+import { Guid } from "@tsva/core/guid";
 import { RequestContext, requestContextStore } from "@tsva/core/request-context";
 import type { TransactionInfo } from "@tsva/core/transaction-info";
 
@@ -123,4 +124,51 @@ export function currentSignal(): AbortSignal | undefined {
 /** The current turn's ambient deadline (epoch ms), or `undefined` if none is in scope. */
 export function currentDeadline(): number | undefined {
   return invocationContext.getStore()?.deadline;
+}
+
+/** Options for {@link withCallOptions}: a caller-chosen deadline and/or cancellation signal. */
+export interface CallOptions {
+  /**
+   * A fresh deadline, in ms from now, for every grain call made inside `fn` —
+   * overriding any ambient deadline already in scope (an explicit per-call
+   * override always wins, unlike `InvokeCallOptions.deadlineMs`'s
+   * fill-in-if-absent default). Converted to an absolute epoch-ms deadline
+   * with the real wall clock, same as `InvokeCallOptions.deadlineMs`, so it
+   * survives a cross-silo forward.
+   */
+  deadlineMs?: number;
+  /** An additional cancellation signal, composed with any ambient one already in scope. */
+  signal?: AbortSignal;
+}
+
+/**
+ * Run `fn` with a caller-chosen deadline/signal in ambient scope for every
+ * grain call it makes — the "friendlier per-call deadline API" `GrainFactory`
+ * itself has no room for (it only propagates whatever `InvocationContext`
+ * already carries; it never lets a caller set a NEW one). Usable both inside
+ * a grain turn (nests under whatever ambient deadline/signal is already
+ * running — `deadlineMs` overrides it, `signal` composes with it) and from
+ * top-level (non-grain) client code, which otherwise has no ambient
+ * `InvocationContext` at all.
+ *
+ * Because `GrainFactory`'s proxy already reads `deadline`/`signal` off this
+ * same ambient store (see `grain-factory.ts`) and stamps every outgoing
+ * `InvocationRequest`/`InvokeCallOptions` from it, and a callee's own turn
+ * re-derives its ambient context from those (`ActivationData.invoke`), the
+ * deadline/signal set here automatically rides the WHOLE downstream call
+ * chain — no `grain-factory.ts` changes needed.
+ */
+export function withCallOptions<T>(options: CallOptions, fn: () => Promise<T>): Promise<T> {
+  const current = invocationContext.getStore();
+  const next: InvocationContext = {
+    senderId: current?.senderId,
+    ownerId: current?.ownerId,
+    reentrancyId: current?.reentrancyId ?? Guid.newGuid().toString(),
+    transaction: current?.transaction,
+    deadline:
+      options.deadlineMs !== undefined ? Date.now() + options.deadlineMs : current?.deadline,
+    signal: combineSignals([current?.signal, options.signal]),
+    ...(current?.tokenSignals !== undefined ? { tokenSignals: current.tokenSignals } : {}),
+  };
+  return invocationContext.run(next, fn);
 }

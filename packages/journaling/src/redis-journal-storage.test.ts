@@ -96,6 +96,32 @@ describe.skipIf(client === undefined)("RedisJournalStorage", () => {
     expect(segment.version).toBeUndefined();
   });
 
+  // GAP-CANCELLATION-STORAGE (issue #18): an ambient signal threads through to
+  // node-redis's own `withAbortSignal`, so an already-aborted signal cancels
+  // the call for real rather than merely abandoning the wait for it.
+  describe("ambient AbortSignal (issue #18)", () => {
+    it("rejects read() when the signal is already aborted", async () => {
+      const controller = new AbortController();
+      controller.abort();
+      await expect(makeStorage().read("journal", id, controller.signal)).rejects.toBeDefined();
+    });
+
+    it("rejects append() when the signal is already aborted", async () => {
+      const controller = new AbortController();
+      controller.abort();
+      await expect(
+        makeStorage().append("journal", id, ["a"], undefined, controller.signal),
+      ).rejects.toBeDefined();
+    });
+
+    it("still succeeds when the signal never fires", async () => {
+      const controller = new AbortController();
+      await makeStorage().append("journal", id, ["a"], undefined, controller.signal);
+      const segment = await makeStorage().read("journal", id, controller.signal);
+      expect(segment.entries).toEqual(["a"]);
+    });
+  });
+
   it("round-trips a full manager + structure through Redis", async () => {
     const a = new StateMachineManagerImpl("journal", id, makeStorage());
     const av = new DurableValueImpl<number>("v", a);
