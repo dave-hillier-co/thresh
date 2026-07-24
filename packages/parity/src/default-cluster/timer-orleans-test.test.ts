@@ -168,12 +168,10 @@ describe("DefaultCluster.Tests.TimerTests.TimerOrleansTest", () => {
 
   // Ports the due-time/period range-validation portion of upstream's
   // GrainTimer_Change (invalid values now throw, matching Orleans'
-  // TimerQueueTimer.ValidateArguments — see packages/runtime/src/grain-timer-impl.ts).
-  // Upstream's `grain2`/`grain3` sections (callback-initiated Change()/dispose() via
-  // the `operationType` argument) are not ported: `TimerCallGrain.startTimer`'s
-  // `operationType` is accepted for wire fidelity but not interpreted (see
-  // packages/parity/src/grains/impl/timer-call-grain.ts), which is a separate,
-  // still-open limitation unrelated to range validation.
+  // TimerQueueTimer.ValidateArguments — see packages/runtime/src/grain-timer-impl.ts),
+  // plus upstream's `grain2`/`grain3` sections: the timer callback itself calling
+  // Change()/dispose() via the `operationType` argument (see
+  // packages/parity/src/grains/impl/timer-call-grain.ts).
   orleansTest("DefaultCluster.Tests.TimerTests.TimerOrleansTest.GrainTimer_Change", async () => {
     const testName = "GrainTimer_Change";
     const delay: Duration = { seconds: 5 };
@@ -209,6 +207,25 @@ describe("DefaultCluster.Tests.TimerTests.TimerOrleansTest", () => {
     expect(await grain.getException()).toBeNull();
 
     await grain.stopTimer(testName);
+
+    // grain2: the timer's own callback calls `timer.change()` (operationType
+    // "update_period"), pushing the next fire far out — the tick count should
+    // stay at 1 for the remainder of `wait`.
+    const grain2 = cluster.getGrain(ITimerCallGrain, randomIntegerKey());
+    await grain2.startTimer(testName, delay, "update_period");
+    time.advance(durationToMs(delay) * 2);
+    await flush();
+    expect(await grain2.getException()).toBeNull();
+    expect(await grain2.getTickCount()).toBe(1);
+
+    // grain3: the timer's own callback disposes it (operationType
+    // "dispose_timer") — it should tick exactly once and never again.
+    const grain3 = cluster.getGrain(ITimerCallGrain, randomIntegerKey());
+    await grain3.startTimer(testName, delay, "dispose_timer");
+    time.advance(durationToMs(delay) * 4);
+    await flush();
+    expect(await grain3.getException()).toBeNull();
+    expect(await grain3.getTickCount()).toBe(1);
   });
 
   orleansTest.excluded(

@@ -1,10 +1,5 @@
 // Ported from dotnet/orleans test/Grains/TestInternalGrains/TimerGrain.cs @ v10.1.0 (MIT)
 // (ITimerCallGrain / TimerCallGrain section).
-// `operationType` is accepted for interface fidelity but not interpreted: the only
-// ported test that varies it (GrainTimer_Change, exercising timer.Change() validation
-// and callback-initiated Change/dispose) is GAP-TIMER-VALIDATION — this framework's
-// GrainTimer.change() performs no due/period range validation, so that test cannot be
-// faithfully ported yet.
 import type { Duration } from "@tsva/core/duration";
 import { grain } from "@tsva/core/decorators";
 import { Grain } from "@tsva/core/grain";
@@ -27,8 +22,8 @@ export class TimerCallGrain extends Grain implements ITimerCallGrain {
     return this.lastException;
   }
 
-  async startTimer(name: string, dueTime: Duration): Promise<void> {
-    this.register(name, dueTime, undefined);
+  async startTimer(name: string, dueTime: Duration, operationType?: string): Promise<void> {
+    this.register(name, dueTime, undefined, operationType);
   }
 
   async restartTimer(name: string, dueTime: Duration, period?: Duration): Promise<void> {
@@ -58,20 +53,36 @@ export class TimerCallGrain extends Grain implements ITimerCallGrain {
     });
   }
 
-  private register(name: string, dueTime: Duration, period: Duration | undefined): void {
-    const timer = this.runtime.registerTimer(
+  private register(
+    name: string,
+    dueTime: Duration,
+    period: Duration | undefined,
+    operationType?: string,
+  ): void {
+    // `timer` is referenced by its own callback (update_period/dispose_timer
+    // below); safe despite the TDZ because the callback only runs on a later
+    // turn, once `registerTimer` has returned and `timer` is initialized.
+    const timer: GrainTimer = this.runtime.registerTimer(
       async () => {
         try {
           this.tickCount++;
+          if (operationType === "update_period") {
+            timer.change(period100, period100);
+          } else if (operationType === "dispose_timer") {
+            timer.dispose();
+            this.timers.delete(name);
+          }
         } catch (error) {
           this.lastException = error instanceof Error ? error.message : String(error);
         }
       },
       dueTime,
       period,
+      { interleave: true },
     );
     this.timers.set(name, timer);
   }
 }
 
 const period0: Duration = { ms: 0 };
+const period100: Duration = { seconds: 100 };
