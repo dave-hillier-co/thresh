@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { grain } from "@tsva/core/decorators";
 import { Grain } from "@tsva/core/grain";
 import type { GrainCancellationToken } from "@tsva/core/grain-cancellation-token";
@@ -147,6 +147,53 @@ describe("external client", () => {
     expect(delays[1]).toBe(200);
     expect(delays[2]).toBe(400);
     for (const d of delays) expect(d).toBeLessThanOrEqual(2000);
+  });
+
+  it("bounds total wall-clock time across gateway failover to callTimeoutMs (per-attempt deadline)", async () => {
+    vi.useFakeTimers();
+    try {
+      const network = new InProcessNetwork();
+      // Gateways that accept a connection but never reply. Each attempt is
+      // "generous" — it would otherwise be granted the FULL callTimeoutMs
+      // before failing over — so without a cumulative deadline, three
+      // failovers would take roughly 3x callTimeoutMs.
+      const blackHoles = [
+        new SiloAddress("bh-1", "uid-b1", "bh-1:1"),
+        new SiloAddress("bh-2", "uid-b2", "bh-2:2"),
+        new SiloAddress("bh-3", "uid-b3", "bh-3:3"),
+      ];
+      for (const addr of blackHoles) {
+        await new InProcessTransport(network, CLUSTER).listen(addr, () => undefined);
+      }
+      const callTimeoutMs = 300;
+      const client = createClient({
+        clusterId: CLUSTER,
+        local: clientAddr,
+        transport: new InProcessTransport(network, CLUSTER),
+        gateways: staticGatewayProvider(blackHoles),
+        callTimeoutMs,
+      }).registerGrain(CounterGrain, { interfaces: [ICounter] });
+      await client.connect();
+
+      const start = Date.now();
+      const call = client.getGrain(ICounter, "x").increment(1);
+      const assertion = expect(call).rejects.toThrow(/timed out.*attempt/is);
+      // Drain every timer the call schedules (per-attempt correlation
+      // timeouts and backoff delays) until it settles. The first iteration
+      // runs unconditionally: nothing is scheduled yet until the pending
+      // microtasks that kick off the first attempt have flushed.
+      for (let i = 0; i < 20; i++) {
+        await vi.advanceTimersByTimeAsync(callTimeoutMs);
+        if (vi.getTimerCount() === 0) break;
+      }
+      await assertion;
+      // Bounded by the configured budget, not by (attempts * callTimeoutMs) —
+      // a small allowance covers the connect roundtrip and backoff steps
+      // between attempts.
+      expect(Date.now() - start).toBeLessThanOrEqual(callTimeoutMs + 100);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("cancels a grain call via a client-created GrainCancellationTokenSource", async () => {

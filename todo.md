@@ -126,8 +126,6 @@ shows per-tag counts). One-line definitions live on the `GapTag` union. Grouped 
       so hosts can configure the minimum without constructing `LocalReminderService` by hand.
 - [ ] **Directory — apply silo-liveness gate to `register`** (Orleans `RegisterCore` treats an
       existing entry whose silo is dead as overwritable).
-- [ ] **Client — per-attempt deadline** so the cumulative `callTimeoutMs` accounts for time spent
-      in gateway-failover backoff.
 - [ ] **Durable jobs — in-grain `RunId` dedup** on the delivery path
       (`cluster-node.deliverDurableJob`) mirroring Orleans
       `DurableJobReceiverExtension._runningJobs`, so concurrent re-deliveries of an in-flight RunId

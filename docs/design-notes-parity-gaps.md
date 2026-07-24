@@ -11,11 +11,11 @@ Read [`deviations.md`](deviations.md) for what stays Orleans-faithful and what i
 
 ## 1. Cancellation tokens and per-call deadlines
 
-**Problem.** A grain call cannot be cancelled. A hung downstream blocks the calling turn forever; `onDeactivate` cannot be aborted; graceful drain has no upper bound on time-to-quiesce. The client now backs off between failed gateways, but the cumulative `callTimeoutMs` still covers everything — backoff eats the caller's budget.
+**Problem.** A grain call cannot be cancelled. A hung downstream blocks the calling turn forever; `onDeactivate` cannot be aborted; graceful drain has no upper bound on time-to-quiesce. `@tsva/client`'s `callTimeoutMs` is now a cumulative wall-clock budget across gateway failover — each retry attempt (and the backoff between attempts) draws down the same budget rather than each getting a fresh one — but nothing downstream of a single attempt (the grain's own turn, `onDeactivate`) can be aborted mid-flight.
 
 **Orleans.** Threads `CancellationToken` through the call chain; deactivation uses `cts.CancelAfter(DeactivationTimeout)`; the chain-reentrant grain context exposes `CancelToken` so sub-calls of a cancelled parent abort. `GrainCancellationToken` is a system-target backed by a sourceToken graph.
 
-**TS today.** No `CancellationToken` analogue. `AbortSignal` is the natural Node primitive but is not threaded anywhere. Per-attempt deadline plumbing is also missing in `@tsva/client`.
+**TS today.** No `CancellationToken` analogue. `AbortSignal` is the natural Node primitive but is not threaded anywhere.
 
 **Options.**
 - **(A) Pervasive `AbortSignal` parameter.** Every grain method gets an optional trailing `AbortSignal`. Idiomatic Node, but breaks the "grain method signature = interface" contract because callers can't see the signal in the interface declaration unless they add it manually.
