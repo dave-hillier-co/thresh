@@ -115,6 +115,23 @@ export class GrainTaskCanceledError extends Error {
 }
 
 /**
+ * Raised when a call's ambient `AbortSignal`/deadline (see
+ * `@tsva/runtime/dispatcher`'s `InvokeCallOptions` and `InvocationRequest
+ * .deadline`) fires before the call's turn was ever admitted to run. Orleans
+ * has no analogue — this is JS-only cooperative cancellation (see
+ * `docs/deviations.md`). Once a turn has actually started it always runs to
+ * completion (no thread interruption to preempt it with); this error only
+ * preempts a still-queued turn (`TurnScheduler`) or abandons a wait on a
+ * storage-provider call (`@tsva/core/abort`'s `raceSignal`).
+ */
+export class GrainCallAbortedError extends Error {
+  constructor(message = "the call was aborted before it completed") {
+    super(message);
+    this.name = "GrainCallAbortedError";
+  }
+}
+
+/**
  * Raised when a transaction is aborted by the concurrency-control or commit
  * protocol — for example a younger transaction "dies" under wait-die when it
  * conflicts with an older holder, or a participant fails to prepare.

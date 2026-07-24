@@ -8,7 +8,8 @@ export interface PersistentState<TState> {
   readonly etag: string | undefined;
   readonly exists: boolean;
 
-  read(): Promise<void>;
-  write(): Promise<void>;
-  clear(): Promise<void>;
+  /** `signal`, when given, is threaded to the backing `GrainStorage` call (see its doc). */
+  read(signal?: AbortSignal): Promise<void>;
+  write(signal?: AbortSignal): Promise<void>;
+  clear(signal?: AbortSignal): Promise<void>;
 }

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { GrainCallAbortedError } from "@tsva/core/errors";
 import { TurnScheduler } from "@tsva/runtime/turn-scheduler";
 
 function deferred<T = void>() {
@@ -216,6 +217,78 @@ describe("TurnScheduler", () => {
     activation.resolve();
     await flush();
     expect(log).toEqual(["activate:start", "activate:end", "call:start"]);
+  });
+
+  describe("ambient cancellation (turn.signal)", () => {
+    it("rejects a still-queued turn with GrainCallAbortedError once its signal fires, without running it", async () => {
+      const sched = new TurnScheduler();
+      const log: string[] = [];
+      const w = deferred();
+      const controller = new AbortController();
+      void sched.schedule({
+        options: {},
+        run: async () => {
+          log.push("w:start");
+          await w.promise;
+        },
+      });
+      const pQueued = sched.schedule({
+        options: {},
+        signal: controller.signal,
+        run: async () => {
+          log.push("queued:start"); // must never run
+        },
+      });
+      await flush();
+      expect(log).toEqual(["w:start"]);
+
+      controller.abort();
+      w.resolve();
+      await expect(pQueued).rejects.toBeInstanceOf(GrainCallAbortedError);
+      await flush();
+      expect(log).toEqual(["w:start"]); // the aborted turn never ran
+    });
+
+    it("runs a turn whose signal never fires exactly as before", async () => {
+      const sched = new TurnScheduler();
+      const controller = new AbortController();
+      await expect(
+        sched.schedule({ options: {}, signal: controller.signal, run: async () => 7 }),
+      ).resolves.toBe(7);
+    });
+
+    it("still runs to completion a turn that already started when its signal later fires", async () => {
+      const sched = new TurnScheduler();
+      const log: string[] = [];
+      const controller = new AbortController();
+      const w = deferred();
+      const running = sched.schedule({
+        options: {},
+        signal: controller.signal,
+        run: async () => {
+          log.push("start");
+          await w.promise;
+          log.push("end");
+          return "done";
+        },
+      });
+      await flush();
+      expect(log).toEqual(["start"]);
+
+      controller.abort(); // fires only after this turn is already running
+      w.resolve();
+      await expect(running).resolves.toBe("done");
+      expect(log).toEqual(["start", "end"]);
+    });
+
+    it("admits a turn scheduled with an already-aborted signal straight to rejection", async () => {
+      const sched = new TurnScheduler();
+      const controller = new AbortController();
+      controller.abort();
+      await expect(
+        sched.schedule({ options: {}, signal: controller.signal, run: async () => "never" }),
+      ).rejects.toBeInstanceOf(GrainCallAbortedError);
+    });
   });
 
   describe("mayInterleave predicate (Orleans' [MayInterleave])", () => {

@@ -13,6 +13,7 @@ import type { ActivationData } from "@tsva/runtime/activation";
 import { ActivationStreamProvider } from "@tsva/runtime/activation-stream-provider";
 import type { GrainFactory } from "@tsva/runtime/grain-factory";
 import {
+  currentSignal,
   currentTransaction,
   requestContext,
   requireTransaction,
@@ -152,6 +153,10 @@ export class GrainRuntimeImpl implements GrainRuntime {
 
   setRequestContext(key: string, value: string): void {
     requestContext.set(key, value);
+  }
+
+  getCancellationSignal(): AbortSignal | undefined {
+    return currentSignal();
   }
 
   getTransactionId(): string | undefined {

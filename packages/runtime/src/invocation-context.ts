@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { combineSignals } from "@tsva/core/abort";
 import type { GrainId } from "@tsva/core/grain-id";
 import { RequestContext, requestContextStore } from "@tsva/core/request-context";
 import type { TransactionInfo } from "@tsva/core/transaction-info";
@@ -35,6 +36,37 @@ export interface InvocationContext {
   reentrancyId: string;
   /** The transaction this turn runs inside, if any. */
   transaction?: TransactionInfo | undefined;
+  /**
+   * Absolute deadline (epoch ms) ambient for this call chain, if any —
+   * propagated onto an outgoing request the same way `transaction` is (see
+   * `grain-factory.ts`), so it rides every downstream hop until something
+   * sets a fresh one. Orleans has no analogue (JS-only ambient cancellation;
+   * see `docs/deviations.md`).
+   */
+  deadline?: number | undefined;
+  /**
+   * This turn's ambient cancellation signal, if any — set by
+   * `ActivationData.invoke` from the caller's `InvokeCallOptions.signal`/
+   * `deadline`. Propagated AS-IS to the next hop's `InvokeCallOptions.signal`
+   * (`grain-factory.ts`) and is what `TurnScheduler` uses to preempt a
+   * still-queued turn. Deliberately NOT combined with `tokenSignals` below —
+   * see its doc for why the two must stay separate.
+   */
+  signal?: AbortSignal | undefined;
+  /**
+   * Signals from `GrainCancellationToken`s bound during this turn
+   * (`ActivationData.bindCancellationTokens`) — composed into
+   * `GrainRuntime.getCancellationSignal()`'s result (see `currentSignal`) but
+   * deliberately kept OUT of `signal` above and never propagated to an
+   * outgoing call: `GrainCancellationToken` is purely cooperative (Orleans
+   * parity — a callee must explicitly observe it), so it must never cause
+   * `TurnScheduler` to preemptively reject a downstream call at admission the
+   * way a genuine ambient `signal`/deadline does. Composing it only into the
+   * turn-local observable signal keeps `getCancellationSignal()` convenient
+   * without smuggling that admission-preempting power onto every call a
+   * cancellation-token-carrying grain happens to make afterward.
+   */
+  tokenSignals?: AbortSignal[];
 }
 
 export const invocationContext = new AsyncLocalStorage<InvocationContext>();
@@ -73,4 +105,22 @@ export function requireTransaction(): TransactionInfo {
     throw new Error("operation requires a transaction but none is in scope");
   }
   return tx;
+}
+
+/**
+ * The current turn's cancellation signal for grain code to observe
+ * cooperatively — the ambient `InvokeCallOptions.signal`/deadline-derived
+ * `signal` composed with any bound `GrainCancellationToken`s'
+ * `tokenSignals`. NOT the same value `TurnScheduler`/propagation to the next
+ * hop use (that's `signal` alone) — see `InvocationContext.tokenSignals`.
+ */
+export function currentSignal(): AbortSignal | undefined {
+  const store = invocationContext.getStore();
+  if (store === undefined) return undefined;
+  return combineSignals([store.signal, ...(store.tokenSignals ?? [])]);
+}
+
+/** The current turn's ambient deadline (epoch ms), or `undefined` if none is in scope. */
+export function currentDeadline(): number | undefined {
+  return invocationContext.getStore()?.deadline;
 }

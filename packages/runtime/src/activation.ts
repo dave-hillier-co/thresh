@@ -47,6 +47,7 @@ import {
   type IncomingGrainCallContext,
   type IncomingGrainCallFilter,
 } from "@tsva/core/grain-call-filter";
+import { combineSignals } from "@tsva/core/abort";
 import type { InvocationRequest } from "@tsva/core/request";
 import {
   PLACEMENT_HINT_KEY,
@@ -63,6 +64,8 @@ import {
 import type { TransactionParticipant } from "@tsva/core/transaction-info";
 import { TransactionResourceInterface } from "@tsva/core/transaction-resource";
 import { getTransactionalFields } from "@tsva/core/transactional-state-metadata";
+import { deadlineSignal } from "@tsva/runtime/ambient-signal";
+import type { InvokeCallOptions } from "@tsva/runtime/dispatcher";
 import { GrainTimerImpl } from "@tsva/runtime/grain-timer-impl";
 import { invocationContext } from "@tsva/runtime/invocation-context";
 import type { TimeProvider } from "@tsva/runtime/time-provider";
@@ -247,14 +250,24 @@ export class ActivationData implements GrainContext {
       .catch(() => undefined);
   }
 
-  invoke(req: InvocationRequest): Promise<unknown> {
+  invoke(req: InvocationRequest, opts?: InvokeCallOptions): Promise<unknown> {
     this.touch();
+    // Composed once per call: the caller's own `opts.signal` plus whatever
+    // `AbortSignal` a `req.deadline` (ambient or freshly set — see
+    // `InvokeCallOptions.deadlineMs`) derives, on THIS activation's own clock
+    // (`deadlineSignal`, fake-clock-driven in tests). `dispose()` clears the
+    // deadline timer once the turn settles either way, so a call that
+    // finishes before its deadline never leaks one.
+    const deadline =
+      req.deadline === undefined ? undefined : deadlineSignal(req.deadline, this.time);
+    const signal = combineSignals([opts?.signal, deadline?.signal]);
     return this.scheduler
       .schedule({
         options: req.options,
         reentrancyId: req.reentrancyId,
         method: req.method,
         args: req.args,
+        ...(signal !== undefined ? { signal } : {}),
         run: () => {
           if (this.state === "invalid" || this.state === "deactivating") {
             // A failed activation surfaces the original activation error to the
@@ -280,13 +293,18 @@ export class ActivationData implements GrainContext {
                 ownerId: this.id,
                 reentrancyId: req.reentrancyId,
                 transaction: req.transaction,
+                deadline: req.deadline,
+                signal,
               },
               () => this.callMethod(req),
             ),
           );
         },
       })
-      .finally(() => this.touch());
+      .finally(() => {
+        this.touch();
+        deadline?.dispose();
+      });
   }
 
   /**
@@ -406,8 +424,8 @@ export class ActivationData implements GrainContext {
     return timer;
   }
 
-  async deactivate(reason: DeactivationReason): Promise<void> {
-    await this.runDeactivateHook(reason);
+  async deactivate(reason: DeactivationReason, signal?: AbortSignal): Promise<void> {
+    await this.runDeactivateHook(reason, signal);
     this.finalizeDeactivation();
   }
 
@@ -416,8 +434,13 @@ export class ActivationData implements GrainContext {
    * "deactivating" state so the caller can inspect `wantsMigration` (which
    * the hook may have just set, e.g. via `migrateOnIdle` called from
    * `onDeactivate`) before finalizing. No-op if already deactivating/invalid.
+   *
+   * `signal`, when given, is passed straight through to `onDeactivate` — no
+   * caller supplies one today (this is plumbing for a future
+   * deactivate-with-timeout caller); it does not preempt this scheduled turn
+   * itself.
    */
-  async runDeactivateHook(reason: DeactivationReason): Promise<void> {
+  async runDeactivateHook(reason: DeactivationReason, signal?: AbortSignal): Promise<void> {
     if (this.state === "invalid" || this.state === "deactivating") return;
     this.state = "deactivating";
     for (const timer of this.timers) timer.dispose();
@@ -434,7 +457,7 @@ export class ActivationData implements GrainContext {
               activationId: this.activationId,
               reason: formatDeactivationReason(reason),
             },
-            () => this.instance.onDeactivate(reason),
+            () => this.instance.onDeactivate(reason, signal),
           ),
       })
       .catch(() => undefined);
@@ -792,8 +815,19 @@ export class ActivationData implements GrainContext {
    * arrived already-cancelled (`cancelled: true`, set when `cancel()` ran
    * before the call was even sent) pre-aborts the controller here, so the
    * grain method sees an already-fired signal instead of racing one.
+   *
+   * Also records each bound token's signal onto this turn's
+   * `invocationContext.tokenSignals` (Orleans has no analogue — see
+   * `docs/deviations.md`), so `GrainRuntime.getCancellationSignal()` observes
+   * it too — composed there with the ambient `signal`, but deliberately kept
+   * OUT of `signal` itself: `GrainCancellationToken` is purely cooperative,
+   * so it must never propagate onto a downstream call's `InvokeCallOptions
+   * .signal` and start preemptively rejecting THAT call's admission the way a
+   * genuine ambient signal/deadline does (see `InvocationContext
+   * .tokenSignals`'s doc).
    */
   private bindCancellationTokens(args: unknown[]): void {
+    const store = invocationContext.getStore();
     for (let i = 0; i < args.length; i++) {
       const arg = args[i];
       if (!(arg instanceof CancellationTokenPlaceholder)) continue;
@@ -820,6 +854,9 @@ export class ActivationData implements GrainContext {
         // cascades on to that further target too.
         onDispatchToTarget: (target) => ext.recordForwardTarget(tokenId, target),
       });
+      if (store !== undefined) {
+        (store.tokenSignals ??= []).push(controller.signal);
+      }
     }
   }
 

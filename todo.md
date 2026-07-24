@@ -8,9 +8,6 @@ current-state evidence (what already exists, what is missing, file pointers).
 
 ## Parity gaps
 
-- [ ] [#18](https://github.com/dave-hillier-co/ts-virtual-actors/issues/18) Cancellation tokens &
-      per-call deadlines end-to-end (explicit `GrainCancellationToken` done; ambient
-      signal/deadline threading missing). Prerequisite for #19, TM cancel, stream redelivery backoff.
 - [ ] [#19](https://github.com/dave-hillier-co/ts-virtual-actors/issues/19) Scheduler
       back-pressure, stuck-turn detection & enforced `onDeactivate` timeout.
 - [ ] [#20](https://github.com/dave-hillier-co/ts-virtual-actors/issues/20) Runtime
@@ -34,6 +31,12 @@ current-state evidence (what already exists, what is missing, file pointers).
       config errors.
 - [ ] [#33](https://github.com/dave-hillier-co/ts-virtual-actors/issues/33) Share named
       `MemoryStreamProvider` instances across `TestCluster` (currently per-silo).
+- [ ] Ambient cancellation follow-ups from #18 (core slice landed: `@tsva/core/abort`,
+      `InvocationRequest.deadline`, `AbortSignal` threaded through `InvocationContext`,
+      `Dispatcher`/`TurnScheduler`/`ActivationData`, `GrainRuntime.getCancellationSignal()`, and
+      `GrainStorage`/`PersistentState`) — journal/transactional-storage provider signatures still
+      lack a `signal` param, and `getGrain` proxy calls have no friendlier per-call deadline API
+      (today only `Dispatcher.invoke`'s `opts` exposes `deadlineMs`/`signal`).
 
 ## Bugs
 

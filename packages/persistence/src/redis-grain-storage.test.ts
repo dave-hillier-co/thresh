@@ -151,4 +151,28 @@ describe.skipIf(client === undefined)("RedisGrainStorage", () => {
     await limit.read();
     expect(limit.exists).toBe(false);
   });
+
+  // GAP-CANCELLATION-STORAGE (issue #18): an ambient signal threads through to
+  // node-redis's own `withAbortSignal`, so an already-aborted signal cancels
+  // the call for real rather than merely abandoning the wait for it.
+  describe("ambient AbortSignal (issue #18)", () => {
+    it("rejects read() when the signal is already aborted", async () => {
+      const state = makeState(makeStorage());
+      const controller = new AbortController();
+      controller.abort();
+      await expect(state.read(controller.signal)).rejects.toBeDefined();
+    });
+
+    it("still succeeds when the signal never fires", async () => {
+      const state = makeState(makeStorage());
+      const controller = new AbortController();
+      state.value.cents = 42;
+      await state.write(controller.signal);
+      expect(state.exists).toBe(true);
+
+      const reloaded = makeState(makeStorage());
+      await reloaded.read(controller.signal);
+      expect(reloaded.value.cents).toBe(42);
+    });
+  });
 });

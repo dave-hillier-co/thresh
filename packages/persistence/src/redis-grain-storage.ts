@@ -57,8 +57,13 @@ export class RedisGrainStorage implements GrainStorage {
     this.keyPrefix = options.keyPrefix ?? "tsva";
   }
 
-  async read<T>(stateName: string, grainId: GrainId, state: StateHolder<T>): Promise<void> {
-    const record = await this.client.hGetAll(this.key(stateName, grainId));
+  async read<T>(
+    stateName: string,
+    grainId: GrainId,
+    state: StateHolder<T>,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const record = await this.clientFor(signal).hGetAll(this.key(stateName, grainId));
     if (record.etag === undefined) {
       state.exists = false;
       state.etag = undefined;
@@ -69,10 +74,15 @@ export class RedisGrainStorage implements GrainStorage {
     state.exists = true;
   }
 
-  async write<T>(stateName: string, grainId: GrainId, state: StateHolder<T>): Promise<void> {
+  async write<T>(
+    stateName: string,
+    grainId: GrainId,
+    state: StateHolder<T>,
+    signal?: AbortSignal,
+  ): Promise<void> {
     const etag = randomUUID();
     try {
-      await this.client.eval(WRITE, {
+      await this.clientFor(signal).eval(WRITE, {
         keys: [this.key(stateName, grainId)],
         arguments: [state.etag ?? "", serializeValue(state.value), etag],
       });
@@ -83,9 +93,14 @@ export class RedisGrainStorage implements GrainStorage {
     state.exists = true;
   }
 
-  async clear<T>(stateName: string, grainId: GrainId, state: StateHolder<T>): Promise<void> {
+  async clear<T>(
+    stateName: string,
+    grainId: GrainId,
+    state: StateHolder<T>,
+    signal?: AbortSignal,
+  ): Promise<void> {
     try {
-      await this.client.eval(CLEAR, {
+      await this.clientFor(signal).eval(CLEAR, {
         keys: [this.key(stateName, grainId)],
         arguments: [state.etag ?? ""],
       });
@@ -94,6 +109,11 @@ export class RedisGrainStorage implements GrainStorage {
     }
     state.etag = undefined;
     state.exists = false;
+  }
+
+  /** The client to issue this call on: scoped to `signal` (node-redis's own abort hook) when given. */
+  private clientFor(signal: AbortSignal | undefined): RedisClient {
+    return signal === undefined ? this.client : this.client.withAbortSignal(signal);
   }
 
   private rethrowConflict(

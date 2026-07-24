@@ -38,7 +38,13 @@ export abstract class Grain {
     return Promise.resolve();
   }
 
-  onDeactivate(_reason: DeactivationReason): Promise<void> {
+  /**
+   * `signal`, when given, fires if the deactivation is abandoned before this
+   * hook finishes (e.g. a future deactivate-with-timeout caller) — purely
+   * advisory, since JS has no thread interruption; nothing in this base
+   * implementation observes it, and today no caller supplies one.
+   */
+  onDeactivate(_reason: DeactivationReason, _signal?: AbortSignal): Promise<void> {
     return Promise.resolve();
   }
 }
