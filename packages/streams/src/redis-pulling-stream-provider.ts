@@ -8,25 +8,36 @@ import type {
   StreamActivationBinding,
   StreamHandler,
   StreamId,
+  StreamProducerHandle,
   StreamProvider,
   StreamSubscriptionHandle,
   SubscribeOptions,
 } from "@tsva/core/stream";
 import { implicitSubscriberIds } from "@tsva/streams/implicit-subscriptions";
-import { QueuePullingAgent } from "@tsva/streams/queue-pulling-agent";
+import { QueuePullingAgent, type StreamFailureHandler } from "@tsva/streams/queue-pulling-agent";
 import { ownedQueueIndices, type HashRange } from "@tsva/streams/queue-ownership";
 import { RedisStreamQueue } from "@tsva/streams/redis-stream-queue";
 import { RedisSubscriptionRegistry } from "@tsva/streams/redis-subscription-registry";
 import type { StreamDeliver } from "@tsva/streams/stream-deliver";
+import { StreamProducerRegistry } from "@tsva/streams/stream-producer-registry";
+import { StreamProviderConfigurationError } from "@tsva/streams/stream-provider-config-error";
 
 export type RedisClient = ReturnType<typeof createClient>;
 export type { StreamDeliver } from "@tsva/streams/stream-deliver";
+export type { StreamFailureHandler } from "@tsva/streams/queue-pulling-agent";
 
 export interface RedisPullingStreamProviderOptions {
   keyPrefix?: string;
   /** Number of physical queues streams are multiplexed over (defaults to 8). */
   queueCount?: number;
   pollIntervalMs?: number;
+  /**
+   * Notified when a pulling agent exhausts its retry budget on a delivery
+   * (Orleans `IStreamFailureHandler`), forwarded to every queue's agent this
+   * provider starts (`startAgentsFor`). See `DurableStreamFailureHandler` for
+   * a store-backed implementation.
+   */
+  failureHandler?: StreamFailureHandler;
 }
 
 /**
@@ -42,9 +53,11 @@ export class RedisPullingStreamProvider implements ActivationBoundStreamProvider
   private readonly keyPrefix: string;
   private readonly queueCount: number;
   private readonly pollIntervalMs: number;
+  private readonly failureHandler: StreamFailureHandler | undefined;
   private readonly registry: RedisSubscriptionRegistry;
   private readonly queues: RedisStreamQueue[];
   private readonly agents = new Map<number, QueuePullingAgent>();
+  private readonly producers = new StreamProducerRegistry();
   private deliver: StreamDeliver = async () => undefined;
   private implicitTypesFor: (namespace: string) => Iterable<GrainType> = () => [];
 
@@ -53,9 +66,28 @@ export class RedisPullingStreamProvider implements ActivationBoundStreamProvider
     private readonly name = "default",
     options: RedisPullingStreamProviderOptions = {},
   ) {
+    if (
+      options.queueCount !== undefined &&
+      (!Number.isInteger(options.queueCount) || options.queueCount < 1)
+    ) {
+      throw new StreamProviderConfigurationError(
+        name,
+        `queueCount must be a positive integer, got ${options.queueCount}`,
+      );
+    }
+    if (
+      options.pollIntervalMs !== undefined &&
+      (!Number.isFinite(options.pollIntervalMs) || options.pollIntervalMs < 0)
+    ) {
+      throw new StreamProviderConfigurationError(
+        name,
+        `pollIntervalMs must be a non-negative number, got ${options.pollIntervalMs}`,
+      );
+    }
     this.keyPrefix = options.keyPrefix ?? "tsva";
     this.queueCount = options.queueCount ?? 8;
     this.pollIntervalMs = options.pollIntervalMs ?? 50;
+    this.failureHandler = options.failureHandler;
     this.registry = new RedisSubscriptionRegistry(client, this.keyPrefix, this.name);
     this.queues = Array.from(
       { length: this.queueCount },
@@ -106,7 +138,10 @@ export class RedisPullingStreamProvider implements ActivationBoundStreamProvider
       const agent = new QueuePullingAgent(
         this.queues[i]!,
         (streamKey, event, token) => this.fanOut(streamKey, event, token),
-        { pollIntervalMs: this.pollIntervalMs },
+        {
+          pollIntervalMs: this.pollIntervalMs,
+          ...(this.failureHandler !== undefined ? { failureHandler: this.failureHandler } : {}),
+        },
       );
       this.agents.set(i, agent);
       agent.start();
@@ -125,6 +160,11 @@ export class RedisPullingStreamProvider implements ActivationBoundStreamProvider
 
   bindActivation(binding: StreamActivationBinding): StreamProvider {
     return { getStream: <T>(ns: string, key: GrainKey) => this.streamFor<T>(ns, key, binding) };
+  }
+
+  /** Orleans' pub-sub `RegisterProducer` — see `StreamProducerHandle`. */
+  async registerProducer(namespace: string, key: GrainKey): Promise<StreamProducerHandle> {
+    return this.producers.register(this.name, namespace, key);
   }
 
   private async fanOut(streamKey: string, event: unknown, token: number): Promise<void> {

@@ -21,6 +21,7 @@ import {
 } from "@tsva/streams/queue-pulling-agent";
 import { ownedQueueIndices, type HashRange } from "@tsva/streams/queue-ownership";
 import type { StreamDeliver } from "@tsva/streams/stream-deliver";
+import { StreamProviderConfigurationError } from "@tsva/streams/stream-provider-config-error";
 
 export interface GeneratorPullingStreamProviderOptions {
   /** Number of physical queues, each generating one synthetic stream (defaults to 4). */
@@ -55,6 +56,15 @@ export class GeneratorPullingStreamProvider
     config: StreamGeneratorConfig,
     options: GeneratorPullingStreamProviderOptions = {},
   ) {
+    if (
+      options.queueCount !== undefined &&
+      (!Number.isInteger(options.queueCount) || options.queueCount < 1)
+    ) {
+      throw new StreamProviderConfigurationError(
+        name,
+        `queueCount must be a positive integer, got ${options.queueCount}`,
+      );
+    }
     this.queueCount = options.queueCount ?? 4;
     this.pollIntervalMs = options.pollIntervalMs ?? 20;
     this.queues = Array.from({ length: this.queueCount }, () => new GeneratorStreamQueue(config));

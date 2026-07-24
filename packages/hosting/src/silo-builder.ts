@@ -71,7 +71,15 @@ import {
   type GeneratorPullingStreamProviderOptions,
 } from "@tsva/streams/generator-pulling-stream-provider";
 import type { StreamGeneratorConfig } from "@tsva/streams/generator-stream-queue";
-import type { PullingStreamProviderHost } from "@tsva/streams/queue-pulling-agent";
+import type {
+  PullingStreamProviderHost,
+  StreamFailureHandler,
+} from "@tsva/streams/queue-pulling-agent";
+import {
+  DurableStreamFailureHandler,
+  MemoryStreamFailureStore,
+  type DurableStreamFailureStore,
+} from "@tsva/streams/stream-failure-store";
 import { ClusterNode } from "@tsva/runtime/cluster-node";
 import type { GrainActivator } from "@tsva/runtime/catalog";
 import type { LoadSheddingOptions } from "@tsva/runtime/load-shedding";
@@ -188,6 +196,7 @@ export class SiloBuilder {
     options: { streamInactivityPeriodMs?: number } | undefined;
   }> = [];
   private readonly streamFilters: Array<{ providerName: string; filter: StreamFilter }> = [];
+  private streamFailureStore: DurableStreamFailureStore | undefined;
   private readonly broadcastProviders = new Map<string, BroadcastChannelOptions>();
   private transactionsDisabled = false;
 
@@ -334,8 +343,18 @@ export class SiloBuilder {
    * here: this provider delivers by direct push, in-process, with no bounded
    * cache to evict from — see `MemoryStreamProvider`'s class doc.
    */
-  useMemoryStreams(name = "default", options?: { streamInactivityPeriodMs?: number }): this {
-    const provider = new MemoryStreamProvider(name);
+  /**
+   * `provider` lets a caller supply an existing `MemoryStreamProvider`
+   * instance instead of constructing a fresh one — `TestCluster` uses this to
+   * share one named provider cluster-wide (mirroring how it shares `storage`/
+   * `reminderTable`), so a producer and consumer landing on different silos
+   * still publish/subscribe into the same instance.
+   */
+  useMemoryStreams(
+    name = "default",
+    options?: { streamInactivityPeriodMs?: number },
+    provider: MemoryStreamProvider = new MemoryStreamProvider(name),
+  ): this {
     this.memoryStreams.push({ provider, options });
     this.streamProviders.set(name, provider);
     return this;
@@ -359,6 +378,21 @@ export class SiloBuilder {
   }
 
   /**
+   * Register a durable store for permanently-failed (poison) stream
+   * deliveries (Orleans' `AzureTableStorageStreamFailureHandler` equivalent).
+   * Every subsequent `addRedisStreams` call that doesn't supply its own
+   * `failureHandler` gets one backed by this store, so poison events across
+   * every Redis stream provider on this silo land in one place. Defaults to
+   * an in-memory store; pass a durable one for a real deployment.
+   */
+  useDurableStreamFailureStore(
+    store: DurableStreamFailureStore = new MemoryStreamFailureStore(),
+  ): this {
+    this.streamFailureStore = store;
+    return this;
+  }
+
+  /**
    * Register a broadcast-channel provider, named "default" unless given.
    * Broadcast channels are direct in-cluster pub/sub with no backing store —
    * a publish fans the item out to the channel's implicit subscribers — so
@@ -375,16 +409,26 @@ export class SiloBuilder {
    * Register a Redis-backed stream provider (durable, cluster-shared). The
    * client connects when the silo starts and disconnects when it stops; the
    * provider's poll loops are stopped on shutdown. `keyPrefix` namespaces keys
-   * (defaults to `"tsva"`).
+   * (defaults to `"tsva"`). `options.failureHandler` (Orleans
+   * `IStreamFailureHandler`) is forwarded to every queue's pulling agent,
+   * defaulting to a handler backed by `useDurableStreamFailureStore`'s store
+   * when one was registered and this call supplies none of its own.
    */
-  addRedisStreams(name: string, options: { url: string; keyPrefix?: string }): this {
+  addRedisStreams(
+    name: string,
+    options: { url: string; keyPrefix?: string; failureHandler?: StreamFailureHandler },
+  ): this {
     const client = createClient({ url: options.url });
     client.on("error", () => {});
-    const provider = new RedisPullingStreamProvider(
-      client,
-      name,
-      toConfigOption("keyPrefix", options.keyPrefix),
-    );
+    const failureHandler =
+      options.failureHandler ??
+      (this.streamFailureStore !== undefined
+        ? new DurableStreamFailureHandler(this.streamFailureStore)
+        : undefined);
+    const provider = new RedisPullingStreamProvider(client, name, {
+      ...toConfigOption("keyPrefix", options.keyPrefix),
+      ...toConfigOption("failureHandler", failureHandler),
+    });
     this.pullingStreams.push(provider);
     this.starters.push(async () => {
       await client.connect();

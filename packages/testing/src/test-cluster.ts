@@ -14,6 +14,7 @@ import { MemoryJobShardStore } from "@tsva/durable-jobs/memory-job-shard-store";
 import { MemoryJournalStorage } from "@tsva/journaling/memory-journal-storage";
 import { MemoryGrainStorage } from "@tsva/persistence/memory-grain-storage";
 import { MemoryReminderTable } from "@tsva/reminders/memory-reminder-table";
+import { MemoryStreamProvider } from "@tsva/streams/memory-stream-provider";
 import { StaticMembershipService } from "@tsva/runtime/static-membership";
 import type { LoadSheddingOptions } from "@tsva/runtime/load-shedding";
 import { MemoryTransactionalStorage } from "@tsva/transactions/memory-transactional-storage";
@@ -49,8 +50,17 @@ export interface TestClusterOptions {
    * `.UseTransactions()`).
    */
   transactions?: boolean;
-  /** Per-silo overrides, applied after the defaults. */
-  configureSilo?: (builder: SiloBuilder, silo: { index: number; address: SiloAddress }) => void;
+  /**
+   * Per-silo overrides, applied after the defaults. `cluster` is the
+   * `TestCluster` under construction — use `cluster.streamProvider(name)` to
+   * register a named `MemoryStreamProvider` shared cluster-wide (the way
+   * `storage`/`reminderTable` already are) instead of a fresh per-silo one.
+   */
+  configureSilo?: (
+    builder: SiloBuilder,
+    silo: { index: number; address: SiloAddress },
+    cluster: TestCluster,
+  ) => void;
   /**
    * Static metadata a silo advertises via membership (e.g. `{ role: "worker" }`),
    * consulted by metadata-aware placement (Orleans role-based placement). Return
@@ -97,6 +107,12 @@ export class TestCluster {
   readonly transactionalStorage = new MemoryTransactionalStorage();
   readonly journalStorage = new MemoryJournalStorage();
   readonly jobShardStore = new MemoryJobShardStore();
+  // Named `MemoryStreamProvider`s, shared cluster-wide like the backends
+  // above: a producer and consumer on different silos publish/subscribe into
+  // the same instance instead of two independent ones that never see each
+  // other (`SiloBuilder.useMemoryStreams` otherwise constructs a fresh
+  // provider per call).
+  private readonly memoryStreamProviders = new Map<string, MemoryStreamProvider>();
 
   private constructor(
     private readonly options: TestClusterOptions,
@@ -139,6 +155,22 @@ export class TestCluster {
 
   getGrain<T>(def: GrainInterface<T>, key: GrainKeyFor<T>): T {
     return this.primary.host.getGrain(def, key);
+  }
+
+  /**
+   * The cluster-wide `MemoryStreamProvider` registered under `name`,
+   * creating it on first use. Every silo's `useMemoryStreams(name, ..., ...)`
+   * call (the default chain, and any `configureSilo` override that asks for
+   * this same name) reuses the identical instance, so producer and consumer
+   * activations landing on different silos still share one provider.
+   */
+  streamProvider(name = "default"): MemoryStreamProvider {
+    let provider = this.memoryStreamProviders.get(name);
+    if (provider === undefined) {
+      provider = new MemoryStreamProvider(name);
+      this.memoryStreamProviders.set(name, provider);
+    }
+    return provider;
   }
 
   /**
@@ -247,7 +279,7 @@ export class TestCluster {
       .useInProcessTransport(this.network)
       .useMemoryStorage(this.storage)
       .useReminders(this.reminderTable)
-      .useMemoryStreams()
+      .useMemoryStreams("default", undefined, this.streamProvider("default"))
       .useBroadcastChannels()
       .useMemoryJournaling(this.journalStorage)
       .useMemoryDurableJobs(this.jobShardStore);
@@ -259,7 +291,7 @@ export class TestCluster {
     for (const spec of this.options.grains ?? []) {
       builder.registerGrain(spec.ctor, { interfaces: spec.interfaces });
     }
-    this.options.configureSilo?.(builder, { index, address });
+    this.options.configureSilo?.(builder, { index, address }, this);
     const silo: InternalSilo = { index, address, membership, host: builder.build() };
     this.live.push(silo);
     return silo;

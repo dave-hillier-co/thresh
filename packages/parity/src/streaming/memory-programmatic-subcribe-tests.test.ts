@@ -165,18 +165,13 @@ async function waitUntil(check: () => Promise<boolean>, timeoutMs = 5000): Promi
   }
 }
 
-// A single silo: `MemoryStreamProvider` is built per silo (`SiloBuilder.useMemoryStreams`),
-// not shared cluster-wide the way `TestCluster`'s storage/reminder/journal
-// backends are — so a producer grain and an admin-attached consumer grain
-// landing on *different* silos of a multi-silo cluster would publish into,
-// and register against, two independent provider instances that never see
-// each other. Orleans' own memory-stream provider avoids this because its
-// backing queue is process-wide regardless of silo; pinning to one silo here
-// sidesteps the gap without taking on a broader "share stream providers
-// across a TestCluster" change in this slice.
+// `TestCluster.streamProvider(name)` shares one `MemoryStreamProvider`
+// instance cluster-wide per name (the way `storage`/`reminderTable` already
+// are), so a producer grain and an admin-attached consumer grain landing on
+// *different* silos of a multi-silo cluster still publish into, and register
+// against, the same provider instance.
 async function startCluster(): Promise<TestCluster> {
   return TestCluster.start({
-    initialSilos: 1,
     grains: [
       { ctor: SubscribeGrain, interfaces: [ISubscribeGrain] },
       { ctor: PassiveConsumerGrain, interfaces: [IPassiveConsumerGrain] },
@@ -184,9 +179,17 @@ async function startCluster(): Promise<TestCluster> {
       { ctor: TypedProducerGrainProducingApple, interfaces: [ITypedProducerGrainProducingApple] },
       { ctor: TypedProducerGrainProducingInt, interfaces: [ITypedProducerGrainProducingInt] },
     ],
-    configureSilo: (builder) => {
-      builder.useMemoryStreams(StreamProviderName);
-      builder.useMemoryStreams(StreamProviderName2);
+    configureSilo: (builder, _silo, cluster) => {
+      builder.useMemoryStreams(
+        StreamProviderName,
+        undefined,
+        cluster.streamProvider(StreamProviderName),
+      );
+      builder.useMemoryStreams(
+        StreamProviderName2,
+        undefined,
+        cluster.streamProvider(StreamProviderName2),
+      );
     },
   });
 }

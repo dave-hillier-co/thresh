@@ -105,7 +105,9 @@ describe("MemoryStreamProvider", () => {
 
     await provider.getStream<string>("chat", "general").publish("hello");
 
-    expect(delivered).toEqual([{ subscriber: "Watcher/general", streamKey: "chat/general", event: "hello" }]);
+    expect(delivered).toEqual([
+      { subscriber: "Watcher/general", streamKey: "chat/general", event: "hello" },
+    ]);
   });
 
   it("does not deliver to an implicit subscriber before setImplicitSubscribers is wired", async () => {
@@ -181,5 +183,20 @@ describe("MemoryStreamProvider", () => {
     await flush();
 
     expect(received).toEqual([1]);
+  });
+
+  it("registers and unregisters an explicit producer", async () => {
+    const provider = new MemoryStreamProvider("chat-provider");
+
+    const handle = await provider.registerProducer("chat", "room-1");
+    expect(handle.streamId).toEqual({
+      provider: "chat-provider",
+      namespace: "chat",
+      key: "room-1",
+    });
+
+    await handle.unregister();
+    // Idempotent: a second unregister is a no-op, not an error.
+    await handle.unregister();
   });
 });
