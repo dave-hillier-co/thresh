@@ -18,7 +18,9 @@ for how the design differs from Orleans.
 - **Timers & reminders** — in-memory timers; durable reminders with hash-range ownership and
   rebalancing; memory + Redis + Postgres tables.
 - **Event streams** — `StreamProvider`/subscriptions, pulling agents, ring-based queue ownership,
-  durable cursors, at-least-once delivery, implicit subscriptions; memory + Redis Streams.
+  durable cursors, at-least-once delivery, implicit subscriptions; memory + Redis Streams +
+  Postgres + Kafka backings behind a shared backend-neutral provider core (see
+  [`docs/stream-backings-postgres-kafka.md`](docs/stream-backings-postgres-kafka.md)).
 - **Cross-grain ACID transactions** — `TransactionalState<T>` with timestamp-ordered wait-die
   locking, optimistic two-phase commit (TM elected from writers), durable storage, cross-silo
   participants, in-doubt recovery.
@@ -82,4 +84,6 @@ for how the design differs from Orleans.
 
 ## ⏸ Deferred
 
-- Additional stream backings behind the existing interfaces (Redis is the default).
+- Stream-backing polish (Phase 3 of
+  [`docs/stream-backings-postgres-kafka.md`](docs/stream-backings-postgres-kafka.md)):
+  LISTEN/NOTIFY wake-up for the Postgres queue, consumer-lag gauges, worked examples.
