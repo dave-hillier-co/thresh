@@ -73,6 +73,7 @@ import { PostgresReminderTable } from "@tsva/reminders/postgres-reminder-table";
 import { RedisReminderTable } from "@tsva/reminders/redis-reminder-table";
 import { MemoryStreamProvider } from "@tsva/streams/memory-stream-provider";
 import { RedisPullingStreamProvider } from "@tsva/streams/redis-pulling-stream-provider";
+import { PostgresPullingStreamProvider } from "@tsva/streams/postgres-pulling-stream-provider";
 import {
   GeneratorPullingStreamProvider,
   type GeneratorPullingStreamProviderOptions,
@@ -299,7 +300,10 @@ export class SiloBuilder {
    * Enable durable reminders backed by the given table (in-memory by default).
    * `options` mirrors Orleans `ReminderOptions` (e.g. `minimumPeriod`).
    */
-  useReminders(table: ReminderTable = new MemoryReminderTable(), options?: ReminderServiceOptions): this {
+  useReminders(
+    table: ReminderTable = new MemoryReminderTable(),
+    options?: ReminderServiceOptions,
+  ): this {
     this.reminderTable = table;
     this.reminderServiceOptions = options;
     return this;
@@ -521,6 +525,58 @@ export class SiloBuilder {
     this.closers.push(async () => {
       provider.stop();
       await client.close();
+    });
+    return this.addStreamProvider(name, provider);
+  }
+
+  /**
+   * Register a Postgres-backed stream provider (durable, cluster-shared) —
+   * the Postgres counterpart to `addRedisStreams` for a deployment that would
+   * otherwise need Redis solely for streams
+   * (docs/stream-backings-postgres-kafka.md Phase 1). The connection pool is
+   * created here, the backing tables (`<tablePrefix>_events`,
+   * `<tablePrefix>_cursors`, `<tablePrefix>_subscriptions`) are provisioned
+   * on silo start, and the pool is closed on stop; the provider's poll loops
+   * are stopped on shutdown too. `tablePrefix` namespaces the tables
+   * (defaults to `"tsva_stream"`). `options.failureHandler` (Orleans
+   * `IStreamFailureHandler`) is forwarded to every queue's pulling agent,
+   * defaulting to a handler backed by `useDurableStreamFailureStore`'s store
+   * when one was registered and this call supplies none of its own.
+   * `options.retainFor` keeps a replay window of delivered rows instead of
+   * trimming them eagerly on commit.
+   */
+  addPostgresStreams(
+    name: string,
+    options: {
+      connectionString: string;
+      queueCount?: number;
+      pollIntervalMs?: number;
+      tablePrefix?: string;
+      failureHandler?: StreamFailureHandler;
+      retainFor?: Duration;
+    },
+  ): this {
+    const pool = new Pool({ connectionString: options.connectionString });
+    pool.on("error", () => {}); // surfaced by start()/queries; don't crash the process
+    const failureHandler =
+      options.failureHandler ??
+      (this.streamFailureStore !== undefined
+        ? new DurableStreamFailureHandler(this.streamFailureStore)
+        : undefined);
+    const provider = new PostgresPullingStreamProvider(pool, name, {
+      ...toConfigOption("queueCount", options.queueCount),
+      ...toConfigOption("pollIntervalMs", options.pollIntervalMs),
+      ...toConfigOption("tablePrefix", options.tablePrefix),
+      ...toConfigOption("failureHandler", failureHandler),
+      ...toConfigOption("retainFor", options.retainFor),
+    });
+    this.pullingStreams.push(provider);
+    this.starters.push(async () => {
+      await provider.start();
+    });
+    this.closers.push(async () => {
+      provider.stop();
+      await pool.end();
     });
     return this.addStreamProvider(name, provider);
   }

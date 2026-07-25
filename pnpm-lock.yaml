@@ -420,6 +420,9 @@ importers:
       '@tsva/observability':
         specifier: workspace:*
         version: link:../observability
+      pg:
+        specifier: ^8.21.0
+        version: 8.21.0
       redis:
         specifier: ^5.12.1
         version: 5.12.1(@opentelemetry/api@1.9.1)
