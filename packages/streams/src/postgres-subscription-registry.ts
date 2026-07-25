@@ -7,7 +7,7 @@ const IDENTIFIER = /^[a-z_][a-z0-9_]*$/;
 
 function isDuplicate(err: unknown): boolean {
   const code = (err as { code?: string }).code;
-  return code === "23505" || code === "42P07";
+  return code === "23505" || code === "42P07" || code === "42710";
 }
 
 /**

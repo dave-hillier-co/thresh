@@ -19,8 +19,9 @@ deadline API, keepalive unbind on deactivation, and full-facet `@readOnly` guard
 - [ ] [#39](https://github.com/dave-hillier-co/ts-virtual-actors/issues/39) Additional stream
       backings behind the existing interfaces —
       [`docs/stream-backings-postgres-kafka.md`](docs/stream-backings-postgres-kafka.md). Phase 0
-      (shared provider core) and Phase 1 (Postgres backing, `addPostgresStreams`) are done; Kafka
-      (Phase 2) and the LISTEN/NOTIFY polish (Phase 3) remain.
+      (shared provider core), Phase 1 (Postgres backing, `addPostgresStreams`) and Phase 2 (Kafka
+      backing, `addKafkaStreams`) are done; Phase 3 (LISTEN/NOTIFY polish, consumer-lag gauge,
+      worked examples) is optional and remains.
 
 ## Orleans test-suite port (parity suite)
 

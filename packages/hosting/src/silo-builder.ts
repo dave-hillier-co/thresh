@@ -71,14 +71,17 @@ import {
 import { MemoryReminderTable } from "@tsva/reminders/memory-reminder-table";
 import { PostgresReminderTable } from "@tsva/reminders/postgres-reminder-table";
 import { RedisReminderTable } from "@tsva/reminders/redis-reminder-table";
+import { Kafka } from "kafkajs";
 import { MemoryStreamProvider } from "@tsva/streams/memory-stream-provider";
 import { RedisPullingStreamProvider } from "@tsva/streams/redis-pulling-stream-provider";
 import { PostgresPullingStreamProvider } from "@tsva/streams/postgres-pulling-stream-provider";
+import { KafkaPullingStreamProvider } from "@tsva/streams/kafka-pulling-stream-provider";
 import {
   GeneratorPullingStreamProvider,
   type GeneratorPullingStreamProviderOptions,
 } from "@tsva/streams/generator-pulling-stream-provider";
 import type { StreamGeneratorConfig } from "@tsva/streams/generator-stream-queue";
+import type { SubscriptionRegistry } from "@tsva/streams/pulling-stream-provider-core";
 import type {
   PullingStreamProviderHost,
   StreamFailureHandler,
@@ -88,6 +91,12 @@ import {
   MemoryStreamFailureStore,
   type DurableStreamFailureStore,
 } from "@tsva/streams/stream-failure-store";
+import { PostgresSubscriptionRegistry } from "@tsva/streams/postgres-subscription-registry";
+import { RedisSubscriptionRegistry } from "@tsva/streams/redis-subscription-registry";
+import { PostgresStreamCursorStore } from "@tsva/streams/postgres-stream-cursor-store";
+import { RedisStreamCursorStore } from "@tsva/streams/redis-stream-cursor-store";
+import type { StreamCursorStore } from "@tsva/streams/stream-cursor-store";
+import { StreamProviderConfigurationError } from "@tsva/streams/stream-provider-config-error";
 import { ClusterNode } from "@tsva/runtime/cluster-node";
 import type { ActivationOptions } from "@tsva/runtime/activation";
 import type { GrainActivator } from "@tsva/runtime/catalog";
@@ -577,6 +586,98 @@ export class SiloBuilder {
     this.closers.push(async () => {
       provider.stop();
       await pool.end();
+    });
+    return this.addStreamProvider(name, provider);
+  }
+
+  /**
+   * Register a Kafka-backed stream provider (durable, cluster-shared) —
+   * teams with Kafka as their event backbone publish/consume streams without
+   * a second durable system for the transport
+   * (docs/stream-backings-postgres-kafka.md Phase 2). One topic per provider
+   * (`<topicPrefix>.<name>`, default `"tsva.streams"`); one Kafka partition
+   * per physical queue, validated to match `queueCount` when the silo
+   * starts (topic auto-creation is not assumed — create the topic with the
+   * desired partition count out of band).
+   *
+   * Kafka has no metadata surface for cursors/subscriptions/failures, so
+   * `options.metadata` supplies a Postgres or Redis store for that trio —
+   * exactly the stores `addPostgresStreams`/`addRedisStreams` already build
+   * (`PostgresSubscriptionRegistry`+`PostgresStreamCursorStore`, or
+   * `RedisSubscriptionRegistry`+`RedisStreamCursorStore`); Orleans' EventHubs
+   * provider keeps its checkpoints in Azure Table storage the same way. The
+   * connection (pool or client) is created and torn down here, alongside the
+   * Kafka producer/consumer/admin client. `options.failureHandler` (Orleans
+   * `IStreamFailureHandler`) is forwarded to every queue's pulling agent —
+   * and to the retention-gap edge case — defaulting to a handler backed by
+   * `useDurableStreamFailureStore`'s store when one was registered and this
+   * call supplies none of its own.
+   */
+  addKafkaStreams(
+    name: string,
+    options: {
+      brokers: string[];
+      queueCount?: number;
+      pollIntervalMs?: number;
+      topicPrefix?: string;
+      failureHandler?: StreamFailureHandler;
+      metadata:
+        | { postgres: { connectionString: string; tablePrefix?: string } }
+        | { redis: { url: string; keyPrefix?: string } };
+    },
+  ): this {
+    if (!Array.isArray(options.brokers) || options.brokers.length === 0) {
+      throw new StreamProviderConfigurationError(name, "brokers must be a non-empty array");
+    }
+    const kafka = new Kafka({ clientId: `tsva-streams-${name}`, brokers: options.brokers });
+
+    let registry: SubscriptionRegistry;
+    let cursorStore: StreamCursorStore;
+    if ("postgres" in options.metadata) {
+      const { connectionString, tablePrefix } = options.metadata.postgres;
+      const prefix = tablePrefix ?? "tsva_stream";
+      const pool = new Pool({ connectionString });
+      pool.on("error", () => {}); // surfaced by start()/queries; don't crash the process
+      registry = new PostgresSubscriptionRegistry(pool, prefix, name);
+      cursorStore = new PostgresStreamCursorStore(pool, prefix);
+      this.closers.push(async () => {
+        await pool.end();
+      });
+    } else {
+      const { url, keyPrefix } = options.metadata.redis;
+      const prefix = keyPrefix ?? "tsva";
+      const client = createClient({ url });
+      client.on("error", () => {});
+      registry = new RedisSubscriptionRegistry(client, prefix, name);
+      cursorStore = new RedisStreamCursorStore(client, prefix);
+      this.starters.push(async () => {
+        await client.connect();
+      });
+      this.closers.push(async () => {
+        await client.close();
+      });
+    }
+
+    const failureHandler =
+      options.failureHandler ??
+      (this.streamFailureStore !== undefined
+        ? new DurableStreamFailureHandler(this.streamFailureStore)
+        : undefined);
+    const provider = new KafkaPullingStreamProvider(kafka, name, {
+      registry,
+      cursorStore,
+      ...toConfigOption("queueCount", options.queueCount),
+      ...toConfigOption("pollIntervalMs", options.pollIntervalMs),
+      ...toConfigOption("topicPrefix", options.topicPrefix),
+      ...toConfigOption("failureHandler", failureHandler),
+    });
+    this.pullingStreams.push(provider);
+    this.starters.push(async () => {
+      await provider.start();
+    });
+    this.closers.push(async () => {
+      provider.stop();
+      await provider.disconnect();
     });
     return this.addStreamProvider(name, provider);
   }

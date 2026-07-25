@@ -4,6 +4,7 @@ import { durationToMs, type Duration } from "@tsva/core/duration";
 import { deserializeValue, serializeValue } from "@tsva/core/value-codec";
 import type { AppendableQueue } from "@tsva/streams/pulling-stream-provider-core";
 import type { QueueEntry } from "@tsva/streams/redis-stream-queue";
+import { PostgresStreamCursorStore } from "@tsva/streams/postgres-stream-cursor-store";
 
 // Table names are interpolated (Postgres cannot bind identifiers), so guard
 // them against anything but a plain SQL identifier; all other inputs are bound.
@@ -13,7 +14,7 @@ const IDENTIFIER = /^[a-z_][a-z0-9_]*$/;
 // duplicate error even though the table now exists, which is the desired state.
 function isDuplicate(err: unknown): boolean {
   const code = (err as { code?: string }).code;
-  return code === "23505" || code === "42P07";
+  return code === "23505" || code === "42P07" || code === "42710";
 }
 
 /**
@@ -27,7 +28,7 @@ function isDuplicate(err: unknown): boolean {
  */
 export class PostgresStreamQueue implements AppendableQueue {
   private readonly eventsTable: string;
-  private readonly cursorsTable: string;
+  private readonly cursors: PostgresStreamCursorStore;
   private readonly retainForMs: number | undefined;
 
   constructor(
@@ -38,13 +39,10 @@ export class PostgresStreamQueue implements AppendableQueue {
     retainFor?: Duration,
   ) {
     this.eventsTable = `${tablePrefix}_events`;
-    this.cursorsTable = `${tablePrefix}_cursors`;
     if (!IDENTIFIER.test(this.eventsTable)) {
       throw new Error(`invalid table name: ${this.eventsTable}`);
     }
-    if (!IDENTIFIER.test(this.cursorsTable)) {
-      throw new Error(`invalid table name: ${this.cursorsTable}`);
-    }
+    this.cursors = new PostgresStreamCursorStore(pool, tablePrefix);
     this.retainForMs = retainFor === undefined ? undefined : durationToMs(retainFor);
   }
 
@@ -65,17 +63,10 @@ export class PostgresStreamQueue implements AppendableQueue {
         `CREATE INDEX IF NOT EXISTS ${this.eventsTable}_provider_queue_id_idx
            ON ${this.eventsTable} (provider, queue_idx, id)`,
       );
-      await this.pool.query(
-        `CREATE TABLE IF NOT EXISTS ${this.cursorsTable} (
-           provider TEXT NOT NULL,
-           queue_idx INT NOT NULL,
-           cursor BIGINT NOT NULL,
-           PRIMARY KEY (provider, queue_idx)
-         )`,
-      );
     } catch (err) {
       if (!isDuplicate(err)) throw err;
     }
+    await this.cursors.start();
   }
 
   /** Append an event for `streamKey`; returns its queue token. */
@@ -113,26 +104,11 @@ export class PostgresStreamQueue implements AppendableQueue {
 
   /** The committed cursor (0 if the queue has never been read). */
   async getCursor(signal?: AbortSignal): Promise<number> {
-    const res = await raceSignal(
-      this.pool.query<{ cursor: string }>(
-        `SELECT cursor FROM ${this.cursorsTable} WHERE provider = $1 AND queue_idx = $2`,
-        [this.providerName, this.queueIdx],
-      ),
-      signal,
-    );
-    return res.rows[0] === undefined ? 0 : Number(res.rows[0].cursor);
+    return this.cursors.getCursor(this.providerName, this.queueIdx, signal);
   }
 
   async commit(cursor: number, signal?: AbortSignal): Promise<void> {
-    await raceSignal(
-      this.pool.query(
-        `INSERT INTO ${this.cursorsTable} (provider, queue_idx, cursor)
-         VALUES ($1, $2, $3)
-         ON CONFLICT (provider, queue_idx) DO UPDATE SET cursor = EXCLUDED.cursor`,
-        [this.providerName, this.queueIdx, cursor],
-      ),
-      signal,
-    );
+    await this.cursors.commit(this.providerName, this.queueIdx, cursor, signal);
     // Opportunistic trim: delivered rows below the committed cursor are dead
     // weight. Never fails the commit — a trim error is swallowed (logged to
     // stderr) so a transient issue here can't turn a successful delivery into

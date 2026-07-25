@@ -9,6 +9,7 @@
   "dependencies": {
     "@tsva/core": "workspace:*",
     "@tsva/observability": "workspace:*",
+    "kafkajs": "^2.2.4",
     "pg": "^8.21.0",
     "redis": "^5.12.1"
   }
