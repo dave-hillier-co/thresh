@@ -17,7 +17,8 @@ deadline API, keepalive unbind on deactivation, and full-facet `@readOnly` guard
 ## Deferred
 
 - [ ] [#39](https://github.com/dave-hillier-co/ts-virtual-actors/issues/39) Additional stream
-      backings behind the existing interfaces.
+      backings behind the existing interfaces — Postgres and Kafka planned in
+      [`docs/stream-backings-postgres-kafka.md`](docs/stream-backings-postgres-kafka.md).
 
 ## Orleans test-suite port (parity suite)
 
