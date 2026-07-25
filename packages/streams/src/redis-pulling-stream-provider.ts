@@ -1,26 +1,22 @@
 import type { createClient } from "redis";
-import { keyToString, type GrainKey } from "@tsva/core/grain-key";
+import type { GrainKey } from "@tsva/core/grain-key";
 import type { GrainType } from "@tsva/core/grain-type";
-import { stableHash32 } from "@tsva/core/hash";
 import type {
   ActivationBoundStreamProvider,
   AsyncStream,
   StreamActivationBinding,
-  StreamHandler,
-  StreamId,
   StreamProducerHandle,
   StreamProvider,
-  StreamSubscriptionHandle,
-  SubscribeOptions,
 } from "@tsva/core/stream";
-import { implicitSubscriberIds } from "@tsva/streams/implicit-subscriptions";
-import { QueuePullingAgent, type StreamFailureHandler } from "@tsva/streams/queue-pulling-agent";
-import { ownedQueueIndices, type HashRange } from "@tsva/streams/queue-ownership";
+import {
+  PullingStreamProviderCore,
+  validateQueueCount,
+} from "@tsva/streams/pulling-stream-provider-core";
+import type { StreamFailureHandler } from "@tsva/streams/queue-pulling-agent";
+import type { HashRange } from "@tsva/streams/queue-ownership";
 import { RedisStreamQueue } from "@tsva/streams/redis-stream-queue";
 import { RedisSubscriptionRegistry } from "@tsva/streams/redis-subscription-registry";
 import type { StreamDeliver } from "@tsva/streams/stream-deliver";
-import { StreamProducerRegistry } from "@tsva/streams/stream-producer-registry";
-import { StreamProviderConfigurationError } from "@tsva/streams/stream-provider-config-error";
 
 export type RedisClient = ReturnType<typeof createClient>;
 export type { StreamDeliver } from "@tsva/streams/stream-deliver";
@@ -48,61 +44,46 @@ export interface RedisPullingStreamProviderOptions {
  * delivery. Subscriptions and cursors live in Redis, so they survive deactivation
  * and silo failure. Which queues a silo runs agents for is decided by the ring
  * (`startAgentsFor`), set by the host on every membership change.
+ *
+ * A thin composition over `PullingStreamProviderCore` (see
+ * docs/stream-backings-postgres-kafka.md Phase 0): this class only builds the
+ * Redis-specific queues and subscription registry and delegates everything
+ * else — agent lifecycle, publish→queue selection, fan-out, producer
+ * registry, failure-handler forwarding, config validation — to the core.
  */
 export class RedisPullingStreamProvider implements ActivationBoundStreamProvider {
-  private readonly keyPrefix: string;
-  private readonly queueCount: number;
-  private readonly pollIntervalMs: number;
-  private readonly failureHandler: StreamFailureHandler | undefined;
-  private readonly registry: RedisSubscriptionRegistry;
-  private readonly queues: RedisStreamQueue[];
-  private readonly agents = new Map<number, QueuePullingAgent>();
-  private readonly producers = new StreamProducerRegistry();
-  private deliver: StreamDeliver = async () => undefined;
-  private implicitTypesFor: (namespace: string) => Iterable<GrainType> = () => [];
+  private readonly core: PullingStreamProviderCore;
 
   constructor(
     client: RedisClient,
     private readonly name = "default",
     options: RedisPullingStreamProviderOptions = {},
   ) {
-    if (
-      options.queueCount !== undefined &&
-      (!Number.isInteger(options.queueCount) || options.queueCount < 1)
-    ) {
-      throw new StreamProviderConfigurationError(
-        name,
-        `queueCount must be a positive integer, got ${options.queueCount}`,
-      );
-    }
-    if (
-      options.pollIntervalMs !== undefined &&
-      (!Number.isFinite(options.pollIntervalMs) || options.pollIntervalMs < 0)
-    ) {
-      throw new StreamProviderConfigurationError(
-        name,
-        `pollIntervalMs must be a non-negative number, got ${options.pollIntervalMs}`,
-      );
-    }
-    this.keyPrefix = options.keyPrefix ?? "tsva";
-    this.queueCount = options.queueCount ?? 8;
-    this.pollIntervalMs = options.pollIntervalMs ?? 50;
-    this.failureHandler = options.failureHandler;
-    this.registry = new RedisSubscriptionRegistry(client, this.keyPrefix, this.name);
-    this.queues = Array.from(
-      { length: this.queueCount },
-      (_unused, i) => new RedisStreamQueue(client, `${this.keyPrefix}:streamq:${this.name}:${i}`),
+    const queueCount = validateQueueCount(name, options.queueCount);
+    const keyPrefix = options.keyPrefix ?? "tsva";
+    const registry = new RedisSubscriptionRegistry(client, keyPrefix, name);
+    const queues = Array.from(
+      { length: queueCount },
+      (_unused, i) => new RedisStreamQueue(client, `${keyPrefix}:streamq:${name}:${i}`),
     );
+    this.core = new PullingStreamProviderCore(name, queues, registry, {
+      ...(options.pollIntervalMs !== undefined
+        ? { pollIntervalMs: options.pollIntervalMs }
+        : {}),
+      ...(options.failureHandler !== undefined
+        ? { failureHandler: options.failureHandler }
+        : {}),
+    });
   }
 
   /** Total physical queues; queue ownership is assigned over `[0, physicalQueueCount)`. */
   get physicalQueueCount(): number {
-    return this.queueCount;
+    return this.core.physicalQueueCount;
   }
 
   /** Wire how a pulled event reaches a subscriber's activation (the cluster node). */
   setDeliver(deliver: StreamDeliver): void {
-    this.deliver = deliver;
+    this.core.setDeliver(deliver);
   }
 
   /**
@@ -111,7 +92,7 @@ export class RedisPullingStreamProvider implements ActivationBoundStreamProvider
    * to the registry's explicit subscribers (Orleans' `[ImplicitStreamSubscription]`).
    */
   setImplicitSubscribers(typesFor: (namespace: string) => Iterable<GrainType>): void {
-    this.implicitTypesFor = typesFor;
+    this.core.setImplicitSubscribers(typesFor);
   }
 
   /**
@@ -121,138 +102,29 @@ export class RedisPullingStreamProvider implements ActivationBoundStreamProvider
    * over hash ranges, so a queue (and its committed cursor) hands off losslessly.
    */
   refreshOwnership(ranges: readonly HashRange[]): void {
-    this.startAgentsFor(ownedQueueIndices(this.name, this.queueCount, ranges));
+    this.core.refreshOwnership(ranges);
   }
 
   /** Run pulling agents for exactly these queue indices (idempotent); stop the rest. */
   startAgentsFor(indices: Iterable<number>): void {
-    const wanted = new Set(indices);
-    for (const [i, agent] of this.agents) {
-      if (!wanted.has(i)) {
-        agent.stop();
-        this.agents.delete(i);
-      }
-    }
-    for (const i of wanted) {
-      if (this.agents.has(i)) continue;
-      const agent = new QueuePullingAgent(
-        this.queues[i]!,
-        (streamKey, event, token) => this.fanOut(streamKey, event, token),
-        {
-          pollIntervalMs: this.pollIntervalMs,
-          ...(this.failureHandler !== undefined ? { failureHandler: this.failureHandler } : {}),
-        },
-      );
-      this.agents.set(i, agent);
-      agent.start();
-    }
+    this.core.startAgentsFor(indices);
   }
 
   /** Stop every agent (silo shutdown). Cursors and subscriptions stay in Redis. */
   stop(): void {
-    for (const agent of this.agents.values()) agent.stop();
-    this.agents.clear();
+    this.core.stop();
   }
 
   getStream<T>(namespace: string, key: GrainKey): AsyncStream<T> {
-    return this.streamFor<T>(namespace, key, undefined);
+    return this.core.getStream<T>(namespace, key);
   }
 
   bindActivation(binding: StreamActivationBinding): StreamProvider {
-    return { getStream: <T>(ns: string, key: GrainKey) => this.streamFor<T>(ns, key, binding) };
+    return this.core.bindActivation(binding);
   }
 
   /** Orleans' pub-sub `RegisterProducer` — see `StreamProducerHandle`. */
   async registerProducer(namespace: string, key: GrainKey): Promise<StreamProducerHandle> {
-    return this.producers.register(this.name, namespace, key);
-  }
-
-  private async fanOut(streamKey: string, event: unknown, token: number): Promise<void> {
-    // Explicit subscribers (from the durable registry) plus implicit ones (grain
-    // types bound to the stream's namespace), deduplicated so a grain that is both
-    // gets the event once.
-    const explicit = await this.registry.subscribers(streamKey);
-    const implicit = implicitSubscriberIds(streamKey, this.implicitTypesFor);
-    const seen = new Set<string>();
-    for (const subscriber of [...explicit, ...implicit]) {
-      const id = subscriber.toString();
-      if (seen.has(id)) continue;
-      seen.add(id);
-      await this.deliver(subscriber, streamKey, event, token);
-    }
-  }
-
-  private streamFor<T>(
-    namespace: string,
-    key: GrainKey,
-    binding: StreamActivationBinding | undefined,
-  ): AsyncStream<T> {
-    const keyString = keyToString(key);
-    const streamKey = `${namespace}/${keyString}`;
-    const queue = this.queues[stableHash32(streamKey) % this.queueCount]!;
-    return new PullingStream<T>(
-      { provider: this.name, namespace, key: keyString },
-      streamKey,
-      queue,
-      this.registry,
-      binding,
-    );
-  }
-}
-
-class PullingStream<T> implements AsyncStream<T> {
-  constructor(
-    readonly id: StreamId,
-    private readonly streamKey: string,
-    private readonly queue: RedisStreamQueue,
-    private readonly registry: RedisSubscriptionRegistry,
-    private readonly binding: StreamActivationBinding | undefined,
-  ) {}
-
-  async publish(event: T): Promise<void> {
-    await this.queue.append(this.streamKey, event);
-  }
-
-  async subscribe(
-    handler: StreamHandler<T>,
-    _options?: SubscribeOptions,
-  ): Promise<StreamSubscriptionHandle<T>> {
-    const binding = this.requireBinding();
-    binding.setHandler(this.streamKey, handler as StreamHandler<unknown>);
-    await this.registry.subscribe(this.streamKey, binding.grainId);
-    return new PullingSubscription<T>(this.streamKey, this.registry, binding);
-  }
-
-  async getSubscriptions(): Promise<StreamSubscriptionHandle<T>[]> {
-    if (this.binding === undefined) return [];
-    const subs = await this.registry.subscribers(this.streamKey);
-    return subs.some((g) => g.equals(this.binding!.grainId))
-      ? [new PullingSubscription<T>(this.streamKey, this.registry, this.binding)]
-      : [];
-  }
-
-  private requireBinding(): StreamActivationBinding {
-    if (this.binding === undefined) {
-      throw new Error("subscribing to a pulling stream requires a grain activation");
-    }
-    return this.binding;
-  }
-}
-
-class PullingSubscription<T> implements StreamSubscriptionHandle<T> {
-  constructor(
-    private readonly streamKey: string,
-    private readonly registry: RedisSubscriptionRegistry,
-    private readonly binding: StreamActivationBinding,
-  ) {}
-
-  // Re-bind the handler on (possibly) a fresh activation after reactivation.
-  async resume(handler: StreamHandler<T>): Promise<void> {
-    this.binding.setHandler(this.streamKey, handler as StreamHandler<unknown>);
-  }
-
-  async unsubscribe(): Promise<void> {
-    this.binding.clearHandler(this.streamKey);
-    await this.registry.unsubscribe(this.streamKey, this.binding.grainId);
+    return this.core.registerProducer(namespace, key);
   }
 }
