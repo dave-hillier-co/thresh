@@ -1,12 +1,12 @@
 // Ported from dotnet/orleans test/Orleans.BroadcastChannel.Tests/ConstructorChannelNamespacePredicateProviderTests.cs @ v10.1.0 (MIT).
 import { describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 import {
   ConstructorChannelNamespacePredicateProvider,
   RegexChannelNamespacePredicate,
   registerChannelNamespacePredicateType,
   type IChannelNamespacePredicate,
-} from "@tsva/core/channel-namespace-predicate";
+} from "@thresh/core/channel-namespace-predicate";
 
 // `ConstructorChannelNamespacePredicateProvider` resolves an
 // `IChannelNamespacePredicate` from a `"ctor:<TypeName>[:<arg>]"` pattern string —

@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { GrainId } from "@tsva/core/grain-id";
-import { SiloAddress } from "@tsva/core/silo-address";
-import { FakeTimeProvider } from "@tsva/core/test-support/fake-time-provider";
-import { InProcessNetwork } from "@tsva/messaging/in-process-transport";
-import { createSilo } from "@tsva/hosting/silo-builder";
-import type { SiloHost } from "@tsva/hosting/silo-host";
-import { GreeterGrain } from "@tsva/example-greeter/greeter-grain";
-import { runGreeterDemo } from "@tsva/example-greeter/demo";
-import { IGreeter } from "@tsva/example-greeter/interfaces";
+import { GrainId } from "@thresh/core/grain-id";
+import { SiloAddress } from "@thresh/core/silo-address";
+import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
+import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
+import { createSilo } from "@thresh/hosting/silo-builder";
+import type { SiloHost } from "@thresh/hosting/silo-host";
+import { GreeterGrain } from "@thresh/example-greeter/greeter-grain";
+import { runGreeterDemo } from "@thresh/example-greeter/demo";
+import { IGreeter } from "@thresh/example-greeter/interfaces";
 
 const local = new SiloAddress("silo-0", "uid-0", "silo-0:11111");
 const tick = () => new Promise((r) => setTimeout(r, 0));

@@ -1,7 +1,7 @@
 // Ported from dotnet/orleans test/Orleans.Runtime.Tests/JsonNodeGrainTests.cs @ v10.1.0 (MIT).
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import { IJsonNodeTestGrain } from "@tsva/parity/grains/interfaces/json-node-test-grain-interfaces";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import { IJsonNodeTestGrain } from "@thresh/parity/grains/interfaces/json-node-test-grain-interfaces";
 
 export { IJsonNodeTestGrain };
 

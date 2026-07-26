@@ -1,5 +1,5 @@
 {
-  "name": "@tsva/persistence",
+  "name": "@thresh/persistence",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -8,8 +8,8 @@
   },
   "dependencies": {
     "@opentelemetry/api": "^1.9.1",
-    "@tsva/core": "workspace:*",
-    "@tsva/observability": "workspace:*",
+    "@thresh/core": "workspace:*",
+    "@thresh/observability": "workspace:*",
     "pg": "^8.21.0",
     "redis": "^5.12.1"
   }

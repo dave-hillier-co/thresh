@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { GrainId } from "@tsva/core/grain-id";
-import { DurableDictionaryImpl } from "@tsva/journaling/durable-dictionary-impl";
-import { MemoryJournalStorage } from "@tsva/journaling/memory-journal-storage";
-import { StateMachineManagerImpl } from "@tsva/journaling/state-machine-manager-impl";
+import { GrainId } from "@thresh/core/grain-id";
+import { DurableDictionaryImpl } from "@thresh/journaling/durable-dictionary-impl";
+import { MemoryJournalStorage } from "@thresh/journaling/memory-journal-storage";
+import { StateMachineManagerImpl } from "@thresh/journaling/state-machine-manager-impl";
 
 const id = new GrainId("Catalog", "k1");
 

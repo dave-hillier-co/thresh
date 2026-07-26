@@ -1,18 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
-import { clientIdOf, isObserverGrainId } from "@tsva/core/client-grain-id";
-import { GrainTaskCanceledError } from "@tsva/core/errors";
-import { GrainCancellationToken } from "@tsva/core/grain-cancellation-token";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import { GrainId } from "@tsva/core/grain-id";
-import { grainReferenceIdentity } from "@tsva/core/grain-reference";
-import type { GrainWithStringKey } from "@tsva/core/key-kinds";
-import { SiloAddress } from "@tsva/core/silo-address";
-import { InProcessNetwork, InProcessTransport } from "@tsva/messaging/in-process-transport";
-import { nextCorrelationId, type Message } from "@tsva/messaging/message";
-import { MessagePackSerializer } from "@tsva/messaging/msgpack-serializer";
-import { ICancellationSourcesExtension } from "@tsva/runtime/cancellation-extension";
-import { waitFor } from "@tsva/testing/wait";
-import { createClient } from "@tsva/client/client-node";
+import { clientIdOf, isObserverGrainId } from "@thresh/core/client-grain-id";
+import { GrainTaskCanceledError } from "@thresh/core/errors";
+import { GrainCancellationToken } from "@thresh/core/grain-cancellation-token";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import { GrainId } from "@thresh/core/grain-id";
+import { grainReferenceIdentity } from "@thresh/core/grain-reference";
+import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import { SiloAddress } from "@thresh/core/silo-address";
+import { InProcessNetwork, InProcessTransport } from "@thresh/messaging/in-process-transport";
+import { nextCorrelationId, type Message } from "@thresh/messaging/message";
+import { MessagePackSerializer } from "@thresh/messaging/msgpack-serializer";
+import { ICancellationSourcesExtension } from "@thresh/runtime/cancellation-extension";
+import { waitFor } from "@thresh/testing/wait";
+import { createClient } from "@thresh/client/client-node";
 
 interface IObserver extends GrainWithStringKey {
   onEvent(payload: string): Promise<string>;

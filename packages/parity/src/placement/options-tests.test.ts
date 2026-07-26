@@ -10,7 +10,7 @@
 // combinations of `MaxEdgeCount`, `MaxUnprocessedEdges`, `MinRoundPeriod`,
 // `MaxRoundPeriod`, `RecoveryPeriod`, and
 // `ProbabilisticFilteringMaxAllowedErrorRate`. Ported onto
-// `@tsva/runtime/placement/repartitioning/activation-repartitioner-options`
+// `@thresh/runtime/placement/repartitioning/activation-repartitioner-options`
 // (`ActivationRepartitionerOptions`/`ActivationRepartitionerOptionsValidator`),
 // a faithful port with `TimeSpan` fields represented as millisecond numbers
 // (`*Ms`), matching this codebase's existing duration convention.
@@ -24,9 +24,9 @@ import {
   DEFAULT_PROBABILISTIC_FILTERING_MAX_ALLOWED_ERROR,
   DEFAULT_RECOVERY_PERIOD_MS,
   defaultActivationRepartitionerOptions,
-} from "@tsva/runtime/placement/repartitioning/activation-repartitioner-options";
+} from "@thresh/runtime/placement/repartitioning/activation-repartitioner-options";
 import { describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 describe("UnitTests.ActivationRepartitioningTests.OptionsTests", () => {
   orleansTest("UnitTests.ActivationRepartitioningTests.OptionsTests.ConstantsShouldNotChange", () => {

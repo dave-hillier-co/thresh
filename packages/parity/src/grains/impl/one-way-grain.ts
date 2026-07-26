@@ -1,8 +1,8 @@
 // Ported from dotnet/orleans test/Grains/TestInternalGrains/TestGrain.cs @ v10.1.0 (MIT).
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import type { ISimpleGrainObserver } from "@tsva/parity/grains/interfaces/simple-observerable-grain-interfaces";
-import type { IOneWayGrain } from "@tsva/parity/grains/interfaces/one-way-grain-interfaces";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import type { ISimpleGrainObserver } from "@thresh/parity/grains/interfaces/simple-observerable-grain-interfaces";
+import type { IOneWayGrain } from "@thresh/parity/grains/interfaces/one-way-grain-interfaces";
 
 @grain({ name: "UnitTests.Grains.OneWayGrain" })
 export class OneWayGrain extends Grain implements IOneWayGrain {

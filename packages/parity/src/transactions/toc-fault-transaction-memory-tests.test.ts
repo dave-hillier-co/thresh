@@ -4,14 +4,14 @@
 // TocFaultTransactionTestRunnerxUnit
 // (src/Orleans.Transactions.TestKit.xUnit/TocFaultTransactionTestRunner.cs).
 import { expect } from "vitest";
-import { defineGrain, useTransactionalState } from "@tsva/core/define-grain";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithStringKey } from "@tsva/core/key-kinds";
-import { TransactionInDoubtError } from "@tsva/core/errors";
-import { TransactionCommitter } from "@tsva/transactions/transaction-committer";
-import type { TransactionCommitOperation } from "@tsva/transactions/transaction-committer";
-import { TestCluster } from "@tsva/testing/test-cluster";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { defineGrain, useTransactionalState } from "@thresh/core/define-grain";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import { TransactionInDoubtError } from "@thresh/core/errors";
+import { TransactionCommitter } from "@thresh/transactions/transaction-committer";
+import type { TransactionCommitOperation } from "@thresh/transactions/transaction-committer";
+import { TestCluster } from "@thresh/testing/test-cluster";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 // MultiGrainWriteTransactionWithCommitFailure carries
 // `[SkippableTheory(Skip = "https://github.com/dotnet/orleans/issues/9556")]`
@@ -25,9 +25,9 @@ orleansTest.excluded(
 
 // MultiGrainWriteTransactionWithCommitException: an `ITransactionCommitterTestGrain`
 // acts as a non-grain "commit service" resource (upstream `RemoteCommitService`),
-// enlisted directly in the 2PC commit phase via `@tsva/transactions`'
+// enlisted directly in the 2PC commit phase via `@thresh/transactions`'
 // `TransactionCommitter` (ported alongside `TransactionInDoubtError`,
-// `@tsva/core/errors`, and `TransactionAgent`'s commit-phase failure handling —
+// `@thresh/core/errors`, and `TransactionAgent`'s commit-phase failure handling —
 // see `transaction-committer.ts`/`transaction-agent.ts`). A `ThrowOperation`
 // throws once the manager has already durably recorded the commit, which
 // surfaces as `TransactionInDoubtError` rather than an ordinary abort — the

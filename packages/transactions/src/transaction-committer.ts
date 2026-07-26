@@ -1,7 +1,7 @@
-import type { GrainId } from "@tsva/core/grain-id";
-import { TransactionReadOnlyViolatedError } from "@tsva/core/errors";
-import type { ParticipantId, TransactionParticipant } from "@tsva/core/transaction-info";
-import { requireTransaction } from "@tsva/runtime/invocation-context";
+import type { GrainId } from "@thresh/core/grain-id";
+import { TransactionReadOnlyViolatedError } from "@thresh/core/errors";
+import type { ParticipantId, TransactionParticipant } from "@thresh/core/transaction-info";
+import { requireTransaction } from "@thresh/runtime/invocation-context";
 
 /**
  * A commit-time action against a non-grain "service" resource, enlisted
@@ -11,7 +11,7 @@ import { requireTransaction } from "@tsva/runtime/invocation-context";
  * or not) has prepared successfully. Returning `false` or throwing means the
  * commit step itself failed or could not be confirmed — since the transaction
  * manager has already durably recorded the commit by then, that surfaces to
- * the caller as `TransactionInDoubtError` (`@tsva/core/errors`), not an abort.
+ * the caller as `TransactionInDoubtError` (`@thresh/core/errors`), not an abort.
  */
 export interface TransactionCommitOperation<TService> {
   commit(transactionId: string, service: TService): boolean | Promise<boolean>;

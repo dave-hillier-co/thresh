@@ -1,15 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import { Pool } from "pg";
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithStringKey } from "@tsva/core/key-kinds";
-import type { Remindable, TickStatus } from "@tsva/core/reminder";
-import { SiloAddress } from "@tsva/core/silo-address";
-import { FakeTimeProvider } from "@tsva/core/test-support/fake-time-provider";
-import { InProcessNetwork } from "@tsva/messaging/in-process-transport";
-import { createSilo } from "@tsva/hosting/silo-builder";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { Remindable, TickStatus } from "@thresh/core/reminder";
+import { SiloAddress } from "@thresh/core/silo-address";
+import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
+import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
+import { createSilo } from "@thresh/hosting/silo-builder";
 
 const PG_URL = process.env.PG_URL ?? "postgres://localhost:5432/postgres";
 
@@ -26,7 +26,7 @@ async function reachable(connectionString: string): Promise<Pool | undefined> {
 }
 
 const admin = await reachable(PG_URL);
-const tableName = `tsva_test_${randomUUID().replace(/-/g, "")}`;
+const tableName = `thresh_test_${randomUUID().replace(/-/g, "")}`;
 const checks = new Map<string, number>();
 
 afterAll(async () => {

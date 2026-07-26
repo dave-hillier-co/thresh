@@ -1,9 +1,9 @@
 // Ported from dotnet/orleans test/Orleans.Runtime.Tests/ExceptionPropagationTests.cs @ v10.1.0 (MIT).
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
-import { ExceptionGrain, IExceptionGrain } from "@tsva/parity/grains/impl/exception-grain";
-import { randomIntegerKey } from "@tsva/parity/support/keys";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
+import { ExceptionGrain, IExceptionGrain } from "@thresh/parity/grains/impl/exception-grain";
+import { randomIntegerKey } from "@thresh/parity/support/keys";
 
 describe("UnitTests.General.ExceptionPropagationTests", () => {
   let cluster: TestCluster;

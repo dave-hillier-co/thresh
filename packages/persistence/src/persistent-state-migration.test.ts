@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { GrainId } from "@tsva/core/grain-id";
-import type { GrainStorage } from "@tsva/core/grain-storage";
-import { MigrationBag } from "@tsva/core/grain-migration-participant";
-import { MemoryGrainStorage } from "@tsva/persistence/memory-grain-storage";
-import { PersistentStateImpl } from "@tsva/persistence/persistent-state-impl";
+import { GrainId } from "@thresh/core/grain-id";
+import type { GrainStorage } from "@thresh/core/grain-storage";
+import { MigrationBag } from "@thresh/core/grain-migration-participant";
+import { MemoryGrainStorage } from "@thresh/persistence/memory-grain-storage";
+import { PersistentStateImpl } from "@thresh/persistence/persistent-state-impl";
 
 interface Balance {
   cents: number;

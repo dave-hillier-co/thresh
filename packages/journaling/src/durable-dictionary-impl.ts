@@ -1,5 +1,5 @@
-import type { DurableStateMachine, StateMachineManager } from "@tsva/core/durable-state-machine";
-import type { DurableDictionary } from "@tsva/core/durable-state";
+import type { DurableStateMachine, StateMachineManager } from "@thresh/core/durable-state-machine";
+import type { DurableDictionary } from "@thresh/core/durable-state";
 
 type DictOp<K, V> =
   | { t: "set"; k: K; v: V }

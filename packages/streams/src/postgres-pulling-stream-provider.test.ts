@@ -1,15 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import { Pool } from "pg";
-import { GrainId } from "@tsva/core/grain-id";
-import type { StreamFailureHandler } from "@tsva/streams/queue-pulling-agent";
-import { PostgresPullingStreamProvider } from "@tsva/streams/postgres-pulling-stream-provider";
+import { GrainId } from "@thresh/core/grain-id";
+import type { StreamFailureHandler } from "@thresh/streams/queue-pulling-agent";
+import { PostgresPullingStreamProvider } from "@thresh/streams/postgres-pulling-stream-provider";
 import {
   DurableStreamFailureHandler,
   type StreamDeliveryFailure,
-} from "@tsva/streams/stream-failure-store";
-import { PostgresStreamFailureStore } from "@tsva/streams/postgres-stream-failure-store";
-import { PostgresSubscriptionRegistry } from "@tsva/streams/postgres-subscription-registry";
+} from "@thresh/streams/stream-failure-store";
+import { PostgresStreamFailureStore } from "@thresh/streams/postgres-stream-failure-store";
+import { PostgresSubscriptionRegistry } from "@thresh/streams/postgres-subscription-registry";
 
 const PG_URL = process.env.PG_URL ?? "postgres://localhost:5432/postgres";
 
@@ -37,7 +37,7 @@ async function waitFor(
 }
 
 const pool = await reachable(PG_URL);
-const prefix = `tsva_test_pp_${randomUUID().replace(/-/g, "")}`;
+const prefix = `thresh_test_pp_${randomUUID().replace(/-/g, "")}`;
 
 afterAll(async () => {
   if (pool === undefined) return;

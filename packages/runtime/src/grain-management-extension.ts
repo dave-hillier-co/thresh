@@ -1,5 +1,5 @@
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { ActivationData } from "@tsva/runtime/activation";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { ActivationData } from "@thresh/runtime/activation";
 
 /**
  * Orleans' built-in `IGrainManagementExtension` `IGrainExtension`

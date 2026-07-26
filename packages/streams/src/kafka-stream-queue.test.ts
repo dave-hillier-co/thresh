@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { Kafka } from "kafkajs";
 import { afterAll, describe, expect, it } from "vitest";
-import type { StreamFailureHandler } from "@tsva/streams/queue-pulling-agent";
-import { KafkaStreamQueue, KafkaTopicQueues } from "@tsva/streams/kafka-stream-queue";
-import { MemoryStreamCursorStore } from "@tsva/streams/stream-cursor-store";
-import type { QueueEntry } from "@tsva/streams/redis-stream-queue";
+import type { StreamFailureHandler } from "@thresh/streams/queue-pulling-agent";
+import { KafkaStreamQueue, KafkaTopicQueues } from "@thresh/streams/kafka-stream-queue";
+import { MemoryStreamCursorStore } from "@thresh/streams/stream-cursor-store";
+import type { QueueEntry } from "@thresh/streams/redis-stream-queue";
 
 const KAFKA_BROKERS = process.env.KAFKA_BROKERS ?? "localhost:9092";
 
@@ -13,7 +13,7 @@ async function reachable(): Promise<Kafka | undefined> {
   // producers under test, and kafkajs's idempotent producer requires
   // retries to stay enabled.
   const kafka = new Kafka({
-    clientId: "tsva-test-probe",
+    clientId: "thresh-test-probe",
     brokers: [KAFKA_BROKERS],
     connectionTimeout: 2000,
     logLevel: 1, // ERROR only — kafkajs is chatty at the default level
@@ -32,7 +32,7 @@ const kafka = await reachable();
 const createdTopics: string[] = [];
 
 async function createTopic(numPartitions: number): Promise<string> {
-  const topic = `tsva_test_kq_${randomUUID().replace(/-/g, "")}`;
+  const topic = `thresh_test_kq_${randomUUID().replace(/-/g, "")}`;
   const admin = kafka!.admin();
   await admin.connect();
   try {

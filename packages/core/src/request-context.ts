@@ -5,7 +5,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
  * chain — W3C trace context, tenant/correlation ids, and other app baggage a
  * caller wants a callee to see without threading it through every method
  * signature. Backed by a single {@link AsyncLocalStorage}, shared by both a
- * grain turn (`@tsva/runtime`'s `requestContext` delegates here, scoping a
+ * grain turn (`@thresh/runtime`'s `requestContext` delegates here, scoping a
  * fresh store per turn via {@link runWithRequestContext}) and a non-grain
  * caller (a client / test, calling {@link RequestContext.set} directly,
  * below) — mirroring .NET's `RequestContext`, which is the same static class
@@ -18,7 +18,7 @@ const storage = new AsyncLocalStorage<Record<string, string>>();
  * key a caller sets (`RequestContext.set(PLACEMENT_HINT_KEY, silo.toString())`)
  * to steer a grain's activation onto a chosen silo. Honoured by the placement
  * decision when the hinted silo is a live candidate; otherwise the normal
- * placement strategy runs (see `@tsva/runtime/placement/placement-hint`).
+ * placement strategy runs (see `@thresh/runtime/placement/placement-hint`).
  */
 export const PLACEMENT_HINT_KEY = "PlacementHintKey";
 

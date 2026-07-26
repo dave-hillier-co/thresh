@@ -1,5 +1,5 @@
-import type { Catalog } from "@tsva/runtime/catalog";
-import type { TimeProvider, TimerHandle } from "@tsva/runtime/time-provider";
+import type { Catalog } from "@thresh/runtime/catalog";
+import type { TimeProvider, TimerHandle } from "@thresh/runtime/time-provider";
 
 /** Periodically sweeps the catalog, deactivating idle (stale) activations. */
 export class ActivationCollector {

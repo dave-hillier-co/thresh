@@ -1,4 +1,4 @@
-import type { GrainId } from "@tsva/core/grain-id";
+import type { GrainId } from "@thresh/core/grain-id";
 
 /**
  * Delivers one stream event to a subscriber's activation; wired to

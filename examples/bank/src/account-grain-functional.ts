@@ -1,11 +1,11 @@
-import { defineGrain, useReducerState } from "@tsva/core/define-grain";
+import { defineGrain, useReducerState } from "@thresh/core/define-grain";
 import {
   IAccount,
   initialAccount,
   reduceAccount,
   type AccountEvent,
   type AccountState,
-} from "@tsva/example-bank/interfaces";
+} from "@thresh/example-bank/interfaces";
 
 /**
  * A bank account as a multi-method functional grain: a factory closure with

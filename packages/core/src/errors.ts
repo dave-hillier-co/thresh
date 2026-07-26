@@ -135,13 +135,13 @@ export class GrainTaskCanceledError extends Error {
 
 /**
  * Raised when a call's ambient `AbortSignal`/deadline (see
- * `@tsva/runtime/dispatcher`'s `InvokeCallOptions` and `InvocationRequest
+ * `@thresh/runtime/dispatcher`'s `InvokeCallOptions` and `InvocationRequest
  * .deadline`) fires before the call's turn was ever admitted to run. Orleans
  * has no analogue — this is JS-only cooperative cancellation (see
  * `docs/deviations.md`). Once a turn has actually started it always runs to
  * completion (no thread interruption to preempt it with); this error only
  * preempts a still-queued turn (`TurnScheduler`) or abandons a wait on a
- * storage-provider call (`@tsva/core/abort`'s `raceSignal`).
+ * storage-provider call (`@thresh/core/abort`'s `raceSignal`).
  */
 export class GrainCallAbortedError extends Error {
   constructor(message = "the call was aborted before it completed") {
@@ -172,7 +172,7 @@ export class TransactionAbortedError extends Error {
  * Raised when a read-only transaction attempts to write to a grain's
  * transactional state (Orleans `OrleansReadOnlyViolatedException`, a subtype
  * of `OrleansTransactionAbortedException`). Thrown by
- * `TransactionalStateImpl.performUpdate` (`@tsva/transactions`) before any
+ * `TransactionalStateImpl.performUpdate` (`@thresh/transactions`) before any
  * lock is acquired, since the write is illegal regardless of contention.
  */
 export class TransactionReadOnlyViolatedError extends TransactionAbortedError {
@@ -188,7 +188,7 @@ export class TransactionReadOnlyViolatedError extends TransactionAbortedError {
  * concurrently holding or waiting on the same resource (Orleans
  * `OrleansTransactionLockUpgradeException`, a subtype of
  * `OrleansTransactionTransientFailureException`). Thrown by
- * `ReaderWriterLock.enter` (`@tsva/transactions`) specifically on the
+ * `ReaderWriterLock.enter` (`@thresh/transactions`) specifically on the
  * read-to-write upgrade path — never on an ordinary first-acquisition
  * wait-die death, which keeps raising the generic
  * {@link TransactionAbortedError}.

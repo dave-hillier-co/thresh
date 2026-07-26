@@ -2,8 +2,8 @@ import { metrics, type Attributes, type Counter, type Histogram } from "@opentel
 
 /**
  * OpenTelemetry counter/histogram for persistent-state storage operations —
- * `tsva.storage.ops` (by provider, state name, operation, and ok/error status)
- * and `tsva.storage.op.duration` (milliseconds). Emitted alongside the
+ * `thresh.storage.ops` (by provider, state name, operation, and ok/error status)
+ * and `thresh.storage.op.duration` (milliseconds). Emitted alongside the
  * `withStorageReadSpan`/`withStorageWriteSpan` spans in `activation-tracing.ts`,
  * through the global OpenTelemetry meter — a no-op until the host registers an
  * SDK.
@@ -23,13 +23,13 @@ let instruments: Instruments | undefined;
 
 function instrumentsOf(): Instruments {
   if (instruments === undefined) {
-    const meter = metrics.getMeter("@tsva/observability");
+    const meter = metrics.getMeter("@thresh/observability");
     instruments = {
-      ops: meter.createCounter("tsva.storage.ops", {
+      ops: meter.createCounter("thresh.storage.ops", {
         description: "Number of grain storage operations",
         unit: "{operation}",
       }),
-      duration: meter.createHistogram("tsva.storage.op.duration", {
+      duration: meter.createHistogram("thresh.storage.op.duration", {
         description: "Grain storage operation duration",
         unit: "ms",
       }),
@@ -55,7 +55,7 @@ export async function withStorageOpMetrics<T>(
     "orleans.storage.provider": attrs.provider,
     "orleans.storage.state.name": attrs.stateName,
     "orleans.grain.id": attrs.grainId,
-    "tsva.storage.operation": attrs.operation,
+    "thresh.storage.operation": attrs.operation,
   };
   const start = Date.now();
   let status = "ok";
@@ -66,6 +66,6 @@ export async function withStorageOpMetrics<T>(
     throw err;
   } finally {
     duration.record(Date.now() - start, recorded);
-    ops.add(1, { ...recorded, "tsva.status": status });
+    ops.add(1, { ...recorded, "thresh.status": status });
   }
 }

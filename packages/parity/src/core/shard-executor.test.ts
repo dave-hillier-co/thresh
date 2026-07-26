@@ -1,13 +1,13 @@
 // Ported from dotnet/orleans test/Orleans.Core.Tests/DurableJobs/ShardExecutorTests.cs @ v10.1.0 (MIT).
 import { describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { completed, failed, pollAfter, type DurableJob } from "@tsva/core/durable-job";
-import { GrainId } from "@tsva/core/grain-id";
-import { FakeTimeProvider } from "@tsva/core/test-support/fake-time-provider";
-import { systemTimeProvider } from "@tsva/core/time-provider";
-import { defaultShouldRetry } from "@tsva/durable-jobs/job-model";
-import { MemoryJobShardStore } from "@tsva/durable-jobs/memory-job-shard-store";
-import { ConcurrencyLimiter, ShardExecutor, type RunJob } from "@tsva/durable-jobs/shard-executor";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { completed, failed, pollAfter, type DurableJob } from "@thresh/core/durable-job";
+import { GrainId } from "@thresh/core/grain-id";
+import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
+import { systemTimeProvider } from "@thresh/core/time-provider";
+import { defaultShouldRetry } from "@thresh/durable-jobs/job-model";
+import { MemoryJobShardStore } from "@thresh/durable-jobs/memory-job-shard-store";
+import { ConcurrencyLimiter, ShardExecutor, type RunJob } from "@thresh/durable-jobs/shard-executor";
 
 // Upstream's ShardExecutor is invoked via a single `RunShardAsync(shard, cancellationToken)`
 // call that processes the shard's *current* jobs and returns once they settle —

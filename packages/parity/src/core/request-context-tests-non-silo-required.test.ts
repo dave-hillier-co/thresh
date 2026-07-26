@@ -1,6 +1,6 @@
 // Ported from dotnet/orleans test/Orleans.Core.Tests/General/RequestContextTestsNonSiloRequired.cs @ v10.1.0 (MIT).
 import { describe, it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 // This framework has no RequestContext ambient-dictionary concept, no Message class with a
 // RequestContextData export/import round-trip through a DeepCopier, and no .NET

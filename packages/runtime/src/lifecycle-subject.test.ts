@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { LifecycleSubject, type LifecycleObserver } from "@tsva/runtime/lifecycle-subject";
+import { LifecycleSubject, type LifecycleObserver } from "@thresh/runtime/lifecycle-subject";
 
 function recordingObserver(log: string[], name: string, opts?: { failOnStart?: boolean; failOnStop?: boolean }): LifecycleObserver {
   return {

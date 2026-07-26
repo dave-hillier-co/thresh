@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { Grain } from "@tsva/core/grain";
-import { GrainId } from "@tsva/core/grain-id";
-import type { IncomingGrainCallFilter } from "@tsva/core/grain-call-filter";
-import type { InvocationRequest } from "@tsva/core/request";
-import { ActivationData } from "@tsva/runtime/activation";
-import { requestContext } from "@tsva/runtime/invocation-context";
-import { FakeTimeProvider } from "@tsva/runtime/test-support/fake-time-provider";
+import { Grain } from "@thresh/core/grain";
+import { GrainId } from "@thresh/core/grain-id";
+import type { IncomingGrainCallFilter } from "@thresh/core/grain-call-filter";
+import type { InvocationRequest } from "@thresh/core/request";
+import { ActivationData } from "@thresh/runtime/activation";
+import { requestContext } from "@thresh/runtime/invocation-context";
+import { FakeTimeProvider } from "@thresh/runtime/test-support/fake-time-provider";
 
 class RequestContextGrain extends Grain {
   async getContextValue(key: string): Promise<string | undefined> {

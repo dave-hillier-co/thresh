@@ -1,6 +1,6 @@
 // Ported from dotnet/orleans test/Orleans.Core.Tests/Directory/GrainLocatorResolverTests.cs @ v10.1.0 (MIT).
 import { describe, it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 // GrainLocatorResolver picks which IGrainLocator implementation (DhtGrainLocator
 // for the default directory, CachedGrainLocator for a custom per-type

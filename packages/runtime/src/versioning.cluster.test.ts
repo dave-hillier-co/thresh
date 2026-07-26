@@ -1,15 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import { GrainId } from "@tsva/core/grain-id";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithStringKey } from "@tsva/core/key-kinds";
-import type { SiloAddress } from "@tsva/core/silo-address";
-import type { CompatibilityKind } from "@tsva/core/version-compatibility";
-import type { VersionSelectorKind } from "@tsva/core/version-selector";
-import { InProcessNetwork } from "@tsva/messaging/in-process-transport";
-import type { Message } from "@tsva/messaging/message";
-import { TestCluster } from "@tsva/testing/test-cluster";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import { GrainId } from "@thresh/core/grain-id";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { SiloAddress } from "@thresh/core/silo-address";
+import type { CompatibilityKind } from "@thresh/core/version-compatibility";
+import type { VersionSelectorKind } from "@thresh/core/version-selector";
+import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
+import type { Message } from "@thresh/messaging/message";
+import { TestCluster } from "@thresh/testing/test-cluster";
 
 interface ICounter extends GrainWithStringKey {
   increment(by: number): Promise<number>;

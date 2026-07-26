@@ -1,11 +1,11 @@
 import { once } from "node:events";
-import { KubernetesEndpointWatch } from "@tsva/clustering-k8s/kubernetes-endpoint-watch";
-import { createKubernetesClientSource } from "@tsva/clustering-k8s/kubernetes-client-source";
-import { readPodEnvironment, siloAddressFromPodEnv } from "@tsva/clustering-k8s/pod-environment";
-import { createSilo } from "@tsva/hosting/silo-builder";
-import { CounterGrain } from "@tsva/example-k8s-silo/counter-grain";
-import { ICounter } from "@tsva/example-k8s-silo/interfaces";
-import { createCounterApi } from "@tsva/example-k8s-silo/http-api";
+import { KubernetesEndpointWatch } from "@thresh/clustering-k8s/kubernetes-endpoint-watch";
+import { createKubernetesClientSource } from "@thresh/clustering-k8s/kubernetes-client-source";
+import { readPodEnvironment, siloAddressFromPodEnv } from "@thresh/clustering-k8s/pod-environment";
+import { createSilo } from "@thresh/hosting/silo-builder";
+import { CounterGrain } from "@thresh/example-k8s-silo/counter-grain";
+import { ICounter } from "@thresh/example-k8s-silo/interfaces";
+import { createCounterApi } from "@thresh/example-k8s-silo/http-api";
 
 const SILO_PORT = Number(process.env.SILO_PORT ?? 11111);
 const HEALTH_PORT = Number(process.env.HEALTH_PORT ?? 8080);

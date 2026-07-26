@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { StreamProducerRegistry } from "@tsva/streams/stream-producer-registry";
+import { StreamProducerRegistry } from "@thresh/streams/stream-producer-registry";
 
 describe("StreamProducerRegistry", () => {
   it("counts a registered producer until it unregisters", async () => {

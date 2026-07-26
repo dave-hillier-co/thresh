@@ -1,16 +1,16 @@
 // Ported from dotnet/orleans test/Orleans.DefaultCluster.Tests/ManagementGrainTests.cs @ v10.1.0 (MIT).
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { grainAddressEquals } from "@tsva/core/grain-address";
-import { Guid } from "@tsva/core/guid";
-import { IManagementGrain } from "@tsva/core/management-grain";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
+import { grainAddressEquals } from "@thresh/core/grain-address";
+import { Guid } from "@thresh/core/guid";
+import { IManagementGrain } from "@thresh/core/management-grain";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
 import {
   DumbGrain,
   DumbWorker,
   IDumbGrain,
   IDumbWorker,
-} from "@tsva/parity/grains/impl/management-grain-support";
+} from "@thresh/parity/grains/impl/management-grain-support";
 
 describe("UnitTests.OrleansRuntime.ManagementGrainTests", () => {
   let cluster: TestCluster;

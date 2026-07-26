@@ -12,8 +12,8 @@
 // and the `ExampleStorage` plugin built on it in
 // `packages/parity/src/support/example-storage.ts`).
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
 import {
   IStorageDefaultFacetGrain,
   IStorageDefaultFactoryGrain,
@@ -23,13 +23,13 @@ import {
   StorageDefaultFactoryGrain,
   StorageFacetGrain,
   StorageFactoryGrain,
-} from "@tsva/parity/grains/impl/storage-facet-grain";
+} from "@thresh/parity/grains/impl/storage-facet-grain";
 import {
   tableExampleStorageFactory,
   useAsDefaultExampleStorage,
   useBlobExampleStorage,
   useTableExampleStorage,
-} from "@tsva/parity/support/example-storage";
+} from "@thresh/parity/support/example-storage";
 
 describe("Tester.StorageFacetTests", () => {
   let cluster: TestCluster;

@@ -1,20 +1,20 @@
 // Ported from dotnet/orleans test/Orleans.DefaultCluster.Tests/Migration/MigrationTests.cs @ v10.1.0 (MIT).
-import { grain, persistentState } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
+import { grain, persistentState } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
 import type {
   DehydrationContext,
   IGrainMigrationParticipant,
   RehydrationContext,
-} from "@tsva/core/grain-migration-participant";
-import type { DeactivationReason } from "@tsva/core/reasons";
-import type { PersistentState } from "@tsva/core/persistent-state";
-import { RequestContext } from "@tsva/core/request-context";
-import type { SiloAddress } from "@tsva/core/silo-address";
+} from "@thresh/core/grain-migration-participant";
+import type { DeactivationReason } from "@thresh/core/reasons";
+import type { PersistentState } from "@thresh/core/persistent-state";
+import { RequestContext } from "@thresh/core/request-context";
+import type { SiloAddress } from "@thresh/core/silo-address";
 import {
   IMigrationTestGrain,
   IMigrationTestGrainGrainOfT,
   IMigrationTestGrainIPersistentStateOfT,
-} from "@tsva/parity/grains/interfaces/migration-test-grain-interfaces";
+} from "@thresh/parity/grains/interfaces/migration-test-grain-interfaces";
 
 export { IMigrationTestGrain, IMigrationTestGrainGrainOfT, IMigrationTestGrainIPersistentStateOfT };
 

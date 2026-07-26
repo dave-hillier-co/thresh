@@ -20,8 +20,8 @@ const ENABLED = process.env.K8S_E2E === "1";
 
 const exec = promisify(execFile);
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
-const IMAGE = "tsva-k8s-silo:dev";
-const ns = `tsva-e2e-${Math.random().toString(36).slice(2, 8)}`;
+const IMAGE = "thresh-k8s-silo:dev";
+const ns = `thresh-e2e-${Math.random().toString(36).slice(2, 8)}`;
 
 const sh = (cmd: string, args: string[], timeoutMs = 120_000) =>
   exec(cmd, args, { timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, cwd: repoRoot });

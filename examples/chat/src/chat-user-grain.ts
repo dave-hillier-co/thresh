@@ -1,6 +1,6 @@
-import { defineGrain } from "@tsva/core/define-grain";
-import type { StreamHandler } from "@tsva/core/stream";
-import { CHAT, type ChatMessage, type IChatUser } from "@tsva/example-chat/interfaces";
+import { defineGrain } from "@thresh/core/define-grain";
+import type { StreamHandler } from "@thresh/core/stream";
+import { CHAT, type ChatMessage, type IChatUser } from "@thresh/example-chat/interfaces";
 
 /**
  * A chat member. `join` subscribes to the room stream — or, if this activation

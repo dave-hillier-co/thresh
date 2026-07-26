@@ -1,27 +1,27 @@
 import type { Kafka } from "kafkajs";
-import type { GrainKey } from "@tsva/core/grain-key";
-import type { GrainType } from "@tsva/core/grain-type";
+import type { GrainKey } from "@thresh/core/grain-key";
+import type { GrainType } from "@thresh/core/grain-type";
 import type {
   ActivationBoundStreamProvider,
   AsyncStream,
   StreamActivationBinding,
   StreamProducerHandle,
   StreamProvider,
-} from "@tsva/core/stream";
+} from "@thresh/core/stream";
 import {
   PullingStreamProviderCore,
   validateQueueCount,
   type SubscriptionRegistry,
-} from "@tsva/streams/pulling-stream-provider-core";
-import type { StreamFailureHandler } from "@tsva/streams/queue-pulling-agent";
-import { ownedQueueIndices, type HashRange } from "@tsva/streams/queue-ownership";
-import { KafkaStreamQueue, KafkaTopicQueues } from "@tsva/streams/kafka-stream-queue";
-import type { StreamCursorStore } from "@tsva/streams/stream-cursor-store";
-import type { StreamDeliver } from "@tsva/streams/stream-deliver";
-import { StreamProviderConfigurationError } from "@tsva/streams/stream-provider-config-error";
+} from "@thresh/streams/pulling-stream-provider-core";
+import type { StreamFailureHandler } from "@thresh/streams/queue-pulling-agent";
+import { ownedQueueIndices, type HashRange } from "@thresh/streams/queue-ownership";
+import { KafkaStreamQueue, KafkaTopicQueues } from "@thresh/streams/kafka-stream-queue";
+import type { StreamCursorStore } from "@thresh/streams/stream-cursor-store";
+import type { StreamDeliver } from "@thresh/streams/stream-deliver";
+import { StreamProviderConfigurationError } from "@thresh/streams/stream-provider-config-error";
 
-export type { StreamDeliver } from "@tsva/streams/stream-deliver";
-export type { StreamFailureHandler } from "@tsva/streams/queue-pulling-agent";
+export type { StreamDeliver } from "@thresh/streams/stream-deliver";
+export type { StreamFailureHandler } from "@thresh/streams/queue-pulling-agent";
 
 /** Anything the Kafka provider provisions lazily on `start()` — Postgres-backed metadata does. */
 interface Startable {
@@ -29,7 +29,7 @@ interface Startable {
 }
 
 export interface KafkaPullingStreamProviderOptions {
-  /** Prefix for the provider's topic, `<prefix>.<name>` (defaults to `"tsva.streams"`). */
+  /** Prefix for the provider's topic, `<prefix>.<name>` (defaults to `"thresh.streams"`). */
   topicPrefix?: string;
   /**
    * Number of physical queues streams are multiplexed over (defaults to 8);
@@ -89,7 +89,7 @@ export class KafkaPullingStreamProvider implements ActivationBoundStreamProvider
     options: KafkaPullingStreamProviderOptions,
   ) {
     this.queueCount = validateQueueCount(name, options.queueCount);
-    const topicPrefix = options.topicPrefix ?? "tsva.streams";
+    const topicPrefix = options.topicPrefix ?? "thresh.streams";
     this.topic = `${topicPrefix}.${name}`;
     this.registry = options.registry;
     this.cursorStore = options.cursorStore;

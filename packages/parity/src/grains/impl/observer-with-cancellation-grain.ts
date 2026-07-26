@@ -1,11 +1,11 @@
 // Ported from dotnet/orleans test/Grains/TestGrains/ObserverWithCancellationGrain.cs @ v10.1.0 (MIT).
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import type { GrainCancellationToken } from "@tsva/core/grain-cancellation-token";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import type { GrainCancellationToken } from "@thresh/core/grain-cancellation-token";
 import {
   ILongRunningObserver,
   IObserverWithCancellationGrain,
-} from "@tsva/parity/grains/interfaces/observer-with-cancellation-grain-interfaces";
+} from "@thresh/parity/grains/interfaces/observer-with-cancellation-grain-interfaces";
 
 export { ILongRunningObserver, IObserverWithCancellationGrain };
 

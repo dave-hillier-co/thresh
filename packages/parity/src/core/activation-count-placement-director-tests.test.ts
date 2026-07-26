@@ -1,6 +1,6 @@
 // Ported from dotnet/orleans test/Orleans.Core.Tests/Runtime/ActivationCountPlacementDirectorTests.cs @ v10.1.0 (MIT).
 import { describe, it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 // This framework's ActivationCountPlacement (packages/runtime/src/placement/activation-count-placement.ts)
 // is a power-of-k random-sampling strategy with no deployment-load-publisher stats subscription,

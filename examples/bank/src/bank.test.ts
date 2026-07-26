@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { MemoryGrainStorage } from "@tsva/persistence/memory-grain-storage";
-import { buildBankSilo, runBankDemo } from "@tsva/example-bank/demo";
-import { IAccount } from "@tsva/example-bank/interfaces";
+import { MemoryGrainStorage } from "@thresh/persistence/memory-grain-storage";
+import { buildBankSilo, runBankDemo } from "@thresh/example-bank/demo";
+import { IAccount } from "@thresh/example-bank/interfaces";
 
 describe("bank reducer grains", () => {
   it("runs the demo end-to-end: events fold to state, transfer moves funds, snapshot survives restart", async () => {

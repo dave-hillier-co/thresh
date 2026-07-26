@@ -1,17 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
-import { RejectionError } from "@tsva/core/errors";
-import { GrainId } from "@tsva/core/grain-id";
-import type { InvocationRequest } from "@tsva/core/request";
-import { SiloAddress } from "@tsva/core/silo-address";
-import type { Catalog } from "@tsva/runtime/catalog";
-import type { GrainDirectory } from "@tsva/directory/grain-directory";
-import type { LocationCache } from "@tsva/directory/location-cache";
+import { RejectionError } from "@thresh/core/errors";
+import { GrainId } from "@thresh/core/grain-id";
+import type { InvocationRequest } from "@thresh/core/request";
+import { SiloAddress } from "@thresh/core/silo-address";
+import type { Catalog } from "@thresh/runtime/catalog";
+import type { GrainDirectory } from "@thresh/directory/grain-directory";
+import type { LocationCache } from "@thresh/directory/location-cache";
 import {
   DistributedDispatcher,
   type DistributedDispatcherDeps,
-} from "@tsva/runtime/distributed-dispatcher";
-import type { PlacementFilter } from "@tsva/runtime/placement/placement-filter";
-import { RandomPlacement } from "@tsva/runtime/placement/random-placement";
+} from "@thresh/runtime/distributed-dispatcher";
+import type { PlacementFilter } from "@thresh/runtime/placement/placement-filter";
+import { RandomPlacement } from "@thresh/runtime/placement/random-placement";
 
 const silo = (n: number) => new SiloAddress(`silo-${n}`, `uid-${n}`, `silo-${n}:1`);
 const local = silo(0);

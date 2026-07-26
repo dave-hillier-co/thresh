@@ -16,18 +16,18 @@ import type {
   GrainCallContext,
   IncomingGrainCallFilter,
   OutgoingGrainCallFilter,
-} from "@tsva/core/grain-call-filter";
+} from "@thresh/core/grain-call-filter";
 
-const tracer = trace.getTracer("@tsva/observability");
+const tracer = trace.getTracer("@thresh/observability");
 
 const spanName = (ctx: GrainCallContext): string => `${ctx.interfaceName}/${ctx.methodName}`;
 
 function attributes(ctx: GrainCallContext): Attributes {
   return {
-    "rpc.system": "tsva",
+    "rpc.system": "thresh",
     "rpc.service": ctx.interfaceName,
     "rpc.method": ctx.methodName,
-    "tsva.grain_id": ctx.target.toString(),
+    "thresh.grain_id": ctx.target.toString(),
   };
 }
 

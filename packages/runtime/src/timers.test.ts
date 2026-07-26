@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainTimer } from "@tsva/core/grain-timer";
-import type { GrainWithStringKey } from "@tsva/core/key-kinds";
-import { Silo } from "@tsva/runtime/silo";
-import { FakeTimeProvider } from "@tsva/runtime/test-support/fake-time-provider";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainTimer } from "@thresh/core/grain-timer";
+import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import { Silo } from "@thresh/runtime/silo";
+import { FakeTimeProvider } from "@thresh/runtime/test-support/fake-time-provider";
 
 interface ITicker extends GrainWithStringKey {
   startPeriodic(): Promise<void>;

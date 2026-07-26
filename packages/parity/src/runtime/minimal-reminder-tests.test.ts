@@ -1,14 +1,14 @@
 // Ported from dotnet/orleans test/Orleans.Runtime.Tests/MinimalReminderTests.cs @ v10.1.0 (MIT).
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
-import type { Duration } from "@tsva/core/duration";
-import { FakeTimeProvider } from "@tsva/core/test-support/fake-time-provider";
-import { randomGuidKey } from "@tsva/parity/support/keys";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
+import type { Duration } from "@thresh/core/duration";
+import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
+import { randomGuidKey } from "@thresh/parity/support/keys";
 import {
   IReminderTestGrain2,
   ReminderTestGrain2,
-} from "@tsva/parity/grains/impl/reminder-test-grain2";
+} from "@thresh/parity/grains/impl/reminder-test-grain2";
 
 describe("UnitTests.CatalogTests.MinimalReminderTests", () => {
   let cluster: TestCluster;

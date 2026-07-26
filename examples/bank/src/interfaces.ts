@@ -1,5 +1,5 @@
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithStringKey } from "@tsva/core/key-kinds";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithStringKey } from "@thresh/core/key-kinds";
 
 /** Past-tense facts a reducer folds into account state. Never persisted in snapshot mode. */
 export type AccountEvent =

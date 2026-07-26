@@ -16,21 +16,21 @@
  * deterministic under a fake clock; the cycle runner and membership are injected
  * so this stays off `ClusterNode` (which already exposes `runRebalanceCycle`).
  */
-import type { MembershipService } from "@tsva/core/membership";
-import { activeSilos } from "@tsva/core/membership";
-import type { SiloAddress } from "@tsva/core/silo-address";
-import type { TimeProvider, TimerHandle } from "@tsva/core/time-provider";
+import type { MembershipService } from "@thresh/core/membership";
+import { activeSilos } from "@thresh/core/membership";
+import type { SiloAddress } from "@thresh/core/silo-address";
+import type { TimeProvider, TimerHandle } from "@thresh/core/time-provider";
 import type {
   CycleState,
   MigrationMove,
   RebalancerOptions,
   StopReason,
-} from "@tsva/runtime/placement/rebalancing/rebalancer-model";
-import { INITIAL_CYCLE_STATE } from "@tsva/runtime/placement/rebalancing/rebalancer-model";
+} from "@thresh/runtime/placement/rebalancing/rebalancer-model";
+import { INITIAL_CYCLE_STATE } from "@thresh/runtime/placement/rebalancing/rebalancer-model";
 import type {
   RebalancerStatus,
   RebalancingReport,
-} from "@tsva/runtime/placement/rebalancing/rebalancing-report";
+} from "@thresh/runtime/placement/rebalancing/rebalancing-report";
 
 /**
  * The outcome of running one cycle, as `ClusterNode.runRebalanceCycle` returns

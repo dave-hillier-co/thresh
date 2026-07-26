@@ -1,33 +1,33 @@
-import { durationToMs } from "@tsva/core/duration";
+import { durationToMs } from "@thresh/core/duration";
 import {
   runCallFilters,
   type GrainCallContext,
   type OutgoingGrainCallFilter,
-} from "@tsva/core/grain-call-filter";
+} from "@thresh/core/grain-call-filter";
 import {
   GrainCancellationToken,
   recordCancellationTarget,
-} from "@tsva/core/grain-cancellation-token";
-import { GrainId } from "@tsva/core/grain-id";
-import { getGrainInterface, type GrainInterface } from "@tsva/core/grain-interface";
-import type { GrainKey } from "@tsva/core/grain-key";
-import { GRAIN_REF, GRAIN_REF_CAST } from "@tsva/core/grain-reference";
-import type { GrainType } from "@tsva/core/grain-type";
-import { Guid } from "@tsva/core/guid";
-import type { InvokeMethodOptions } from "@tsva/core/invoke-options";
-import type { InvocationRequest } from "@tsva/core/request";
-import { requestContextStore } from "@tsva/core/request-context";
-import type { TransactionInfo } from "@tsva/core/transaction-info";
+} from "@thresh/core/grain-cancellation-token";
+import { GrainId } from "@thresh/core/grain-id";
+import { getGrainInterface, type GrainInterface } from "@thresh/core/grain-interface";
+import type { GrainKey } from "@thresh/core/grain-key";
+import { GRAIN_REF, GRAIN_REF_CAST } from "@thresh/core/grain-reference";
+import type { GrainType } from "@thresh/core/grain-type";
+import { Guid } from "@thresh/core/guid";
+import type { InvokeMethodOptions } from "@thresh/core/invoke-options";
+import type { InvocationRequest } from "@thresh/core/request";
+import { requestContextStore } from "@thresh/core/request-context";
+import type { TransactionInfo } from "@thresh/core/transaction-info";
 import {
   GrainCallTimeoutError,
   TransactionAbortedError,
   TransactionInDoubtError,
   TransactionsDisabledError,
-} from "@tsva/core/errors";
-import type { Dispatcher, InvokeCallOptions } from "@tsva/runtime/dispatcher";
-import { invocationContext } from "@tsva/runtime/invocation-context";
-import { systemTimeProvider, type TimeProvider } from "@tsva/runtime/time-provider";
-import type { TransactionAgent } from "@tsva/runtime/transaction-agent";
+} from "@thresh/core/errors";
+import type { Dispatcher, InvokeCallOptions } from "@thresh/runtime/dispatcher";
+import { invocationContext } from "@thresh/runtime/invocation-context";
+import { systemTimeProvider, type TimeProvider } from "@thresh/runtime/time-provider";
+import type { TransactionAgent } from "@thresh/runtime/transaction-agent";
 
 const newChainId = () => Guid.newGuid().toString();
 
@@ -195,7 +195,7 @@ export class GrainFactory {
             // The ambient RequestContext bag (Orleans `RequestContext`) — the
             // SAME store whether this call originates from inside a grain turn
             // (scoped per-turn by `activation.ts`) or from a non-grain client
-            // caller that set it directly (`RequestContext.set`, `@tsva/core`,
+            // caller that set it directly (`RequestContext.set`, `@thresh/core`,
             // established ambiently via `enterWith` with no turn in scope at
             // all). A fresh copy so mutating it here (or in an outgoing filter)
             // never mutates the caller's own bag.
@@ -393,7 +393,7 @@ export class GrainFactory {
       await agent.resolve(transaction);
       return result;
     } catch (error) {
-      // `TransactionInDoubtError` (@tsva/core/errors) means the commit was
+      // `TransactionInDoubtError` (@thresh/core/errors) means the commit was
       // already durably decided before this failure happened — the opposite
       // of an abort. Nothing to roll back (there is nothing to undo, and
       // every participant's write will still land), and it must surface

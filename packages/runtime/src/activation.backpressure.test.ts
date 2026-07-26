@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { LimitExceededException } from "@tsva/core/errors";
-import { Grain } from "@tsva/core/grain";
-import { GrainId } from "@tsva/core/grain-id";
-import type { Logger, LogFields } from "@tsva/core/logger";
-import type { InvocationRequest } from "@tsva/core/request";
-import { ActivationData, type ActivationOptions } from "@tsva/runtime/activation";
-import { FakeTimeProvider } from "@tsva/runtime/test-support/fake-time-provider";
+import { LimitExceededException } from "@thresh/core/errors";
+import { Grain } from "@thresh/core/grain";
+import { GrainId } from "@thresh/core/grain-id";
+import type { Logger, LogFields } from "@thresh/core/logger";
+import type { InvocationRequest } from "@thresh/core/request";
+import { ActivationData, type ActivationOptions } from "@thresh/runtime/activation";
+import { FakeTimeProvider } from "@thresh/runtime/test-support/fake-time-provider";
 
 function deferred<T = void>() {
   let resolve!: (value: T) => void;

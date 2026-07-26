@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { HealthCheck } from "@tsva/hosting/health-check";
+import { HealthCheck } from "@thresh/hosting/health-check";
 
 const healthy = {
   started: true,

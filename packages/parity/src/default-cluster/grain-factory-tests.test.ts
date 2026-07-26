@@ -14,15 +14,15 @@
 // two key-kind probes (string- and guid-keyed grains) test something this
 // framework's static API can express.
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
 import {
   GuidGrain,
   IGuidGrain,
   IStringGrain,
   StringGrain,
-} from "@tsva/parity/grains/impl/get-grain-grains";
-import { Guid } from "@tsva/core/guid";
+} from "@thresh/parity/grains/impl/get-grain-grains";
+import { Guid } from "@thresh/core/guid";
 
 describe("DefaultCluster.Tests.GrainFactoryTests", () => {
   let cluster: TestCluster;

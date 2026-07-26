@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { createClient } from "redis";
-import { GrainId } from "@tsva/core/grain-id";
-import { FakeTimeProvider } from "@tsva/core/test-support/fake-time-provider";
-import { LocalReminderService, type HashRange } from "@tsva/reminders/local-reminder-service";
-import { RedisReminderTable } from "@tsva/reminders/redis-reminder-table";
+import { GrainId } from "@thresh/core/grain-id";
+import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
+import { LocalReminderService, type HashRange } from "@thresh/reminders/local-reminder-service";
+import { RedisReminderTable } from "@thresh/reminders/redis-reminder-table";
 
 const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
 type Client = ReturnType<typeof createClient>;
@@ -33,7 +33,7 @@ async function deleteAll(c: Client, match: string): Promise<void> {
 }
 
 const client = await reachable(REDIS_URL);
-const prefix = `tsva-test:rem:${randomUUID()}`;
+const prefix = `thresh-test:rem:${randomUUID()}`;
 const makeTable = () => new RedisReminderTable(client!, { keyPrefix: prefix });
 
 const WHOLE: HashRange = [0, 0x1_0000_0000];

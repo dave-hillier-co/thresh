@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { GrainId } from "@tsva/core/grain-id";
-import type { Logger } from "@tsva/core/logger";
-import type { ReminderEntry, ReminderTable } from "@tsva/core/reminder";
-import { FakeTimeProvider } from "@tsva/core/test-support/fake-time-provider";
-import { LocalReminderService, type HashRange } from "@tsva/reminders/local-reminder-service";
-import { MemoryReminderTable } from "@tsva/reminders/memory-reminder-table";
+import { GrainId } from "@thresh/core/grain-id";
+import type { Logger } from "@thresh/core/logger";
+import type { ReminderEntry, ReminderTable } from "@thresh/core/reminder";
+import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
+import { LocalReminderService, type HashRange } from "@thresh/reminders/local-reminder-service";
+import { MemoryReminderTable } from "@thresh/reminders/memory-reminder-table";
 
 const WHOLE: HashRange = [0, 0x1_0000_0000];
 const billing = new GrainId("Billing", "acct-1");

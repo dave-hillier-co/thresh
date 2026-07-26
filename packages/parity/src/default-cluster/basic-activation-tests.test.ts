@@ -1,11 +1,11 @@
 // Ported from dotnet/orleans test/Orleans.DefaultCluster.Tests/BasicActivationTests.cs @ v10.1.0 (MIT).
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
-import { Guid } from "@tsva/core/guid";
-import { ITestGrain, TestGrain } from "@tsva/parity/grains/impl/test-grain";
-import { IGuidTestGrain, GuidTestGrain } from "@tsva/parity/grains/impl/guid-test-grain";
-import { randomIntegerKey } from "@tsva/parity/support/keys";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
+import { Guid } from "@thresh/core/guid";
+import { ITestGrain, TestGrain } from "@thresh/parity/grains/impl/test-grain";
+import { IGuidTestGrain, GuidTestGrain } from "@thresh/parity/grains/impl/guid-test-grain";
+import { randomIntegerKey } from "@thresh/parity/support/keys";
 
 // See bugsFound: an activation whose `onActivate` throws surfaces the generic
 // "activation unavailable: <id>" GrainCallError to every caller — the real

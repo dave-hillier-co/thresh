@@ -1,9 +1,9 @@
 // Ported from dotnet/orleans test/Orleans.EventSourcing.Tests/EventSourcingTests/ChatGrainTests.cs @ v10.1.0 (MIT).
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
-import { ChatGrain, IChatGrain, MAX_NUM_POSTS } from "@tsva/parity/grains/impl/chat-grain";
-import { Guid } from "@tsva/core/guid";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
+import { ChatGrain, IChatGrain, MAX_NUM_POSTS } from "@thresh/parity/grains/impl/chat-grain";
+import { Guid } from "@thresh/core/guid";
 
 function postCount(content: string): number {
   return (content.match(/<post id="/g) ?? []).length;

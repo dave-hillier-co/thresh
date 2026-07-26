@@ -1,6 +1,6 @@
 // Ported from dotnet/orleans test/Orleans.Core.Tests/General/RingTests_Standalone.cs @ v10.1.0 (MIT).
 import { describe, it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 // Exercises Orleans' ConsistentRingProvider directly, wired to IPEndPoint-based SiloAddress
 // values and a hand-rolled FakeSiloStatusOracle. This framework's consistent-hash ring (covered

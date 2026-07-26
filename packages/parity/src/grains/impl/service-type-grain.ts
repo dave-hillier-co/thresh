@@ -1,12 +1,12 @@
 // Ported from dotnet/orleans test/Grains/TestGrains/ServiceType.cs and
 // DerivedServiceType.cs @ v10.1.0 (MIT).
 // See polymorphic-interface-interfaces.ts for why `commonMethod` is omitted.
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
 import {
   IDerivedServiceType,
   IServiceType,
-} from "@tsva/parity/grains/interfaces/polymorphic-interface-interfaces";
+} from "@thresh/parity/grains/interfaces/polymorphic-interface-interfaces";
 
 export { IDerivedServiceType, IServiceType };
 

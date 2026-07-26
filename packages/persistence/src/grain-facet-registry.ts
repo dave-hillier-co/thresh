@@ -1,4 +1,4 @@
-import type { GrainId } from "@tsva/core/grain-id";
+import type { GrainId } from "@thresh/core/grain-id";
 
 export const DEFAULT_FACET_PROVIDER = "default";
 

@@ -1,7 +1,7 @@
 // Ported from dotnet/orleans test/Orleans.DefaultCluster.Tests/GrainInterfaceHierarchyTests.cs @ v10.1.0 (MIT).
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
 import {
   DoSomethingCombinedGrain,
   DoSomethingEmptyGrain,
@@ -13,8 +13,8 @@ import {
   IDoSomethingEmptyWithMoreGrain,
   IDoSomethingWithMoreEmptyGrain,
   IDoSomethingWithMoreGrain,
-} from "@tsva/parity/grains/impl/grain-interface-hierarchy-grains";
-import { randomIntegerKey } from "@tsva/parity/support/keys";
+} from "@thresh/parity/grains/impl/grain-interface-hierarchy-grains";
+import { randomIntegerKey } from "@thresh/parity/support/keys";
 
 describe("DefaultCluster.Tests.GrainInterfaceHierarchyTests", () => {
   let cluster: TestCluster;

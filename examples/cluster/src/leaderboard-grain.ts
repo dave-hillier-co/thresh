@@ -1,5 +1,5 @@
-import { defineGrain } from "@tsva/core/define-grain";
-import type { ILeaderboard, ScoreEntry } from "@tsva/example-cluster/interfaces";
+import { defineGrain } from "@thresh/core/define-grain";
+import type { ILeaderboard, ScoreEntry } from "@thresh/example-cluster/interfaces";
 
 /**
  * Keeps each player's best score. Holds no locks: calls arriving from every silo

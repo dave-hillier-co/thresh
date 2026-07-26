@@ -1,14 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import { createClient } from "redis";
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithStringKey } from "@tsva/core/key-kinds";
-import { SiloAddress } from "@tsva/core/silo-address";
-import type { StreamHandler } from "@tsva/core/stream";
-import { InProcessNetwork } from "@tsva/messaging/in-process-transport";
-import { createSilo } from "@tsva/hosting/silo-builder";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import { SiloAddress } from "@thresh/core/silo-address";
+import type { StreamHandler } from "@thresh/core/stream";
+import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
+import { createSilo } from "@thresh/hosting/silo-builder";
 
 const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
 type Client = ReturnType<typeof createClient>;
@@ -31,7 +31,7 @@ async function reachable(url: string): Promise<Client | undefined> {
 }
 
 const admin = await reachable(REDIS_URL);
-const keyPrefix = `tsva-test:stream-e2e:${randomUUID()}`;
+const keyPrefix = `thresh-test:stream-e2e:${randomUUID()}`;
 
 afterAll(async () => {
   if (admin === undefined) return;

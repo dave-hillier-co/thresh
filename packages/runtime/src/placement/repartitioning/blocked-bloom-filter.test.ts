@@ -1,4 +1,4 @@
-import { GrainId } from "@tsva/core/grain-id";
+import { GrainId } from "@thresh/core/grain-id";
 import { describe, expect, it } from "vitest";
 import { AnchoredGrainsFilter, BlockedBloomFilter } from "./blocked-bloom-filter";
 

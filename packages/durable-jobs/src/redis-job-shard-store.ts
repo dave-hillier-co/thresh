@@ -1,17 +1,17 @@
 import type { createClient } from "redis";
-import type { DurableJob } from "@tsva/core/durable-job";
-import { deserializeValue, serializeValue } from "@tsva/core/value-codec";
+import type { DurableJob } from "@thresh/core/durable-job";
+import { deserializeValue, serializeValue } from "@thresh/core/value-codec";
 import {
   type JobShardStore,
   type PersistedJob,
   type ShardRecord,
   toPersistedJob,
-} from "@tsva/durable-jobs/job-shard-store";
+} from "@thresh/durable-jobs/job-shard-store";
 
 export type RedisClient = ReturnType<typeof createClient>;
 
 export interface RedisJobShardStoreOptions {
-  /** Namespace for keys in the shared Redis (defaults to `"tsva"`). */
+  /** Namespace for keys in the shared Redis (defaults to `"thresh"`). */
   keyPrefix?: string;
 }
 
@@ -75,7 +75,7 @@ export class RedisJobShardStore implements JobShardStore {
     private readonly client: RedisClient,
     options: RedisJobShardStoreOptions = {},
   ) {
-    this.keyPrefix = options.keyPrefix ?? "tsva";
+    this.keyPrefix = options.keyPrefix ?? "thresh";
   }
 
   async persistAdd(job: DurableJob): Promise<void> {

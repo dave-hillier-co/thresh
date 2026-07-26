@@ -1,8 +1,8 @@
 // Ported from dotnet/orleans test/Grains/TestGrains/ReminderTestGrain.cs @ v10.1.0 (MIT).
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import type { Remindable, TickStatus } from "@tsva/core/reminder";
-import { IReminderTestGrain } from "@tsva/parity/grains/interfaces/reminder-test-grain-interfaces";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import type { Remindable, TickStatus } from "@thresh/core/reminder";
+import { IReminderTestGrain } from "@thresh/parity/grains/interfaces/reminder-test-grain-interfaces";
 
 export { IReminderTestGrain };
 

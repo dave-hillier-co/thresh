@@ -1,5 +1,5 @@
 {
-  "name": "@tsva/runtime",
+  "name": "@thresh/runtime",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -8,12 +8,12 @@
   },
   "dependencies": {
     "@opentelemetry/api": "^1.9.1",
-    "@tsva/core": "workspace:*",
-    "@tsva/directory": "workspace:*",
-    "@tsva/messaging": "workspace:*",
-    "@tsva/observability": "workspace:*"
+    "@thresh/core": "workspace:*",
+    "@thresh/directory": "workspace:*",
+    "@thresh/messaging": "workspace:*",
+    "@thresh/observability": "workspace:*"
   },
   "devDependencies": {
-    "@tsva/testing": "workspace:*"
+    "@thresh/testing": "workspace:*"
   }
 }

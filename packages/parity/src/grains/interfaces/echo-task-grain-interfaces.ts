@@ -1,7 +1,7 @@
 // Ported from dotnet/orleans test/Grains/TestGrainInterfaces/IEchoTaskGrain.cs @ v10.1.0 (MIT).
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithGuidKey, GrainWithIntegerKey } from "@tsva/core/key-kinds";
-import type { SiloAddress } from "@tsva/core/silo-address";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithGuidKey, GrainWithIntegerKey } from "@thresh/core/key-kinds";
+import type { SiloAddress } from "@thresh/core/silo-address";
 
 export interface IEchoGrain extends GrainWithGuidKey {
   getLastEcho(): Promise<string>;

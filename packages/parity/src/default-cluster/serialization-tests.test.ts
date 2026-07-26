@@ -8,7 +8,7 @@
 // API surface to poke at directly — it only serializes at the grain-call
 // boundary — so none of it is portable.
 import { describe, it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 const reason =
   "Calls Orleans' internal DeepCopy/RoundTripSerializationForTesting pipeline directly " +

@@ -4,9 +4,9 @@
 // variants; this framework has one grain model (every grain extends `Grain`, there is
 // no separate non-Grain-derived "POCO" activation style), so no equivalent is declared
 // — the ported tests below already cover the shared behavior.
-import type { Duration } from "@tsva/core/duration";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithIntegerKey } from "@tsva/core/key-kinds";
+import type { Duration } from "@thresh/core/duration";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithIntegerKey } from "@thresh/core/key-kinds";
 
 export interface ITimerGrain extends GrainWithIntegerKey {
   stopDefaultTimer(): Promise<void>;

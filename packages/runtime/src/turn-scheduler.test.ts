@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { GrainCallAbortedError } from "@tsva/core/errors";
-import { TurnScheduler } from "@tsva/runtime/turn-scheduler";
-import { LimitExceededException } from "@tsva/core/errors";
-import type { Logger, LogFields } from "@tsva/core/logger";
-import { FakeTimeProvider } from "@tsva/runtime/test-support/fake-time-provider";
+import { GrainCallAbortedError } from "@thresh/core/errors";
+import { TurnScheduler } from "@thresh/runtime/turn-scheduler";
+import { LimitExceededException } from "@thresh/core/errors";
+import type { Logger, LogFields } from "@thresh/core/logger";
+import { FakeTimeProvider } from "@thresh/runtime/test-support/fake-time-provider";
 
 function recordingLogger(): { logger: Logger; warnings: Array<[string, LogFields | undefined]> } {
   const warnings: Array<[string, LogFields | undefined]> = [];

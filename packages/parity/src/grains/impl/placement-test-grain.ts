@@ -1,7 +1,7 @@
 // Ported from dotnet/orleans test/Grains/TestInternalGrains/PlacementTestGrain.cs @ v10.1.0 (MIT).
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import { Guid } from "@tsva/core/guid";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import { Guid } from "@thresh/core/guid";
 import {
   IActivationCountBasedPlacementTestGrain,
   IOtherStatelessWorkerPlacementTestGrain,
@@ -9,7 +9,7 @@ import {
   IRandomPlacementTestGrain,
   IStatelessWorkerPlacementTestGrain,
   type IPlacementTestGrain,
-} from "@tsva/parity/grains/interfaces/placement-test-grain-interfaces";
+} from "@thresh/parity/grains/interfaces/placement-test-grain-interfaces";
 
 export {
   IActivationCountBasedPlacementTestGrain,

@@ -1,16 +1,16 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import { createClient } from "redis";
-import { grain, implicitStreamSubscription } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithStringKey } from "@tsva/core/key-kinds";
-import { SiloAddress } from "@tsva/core/silo-address";
-import { STREAM_SUBSCRIPTION_OBSERVER, type StreamHandler } from "@tsva/core/stream";
-import { InProcessNetwork } from "@tsva/messaging/in-process-transport";
-import { StaticMembershipService } from "@tsva/runtime/static-membership";
-import { MemoryStreamFailureStore } from "@tsva/streams/stream-failure-store";
-import { createSilo } from "@tsva/hosting/silo-builder";
+import { grain, implicitStreamSubscription } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import { SiloAddress } from "@thresh/core/silo-address";
+import { STREAM_SUBSCRIPTION_OBSERVER, type StreamHandler } from "@thresh/core/stream";
+import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
+import { StaticMembershipService } from "@thresh/runtime/static-membership";
+import { MemoryStreamFailureStore } from "@thresh/streams/stream-failure-store";
+import { createSilo } from "@thresh/hosting/silo-builder";
 
 const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
 type Client = ReturnType<typeof createClient>;
@@ -44,7 +44,7 @@ async function waitFor(
 }
 
 const admin = await reachable(REDIS_URL);
-const keyPrefix = `tsva-test:stream-failure-handler:${randomUUID()}`;
+const keyPrefix = `thresh-test:stream-failure-handler:${randomUUID()}`;
 
 afterAll(async () => {
   if (admin === undefined) return;

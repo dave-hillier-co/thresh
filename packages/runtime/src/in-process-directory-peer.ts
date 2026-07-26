@@ -1,9 +1,9 @@
-import { RejectionError } from "@tsva/core/errors";
-import type { GrainAddress } from "@tsva/core/grain-address";
-import type { GrainId } from "@tsva/core/grain-id";
-import type { SiloAddress } from "@tsva/core/silo-address";
-import type { DirectoryPeer } from "@tsva/directory/directory-peer";
-import type { LocalDirectoryPartition } from "@tsva/directory/local-directory-partition";
+import { RejectionError } from "@thresh/core/errors";
+import type { GrainAddress } from "@thresh/core/grain-address";
+import type { GrainId } from "@thresh/core/grain-id";
+import type { SiloAddress } from "@thresh/core/silo-address";
+import type { DirectoryPeer } from "@thresh/directory/directory-peer";
+import type { LocalDirectoryPartition } from "@thresh/directory/local-directory-partition";
 
 /**
  * Reaches peer directory partitions by direct call, for silos sharing a process

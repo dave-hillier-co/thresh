@@ -4,7 +4,7 @@
  * (`src/Orleans.Runtime/Placement/Repartitioning/ActivationRepartitioner.cs`,
  * `.MessageSink.cs`) moving individual grain activations near their most
  * frequent communication partners, distinct from the activation *rebalancer*
- * (load-leveling, `@tsva/runtime/placement/rebalancing`).
+ * (load-leveling, `@thresh/runtime/placement/rebalancing`).
  *
  * Orleans reaches this protocol via an `ISystemTarget` (a per-silo
  * grain-factory reference resolved through `IGrainFactory`); this framework
@@ -37,16 +37,16 @@
  *    injected `TimeProvider`: the ported tests configure it near zero and
  *    poll for the outcome rather than asserting on timing.
  */
-import type { GrainId } from "@tsva/core/grain-id";
-import type { MembershipService } from "@tsva/core/membership";
-import { activeSilos } from "@tsva/core/membership";
-import type { SiloAddress } from "@tsva/core/silo-address";
-import type { HeapElement } from "@tsva/runtime/placement/repartitioning/max-heap";
-import { MaxHeap } from "@tsva/runtime/placement/repartitioning/max-heap";
-import type { Edge } from "@tsva/runtime/placement/repartitioning/edge";
-import { edge, edgeVertex } from "@tsva/runtime/placement/repartitioning/edge";
-import { FrequentEdgeCounter } from "@tsva/runtime/placement/repartitioning/frequent-edge-counter";
-import type { ActivationRepartitionerOptions } from "@tsva/runtime/placement/repartitioning/activation-repartitioner-options";
+import type { GrainId } from "@thresh/core/grain-id";
+import type { MembershipService } from "@thresh/core/membership";
+import { activeSilos } from "@thresh/core/membership";
+import type { SiloAddress } from "@thresh/core/silo-address";
+import type { HeapElement } from "@thresh/runtime/placement/repartitioning/max-heap";
+import { MaxHeap } from "@thresh/runtime/placement/repartitioning/max-heap";
+import type { Edge } from "@thresh/runtime/placement/repartitioning/edge";
+import { edge, edgeVertex } from "@thresh/runtime/placement/repartitioning/edge";
+import { FrequentEdgeCounter } from "@thresh/runtime/placement/repartitioning/frequent-edge-counter";
+import type { ActivationRepartitionerOptions } from "@thresh/runtime/placement/repartitioning/activation-repartitioner-options";
 
 /**
  * Controls the tolerable imbalance between a pair of exchanging silos, ported

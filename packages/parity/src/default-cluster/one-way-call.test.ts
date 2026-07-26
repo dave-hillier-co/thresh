@@ -12,15 +12,15 @@
 // side effect (the observer callback firing, and the grain's internal count)
 // still lands, asynchronously, afterward.
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
-import { waitFor } from "@tsva/testing/wait";
-import type { ClientNode } from "@tsva/client/client-node";
-import { OneWayGrain } from "@tsva/parity/grains/impl/one-way-grain";
-import { IOneWayGrain } from "@tsva/parity/grains/interfaces/one-way-grain-interfaces";
-import { ISimpleGrainObserver } from "@tsva/parity/grains/interfaces/simple-observerable-grain-interfaces";
-import { randomGuidKey } from "@tsva/parity/support/keys";
-import { createClusterClient } from "@tsva/parity/support/client";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
+import { waitFor } from "@thresh/testing/wait";
+import type { ClientNode } from "@thresh/client/client-node";
+import { OneWayGrain } from "@thresh/parity/grains/impl/one-way-grain";
+import { IOneWayGrain } from "@thresh/parity/grains/interfaces/one-way-grain-interfaces";
+import { ISimpleGrainObserver } from "@thresh/parity/grains/interfaces/simple-observerable-grain-interfaces";
+import { randomGuidKey } from "@thresh/parity/support/keys";
+import { createClusterClient } from "@thresh/parity/support/client";
 
 describe("DefaultCluster.Tests.General.OneWayCallTests", () => {
   let cluster: TestCluster;

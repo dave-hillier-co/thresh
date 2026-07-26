@@ -202,7 +202,7 @@ export function guardDurableSetForReadOnly<T>(state: DurableSet<T>, stateName: s
  * can guard a durable-journaling facet without knowing its concrete kind up
  * front — mirrors how `DurableStateField.kind` picks the concrete
  * `DurableStateMachine` implementation in `bindDurableStates`
- * (`@tsva/journaling/durable-state-activator`).
+ * (`@thresh/journaling/durable-state-activator`).
  */
 export function guardDurableFieldForReadOnly(
   kind: DurableKind,

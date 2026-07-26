@@ -1,8 +1,8 @@
 import {
   isMigrationParticipant,
   type IGrainMigrationParticipant,
-} from "@tsva/core/grain-migration-participant";
-import { getPersistentFields } from "@tsva/core/persistent-state-metadata";
+} from "@thresh/core/grain-migration-participant";
+import { getPersistentFields } from "@thresh/core/persistent-state-metadata";
 
 /**
  * The migration participants of a grain instance: the grain itself (when it

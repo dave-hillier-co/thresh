@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { GrainId } from "@tsva/core/grain-id";
-import { JournaledGrain } from "@tsva/core/journaled-grain";
-import { MemoryJournalStorage } from "@tsva/journaling/memory-journal-storage";
-import { JournalStorageRegistry } from "@tsva/journaling/journal-storage-registry";
-import { bindJournaledGrain } from "@tsva/journaling/journaled-grain-binder";
+import { GrainId } from "@thresh/core/grain-id";
+import { JournaledGrain } from "@thresh/core/journaled-grain";
+import { MemoryJournalStorage } from "@thresh/journaling/memory-journal-storage";
+import { JournalStorageRegistry } from "@thresh/journaling/journal-storage-registry";
+import { bindJournaledGrain } from "@thresh/journaling/journaled-grain-binder";
 
 interface CountState {
   count: number;

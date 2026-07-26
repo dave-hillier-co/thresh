@@ -1,5 +1,5 @@
-import type { Serializer, SerializerOptions } from "@tsva/messaging/serializer";
-import { decodeValue, encodeValue } from "@tsva/core/value-codec";
+import type { Serializer, SerializerOptions } from "@thresh/messaging/serializer";
+import { decodeValue, encodeValue } from "@thresh/core/value-codec";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();

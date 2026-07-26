@@ -1,6 +1,6 @@
 // Ported from dotnet/orleans test/Grains/TestGrainInterfaces/IMethodInterceptionGrain.cs @ v10.1.0 (MIT).
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithIntegerKey } from "@tsva/core/key-kinds";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithIntegerKey } from "@thresh/core/key-kinds";
 
 /**
  * Upstream `SayHello` lives on a separate `IMethodFromAnotherInterface` that

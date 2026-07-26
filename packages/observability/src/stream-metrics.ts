@@ -1,10 +1,10 @@
 import { metrics, type Attributes, type Counter } from "@opentelemetry/api";
 
 /**
- * OpenTelemetry counters for pulling-agent stream delivery (`@tsva/streams`):
- * `tsva.streams.delivered` (an event handed to its subscribers),
- * `tsva.streams.failed` (an event skipped after exhausting its retry budget),
- * and `tsva.streams.agent.polls` (one queue-pulling agent poll cycle).
+ * OpenTelemetry counters for pulling-agent stream delivery (`@thresh/streams`):
+ * `thresh.streams.delivered` (an event handed to its subscribers),
+ * `thresh.streams.failed` (an event skipped after exhausting its retry budget),
+ * and `thresh.streams.agent.polls` (one queue-pulling agent poll cycle).
  * Emitted through the global OpenTelemetry meter — a no-op until the host
  * registers an SDK.
  *
@@ -21,17 +21,17 @@ let instruments: Instruments | undefined;
 
 function instrumentsOf(): Instruments {
   if (instruments === undefined) {
-    const meter = metrics.getMeter("@tsva/observability");
+    const meter = metrics.getMeter("@thresh/observability");
     instruments = {
-      delivered: meter.createCounter("tsva.streams.delivered", {
+      delivered: meter.createCounter("thresh.streams.delivered", {
         description: "Stream events delivered to subscribers",
         unit: "{event}",
       }),
-      failed: meter.createCounter("tsva.streams.failed", {
+      failed: meter.createCounter("thresh.streams.failed", {
         description: "Stream events skipped after exhausting the delivery retry budget",
         unit: "{event}",
       }),
-      polls: meter.createCounter("tsva.streams.agent.polls", {
+      polls: meter.createCounter("thresh.streams.agent.polls", {
         description: "Queue-pulling agent poll cycles",
         unit: "{poll}",
       }),

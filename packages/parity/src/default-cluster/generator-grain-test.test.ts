@@ -1,7 +1,7 @@
 // Ported from dotnet/orleans test/Orleans.DefaultCluster.Tests/CodeGenTests/GeneratorGrainTest.cs @ v10.1.0 (MIT).
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
 import {
   GeneratorTestDerivedDerivedGrain,
   GeneratorTestDerivedGrain1,
@@ -11,8 +11,8 @@ import {
   IGeneratorTestDerivedGrain1,
   IGeneratorTestDerivedGrain2,
   IGeneratorTestGrain,
-} from "@tsva/parity/grains/impl/generator-test-grain";
-import { randomIntegerKey } from "@tsva/parity/support/keys";
+} from "@thresh/parity/grains/impl/generator-test-grain";
+import { randomIntegerKey } from "@thresh/parity/support/keys";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();

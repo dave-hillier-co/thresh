@@ -1,5 +1,5 @@
-import { defineGrain } from "@tsva/core/define-grain";
-import { type Alert, type IAlertPublisher } from "@tsva/example-broadcast/interfaces";
+import { defineGrain } from "@thresh/core/define-grain";
+import { type Alert, type IAlertPublisher } from "@thresh/example-broadcast/interfaces";
 
 /**
  * Publishes an alert to a region's broadcast channel `(alerts, region)`. Every

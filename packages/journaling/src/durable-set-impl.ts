@@ -1,5 +1,5 @@
-import type { DurableStateMachine, StateMachineManager } from "@tsva/core/durable-state-machine";
-import type { DurableSet } from "@tsva/core/durable-state";
+import type { DurableStateMachine, StateMachineManager } from "@thresh/core/durable-state-machine";
+import type { DurableSet } from "@thresh/core/durable-state";
 
 type SetOp<T> =
   | { t: "add"; v: T }

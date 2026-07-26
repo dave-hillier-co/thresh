@@ -1,18 +1,18 @@
-import type { GrainMetadata, PlacementFilterDescriptor } from "@tsva/core/grain-metadata";
-import { ActivationCountPlacement } from "@tsva/runtime/placement/activation-count-placement";
-import { MetadataMatchFilter } from "@tsva/runtime/placement/metadata-match-filter";
-import type { PlacementFilter } from "@tsva/runtime/placement/placement-filter";
-import type { PlacementFilterRegistry } from "@tsva/runtime/placement/placement-filter-registry";
-import { PreferLocalPlacement } from "@tsva/runtime/placement/prefer-local-placement";
-import { RandomPlacement } from "@tsva/runtime/placement/random-placement";
-import { ResourceOptimizedPlacement } from "@tsva/runtime/placement/resource-optimized-placement";
-import type { PlacementStrategy } from "@tsva/runtime/placement/placement-strategy";
+import type { GrainMetadata, PlacementFilterDescriptor } from "@thresh/core/grain-metadata";
+import { ActivationCountPlacement } from "@thresh/runtime/placement/activation-count-placement";
+import { MetadataMatchFilter } from "@thresh/runtime/placement/metadata-match-filter";
+import type { PlacementFilter } from "@thresh/runtime/placement/placement-filter";
+import type { PlacementFilterRegistry } from "@thresh/runtime/placement/placement-filter-registry";
+import { PreferLocalPlacement } from "@thresh/runtime/placement/prefer-local-placement";
+import { RandomPlacement } from "@thresh/runtime/placement/random-placement";
+import { ResourceOptimizedPlacement } from "@thresh/runtime/placement/resource-optimized-placement";
+import type { PlacementStrategy } from "@thresh/runtime/placement/placement-strategy";
 import {
   PreferredMatchSiloMetadataPlacementFilterDirector,
   RequiredMatchSiloMetadataPlacementFilterDirector,
-} from "@tsva/runtime/placement/silo-metadata-match-filters";
-import { SiloRoleBasedPlacement } from "@tsva/runtime/placement/silo-role-based-placement";
-import { StatelessWorkerPlacement } from "@tsva/runtime/placement/stateless-worker-placement";
+} from "@thresh/runtime/placement/silo-metadata-match-filters";
+import { SiloRoleBasedPlacement } from "@thresh/runtime/placement/silo-role-based-placement";
+import { StatelessWorkerPlacement } from "@thresh/runtime/placement/stateless-worker-placement";
 
 /** Resolve the placement strategy a grain type's metadata selects. */
 export function placementStrategyFor(metadata: GrainMetadata): PlacementStrategy {

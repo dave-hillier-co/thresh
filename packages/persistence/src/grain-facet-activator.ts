@@ -1,6 +1,6 @@
-import type { GrainId } from "@tsva/core/grain-id";
-import { getGrainFacetFields } from "@tsva/core/grain-facet-metadata";
-import type { GrainFacetRegistry } from "@tsva/persistence/grain-facet-registry";
+import type { GrainId } from "@thresh/core/grain-id";
+import { getGrainFacetFields } from "@thresh/core/grain-facet-metadata";
+import type { GrainFacetRegistry } from "@thresh/persistence/grain-facet-registry";
 
 /**
  * Inject a third-party facet into each `@grainFacet` field of a grain

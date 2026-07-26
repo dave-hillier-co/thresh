@@ -1,6 +1,6 @@
 // Ported from dotnet/orleans test/Orleans.Core.Tests/SchedulerTests/STSchedulerLongTurnTest.cs @ v10.1.0 (MIT).
 import { describe, it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 // Verifies that Orleans' per-silo thread pool (16 threads across two silos) doesn't queue up
 // long-running (12s sleeping) grain calls behind each other and time out, by swamping 100

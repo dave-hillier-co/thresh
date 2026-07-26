@@ -8,13 +8,13 @@
 // fixture too). `GrainServiceTestGrain` reaches the service through
 // `runtime.getGrainService` instead of an injected `ITestGrainServiceClient`
 // (see the interfaces file's class doc for why).
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import { GrainService } from "@tsva/runtime/grain-service";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import { GrainService } from "@thresh/runtime/grain-service";
 import {
   IEchoExtension,
   IGrainServiceTestGrain,
-} from "@tsva/parity/grains/interfaces/grain-service-test-grain-interfaces";
+} from "@thresh/parity/grains/interfaces/grain-service-test-grain-interfaces";
 
 export { IGrainServiceTestGrain };
 

@@ -8,8 +8,8 @@
 // activity-propagation-tests.test.ts, which (unlike activation-tracing-tests)
 // asserts on what the CALLED grain observes of its own trace context
 // (span id, trace state, baggage), not on captured spans.
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithIntegerKey } from "@tsva/core/key-kinds";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithIntegerKey } from "@thresh/core/key-kinds";
 
 /**
  * What a grain call sees of its own OpenTelemetry span (the port analogue of

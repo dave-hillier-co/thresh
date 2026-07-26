@@ -8,7 +8,7 @@
 // object-pooling utility of any kind, so there is no equivalent internal
 // component to port these tests to.
 import { it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 const REASON =
   "white-box unit tests of Orleans' internal ObjectPool<T>/PooledResource<T> generic resource pool (Orleans.Providers.Streams.Common), used to recycle persistent-stream pulling-agent message-cache buffers; this framework has no pulling-agent message cache or generic object-pooling utility to test-access";

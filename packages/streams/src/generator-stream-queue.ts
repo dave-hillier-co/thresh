@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import type { QueueEntry } from "@tsva/streams/redis-stream-queue";
-import type { PullableQueue } from "@tsva/streams/queue-pulling-agent";
+import type { QueueEntry } from "@thresh/streams/redis-stream-queue";
+import type { PullableQueue } from "@thresh/streams/queue-pulling-agent";
 
 /**
  * A synthetic event, mirroring Orleans' `GeneratedEvent`. `Report` marks the

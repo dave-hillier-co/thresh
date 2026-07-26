@@ -8,10 +8,10 @@
 // accessor), so the ported tests build that context directly instead of
 // introducing parallel `ILocalSiloDetails`/`ISiloMetadataCache` abstractions.
 import { describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { SiloAddress } from "@tsva/core/silo-address";
-import { PreferredMatchSiloMetadataPlacementFilterDirector } from "@tsva/runtime/placement/silo-metadata-match-filters";
-import type { PlacementContext } from "@tsva/runtime/placement/placement-strategy";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { SiloAddress } from "@thresh/core/silo-address";
+import { PreferredMatchSiloMetadataPlacementFilterDirector } from "@thresh/runtime/placement/silo-metadata-match-filters";
+import type { PlacementContext } from "@thresh/runtime/placement/placement-strategy";
 
 const silo = (port: number) => new SiloAddress(`silo-${port}`, `uid-${port}`, `1.1.1.1:${port}`);
 

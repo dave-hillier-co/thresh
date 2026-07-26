@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { createClient } from "redis";
-import { QueuePullingAgent, type DeliverEvent } from "@tsva/streams/queue-pulling-agent";
-import { RedisStreamQueue } from "@tsva/streams/redis-stream-queue";
+import { QueuePullingAgent, type DeliverEvent } from "@thresh/streams/queue-pulling-agent";
+import { RedisStreamQueue } from "@thresh/streams/redis-stream-queue";
 
 const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
 type Client = ReturnType<typeof createClient>;
@@ -51,7 +51,7 @@ async function waitForCursor(
 }
 
 const client = await reachable(REDIS_URL);
-const prefix = `tsva-test:queue:${randomUUID()}`;
+const prefix = `thresh-test:queue:${randomUUID()}`;
 let queueSeq = 0;
 
 // A distinct queue key per test keeps runs isolated within the shared Redis.

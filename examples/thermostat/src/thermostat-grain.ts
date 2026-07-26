@@ -1,7 +1,7 @@
-import { grain, persistentState } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import type { PersistentState } from "@tsva/core/persistent-state";
-import type { Remindable, TickStatus } from "@tsva/core/reminder";
+import { grain, persistentState } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import type { PersistentState } from "@thresh/core/persistent-state";
+import type { Remindable, TickStatus } from "@thresh/core/reminder";
 import {
   TELEMETRY,
   type Command,
@@ -9,7 +9,7 @@ import {
   type IThermostatControl,
   type ThermostatConfiguration,
   type ThermostatStatus,
-} from "@tsva/example-thermostat/interfaces";
+} from "@thresh/example-thermostat/interfaces";
 
 interface ThermostatState {
   status: ThermostatStatus;

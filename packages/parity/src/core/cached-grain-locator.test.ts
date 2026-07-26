@@ -1,6 +1,6 @@
 // Ported from dotnet/orleans test/Orleans.Core.Tests/Directory/CachedGrainLocatorTests.cs @ v10.1.0 (MIT).
 import { describe, it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 // CachedGrainLocator is Orleans' per-silo caching wrapper around the
 // pluggable IGrainDirectory abstraction: it composes a GrainDirectoryResolver

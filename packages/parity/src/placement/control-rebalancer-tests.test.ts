@@ -5,10 +5,10 @@
 // timed suspension that auto-resumes off the shared clock), and the
 // `subscribeToReports`/`unsubscribeFromReports` report-listener pub/sub.
 import { describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { FakeTimeProvider } from "@tsva/core/test-support/fake-time-provider";
-import type { RebalancingReport } from "@tsva/runtime/placement/rebalancing/rebalancing-report";
-import { TestCluster } from "@tsva/testing/test-cluster";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
+import type { RebalancingReport } from "@thresh/runtime/placement/rebalancing/rebalancing-report";
+import { TestCluster } from "@thresh/testing/test-cluster";
 
 describe("UnitTests.ActivationRebalancingTests.ControlRebalancerTests", () => {
   orleansTest("UnitTests.ActivationRebalancingTests.ControlRebalancerTests.Rebalancer_Should_Be_Controllable_And_Report_To_Listeners", async () => {

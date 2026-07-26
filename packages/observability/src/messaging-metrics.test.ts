@@ -10,7 +10,7 @@ import {
   recordMessageReceived,
   recordMessageSent,
   recordQueueLatency,
-} from "@tsva/observability/messaging-metrics";
+} from "@thresh/observability/messaging-metrics";
 
 const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
 const reader = new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 100_000 });
@@ -33,20 +33,20 @@ describe("messaging metrics", () => {
   });
 
   it("counts sent and received messages", async () => {
-    recordMessageSent({ "tsva.message.direction": "request" });
-    recordMessageReceived({ "tsva.message.direction": "response" });
+    recordMessageSent({ "thresh.message.direction": "request" });
+    recordMessageReceived({ "thresh.message.direction": "response" });
 
-    const sent = await metric("tsva.messaging.sent");
-    const received = await metric("tsva.messaging.received");
+    const sent = await metric("thresh.messaging.sent");
+    const received = await metric("thresh.messaging.received");
     expect(sent!.dataPoints[0]!.value).toBe(1);
     expect(received!.dataPoints[0]!.value).toBe(1);
   });
 
   it("records queue (connection-acquire) latency as a histogram", async () => {
-    recordQueueLatency(12, { "tsva.peer": "silo-1:1000" });
+    recordQueueLatency(12, { "thresh.peer": "silo-1:1000" });
 
-    const latency = await metric("tsva.messaging.queue.latency");
+    const latency = await metric("thresh.messaging.queue.latency");
     expect(latency).toBeDefined();
-    expect(latency!.dataPoints[0]!.attributes["tsva.peer"]).toBe("silo-1:1000");
+    expect(latency!.dataPoints[0]!.attributes["thresh.peer"]).toBe("silo-1:1000");
   });
 });

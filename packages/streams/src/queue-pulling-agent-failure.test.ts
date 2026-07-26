@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { QueuePullingAgent, type StreamFailureHandler } from "@tsva/streams/queue-pulling-agent";
-import type { QueueEntry, RedisStreamQueue } from "@tsva/streams/redis-stream-queue";
+import { QueuePullingAgent, type StreamFailureHandler } from "@thresh/streams/queue-pulling-agent";
+import type { QueueEntry, RedisStreamQueue } from "@thresh/streams/redis-stream-queue";
 
 /**
  * In-memory fake of `RedisStreamQueue` — Redis is the only true boundary in this

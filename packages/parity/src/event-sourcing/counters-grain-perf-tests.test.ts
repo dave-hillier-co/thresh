@@ -12,8 +12,8 @@
 // smaller than upstream's 800 to keep this fast in CI; it only has to be
 // enough to make concurrent-raise ordering exercise the log meaningfully.
 import { afterAll, beforeAll, describe } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
 import {
   CountersGrainLogStoreNonReentrant,
   CountersGrainLogStoreReentrant,
@@ -23,8 +23,8 @@ import {
   ICountersGrainLogStoreReentrant,
   ICountersGrainStateStoreNonReentrant,
   ICountersGrainStateStoreReentrant,
-} from "@tsva/parity/grains/impl/counters-grain";
-import { concurrentIncrementsRunner } from "@tsva/parity/event-sourcing/counters-runner";
+} from "@thresh/parity/grains/impl/counters-grain";
+import { concurrentIncrementsRunner } from "@thresh/parity/event-sourcing/counters-runner";
 
 const iterations = 100;
 

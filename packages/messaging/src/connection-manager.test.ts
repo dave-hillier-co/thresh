@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { SiloAddress } from "@tsva/core/silo-address";
-import { ConnectionManager } from "@tsva/messaging/connection-manager";
-import type { Connection, Listener, MessageHandler, Transport } from "@tsva/messaging/transport";
+import { SiloAddress } from "@thresh/core/silo-address";
+import { ConnectionManager } from "@thresh/messaging/connection-manager";
+import type { Connection, Listener, MessageHandler, Transport } from "@thresh/messaging/transport";
 
 const self = new SiloAddress("self", "u0", "self:1");
 const peer = (n: number) => new SiloAddress(`peer-${n}`, `u${n}`, `peer-${n}:1`);

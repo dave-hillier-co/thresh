@@ -4,12 +4,12 @@
 // protected members of a shared base class; this framework has no shared
 // fixture/base-class convention for `orleansTest`-style suites, so they are
 // plain functions each test file imports instead.
-import { Guid } from "@tsva/core/guid";
-import { PLACEMENT_HINT_KEY, RequestContext } from "@tsva/core/request-context";
-import type { SiloAddress } from "@tsva/core/silo-address";
-import type { DetailedGrainStatistic } from "@tsva/core/management-grain";
-import type { TestCluster } from "@tsva/testing/test-cluster";
-import { IRebalancingTestGrain } from "@tsva/parity/grains/interfaces/rebalancing-test-grain-interfaces";
+import { Guid } from "@thresh/core/guid";
+import { PLACEMENT_HINT_KEY, RequestContext } from "@thresh/core/request-context";
+import type { SiloAddress } from "@thresh/core/silo-address";
+import type { DetailedGrainStatistic } from "@thresh/core/management-grain";
+import type { TestCluster } from "@thresh/testing/test-cluster";
+import { IRebalancingTestGrain } from "@thresh/parity/grains/interfaces/rebalancing-test-grain-interfaces";
 
 /** Live activations of `IRebalancingTestGrain` currently hosted on `silo` (Orleans `GetActivationCount`). */
 export function getActivationCount(

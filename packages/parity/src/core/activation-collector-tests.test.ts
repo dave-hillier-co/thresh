@@ -1,6 +1,6 @@
 // Ported from dotnet/orleans test/Orleans.Core.Tests/Runtime/ActivationCollectorTests.cs @ v10.1.0 (MIT).
 import { describe, it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 // This framework's ActivationCollector (packages/runtime/src/activation-collector.ts) is a
 // simple periodic sweep over the catalog; it has no bucketed-by-ticket collection algorithm,

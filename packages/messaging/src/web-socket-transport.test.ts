@@ -1,15 +1,15 @@
 import { once } from "node:events";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
-import { RejectionError } from "@tsva/core/errors";
-import { GrainId } from "@tsva/core/grain-id";
-import { SiloAddress } from "@tsva/core/silo-address";
-import { CorrelationTable } from "@tsva/messaging/correlation-table";
-import { JsonSerializer } from "@tsva/messaging/json-serializer";
-import { MessagePackSerializer } from "@tsva/messaging/msgpack-serializer";
-import { nextCorrelationId, responseTo, type Message } from "@tsva/messaging/message";
-import type { ConnectionPreamble, Listener } from "@tsva/messaging/transport";
-import { WebSocketTransport } from "@tsva/messaging/web-socket-transport";
+import { RejectionError } from "@thresh/core/errors";
+import { GrainId } from "@thresh/core/grain-id";
+import { SiloAddress } from "@thresh/core/silo-address";
+import { CorrelationTable } from "@thresh/messaging/correlation-table";
+import { JsonSerializer } from "@thresh/messaging/json-serializer";
+import { MessagePackSerializer } from "@thresh/messaging/msgpack-serializer";
+import { nextCorrelationId, responseTo, type Message } from "@thresh/messaging/message";
+import type { ConnectionPreamble, Listener } from "@thresh/messaging/transport";
+import { WebSocketTransport } from "@thresh/messaging/web-socket-transport";
 
 const CLUSTER = "c1";
 const body = new JsonSerializer();

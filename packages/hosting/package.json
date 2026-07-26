@@ -1,5 +1,5 @@
 {
-  "name": "@tsva/hosting",
+  "name": "@thresh/hosting",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -7,24 +7,24 @@
     "./*": "./src/*.ts"
   },
   "dependencies": {
-    "@tsva/client": "workspace:*",
-    "@tsva/clustering-k8s": "workspace:*",
-    "@tsva/core": "workspace:*",
-    "@tsva/directory": "workspace:*",
-    "@tsva/durable-jobs": "workspace:*",
-    "@tsva/journaling": "workspace:*",
-    "@tsva/messaging": "workspace:*",
-    "@tsva/observability": "workspace:*",
-    "@tsva/persistence": "workspace:*",
-    "@tsva/reminders": "workspace:*",
-    "@tsva/runtime": "workspace:*",
-    "@tsva/streams": "workspace:*",
-    "@tsva/transactions": "workspace:*",
+    "@thresh/client": "workspace:*",
+    "@thresh/clustering-k8s": "workspace:*",
+    "@thresh/core": "workspace:*",
+    "@thresh/directory": "workspace:*",
+    "@thresh/durable-jobs": "workspace:*",
+    "@thresh/journaling": "workspace:*",
+    "@thresh/messaging": "workspace:*",
+    "@thresh/observability": "workspace:*",
+    "@thresh/persistence": "workspace:*",
+    "@thresh/reminders": "workspace:*",
+    "@thresh/runtime": "workspace:*",
+    "@thresh/streams": "workspace:*",
+    "@thresh/transactions": "workspace:*",
     "kafkajs": "^2.2.4",
     "pg": "^8.21.0",
     "redis": "^5.12.1"
   },
   "devDependencies": {
-    "@tsva/testing": "workspace:*"
+    "@thresh/testing": "workspace:*"
   }
 }

@@ -1,10 +1,10 @@
 import type { Pool } from "pg";
-import { raceSignal } from "@tsva/core/abort";
-import { durationToMs, type Duration } from "@tsva/core/duration";
-import { deserializeValue, serializeValue } from "@tsva/core/value-codec";
-import type { AppendableQueue } from "@tsva/streams/pulling-stream-provider-core";
-import type { QueueEntry } from "@tsva/streams/redis-stream-queue";
-import { PostgresStreamCursorStore } from "@tsva/streams/postgres-stream-cursor-store";
+import { raceSignal } from "@thresh/core/abort";
+import { durationToMs, type Duration } from "@thresh/core/duration";
+import { deserializeValue, serializeValue } from "@thresh/core/value-codec";
+import type { AppendableQueue } from "@thresh/streams/pulling-stream-provider-core";
+import type { QueueEntry } from "@thresh/streams/redis-stream-queue";
+import { PostgresStreamCursorStore } from "@thresh/streams/postgres-stream-cursor-store";
 
 // Table names are interpolated (Postgres cannot bind identifiers), so guard
 // them against anything but a plain SQL identifier; all other inputs are bound.

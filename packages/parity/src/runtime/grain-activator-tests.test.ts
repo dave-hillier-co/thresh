@@ -1,16 +1,16 @@
 // Ported from dotnet/orleans test/Orleans.Runtime.Tests/GrainActivatorTests.cs @ v10.1.0 (MIT).
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
-import { FakeTimeProvider } from "@tsva/core/test-support/fake-time-provider";
-import type { Grain } from "@tsva/core/grain";
-import type { GrainId } from "@tsva/core/grain-id";
-import type { GrainActivator } from "@tsva/runtime/catalog";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
+import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
+import type { Grain } from "@thresh/core/grain";
+import type { GrainId } from "@thresh/core/grain-id";
+import type { GrainActivator } from "@thresh/runtime/catalog";
 import {
   ExplicitlyRegisteredSimpleDiGrain,
   ISimpleDiGrain,
-} from "@tsva/parity/grains/impl/simple-di-grain";
-import { randomIntegerKey } from "@tsva/parity/support/keys";
+} from "@thresh/parity/grains/impl/simple-di-grain";
+import { randomIntegerKey } from "@thresh/parity/support/keys";
 
 const HARDCODED_VALUE = "Hardcoded Test Value";
 

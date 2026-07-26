@@ -5,21 +5,21 @@
 // `hostBuilder.AddTestGrainService(...)`) with its own Init/Start lifecycle
 // that ordinary grains look up and call into, and which can itself expose
 // `IGrainExtension`s (`AddGrainExtension<IEchoExtension, EchoExtension>`).
-// GAP-GRAIN-SERVICE is closed by `@tsva/runtime/grain-service` (`GrainService`
+// GAP-GRAIN-SERVICE is closed by `@thresh/runtime/grain-service` (`GrainService`
 // base class + per-silo `GrainServiceRegistry`, reached from a grain via
 // `GrainRuntime.getGrainService`) built on the same seams as ordinary grain
-// extensions (`@tsva/runtime/grain-management-extension`, the closed
+// extensions (`@thresh/runtime/grain-management-extension`, the closed
 // GAP-GRAIN-EXTENSION) — see that module's class doc for the one deviation
 // (no cross-silo ring-routed messaging, so each silo runs its own instance).
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
 import {
   GrainServiceTestGrain,
   IGrainServiceTestGrain,
   TEST_GRAIN_SERVICE_NAME,
   TestGrainService,
-} from "@tsva/parity/grains/impl/grain-service-test-grain";
+} from "@thresh/parity/grains/impl/grain-service-test-grain";
 
 describe("Tester.GrainServiceTests", () => {
   let cluster: TestCluster;

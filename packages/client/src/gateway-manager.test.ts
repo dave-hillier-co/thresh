@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { SiloAddress } from "@tsva/core/silo-address";
-import { GatewayManager } from "@tsva/client/gateway-manager";
+import { SiloAddress } from "@thresh/core/silo-address";
+import { GatewayManager } from "@thresh/client/gateway-manager";
 import {
   membershipGatewayProvider,
   staticGatewayProvider,
   urlGatewayProvider,
   type GatewayListProvider,
-} from "@tsva/client/gateway-provider";
+} from "@thresh/client/gateway-provider";
 
 const silo = (n: number) => new SiloAddress(`silo-${n}`, `uid-${n}`, `silo-${n}:1111${n}`);
 

@@ -4,9 +4,9 @@
 // span assertions read the harness's captured spans, not data the grain
 // reports back; only `getActivityId`'s SPAN ID matters, for parity with the
 // activation-tracing grains' shape).
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithIntegerKey } from "@tsva/core/key-kinds";
-import type { SiloAddress } from "@tsva/core/silo-address";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithIntegerKey } from "@thresh/core/key-kinds";
+import type { SiloAddress } from "@thresh/core/silo-address";
 
 /** Basic deactivation tracing: a plain `onDeactivate` no-op. */
 export interface IDeactivationTracingTestGrain extends GrainWithIntegerKey {

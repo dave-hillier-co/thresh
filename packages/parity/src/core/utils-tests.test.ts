@@ -1,6 +1,6 @@
 // Ported from dotnet/orleans test/Orleans.Core.Tests/General/UtilsTests.cs @ v10.1.0 (MIT).
 import { describe, it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 // Tests IPEndPoint/SiloAddress.ToGatewayUri(), which formats a "gwy.tcp://" URI for Orleans'
 // TCP gateway transport. This framework routes client-to-silo traffic through Kubernetes

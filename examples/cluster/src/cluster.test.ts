@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { GrainId } from "@tsva/core/grain-id";
-import { ILeaderboard } from "@tsva/example-cluster/interfaces";
-import { buildWebSocketCluster, untilConverged } from "@tsva/example-cluster/cluster";
-import { runClusterDemo } from "@tsva/example-cluster/demo";
+import { GrainId } from "@thresh/core/grain-id";
+import { ILeaderboard } from "@thresh/example-cluster/interfaces";
+import { buildWebSocketCluster, untilConverged } from "@thresh/example-cluster/cluster";
+import { runClusterDemo } from "@thresh/example-cluster/demo";
 
 const LEADERBOARD = new GrainId("Leaderboard", "global");
 

@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { Grain } from "@tsva/core/grain";
-import { GrainId } from "@tsva/core/grain-id";
-import { registerPersistentField } from "@tsva/core/persistent-state-metadata";
-import { ReadOnlyStateViolationError } from "@tsva/core/errors";
-import type { PersistentState } from "@tsva/core/persistent-state";
-import type { InvocationRequest } from "@tsva/core/request";
-import { ActivationData } from "@tsva/runtime/activation";
-import { FakeTimeProvider } from "@tsva/runtime/test-support/fake-time-provider";
+import { Grain } from "@thresh/core/grain";
+import { GrainId } from "@thresh/core/grain-id";
+import { registerPersistentField } from "@thresh/core/persistent-state-metadata";
+import { ReadOnlyStateViolationError } from "@thresh/core/errors";
+import type { PersistentState } from "@thresh/core/persistent-state";
+import type { InvocationRequest } from "@thresh/core/request";
+import { ActivationData } from "@thresh/runtime/activation";
+import { FakeTimeProvider } from "@thresh/runtime/test-support/fake-time-provider";
 
 interface Balance {
   cents: number;

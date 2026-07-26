@@ -9,17 +9,17 @@
 // back to a client through a different silo's gateway) is covered by
 // `packages/client/src/observer-callback.cluster.test.ts`.
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
-import { waitFor } from "@tsva/testing/wait";
-import type { ClientNode } from "@tsva/client/client-node";
-import { SimpleObserverableGrain } from "@tsva/parity/grains/impl/simple-observerable-grain";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
+import { waitFor } from "@thresh/testing/wait";
+import type { ClientNode } from "@thresh/client/client-node";
+import { SimpleObserverableGrain } from "@thresh/parity/grains/impl/simple-observerable-grain";
 import {
   ISimpleGrainObserver,
   ISimpleObserverableGrain,
-} from "@tsva/parity/grains/interfaces/simple-observerable-grain-interfaces";
-import { randomIntegerKey } from "@tsva/parity/support/keys";
-import { createClusterClient } from "@tsva/parity/support/client";
+} from "@thresh/parity/grains/interfaces/simple-observerable-grain-interfaces";
+import { randomIntegerKey } from "@thresh/parity/support/keys";
+import { createClusterClient } from "@thresh/parity/support/client";
 
 describe("DefaultCluster.Tests.General.ObserverTests", () => {
   let cluster: TestCluster;

@@ -1,6 +1,6 @@
 // Ported from dotnet/orleans test/Orleans.Core.Tests/Directory/GrainDirectoryResolverTests.cs @ v10.1.0 (MIT).
 import { describe, it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 // GrainDirectoryResolver resolves, per grain type, which of several
 // registered IGrainDirectory implementations owns it (a grain class can opt

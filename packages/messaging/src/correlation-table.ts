@@ -1,5 +1,5 @@
-import { GrainCallTimeoutError } from "@tsva/core/errors";
-import type { Message } from "@tsva/messaging/message";
+import { GrainCallTimeoutError } from "@thresh/core/errors";
+import type { Message } from "@thresh/messaging/message";
 
 /** Injectable timer so call-timeout behaviour is deterministic in tests. */
 export interface CorrelationTimer {

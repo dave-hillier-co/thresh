@@ -1,15 +1,15 @@
-import { SiloAddress } from "@tsva/core/silo-address";
-import { FakeTimeProvider } from "@tsva/core/test-support/fake-time-provider";
-import { InProcessNetwork } from "@tsva/messaging/in-process-transport";
-import { createSilo } from "@tsva/hosting/silo-builder";
-import { FleetAggregatorGrain } from "@tsva/example-thermostat/fleet-aggregator-grain";
+import { SiloAddress } from "@thresh/core/silo-address";
+import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
+import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
+import { createSilo } from "@thresh/hosting/silo-builder";
+import { FleetAggregatorGrain } from "@thresh/example-thermostat/fleet-aggregator-grain";
 import {
   IFleetAggregator,
   IThermostat,
   IThermostatControl,
   type Command,
-} from "@tsva/example-thermostat/interfaces";
-import { ThermostatGrain } from "@tsva/example-thermostat/thermostat-grain";
+} from "@thresh/example-thermostat/interfaces";
+import { ThermostatGrain } from "@thresh/example-thermostat/thermostat-grain";
 
 export interface DemoResult {
   commands: Command[][];

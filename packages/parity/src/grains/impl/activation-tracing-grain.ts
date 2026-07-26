@@ -1,14 +1,14 @@
 // Ported from dotnet/orleans test/Orleans.Runtime.Tests/ActivationTracingTests.cs
 // @ v10.1.0 (MIT) — `ActivityGrain` and `PersistentStateActivityGrain`.
 import { context, propagation, trace } from "@opentelemetry/api";
-import { grain, persistentState } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import type { PersistentState } from "@tsva/core/persistent-state";
+import { grain, persistentState } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import type { PersistentState } from "@thresh/core/persistent-state";
 import {
   IActivityGrain,
   IPersistentStateActivityGrain,
   type ActivityData,
-} from "@tsva/parity/grains/interfaces/activation-tracing-grain-interfaces";
+} from "@thresh/parity/grains/interfaces/activation-tracing-grain-interfaces";
 
 export { IActivityGrain, IPersistentStateActivityGrain };
 

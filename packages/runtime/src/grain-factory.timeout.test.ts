@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { GrainCallTimeoutError } from "@tsva/core/errors";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithStringKey } from "@tsva/core/key-kinds";
-import type { Dispatcher } from "@tsva/runtime/dispatcher";
-import { GrainFactory } from "@tsva/runtime/grain-factory";
-import { FakeTimeProvider } from "@tsva/runtime/test-support/fake-time-provider";
+import { GrainCallTimeoutError } from "@thresh/core/errors";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { Dispatcher } from "@thresh/runtime/dispatcher";
+import { GrainFactory } from "@thresh/runtime/grain-factory";
+import { FakeTimeProvider } from "@thresh/runtime/test-support/fake-time-provider";
 
 interface ISlow extends GrainWithStringKey {
   hang(): Promise<string>;

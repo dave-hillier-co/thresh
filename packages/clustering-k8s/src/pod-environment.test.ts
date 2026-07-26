@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readPodEnvironment, siloAddressFromPodEnv } from "@tsva/clustering-k8s/pod-environment";
+import { readPodEnvironment, siloAddressFromPodEnv } from "@thresh/clustering-k8s/pod-environment";
 
 const env = {
   POD_NAME: "silo-2",

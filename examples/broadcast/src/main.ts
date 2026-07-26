@@ -1,6 +1,6 @@
-import { runBroadcastDemo } from "@tsva/example-broadcast/demo";
+import { runBroadcastDemo } from "@thresh/example-broadcast/demo";
 
-// Runnable entry point: `pnpm --filter @tsva/example-broadcast start`.
+// Runnable entry point: `pnpm --filter @thresh/example-broadcast start`.
 async function main(): Promise<void> {
   const result = await runBroadcastDemo();
   console.log("Broadcast channels demo");

@@ -1,6 +1,6 @@
-import type { GrainAddress } from "@tsva/core/grain-address";
-import type { GrainId } from "@tsva/core/grain-id";
-import type { SiloAddress } from "@tsva/core/silo-address";
+import type { GrainAddress } from "@thresh/core/grain-address";
+import type { GrainId } from "@thresh/core/grain-id";
+import type { SiloAddress } from "@thresh/core/silo-address";
 
 /**
  * Reaches the directory partition on a remote silo. The silo supplies an

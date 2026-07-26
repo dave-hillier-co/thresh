@@ -1,13 +1,13 @@
 // Ported from dotnet/orleans test/Orleans.DefaultCluster.Tests/LocalActivationStatusCheckerTests.cs @ v10.1.0 (MIT).
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
-import { grainReferenceIdentity } from "@tsva/core/grain-reference";
-import type { GrainId } from "@tsva/core/grain-id";
-import type { ClientNode } from "@tsva/client/client-node";
-import { ISimpleGrain, SimpleGrain } from "@tsva/parity/grains/impl/simple-grain";
-import { randomIntegerKey } from "@tsva/parity/support/keys";
-import { createClusterClient } from "@tsva/parity/support/client";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
+import { grainReferenceIdentity } from "@thresh/core/grain-reference";
+import type { GrainId } from "@thresh/core/grain-id";
+import type { ClientNode } from "@thresh/client/client-node";
+import { ISimpleGrain, SimpleGrain } from "@thresh/parity/grains/impl/simple-grain";
+import { randomIntegerKey } from "@thresh/parity/support/keys";
+import { createClusterClient } from "@thresh/parity/support/client";
 
 describe("DefaultCluster.Tests.LocalActivationStatusCheckerTests", () => {
   let cluster: TestCluster;

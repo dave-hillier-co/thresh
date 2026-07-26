@@ -1,8 +1,8 @@
 // Ported from dotnet/orleans test/Grains/TestGrainInterfaces/IMultifacetWriter.cs,
 // IMultifacetReader.cs, test/Grains/TestInternalGrainInterfaces/IMultifacetTestGrain.cs,
 // IMultifacetFactoryTestGrain.cs @ v10.1.0 (MIT).
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithIntegerKey } from "@tsva/core/key-kinds";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithIntegerKey } from "@thresh/core/key-kinds";
 
 export interface IMultifacetWriter extends GrainWithIntegerKey {
   setValue(x: number): Promise<void>;

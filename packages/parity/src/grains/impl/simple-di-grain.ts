@@ -6,9 +6,9 @@
 // DI still runs inside a custom activator; this framework has no DI container
 // on the construction path to exercise, so that dependency is dropped — the
 // activator constructs this grain directly.
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import { ISimpleDiGrain } from "@tsva/parity/grains/interfaces/simple-di-grain-interfaces";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import { ISimpleDiGrain } from "@thresh/parity/grains/interfaces/simple-di-grain-interfaces";
 
 export { ISimpleDiGrain };
 

@@ -2,9 +2,9 @@
 // Upstream delays 50ms in OnActivateAsync to widen the activation race window
 // under a real threadpool; the ported test still drives thousands of
 // concurrent async calls without that delay, so the simplification is dropped.
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import { ICatalogTestGrain } from "@tsva/parity/grains/interfaces/catalog-test-grain-interfaces";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import { ICatalogTestGrain } from "@thresh/parity/grains/interfaces/catalog-test-grain-interfaces";
 
 export { ICatalogTestGrain };
 

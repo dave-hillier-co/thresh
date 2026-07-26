@@ -1,6 +1,6 @@
-import { runThermostatDemo } from "@tsva/example-thermostat/demo";
+import { runThermostatDemo } from "@thresh/example-thermostat/demo";
 
-// Runnable entry point: `pnpm --filter @tsva/example-thermostat start`.
+// Runnable entry point: `pnpm --filter @thresh/example-thermostat start`.
 async function main(): Promise<void> {
   const result = await runThermostatDemo();
   console.log("Thermostat demo");

@@ -1,16 +1,16 @@
-import { RejectionError } from "@tsva/core/errors";
-import type { GrainAddress } from "@tsva/core/grain-address";
-import type { GrainId } from "@tsva/core/grain-id";
-import type { SiloAddress } from "@tsva/core/silo-address";
+import { RejectionError } from "@thresh/core/errors";
+import type { GrainAddress } from "@thresh/core/grain-address";
+import type { GrainId } from "@thresh/core/grain-id";
+import type { SiloAddress } from "@thresh/core/silo-address";
 import {
   recordDirectoryLookup,
   recordDirectoryRegistration,
   type DirectoryLocality,
-} from "@tsva/observability/directory-metrics";
-import type { ConsistentHashRing } from "@tsva/directory/consistent-hash-ring";
-import type { DirectoryPeer } from "@tsva/directory/directory-peer";
-import type { GrainDirectory } from "@tsva/directory/grain-directory";
-import type { LocalDirectoryPartition } from "@tsva/directory/local-directory-partition";
+} from "@thresh/observability/directory-metrics";
+import type { ConsistentHashRing } from "@thresh/directory/consistent-hash-ring";
+import type { DirectoryPeer } from "@thresh/directory/directory-peer";
+import type { GrainDirectory } from "@thresh/directory/grain-directory";
+import type { LocalDirectoryPartition } from "@thresh/directory/local-directory-partition";
 
 /** Bounded re-resolution attempts when a peer reports our membership view is stale. */
 const MAX_STALE_RETRIES = 5;

@@ -1,6 +1,6 @@
-import { GrainId } from "@tsva/core/grain-id";
-import { ILeaderboard, type ScoreEntry } from "@tsva/example-cluster/interfaces";
-import { buildWebSocketCluster, untilConverged } from "@tsva/example-cluster/cluster";
+import { GrainId } from "@thresh/core/grain-id";
+import { ILeaderboard, type ScoreEntry } from "@thresh/example-cluster/interfaces";
+import { buildWebSocketCluster, untilConverged } from "@thresh/example-cluster/cluster";
 
 export interface ClusterDemoResult {
   /** Which silo the single leaderboard activation landed on. */

@@ -1,8 +1,8 @@
-import type { GrainType } from "@tsva/core/grain-type";
-import type { SiloAddress } from "@tsva/core/silo-address";
-import type { PlacementFilter } from "@tsva/runtime/placement/placement-filter";
-import type { PlacementContext } from "@tsva/runtime/placement/placement-strategy";
-import { ROLE_METADATA_KEY } from "@tsva/runtime/placement/silo-metadata";
+import type { GrainType } from "@thresh/core/grain-type";
+import type { SiloAddress } from "@thresh/core/silo-address";
+import type { PlacementFilter } from "@thresh/runtime/placement/placement-filter";
+import type { PlacementContext } from "@thresh/runtime/placement/placement-strategy";
+import { ROLE_METADATA_KEY } from "@thresh/runtime/placement/silo-metadata";
 
 /**
  * Keeps only candidates whose advertised silo metadata defines every required

@@ -1,7 +1,7 @@
 import type { Pool } from "pg";
-import type { GrainId } from "@tsva/core/grain-id";
-import { deserializeValue, serializeValue } from "@tsva/core/value-codec";
-import type { SubscriptionRegistry } from "@tsva/streams/pulling-stream-provider-core";
+import type { GrainId } from "@thresh/core/grain-id";
+import { deserializeValue, serializeValue } from "@thresh/core/value-codec";
+import type { SubscriptionRegistry } from "@thresh/streams/pulling-stream-provider-core";
 
 const IDENTIFIER = /^[a-z_][a-z0-9_]*$/;
 

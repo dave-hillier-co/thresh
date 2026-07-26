@@ -1,4 +1,4 @@
-import type { GrainStorage } from "@tsva/core/grain-storage";
+import type { GrainStorage } from "@thresh/core/grain-storage";
 
 export const DEFAULT_PROVIDER = "default";
 

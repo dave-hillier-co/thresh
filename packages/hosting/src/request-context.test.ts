@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithStringKey } from "@tsva/core/key-kinds";
-import { SiloAddress } from "@tsva/core/silo-address";
-import { InProcessNetwork } from "@tsva/messaging/in-process-transport";
-import { requestContext } from "@tsva/runtime/invocation-context";
-import { StaticMembershipService } from "@tsva/runtime/static-membership";
-import { createSilo } from "@tsva/hosting/silo-builder";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import { SiloAddress } from "@thresh/core/silo-address";
+import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
+import { requestContext } from "@thresh/runtime/invocation-context";
+import { StaticMembershipService } from "@thresh/runtime/static-membership";
+import { createSilo } from "@thresh/hosting/silo-builder";
 
 interface Downstream extends GrainWithStringKey {
   readTenant(): Promise<string | undefined>;

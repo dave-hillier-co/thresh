@@ -1,15 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { grain, implicitStreamSubscription } from "@tsva/core/decorators";
-import { defineGrain } from "@tsva/core/define-grain";
-import { Grain } from "@tsva/core/grain";
-import { GrainId } from "@tsva/core/grain-id";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithStringKey } from "@tsva/core/key-kinds";
-import { SiloAddress } from "@tsva/core/silo-address";
-import { STREAM_SUBSCRIPTION_OBSERVER, type StreamHandler } from "@tsva/core/stream";
-import { InProcessNetwork, InProcessTransport } from "@tsva/messaging/in-process-transport";
-import { ClusterNode } from "@tsva/runtime/cluster-node";
-import { StaticMembershipService } from "@tsva/runtime/static-membership";
+import { grain, implicitStreamSubscription } from "@thresh/core/decorators";
+import { defineGrain } from "@thresh/core/define-grain";
+import { Grain } from "@thresh/core/grain";
+import { GrainId } from "@thresh/core/grain-id";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import { SiloAddress } from "@thresh/core/silo-address";
+import { STREAM_SUBSCRIPTION_OBSERVER, type StreamHandler } from "@thresh/core/stream";
+import { InProcessNetwork, InProcessTransport } from "@thresh/messaging/in-process-transport";
+import { ClusterNode } from "@thresh/runtime/cluster-node";
+import { StaticMembershipService } from "@thresh/runtime/static-membership";
 
 // Module sink so observed events survive across activations (keyed by grain key).
 let observed: Array<{ key: string; namespace: string; event: unknown }> = [];

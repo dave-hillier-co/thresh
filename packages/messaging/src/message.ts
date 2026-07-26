@@ -1,6 +1,6 @@
-import type { GrainId } from "@tsva/core/grain-id";
-import type { SiloAddress } from "@tsva/core/silo-address";
-import type { AccessCounter, ParticipantId } from "@tsva/core/transaction-info";
+import type { GrainId } from "@thresh/core/grain-id";
+import type { SiloAddress } from "@thresh/core/silo-address";
+import type { AccessCounter, ParticipantId } from "@thresh/core/transaction-info";
 
 export type Direction = "request" | "response" | "oneWay";
 export type ResponseKind = "success" | "error" | "rejection";

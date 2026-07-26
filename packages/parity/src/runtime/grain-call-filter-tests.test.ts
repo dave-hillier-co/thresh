@@ -1,20 +1,20 @@
 // Ported from dotnet/orleans test/Orleans.Runtime.Tests/GrainCallFilterTests.cs @ v10.1.0 (MIT).
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
 import {
   INCOMING_CALL_FILTER,
   type IncomingGrainCallContext,
   type IncomingGrainCallFilter,
   type OutgoingGrainCallFilter,
-} from "@tsva/core/grain-call-filter";
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithGuidKey } from "@tsva/core/key-kinds";
-import { castGrainReference } from "@tsva/core/grain-reference";
-import type { ClientNode } from "@tsva/client/client-node";
-import { invocationContext } from "@tsva/runtime/invocation-context";
+} from "@thresh/core/grain-call-filter";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithGuidKey } from "@thresh/core/key-kinds";
+import { castGrainReference } from "@thresh/core/grain-reference";
+import type { ClientNode } from "@thresh/client/client-node";
+import { invocationContext } from "@thresh/runtime/invocation-context";
 import {
   GRAIN_CALL_FILTER_TEST_KEY,
   GrainCallFilterTestGrain,
@@ -29,9 +29,9 @@ import {
   MethodInterceptionGrainObserver,
   MyGrainExtension,
   OutgoingMethodInterceptionGrain,
-} from "@tsva/parity/grains/impl/method-interception-grain";
-import { createClusterClient } from "@tsva/parity/support/client";
-import { randomGuidKey, randomIntegerKey } from "@tsva/parity/support/keys";
+} from "@thresh/parity/grains/impl/method-interception-grain";
+import { createClusterClient } from "@thresh/parity/support/client";
+import { randomGuidKey, randomIntegerKey } from "@thresh/parity/support/keys";
 
 // System-wide incoming filter: mirrors the upstream fixture's
 // `SiloInvokerTestSiloBuilderConfigurator` incoming filter, trimmed to just

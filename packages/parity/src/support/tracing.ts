@@ -8,7 +8,7 @@
 // `SimpleSpanProcessor(InMemorySpanExporter)` for capture, and
 // `AsyncLocalStorageContextManager` so span context (parent/child) survives
 // `await` boundaries across grain calls — plus the W3C propagator so
-// `tracingFilters()` (see `@tsva/observability/tracing`) actually injects and
+// `tracingFilters()` (see `@thresh/observability/tracing`) actually injects and
 // extracts `traceparent`/`tracestate`.
 import {
   context,
@@ -26,7 +26,7 @@ import {
   SimpleSpanProcessor,
   type ReadableSpan,
 } from "@opentelemetry/sdk-trace-base";
-import { setupTracePropagation } from "@tsva/observability/tracing";
+import { setupTracePropagation } from "@thresh/observability/tracing";
 
 export interface CapturedSpan {
   readonly name: string;
@@ -107,7 +107,7 @@ export function createTracingHarness(): {
   context.setGlobalContextManager(contextManager);
   setupTracePropagation();
 
-  const tracer = trace.getTracer("@tsva/parity/trace-context-propagation");
+  const tracer = trace.getTracer("@thresh/parity/trace-context-propagation");
 
   return {
     finishedSpans: () => exporter.getFinishedSpans().map(toCaptured),

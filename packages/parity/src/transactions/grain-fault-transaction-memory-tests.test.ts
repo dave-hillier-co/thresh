@@ -29,24 +29,24 @@
 // (`TransactionContext.GetRequiredTransactionInfo().Fork()`, never awaited).
 //
 // Exception mapping (`src/Orleans.Transactions/OrleansTransactionException.cs`
-// -> `@tsva/core/errors`): `OrleansTransactionAbortedException` ->
+// -> `@thresh/core/errors`): `OrleansTransactionAbortedException` ->
 // `TransactionAbortedError`; `OrleansReadOnlyViolatedException` ->
 // `TransactionReadOnlyViolatedError`; `OrleansOrphanCallException` ->
 // `TransactionOrphanCallError`; `OrleansCascadingAbortException` ->
 // `TransactionCascadingAbortError` (swallowed by `testAfterDustSettles`, this
 // port's `TestAfterDustSettles`).
 import { expect } from "vitest";
-import { defineGrain, useTransactionalState } from "@tsva/core/define-grain";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithStringKey } from "@tsva/core/key-kinds";
+import { defineGrain, useTransactionalState } from "@thresh/core/define-grain";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithStringKey } from "@thresh/core/key-kinds";
 import {
   TransactionAbortedError,
   TransactionCascadingAbortError,
   TransactionOrphanCallError,
   TransactionReadOnlyViolatedError,
-} from "@tsva/core/errors";
-import { TestCluster } from "@tsva/testing/test-cluster";
-import { orleansTest } from "@tsva/testing/orleans-test";
+} from "@thresh/core/errors";
+import { TestCluster } from "@thresh/testing/test-cluster";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 const EXPECTED = 5;
 /** TransactionTestConstants.MaxCoordinatedTransactions (Orleans @ v10.1.0). */

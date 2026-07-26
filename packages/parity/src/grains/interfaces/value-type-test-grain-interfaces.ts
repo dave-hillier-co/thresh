@@ -1,7 +1,7 @@
 // Ported from dotnet/orleans test/Grains/TestGrainInterfaces/IGenericInterfaces.cs
 // (`IValueTypeTestGrain`, `ValueTypeTestData`) @ v10.1.0 (MIT).
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithGuidKey } from "@tsva/core/key-kinds";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithGuidKey } from "@thresh/core/key-kinds";
 
 /** Upstream `ValueTypeTestData`: a plain value (C# struct), ported as data. */
 export interface ValueTypeTestData {

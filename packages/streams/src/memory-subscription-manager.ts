@@ -1,6 +1,6 @@
-import type { GrainId } from "@tsva/core/grain-id";
-import { Guid } from "@tsva/core/guid";
-import type { StreamId, StreamSubscription, StreamSubscriptionManager } from "@tsva/core/stream";
+import type { GrainId } from "@thresh/core/grain-id";
+import { Guid } from "@thresh/core/guid";
+import type { StreamId, StreamSubscription, StreamSubscriptionManager } from "@thresh/core/stream";
 
 /**
  * Confirms an administratively-added subscription with the target grain's

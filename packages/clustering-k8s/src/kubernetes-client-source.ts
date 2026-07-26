@@ -2,8 +2,8 @@ import { DiscoveryV1Api, KubeConfig, Watch } from "@kubernetes/client-node";
 import type {
   EndpointSliceSource,
   RawEndpointSlice,
-} from "@tsva/clustering-k8s/kubernetes-endpoint-watch";
-import type { WatchEventType } from "@tsva/clustering-k8s/watched-endpoints";
+} from "@thresh/clustering-k8s/kubernetes-endpoint-watch";
+import type { WatchEventType } from "@thresh/clustering-k8s/watched-endpoints";
 
 export interface KubernetesClientSourceOptions {
   /** Namespace the silo runs in (from the downward API, `POD_NAMESPACE`). */

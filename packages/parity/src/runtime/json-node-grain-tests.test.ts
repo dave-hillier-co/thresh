@@ -5,17 +5,17 @@
 // `JsonValue` (a derived runtime type) at the call site, which previously
 // threw `InvalidCastException` because Orleans' serializer keyed the wire
 // format off the declared (base) type rather than the actual runtime type.
-// This framework's wire codec (`@tsva/core/value-codec`) is structural JSON
+// This framework's wire codec (`@thresh/core/value-codec`) is structural JSON
 // with no declared-type tagging, so `unknown`-typed grain parameters are the
 // faithful port and every case below is genuinely exercised (not gapped) —
 // see json-node-test-grain-interfaces.ts for the framework-shape rationale.
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
 import {
   IJsonNodeTestGrain,
   JsonNodeTestGrain,
-} from "@tsva/parity/grains/impl/json-node-test-grain";
+} from "@thresh/parity/grains/impl/json-node-test-grain";
 
 describe("DefaultCluster.Tests.JsonNodeGrainTests", () => {
   let cluster: TestCluster;

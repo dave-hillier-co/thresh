@@ -1,11 +1,11 @@
-import type { GrainId } from "@tsva/core/grain-id";
-import { getTransactionalFields } from "@tsva/core/transactional-state-metadata";
-import type { TimeProvider } from "@tsva/core/time-provider";
+import type { GrainId } from "@thresh/core/grain-id";
+import { getTransactionalFields } from "@thresh/core/transactional-state-metadata";
+import type { TimeProvider } from "@thresh/core/time-provider";
 import {
   TransactionalStateImpl,
   type ResolveStatus,
-} from "@tsva/transactions/transactional-state-impl";
-import type { TransactionalStorageRegistry } from "@tsva/transactions/transactional-storage-registry";
+} from "@thresh/transactions/transactional-state-impl";
+import type { TransactionalStorageRegistry } from "@thresh/transactions/transactional-storage-registry";
 
 /** Every `TransactionalState` facet bound onto an instance, so `unbindTransactionalStates` can unload them. */
 const boundStates = new WeakMap<object, TransactionalStateImpl<unknown>[]>();

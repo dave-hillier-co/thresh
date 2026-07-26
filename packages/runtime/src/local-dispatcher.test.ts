@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { GrainId } from "@tsva/core/grain-id";
-import type { InvocationRequest } from "@tsva/core/request";
-import type { Catalog } from "@tsva/runtime/catalog";
-import type { InvokeCallOptions } from "@tsva/runtime/dispatcher";
-import { LocalDispatcher } from "@tsva/runtime/local-dispatcher";
+import { GrainId } from "@thresh/core/grain-id";
+import type { InvocationRequest } from "@thresh/core/request";
+import type { Catalog } from "@thresh/runtime/catalog";
+import type { InvokeCallOptions } from "@thresh/runtime/dispatcher";
+import { LocalDispatcher } from "@thresh/runtime/local-dispatcher";
 
 // GAP-CANCELLATION-DISPATCHER: `LocalDispatcher` previously had no way to
 // carry a caller's `InvokeCallOptions` (ambient signal / per-call deadline)

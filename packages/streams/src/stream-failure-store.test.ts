@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   DurableStreamFailureHandler,
   MemoryStreamFailureStore,
-} from "@tsva/streams/stream-failure-store";
+} from "@thresh/streams/stream-failure-store";
 
 describe("MemoryStreamFailureStore", () => {
   it("records a failure and lists it back", async () => {

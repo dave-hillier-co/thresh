@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
 
 interface ICounter {
   increment(by: number): Promise<number>;

@@ -1,7 +1,7 @@
 // Ported from dotnet/orleans test/Grains/TestGrainInterfaces/IValueTypeTestGrain.cs
 // (`IRoundtripSerializationGrain`, `ParamVal`, `RetVal`, `CampaignEnemyTestType`) @ v10.1.0 (MIT).
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithIntegerKey } from "@tsva/core/key-kinds";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithIntegerKey } from "@thresh/core/key-kinds";
 
 /** Upstream `CampaignEnemyTestType` enum, ported as its member names. */
 export type CampaignEnemyTestType = "None" | "Brute" | "Enemy1" | "Enemy2" | "Enemy3";

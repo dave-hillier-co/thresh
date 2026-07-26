@@ -1,15 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { grain, persistentState } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import { GrainId } from "@tsva/core/grain-id";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithStringKey } from "@tsva/core/key-kinds";
-import type { PersistentState } from "@tsva/core/persistent-state";
-import { SiloAddress } from "@tsva/core/silo-address";
-import { FakeTimeProvider } from "@tsva/core/test-support/fake-time-provider";
-import { InProcessNetwork } from "@tsva/messaging/in-process-transport";
-import { MemoryGrainStorage } from "@tsva/persistence/memory-grain-storage";
-import { createSilo } from "@tsva/hosting/silo-builder";
+import { grain, persistentState } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import { GrainId } from "@thresh/core/grain-id";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { PersistentState } from "@thresh/core/persistent-state";
+import { SiloAddress } from "@thresh/core/silo-address";
+import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
+import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
+import { MemoryGrainStorage } from "@thresh/persistence/memory-grain-storage";
+import { createSilo } from "@thresh/hosting/silo-builder";
 
 interface BalanceState {
   cents: number;

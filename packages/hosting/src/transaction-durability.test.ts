@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { grain, transactionalState } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithStringKey } from "@tsva/core/key-kinds";
-import { SiloAddress } from "@tsva/core/silo-address";
-import type { TransactionalState } from "@tsva/core/transactional-state";
-import { InProcessNetwork } from "@tsva/messaging/in-process-transport";
-import { MemoryTransactionalStorage } from "@tsva/transactions/memory-transactional-storage";
-import { createSilo } from "@tsva/hosting/silo-builder";
-import type { SiloHost } from "@tsva/hosting/silo-host";
+import { grain, transactionalState } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import { SiloAddress } from "@thresh/core/silo-address";
+import type { TransactionalState } from "@thresh/core/transactional-state";
+import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
+import { MemoryTransactionalStorage } from "@thresh/transactions/memory-transactional-storage";
+import { createSilo } from "@thresh/hosting/silo-builder";
+import type { SiloHost } from "@thresh/hosting/silo-host";
 
 interface Balance {
   cents: number;

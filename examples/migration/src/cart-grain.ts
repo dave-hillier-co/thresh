@@ -1,5 +1,5 @@
-import { defineGrain, usePersistentState } from "@tsva/core/define-grain";
-import type { ICart } from "@tsva/example-migration/interfaces";
+import { defineGrain, usePersistentState } from "@thresh/core/define-grain";
+import type { ICart } from "@thresh/example-migration/interfaces";
 
 interface CartState {
   items: string[];

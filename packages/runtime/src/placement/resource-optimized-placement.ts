@@ -1,9 +1,9 @@
-import type { GrainType } from "@tsva/core/grain-type";
-import type { SiloAddress } from "@tsva/core/silo-address";
+import type { GrainType } from "@thresh/core/grain-type";
+import type { SiloAddress } from "@thresh/core/silo-address";
 import type {
   PlacementContext,
   PlacementStrategy,
-} from "@tsva/runtime/placement/placement-strategy";
+} from "@thresh/runtime/placement/placement-strategy";
 
 /**
  * Places the grain on the least-loaded silo (Orleans `ResourceOptimizedPlacement`).

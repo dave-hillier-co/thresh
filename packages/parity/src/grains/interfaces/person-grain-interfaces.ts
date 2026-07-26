@@ -1,6 +1,6 @@
 // Ported from dotnet/orleans test/Grains/TestGrainInterfaces/EventSourcing/IPersonGrain.cs @ v10.1.0 (MIT).
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithGuidKey } from "@tsva/core/key-kinds";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithGuidKey } from "@thresh/core/key-kinds";
 
 export type GenderType = "Male" | "Female";
 

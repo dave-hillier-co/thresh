@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { GrainCallAbortedError } from "@tsva/core/errors";
-import { CancellationTokenPlaceholder } from "@tsva/core/grain-cancellation-token";
-import { Grain } from "@tsva/core/grain";
-import { GrainId } from "@tsva/core/grain-id";
-import type { InvocationRequest } from "@tsva/core/request";
-import type { DeactivationReason } from "@tsva/core/reasons";
-import { ActivationData } from "@tsva/runtime/activation";
-import { GrainFactory } from "@tsva/runtime/grain-factory";
-import { GrainRuntimeImpl } from "@tsva/runtime/grain-runtime-impl";
-import { FakeTimeProvider } from "@tsva/runtime/test-support/fake-time-provider";
+import { GrainCallAbortedError } from "@thresh/core/errors";
+import { CancellationTokenPlaceholder } from "@thresh/core/grain-cancellation-token";
+import { Grain } from "@thresh/core/grain";
+import { GrainId } from "@thresh/core/grain-id";
+import type { InvocationRequest } from "@thresh/core/request";
+import type { DeactivationReason } from "@thresh/core/reasons";
+import { ActivationData } from "@thresh/runtime/activation";
+import { GrainFactory } from "@thresh/runtime/grain-factory";
+import { GrainRuntimeImpl } from "@thresh/runtime/grain-runtime-impl";
+import { FakeTimeProvider } from "@thresh/runtime/test-support/fake-time-provider";
 
 // GAP-CANCELLATION-AMBIENT (issue #18): ambient per-call cancellation and
 // deadlines threaded through the InvocationRequest/InvocationContext/

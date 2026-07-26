@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { Pool } from "pg";
-import type { GrainId } from "@tsva/core/grain-id";
-import type { ReminderEntry, ReminderRegistration, ReminderTable } from "@tsva/core/reminder";
-import { deserializeValue, serializeValue } from "@tsva/core/value-codec";
+import type { GrainId } from "@thresh/core/grain-id";
+import type { ReminderEntry, ReminderRegistration, ReminderTable } from "@thresh/core/reminder";
+import { deserializeValue, serializeValue } from "@thresh/core/value-codec";
 import type { ReminderData } from "./reminder-data";
 
 export interface PostgresReminderTableOptions {
-  /** Table holding the reminder rows (defaults to `"tsva_reminders"`). */
+  /** Table holding the reminder rows (defaults to `"thresh_reminders"`). */
   tableName?: string;
 }
 
@@ -35,7 +35,7 @@ export class PostgresReminderTable implements ReminderTable {
     private readonly pool: Pool,
     options: PostgresReminderTableOptions = {},
   ) {
-    this.table = options.tableName ?? "tsva_reminders";
+    this.table = options.tableName ?? "thresh_reminders";
     if (!IDENTIFIER.test(this.table)) throw new Error(`invalid table name: ${this.table}`);
   }
 

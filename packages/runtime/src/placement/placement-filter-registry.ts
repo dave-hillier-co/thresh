@@ -1,4 +1,4 @@
-import type { PlacementFilter } from "@tsva/runtime/placement/placement-filter";
+import type { PlacementFilter } from "@thresh/runtime/placement/placement-filter";
 
 /**
  * Named custom placement-filter directors registered on a silo builder

@@ -1,8 +1,8 @@
-import type { GrainId } from "@tsva/core/grain-id";
-import type { SiloAddress } from "@tsva/core/silo-address";
-import { recordMessageSent, recordQueueLatency } from "@tsva/observability/messaging-metrics";
-import type { Message } from "@tsva/messaging/message";
-import type { Connection, Transport } from "@tsva/messaging/transport";
+import type { GrainId } from "@thresh/core/grain-id";
+import type { SiloAddress } from "@thresh/core/silo-address";
+import { recordMessageSent, recordQueueLatency } from "@thresh/observability/messaging-metrics";
+import type { Message } from "@thresh/messaging/message";
+import type { Connection, Transport } from "@thresh/messaging/transport";
 
 /**
  * Pools one duplex connection per peer silo, opened lazily on first use and
@@ -34,7 +34,7 @@ export class ConnectionManager {
           ...(this.clientId ? { clientId: this.clientId } : {}),
         })
         .then((connection) => {
-          recordQueueLatency(Date.now() - dialStart, { "tsva.peer": key });
+          recordQueueLatency(Date.now() - dialStart, { "thresh.peer": key });
           return instrumented(connection, key);
         })
         .catch((err: unknown) => {
@@ -60,11 +60,11 @@ export class ConnectionManager {
   }
 }
 
-/** Wraps a freshly dialed connection's `send` to record the `tsva.messaging.sent` counter. */
+/** Wraps a freshly dialed connection's `send` to record the `thresh.messaging.sent` counter. */
 function instrumented(connection: Connection, peer: string): Connection {
   return {
     send: (message: Message) => {
-      recordMessageSent({ "tsva.peer": peer, "tsva.message.direction": message.direction });
+      recordMessageSent({ "thresh.peer": peer, "thresh.message.direction": message.direction });
       connection.send(message);
     },
     close: (reason?: string) => connection.close(reason),

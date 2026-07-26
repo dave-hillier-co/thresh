@@ -1,6 +1,6 @@
-import { InconsistentStateError } from "@tsva/core/errors";
-import type { GrainId } from "@tsva/core/grain-id";
-import type { GrainStorage, StateHolder } from "@tsva/core/grain-storage";
+import { InconsistentStateError } from "@thresh/core/errors";
+import type { GrainId } from "@thresh/core/grain-id";
+import type { GrainStorage, StateHolder } from "@thresh/core/grain-storage";
 
 interface Record {
   value: unknown;

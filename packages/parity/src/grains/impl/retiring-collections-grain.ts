@@ -1,13 +1,13 @@
 // Test-scaffolding grain implementations for GAP-STATE-MACHINE-RETIREMENT.
 // See retiring-collections-grain-interfaces.ts for why there are two classes
 // sharing one grain type name.
-import { durableDictionary, grain } from "@tsva/core/decorators";
-import type { DurableDictionary } from "@tsva/core/durable-state";
-import { Grain } from "@tsva/core/grain";
+import { durableDictionary, grain } from "@thresh/core/decorators";
+import type { DurableDictionary } from "@thresh/core/durable-state";
+import { Grain } from "@thresh/core/grain";
 import {
   IRetiringCollectionsGrain,
   IRetiringCollectionsGrainPartial,
-} from "@tsva/parity/grains/interfaces/retiring-collections-grain-interfaces";
+} from "@thresh/parity/grains/interfaces/retiring-collections-grain-interfaces";
 
 export { IRetiringCollectionsGrain, IRetiringCollectionsGrainPartial };
 

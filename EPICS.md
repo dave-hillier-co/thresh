@@ -41,7 +41,7 @@ for how the design differs from Orleans.
 - **Reducer & functional-first authoring** — `defineGrain` + hooks, snapshot reducers, dispatch
   grains. Every example grain is functional (one `@grain()` class kept on purpose as the living
   interop example).
-- **Durable jobs** — `@tsva/durable-jobs`: sharded (time-bucketed), durable, at-least-once scheduled
+- **Durable jobs** — `@thresh/durable-jobs`: sharded (time-bucketed), durable, at-least-once scheduled
   grain invocation, with per-silo concurrency control (limiter + slow-start + overload backoff),
   retry policy, `pollAfter` supervision, and membership-driven shard ownership with dead-silo
   adoption, poison protection and a claim ramp-up budget. Memory + Redis (Lua-CAS) shard stores;
@@ -54,10 +54,10 @@ for how the design differs from Orleans.
 ## ✅ Shipped in the 2026-07-24 issue burn-down (#18–#37)
 
 - **Observability breadth** — OTel meters across messaging, reminders, streams, durable-jobs,
-  directory and storage ops (`tsva.*`, no-op safe), alongside the existing call filters,
+  directory and storage ops (`thresh.*`, no-op safe), alongside the existing call filters,
   activation-path spans and `traceparent`/baggage propagation — now including the
   server→client observer-push direction.
-- **Ambient cancellation & per-call deadlines** — `@tsva/core/abort`, `AbortSignal` + deadline
+- **Ambient cancellation & per-call deadlines** — `@thresh/core/abort`, `AbortSignal` + deadline
   threaded through invocation context, dispatchers, turn scheduler (admission-time preemption),
   `onDeactivate(reason, signal?)` and grain storage; composes with the explicit
   `GrainCancellationToken` mechanism. Remainders in `todo.md`.

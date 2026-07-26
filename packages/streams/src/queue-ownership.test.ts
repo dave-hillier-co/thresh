@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ownedQueueIndices, queueRingHash, type HashRange } from "@tsva/streams/queue-ownership";
+import { ownedQueueIndices, queueRingHash, type HashRange } from "@thresh/streams/queue-ownership";
 
 const RING = 0x1_0000_0000;
 const WHOLE: HashRange = [0, RING];

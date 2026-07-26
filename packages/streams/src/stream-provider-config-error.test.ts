@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { GeneratorPullingStreamProvider } from "@tsva/streams/generator-pulling-stream-provider";
-import { MemoryStreamProvider } from "@tsva/streams/memory-stream-provider";
-import type { RedisClient } from "@tsva/streams/redis-pulling-stream-provider";
-import { RedisPullingStreamProvider } from "@tsva/streams/redis-pulling-stream-provider";
-import { StreamProviderConfigurationError } from "@tsva/streams/stream-provider-config-error";
+import { GeneratorPullingStreamProvider } from "@thresh/streams/generator-pulling-stream-provider";
+import { MemoryStreamProvider } from "@thresh/streams/memory-stream-provider";
+import type { RedisClient } from "@thresh/streams/redis-pulling-stream-provider";
+import { RedisPullingStreamProvider } from "@thresh/streams/redis-pulling-stream-provider";
+import { StreamProviderConfigurationError } from "@thresh/streams/stream-provider-config-error";
 
 // Config validation happens synchronously in the constructor, before the
 // client is ever touched, so a fake client is enough here — no real Redis

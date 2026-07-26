@@ -1,5 +1,5 @@
-import type { EndpointSlice } from "@tsva/clustering-k8s/endpoint-slice";
-import type { EndpointWatch } from "@tsva/clustering-k8s/kubernetes-membership";
+import type { EndpointSlice } from "@thresh/clustering-k8s/endpoint-slice";
+import type { EndpointWatch } from "@thresh/clustering-k8s/kubernetes-membership";
 
 export type WatchEventType = "ADDED" | "MODIFIED" | "DELETED";
 

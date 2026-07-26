@@ -2,7 +2,7 @@ import type { GrainType } from "./grain-type";
 
 /**
  * A serializable description of a placement filter declared on a grain. Kept inert
- * here so `@tsva/core` need not depend on runtime placement classes; the runtime
+ * here so `@thresh/core` need not depend on runtime placement classes; the runtime
  * resolves it to a `PlacementFilter` instance. A grain may declare several
  * (Orleans' stackable `[XyzPlacementFilter(order)]` attributes); `order`
  * (defaulting to `0`) fixes the composition order — ascending, output of one
@@ -49,7 +49,7 @@ export interface GrainOptions {
    * being moved by the named subsystem (or both, with `"any"`). `"rebalancer"`
    * exempts it from the load-leveling activation rebalancer; `"repartitioner"`
    * exempts it from the communication-graph activation repartitioner
-   * (`@tsva/runtime/placement/repartitioning/activation-repartitioner`).
+   * (`@thresh/runtime/placement/repartitioning/activation-repartitioner`).
    */
   immovable?: "any" | "rebalancer" | "repartitioner";
 }

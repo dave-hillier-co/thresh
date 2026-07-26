@@ -1,7 +1,7 @@
 // Ported from dotnet/orleans test/Grains/TestGrainInterfaces/ISimpleObserverableGrain.cs @ v10.1.0 (MIT).
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithStringKey } from "@tsva/core/key-kinds";
-import { ISimpleGrain } from "@tsva/parity/grains/interfaces/simple-grain-interfaces";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import { ISimpleGrain } from "@thresh/parity/grains/interfaces/simple-grain-interfaces";
 
 export { ISimpleGrain };
 

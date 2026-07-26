@@ -1,4 +1,4 @@
-import { Guid } from "@tsva/core/guid";
+import { Guid } from "@thresh/core/guid";
 
 /** Upstream `GetRandomGrainId()`: a fresh integer key per test so tests sharing one cluster stay isolated. */
 export function randomIntegerKey(): bigint {

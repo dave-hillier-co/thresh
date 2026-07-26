@@ -1,8 +1,8 @@
 // Ported from dotnet/orleans src/Orleans.Transactions.TestKit.Base/Grains/
 // TransactionAttributionGrain.cs @ v10.1.0 (MIT).
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import type { GrainRuntime } from "@tsva/core/grain-runtime";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import type { GrainRuntime } from "@thresh/core/grain-runtime";
 import {
   attributionGrainInterfaceFor,
   NoAttributionGrainInterface,
@@ -14,7 +14,7 @@ import {
   NotAllowedAttributionGrainInterface,
   type AttributionTierEntry,
   type TransactionAttributionGrain,
-} from "@tsva/parity/grains/interfaces/transaction-attribution-grain-interfaces";
+} from "@thresh/parity/grains/interfaces/transaction-attribution-grain-interfaces";
 
 export {
   NoAttributionGrainInterface,

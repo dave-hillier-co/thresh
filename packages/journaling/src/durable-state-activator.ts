@@ -1,13 +1,13 @@
-import type { GrainId } from "@tsva/core/grain-id";
-import type { DurableStateMachine, StateMachineManager } from "@tsva/core/durable-state-machine";
-import { getDurableFields, type DurableKind } from "@tsva/core/durable-state-metadata";
-import { DurableValueImpl } from "@tsva/journaling/durable-value-impl";
-import { DurableDictionaryImpl } from "@tsva/journaling/durable-dictionary-impl";
-import { DurableListImpl } from "@tsva/journaling/durable-list-impl";
-import { DurableQueueImpl } from "@tsva/journaling/durable-queue-impl";
-import { DurableSetImpl } from "@tsva/journaling/durable-set-impl";
-import type { JournalStorageRegistry } from "@tsva/journaling/journal-storage-registry";
-import { StateMachineManagerImpl } from "@tsva/journaling/state-machine-manager-impl";
+import type { GrainId } from "@thresh/core/grain-id";
+import type { DurableStateMachine, StateMachineManager } from "@thresh/core/durable-state-machine";
+import { getDurableFields, type DurableKind } from "@thresh/core/durable-state-metadata";
+import { DurableValueImpl } from "@thresh/journaling/durable-value-impl";
+import { DurableDictionaryImpl } from "@thresh/journaling/durable-dictionary-impl";
+import { DurableListImpl } from "@thresh/journaling/durable-list-impl";
+import { DurableQueueImpl } from "@thresh/journaling/durable-queue-impl";
+import { DurableSetImpl } from "@thresh/journaling/durable-set-impl";
+import type { JournalStorageRegistry } from "@thresh/journaling/journal-storage-registry";
+import { StateMachineManagerImpl } from "@thresh/journaling/state-machine-manager-impl";
 
 function makeMachine(
   kind: DurableKind,

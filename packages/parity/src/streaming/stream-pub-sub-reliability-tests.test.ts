@@ -14,7 +14,7 @@
 // mechanism under test — grain-storage-backed pub/sub with injectable
 // storage faults — does not exist in this framework's streaming architecture.
 import { it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 const REASON =
   "exercises Orleans' persistent-storage-backed pub/sub system grain (ErrorInjectionStorageProvider fault injection into the \"PubSubStore\" provider) and StreamingDiagnosticObserver; this framework's MemoryStreamProvider keeps subscriptions as in-memory provider state with no persistent-storage-backed pub/sub grain to fault-inject and no diagnostic observer";

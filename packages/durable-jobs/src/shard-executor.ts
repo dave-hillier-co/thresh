@@ -1,19 +1,19 @@
-import { durationToMs, type Duration } from "@tsva/core/duration";
+import { durationToMs, type Duration } from "@thresh/core/duration";
 import type {
   DurableJob,
   DurableJobRunResult,
   JobRunContext,
   ShouldRetry,
-} from "@tsva/core/durable-job";
-import { Guid } from "@tsva/core/guid";
-import type { TimeProvider, TimerHandle } from "@tsva/core/time-provider";
+} from "@thresh/core/durable-job";
+import { Guid } from "@thresh/core/guid";
+import type { TimeProvider, TimerHandle } from "@thresh/core/time-provider";
 import {
   recordJobCompleted,
   recordJobFailed,
   recordJobStarted,
-} from "@tsva/observability/durable-job-metrics";
-import { InMemoryJobQueue, type QueuedJob } from "@tsva/durable-jobs/job-model";
-import type { JobShardStore } from "@tsva/durable-jobs/job-shard-store";
+} from "@thresh/observability/durable-job-metrics";
+import { InMemoryJobQueue, type QueuedJob } from "@thresh/durable-jobs/job-model";
+import type { JobShardStore } from "@thresh/durable-jobs/job-shard-store";
 
 /** Delivers one attempt of a job to the target grain as a turn; resolves its result. */
 export type RunJob = (job: JobRunContext) => Promise<DurableJobRunResult>;
@@ -295,7 +295,7 @@ export class ShardExecutor {
       // recoverable — the next claimer's `load()` will skip and clean up.
       const runId = Guid.newGuid().toString();
       await this.store.persistRunStart(this.shardKey, durable.id, runId).catch(() => undefined);
-      recordJobStarted({ "tsva.job.name": durable.name });
+      recordJobStarted({ "thresh.job.name": durable.name });
       const context: JobRunContext = {
         id: durable.id,
         name: durable.name,
@@ -334,7 +334,7 @@ export class ShardExecutor {
       await this.store.persistRunComplete(this.shardKey, job.id, runId).catch(() => undefined);
       this.jobs.delete(job.id);
       await this.store.persistRemove(this.shardKey, job.id).catch(() => undefined);
-      recordJobCompleted({ "tsva.job.id": job.id });
+      recordJobCompleted({ "thresh.job.id": job.id });
       return;
     }
     if (result.kind === "pollAfter") {
@@ -344,7 +344,7 @@ export class ShardExecutor {
       return;
     }
     // failed: consult the retry policy with the number of attempts made so far.
-    recordJobFailed({ "tsva.job.id": job.id });
+    recordJobFailed({ "thresh.job.id": job.id });
     const backoff = this.options.shouldRetry(attempt, result.error);
     if (backoff === undefined) {
       this.jobs.delete(job.id);

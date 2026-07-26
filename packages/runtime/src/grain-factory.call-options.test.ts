@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithStringKey } from "@tsva/core/key-kinds";
-import type { InvocationRequest } from "@tsva/core/request";
-import type { Dispatcher, InvokeCallOptions } from "@tsva/runtime/dispatcher";
-import { GrainFactory } from "@tsva/runtime/grain-factory";
-import { invocationContext, withCallOptions } from "@tsva/runtime/invocation-context";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { InvocationRequest } from "@thresh/core/request";
+import type { Dispatcher, InvokeCallOptions } from "@thresh/runtime/dispatcher";
+import { GrainFactory } from "@thresh/runtime/grain-factory";
+import { invocationContext, withCallOptions } from "@thresh/runtime/invocation-context";
 
 // Ambient cancellation remainder (issue #18 follow-up): `withCallOptions` is
 // the friendlier per-call deadline/signal API a caller (grain code or

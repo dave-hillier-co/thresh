@@ -6,7 +6,7 @@
 // ActivationTracingTests.cs (GAP-TRACING).
 //
 // This framework now has the DEACTIVATE-path span (`OnDeactivate`, Lifecycle
-// source — `@tsva/observability/activation-tracing`'s `withOnDeactivateSpan`,
+// source — `@thresh/observability/activation-tracing`'s `withOnDeactivateSpan`,
 // wired around `ActivationData.runDeactivateHook`'s `instance.onDeactivate`
 // call) plus a `StorageWrite` span (Storage source) around
 // `PersistentStateImpl.write`. Both inherit the ambient OTel context the same
@@ -58,17 +58,17 @@
 // `OnDeactivateSpanPrecedesDehydrateDuringMigration` asserts.
 import { afterAll, beforeAll, beforeEach, describe, expect } from "vitest";
 import { SpanStatusCode } from "@opentelemetry/api";
-import { FakeTimeProvider } from "@tsva/core/test-support/fake-time-provider";
-import { castGrainReference } from "@tsva/core/grain-reference";
-import { GrainId } from "@tsva/core/grain-id";
-import { getGrainMetadata } from "@tsva/core/grain-metadata";
-import { ActivityNames } from "@tsva/observability/activation-tracing";
-import { tracingFilters } from "@tsva/observability/tracing";
-import { IGrainManagementExtension } from "@tsva/runtime/grain-management-extension";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster, type TestSiloHandle } from "@tsva/testing/test-cluster";
-import { waitFor } from "@tsva/testing/wait";
-import type { ClientNode } from "@tsva/client/client-node";
+import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
+import { castGrainReference } from "@thresh/core/grain-reference";
+import { GrainId } from "@thresh/core/grain-id";
+import { getGrainMetadata } from "@thresh/core/grain-metadata";
+import { ActivityNames } from "@thresh/observability/activation-tracing";
+import { tracingFilters } from "@thresh/observability/tracing";
+import { IGrainManagementExtension } from "@thresh/runtime/grain-management-extension";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster, type TestSiloHandle } from "@thresh/testing/test-cluster";
+import { waitFor } from "@thresh/testing/wait";
+import type { ClientNode } from "@thresh/client/client-node";
 import {
   ActivationFailureDeactivationGrain,
   DeactivationMigrationTracingTestGrain,
@@ -80,10 +80,10 @@ import {
   IDeactivationTracingTestGrain,
   IDeactivationWithExceptionTracingTestGrain,
   IDeactivationWithWorkTracingTestGrain,
-} from "@tsva/parity/grains/impl/deactivation-tracing-grain";
-import { createClusterClient } from "@tsva/parity/support/client";
-import { randomIntegerKey } from "@tsva/parity/support/keys";
-import { createTracingHarness } from "@tsva/parity/support/tracing";
+} from "@thresh/parity/grains/impl/deactivation-tracing-grain";
+import { createClusterClient } from "@thresh/parity/support/client";
+import { randomIntegerKey } from "@thresh/parity/support/keys";
+import { createTracingHarness } from "@thresh/parity/support/tracing";
 
 function hostOf(cluster: TestCluster, grainId: GrainId): TestSiloHandle | undefined {
   return cluster.silos.find((s) => s.host.isActive(grainId));

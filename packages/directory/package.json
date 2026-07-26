@@ -1,5 +1,5 @@
 {
-  "name": "@tsva/directory",
+  "name": "@thresh/directory",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -7,7 +7,7 @@
     "./*": "./src/*.ts"
   },
   "dependencies": {
-    "@tsva/core": "workspace:*",
-    "@tsva/observability": "workspace:*"
+    "@thresh/core": "workspace:*",
+    "@thresh/observability": "workspace:*"
   }
 }

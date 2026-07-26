@@ -10,7 +10,7 @@ import type { PerformReadOptions, TransactionalState } from "./transactional-sta
  * receives (see `TransactionalState.performRead`'s doc comment).
  *
  * This closes a real gap distinct from `TransactionReadOnlyViolatedError`
- * (`TransactionalStateImpl.performUpdate`, `@tsva/transactions`): that error
+ * (`TransactionalStateImpl.performUpdate`, `@thresh/transactions`): that error
  * fires only when the whole *transaction* was started read-only
  * (`TransactionInfo.readOnly`, set from `startTransaction`'s caller). A
  * `@readOnly` *grain call* can join an ambient transaction that a different,

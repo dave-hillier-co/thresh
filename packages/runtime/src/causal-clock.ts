@@ -1,4 +1,4 @@
-import type { TimeProvider } from "@tsva/runtime/time-provider";
+import type { TimeProvider } from "@thresh/runtime/time-provider";
 
 /**
  * Monotonic logical clock for transaction timestamps, ported from Orleans'

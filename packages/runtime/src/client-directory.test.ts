@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { clientId } from "@tsva/core/client-grain-id";
-import { SiloAddress } from "@tsva/core/silo-address";
-import { ClientDirectory } from "@tsva/runtime/client-directory";
+import { clientId } from "@thresh/core/client-grain-id";
+import { SiloAddress } from "@thresh/core/silo-address";
+import { ClientDirectory } from "@thresh/runtime/client-directory";
 
 const silo = (n: number) => new SiloAddress(`silo-${n}`, `uid-${n}`, `silo-${n}:1111`);
 

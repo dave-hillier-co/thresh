@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { InconsistentStateError } from "@tsva/core/errors";
-import { GrainId } from "@tsva/core/grain-id";
-import { DurableValueImpl } from "@tsva/journaling/durable-value-impl";
-import { DurableDictionaryImpl } from "@tsva/journaling/durable-dictionary-impl";
-import { DurableListImpl } from "@tsva/journaling/durable-list-impl";
-import { MemoryJournalStorage } from "@tsva/journaling/memory-journal-storage";
-import { StateMachineManagerImpl } from "@tsva/journaling/state-machine-manager-impl";
+import { InconsistentStateError } from "@thresh/core/errors";
+import { GrainId } from "@thresh/core/grain-id";
+import { DurableValueImpl } from "@thresh/journaling/durable-value-impl";
+import { DurableDictionaryImpl } from "@thresh/journaling/durable-dictionary-impl";
+import { DurableListImpl } from "@thresh/journaling/durable-list-impl";
+import { MemoryJournalStorage } from "@thresh/journaling/memory-journal-storage";
+import { StateMachineManagerImpl } from "@thresh/journaling/state-machine-manager-impl";
 
 const id = new GrainId("Agg", "g1");
 

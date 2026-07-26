@@ -1,5 +1,5 @@
 {
-  "name": "@tsva/testing",
+  "name": "@thresh/testing",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -7,16 +7,16 @@
     "./*": "./src/*.ts"
   },
   "dependencies": {
-    "@tsva/core": "workspace:*",
-    "@tsva/durable-jobs": "workspace:*",
-    "@tsva/hosting": "workspace:*",
-    "@tsva/journaling": "workspace:*",
-    "@tsva/messaging": "workspace:*",
-    "@tsva/persistence": "workspace:*",
-    "@tsva/reminders": "workspace:*",
-    "@tsva/runtime": "workspace:*",
-    "@tsva/streams": "workspace:*",
-    "@tsva/transactions": "workspace:*"
+    "@thresh/core": "workspace:*",
+    "@thresh/durable-jobs": "workspace:*",
+    "@thresh/hosting": "workspace:*",
+    "@thresh/journaling": "workspace:*",
+    "@thresh/messaging": "workspace:*",
+    "@thresh/persistence": "workspace:*",
+    "@thresh/reminders": "workspace:*",
+    "@thresh/runtime": "workspace:*",
+    "@thresh/streams": "workspace:*",
+    "@thresh/transactions": "workspace:*"
   },
   "devDependencies": {
     "vitest": "^4.1.7"

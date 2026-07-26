@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { TimeProvider, TimerHandle } from "@tsva/core/time-provider";
-import { ReaderWriterLock } from "@tsva/transactions/reader-writer-lock";
-import { TransactionAbortedError, TransactionLockUpgradeError } from "@tsva/core/errors";
+import type { TimeProvider, TimerHandle } from "@thresh/core/time-provider";
+import { ReaderWriterLock } from "@thresh/transactions/reader-writer-lock";
+import { TransactionAbortedError, TransactionLockUpgradeError } from "@thresh/core/errors";
 
 /**
  * A controllable clock for sociable tests: tracks "now", and fires any timer

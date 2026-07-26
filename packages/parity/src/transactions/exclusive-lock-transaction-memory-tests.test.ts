@@ -10,12 +10,12 @@
 // `[UseExclusiveLock]`, avoid the race entirely by taking an exclusive lock up
 // front.
 import { expect } from "vitest";
-import { defineGrain, useTransactionalState } from "@tsva/core/define-grain";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithStringKey } from "@tsva/core/key-kinds";
-import { TransactionAbortedError, TransactionLockUpgradeError } from "@tsva/core/errors";
-import { TestCluster } from "@tsva/testing/test-cluster";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { defineGrain, useTransactionalState } from "@thresh/core/define-grain";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import { TransactionAbortedError, TransactionLockUpgradeError } from "@thresh/core/errors";
+import { TestCluster } from "@thresh/testing/test-cluster";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 interface Counter {
   value: number;
@@ -136,7 +136,7 @@ orleansTest(
 // currently-active group is queued as its own new group and runs after the
 // active one drains, with **nobody aborted**, which is how all 10 concurrent
 // transactions in `ConcurrentReadThenWriteWithExclusiveLock_NoLockException`
-// succeed with zero exceptions of any kind. `@tsva/transactions`'
+// succeed with zero exceptions of any kind. `@thresh/transactions`'
 // `ReaderWriterLock` (see `reader-writer-lock.ts`) is a strict
 // timestamp-ordered **wait-die** lock instead: a write request that conflicts
 // with a holder and is younger than that holder always dies, by design —

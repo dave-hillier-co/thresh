@@ -1,10 +1,10 @@
-import { GrainId } from "@tsva/core/grain-id";
-import { SiloAddress } from "@tsva/core/silo-address";
-import { FakeTimeProvider } from "@tsva/core/test-support/fake-time-provider";
-import { InProcessNetwork } from "@tsva/messaging/in-process-transport";
-import { createSilo } from "@tsva/hosting/silo-builder";
-import { GreeterGrain } from "@tsva/example-greeter/greeter-grain";
-import { IGreeter } from "@tsva/example-greeter/interfaces";
+import { GrainId } from "@thresh/core/grain-id";
+import { SiloAddress } from "@thresh/core/silo-address";
+import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
+import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
+import { createSilo } from "@thresh/hosting/silo-builder";
+import { GreeterGrain } from "@thresh/example-greeter/greeter-grain";
+import { IGreeter } from "@thresh/example-greeter/interfaces";
 
 export interface GreeterDemoResult {
   /** The first greeting — proves onActivate ran before it (carries the prefix). */

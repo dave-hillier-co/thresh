@@ -10,13 +10,13 @@ export interface RuntimeMetricSources {
 
 /**
  * Register OpenTelemetry observable instruments for silo runtime state that a
- * call filter cannot capture — `tsva.activations` (live activation count, a
- * gauge) and `tsva.directory.cache.hits`/`.misses` (cumulative counters).
+ * call filter cannot capture — `thresh.activations` (live activation count, a
+ * gauge) and `thresh.directory.cache.hits`/`.misses` (cumulative counters).
  * No-op without an SDK.
  * Returns a function that unregisters them (call it when the silo stops).
  */
 export function registerRuntimeMetrics(sources: RuntimeMetricSources): () => void {
-  const meter = metrics.getMeter("@tsva/observability");
+  const meter = metrics.getMeter("@thresh/observability");
   const unregister: Array<() => void> = [];
 
   type ObservableInstrument = {
@@ -31,7 +31,7 @@ export function registerRuntimeMetrics(sources: RuntimeMetricSources): () => voi
     unregister.push(() => instrument.removeCallback(callback));
   };
 
-  const activations = meter.createObservableGauge("tsva.activations", {
+  const activations = meter.createObservableGauge("thresh.activations", {
     description: "Live grain activations on this silo",
     unit: "{activation}",
   });
@@ -39,11 +39,11 @@ export function registerRuntimeMetrics(sources: RuntimeMetricSources): () => voi
 
   const { directoryCache } = sources;
   if (directoryCache !== undefined) {
-    const hits = meter.createObservableCounter("tsva.directory.cache.hits", {
+    const hits = meter.createObservableCounter("thresh.directory.cache.hits", {
       description: "Location-cache hits",
       unit: "{lookup}",
     });
-    const misses = meter.createObservableCounter("tsva.directory.cache.misses", {
+    const misses = meter.createObservableCounter("thresh.directory.cache.misses", {
       description: "Location-cache misses",
       unit: "{lookup}",
     });

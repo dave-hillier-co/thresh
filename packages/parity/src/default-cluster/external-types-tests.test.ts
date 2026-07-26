@@ -1,11 +1,11 @@
 // Ported from dotnet/orleans test/Orleans.DefaultCluster.Tests/ExternalTypesTests.cs @ v10.1.0 (MIT).
 import { afterAll, beforeAll, describe } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
 import {
   ExternalTypeGrain,
   IExternalTypeGrain,
-} from "@tsva/parity/grains/impl/external-type-grain";
+} from "@thresh/parity/grains/impl/external-type-grain";
 
 describe("DefaultCluster.Tests.General.ExternalTypesTests", () => {
   let cluster: TestCluster;

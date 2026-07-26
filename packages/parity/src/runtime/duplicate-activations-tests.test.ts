@@ -4,9 +4,9 @@
 // timeout by default (one is opt-in via `defaultResponseTimeout`), so there is
 // nothing to configure here.
 import { afterAll, beforeAll, describe } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
-import { CatalogTestGrain, ICatalogTestGrain } from "@tsva/parity/grains/impl/catalog-test-grain";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
+import { CatalogTestGrain, ICatalogTestGrain } from "@thresh/parity/grains/impl/catalog-test-grain";
 
 describe("UnitTests.CatalogTests.DuplicateActivationsTests", () => {
   let cluster: TestCluster;

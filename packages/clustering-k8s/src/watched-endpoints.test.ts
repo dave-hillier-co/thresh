@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { activeSilos } from "@tsva/core/membership";
-import { SiloAddress } from "@tsva/core/silo-address";
-import type { EndpointSlice } from "@tsva/clustering-k8s/endpoint-slice";
-import { KubernetesMembership } from "@tsva/clustering-k8s/kubernetes-membership";
-import { WatchedEndpoints } from "@tsva/clustering-k8s/watched-endpoints";
+import { activeSilos } from "@thresh/core/membership";
+import { SiloAddress } from "@thresh/core/silo-address";
+import type { EndpointSlice } from "@thresh/clustering-k8s/endpoint-slice";
+import { KubernetesMembership } from "@thresh/clustering-k8s/kubernetes-membership";
+import { WatchedEndpoints } from "@thresh/clustering-k8s/watched-endpoints";
 
 function sliceFor(name: string, uid: string, ip: string, ready = true): EndpointSlice {
   return {

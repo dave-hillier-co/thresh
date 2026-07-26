@@ -1,18 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { GrainId } from "@tsva/core/grain-id";
-import type { GrainType } from "@tsva/core/grain-type";
-import type { TimeProvider, TimerHandle } from "@tsva/core/time-provider";
-import type { TransactionInfo } from "@tsva/core/transaction-info";
-import { invocationContext } from "@tsva/runtime/invocation-context";
-import { systemTimeProvider } from "@tsva/runtime/time-provider";
-import { TransactionAgent } from "@tsva/runtime/transaction-agent";
+import { GrainId } from "@thresh/core/grain-id";
+import type { GrainType } from "@thresh/core/grain-type";
+import type { TimeProvider, TimerHandle } from "@thresh/core/time-provider";
+import type { TransactionInfo } from "@thresh/core/transaction-info";
+import { invocationContext } from "@thresh/runtime/invocation-context";
+import { systemTimeProvider } from "@thresh/runtime/time-provider";
+import { TransactionAgent } from "@thresh/runtime/transaction-agent";
 import {
   TransactionAbortedError,
   TransactionLockUpgradeError,
   TransactionReadOnlyViolatedError,
-} from "@tsva/core/errors";
-import { MemoryTransactionalStorage } from "@tsva/transactions/memory-transactional-storage";
-import { TransactionalStateImpl } from "@tsva/transactions/transactional-state-impl";
+} from "@thresh/core/errors";
+import { MemoryTransactionalStorage } from "@thresh/transactions/memory-transactional-storage";
+import { TransactionalStateImpl } from "@thresh/transactions/transactional-state-impl";
 
 interface Balance {
   cents: number;

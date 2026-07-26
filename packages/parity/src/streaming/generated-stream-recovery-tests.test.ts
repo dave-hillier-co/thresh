@@ -32,22 +32,22 @@
 // tractable without losing coverage of the recoverable-cursor subsystem
 // itself.
 import { expect } from "vitest";
-import { grain, implicitStreamSubscription, persistentState } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithStringKey } from "@tsva/core/key-kinds";
-import { IManagementGrain } from "@tsva/core/management-grain";
-import type { PersistentState } from "@tsva/core/persistent-state";
+import { grain, implicitStreamSubscription, persistentState } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import { IManagementGrain } from "@thresh/core/management-grain";
+import type { PersistentState } from "@thresh/core/persistent-state";
 import {
   STREAM_GENERATOR_COMMAND_CONFIGURE,
   STREAM_SUBSCRIPTION_OBSERVER,
   type StreamHandler,
-} from "@tsva/core/stream";
-import type { GeneratedEvent } from "@tsva/streams/generator-stream-queue";
-import { RecoverableStreamDeliveryError } from "@tsva/streams/stream-recovery";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
-import { waitFor } from "@tsva/testing/wait";
+} from "@thresh/core/stream";
+import type { GeneratedEvent } from "@thresh/streams/generator-stream-queue";
+import { RecoverableStreamDeliveryError } from "@thresh/streams/stream-recovery";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
+import { waitFor } from "@thresh/testing/wait";
 
 const STREAM_PROVIDER_NAME = "GeneratedStreamProvider";
 const TOTAL_QUEUE_COUNT = 4;

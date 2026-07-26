@@ -1,6 +1,6 @@
-import { runMigrationDemo } from "@tsva/example-migration/demo";
+import { runMigrationDemo } from "@thresh/example-migration/demo";
 
-// Runnable entry point: `pnpm --filter @tsva/example-migration start`.
+// Runnable entry point: `pnpm --filter @thresh/example-migration start`.
 async function main(): Promise<void> {
   const result = await runMigrationDemo();
   console.log("Grain migration demo");

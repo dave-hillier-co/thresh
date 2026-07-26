@@ -5,15 +5,15 @@
 // `SimpleExtension`/`GenericExtensionTestGrain`/`GenericGrainWithNonGenericExtension`/
 // `GenericTestExtension` are not ported: the generic-grain gap (GAP-GENERIC-GRAINS)
 // blocks them, not the extension mechanism itself.
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
 import {
   IExtensionTestGrain,
   INoOpTestGrain,
   ITestExtension,
   IAutoExtension,
-} from "@tsva/parity/grains/interfaces/extension-test-interfaces";
-import { ITestGrain } from "@tsva/parity/grains/interfaces/test-grain-interfaces";
+} from "@thresh/parity/grains/interfaces/extension-test-interfaces";
+import { ITestGrain } from "@thresh/parity/grains/interfaces/test-grain-interfaces";
 
 export { IExtensionTestGrain, INoOpTestGrain, ITestExtension, IAutoExtension };
 

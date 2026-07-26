@@ -1,10 +1,10 @@
 // Ported from dotnet/orleans test/Orleans.DefaultCluster.Tests/ManagementGrainTests.cs @ v10.1.0 (MIT).
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
 import {
   IDumbGrain,
   IDumbWorker,
-} from "@tsva/parity/grains/interfaces/management-grain-interfaces";
+} from "@thresh/parity/grains/interfaces/management-grain-interfaces";
 
 export { IDumbGrain, IDumbWorker };
 

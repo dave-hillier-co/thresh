@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { all, latest, minimum, versionSelector } from "@tsva/core/version-selector";
+import { all, latest, minimum, versionSelector } from "@thresh/core/version-selector";
 
 describe("version selectors", () => {
   it("latest picks the highest compatible version", () => {

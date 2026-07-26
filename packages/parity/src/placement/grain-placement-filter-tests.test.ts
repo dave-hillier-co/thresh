@@ -7,8 +7,8 @@
 // composing ascending), duplicate-order rejection, and observable filter
 // invocation.
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
 import {
   ORDER_A_PLACEMENT_FILTER,
   ORDER_B_PLACEMENT_FILTER,
@@ -27,12 +27,12 @@ import {
   ITestDuplicateOrderFilteredGrain,
   ITestFilteredGrain,
   IUnfilteredGrain,
-} from "@tsva/parity/grains/impl/placement-filter-test-grain";
+} from "@thresh/parity/grains/impl/placement-filter-test-grain";
 import {
   RecordingPlacementFilterDirector,
   TaggingPlacementFilterDirector,
-} from "@tsva/parity/support/placement-filter-directors";
-import { randomIntegerKey } from "@tsva/parity/support/keys";
+} from "@thresh/parity/support/placement-filter-directors";
+import { randomIntegerKey } from "@thresh/parity/support/keys";
 
 describe("UnitTests.PlacementFilterTests.GrainPlacementFilterTests", () => {
   let cluster: TestCluster;

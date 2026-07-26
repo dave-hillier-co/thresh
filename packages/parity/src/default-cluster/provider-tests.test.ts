@@ -7,24 +7,24 @@
 // support (GAP-GENERIC-GRAINS) — the extension mechanism itself is no longer
 // the blocker.
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
-import { castGrainReference } from "@tsva/core/grain-reference";
-import { GrainExtensionNotInstalledException } from "@tsva/core/errors";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
+import { castGrainReference } from "@thresh/core/grain-reference";
+import { GrainExtensionNotInstalledException } from "@thresh/core/errors";
 import {
   ExtensionTestGrain,
   NoOpTestGrain,
   AutoExtension,
-} from "@tsva/parity/grains/impl/extension-test-grain";
+} from "@thresh/parity/grains/impl/extension-test-grain";
 import {
   IExtensionTestGrain,
   INoOpTestGrain,
   ITestExtension,
   ISimpleExtension,
   IAutoExtension,
-} from "@tsva/parity/grains/interfaces/extension-test-interfaces";
-import { TestGrain, ITestGrain } from "@tsva/parity/grains/impl/test-grain";
-import { randomIntegerKey } from "@tsva/parity/support/keys";
+} from "@thresh/parity/grains/interfaces/extension-test-interfaces";
+import { TestGrain, ITestGrain } from "@thresh/parity/grains/impl/test-grain";
+import { randomIntegerKey } from "@thresh/parity/support/keys";
 
 describe("DefaultCluster.Tests.ProviderTests", () => {
   let cluster: TestCluster;

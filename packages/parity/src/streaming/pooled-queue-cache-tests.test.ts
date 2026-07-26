@@ -12,7 +12,7 @@
 // replaying from its own cursor forever — there is no shared pooled cache, no
 // eviction strategy, and so no "cache miss" concept to reproduce.
 import { it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 const REASON =
   "white-box unit tests of Orleans' internal PooledQueueCache pulling-agent message cache (pooled buffers, ChronologicalEvictionStrategy, cursor replay); this framework's MemoryStreamProvider replays each subscription from an unbounded per-stream event log with no shared pooled cache or eviction strategy, so there is no cache-miss concept to test";

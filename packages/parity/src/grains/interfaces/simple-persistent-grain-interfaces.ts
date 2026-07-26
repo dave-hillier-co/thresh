@@ -3,8 +3,8 @@
 // call-context propagation, callee-to-caller direction); no ported test in
 // this suite exercises that direction (`RequestContextCalleeToCallerFlow` is
 // gapped upstream itself, `[Fact(Skip = ...)]`), so it is omitted here.
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { ISimpleGrain } from "@tsva/parity/grains/interfaces/simple-grain-interfaces";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { ISimpleGrain } from "@thresh/parity/grains/interfaces/simple-grain-interfaces";
 
 // Upstream overloads SetA(a)/SetA(a, deactivate); TS interfaces cannot overload
 // across the wire (dispatch is by method name), so the two-arg form is

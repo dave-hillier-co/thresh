@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { durableList, grain } from "@tsva/core/decorators";
-import { defineGrain, useDurableDictionary } from "@tsva/core/define-grain";
-import { Grain } from "@tsva/core/grain";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithStringKey } from "@tsva/core/key-kinds";
-import type { DurableList } from "@tsva/core/durable-state";
-import { SiloAddress } from "@tsva/core/silo-address";
-import { InProcessNetwork } from "@tsva/messaging/in-process-transport";
-import { MemoryJournalStorage } from "@tsva/journaling/memory-journal-storage";
-import { createSilo, type SiloConfig } from "@tsva/hosting/silo-builder";
+import { durableList, grain } from "@thresh/core/decorators";
+import { defineGrain, useDurableDictionary } from "@thresh/core/define-grain";
+import { Grain } from "@thresh/core/grain";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { DurableList } from "@thresh/core/durable-state";
+import { SiloAddress } from "@thresh/core/silo-address";
+import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
+import { MemoryJournalStorage } from "@thresh/journaling/memory-journal-storage";
+import { createSilo, type SiloConfig } from "@thresh/hosting/silo-builder";
 
 // A class grain journalling an ordered list.
 interface ICart extends GrainWithStringKey {

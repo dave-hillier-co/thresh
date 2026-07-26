@@ -13,12 +13,12 @@
 // repartitioner recognising the `SP -> SR` call edge and moving `SR` closer
 // to `SP` after `triggerRepartitionExchange`) stays faithful to the real
 // protocol.
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithStringKey } from "@tsva/core/key-kinds";
-import { PLACEMENT_HINT_KEY, RequestContext } from "@tsva/core/request-context";
-import type { SiloAddress } from "@tsva/core/silo-address";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import { PLACEMENT_HINT_KEY, RequestContext } from "@thresh/core/request-context";
+import type { SiloAddress } from "@thresh/core/silo-address";
 
 // ── A / B / C / CImmovable / D (Scenarios 1-4) ──────────────────────────────
 

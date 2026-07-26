@@ -1,11 +1,11 @@
-import { GrainId } from "@tsva/core/grain-id";
-import { SiloAddress } from "@tsva/core/silo-address";
-import { FakeTimeProvider } from "@tsva/core/test-support/fake-time-provider";
-import { InProcessNetwork } from "@tsva/messaging/in-process-transport";
-import { createSilo } from "@tsva/hosting/silo-builder";
-import { ChatRoomGrain } from "@tsva/example-chat/chat-room-grain";
-import { ChatUserGrain } from "@tsva/example-chat/chat-user-grain";
-import { IChatRoom, IChatUser, type ChatMessage } from "@tsva/example-chat/interfaces";
+import { GrainId } from "@thresh/core/grain-id";
+import { SiloAddress } from "@thresh/core/silo-address";
+import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
+import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
+import { createSilo } from "@thresh/hosting/silo-builder";
+import { ChatRoomGrain } from "@thresh/example-chat/chat-room-grain";
+import { ChatUserGrain } from "@thresh/example-chat/chat-user-grain";
+import { IChatRoom, IChatUser, type ChatMessage } from "@thresh/example-chat/interfaces";
 
 export interface ChatDemoResult {
   /** Messages each member received during the fan-out phase. */

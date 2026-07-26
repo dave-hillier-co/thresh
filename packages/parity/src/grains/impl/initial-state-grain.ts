@@ -1,8 +1,8 @@
 // Ported from dotnet/orleans test/Grains/TestGrains/InitialStateGrain.cs @ v10.1.0 (MIT).
-import { grain, persistentState } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import type { PersistentState } from "@tsva/core/persistent-state";
-import { IInitialStateGrain } from "@tsva/parity/grains/interfaces/initial-state-grain-interfaces";
+import { grain, persistentState } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import type { PersistentState } from "@thresh/core/persistent-state";
+import { IInitialStateGrain } from "@thresh/parity/grains/interfaces/initial-state-grain-interfaces";
 
 export { IInitialStateGrain };
 

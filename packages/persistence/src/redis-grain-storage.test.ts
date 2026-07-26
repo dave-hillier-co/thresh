@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { createClient } from "redis";
-import { InconsistentStateError } from "@tsva/core/errors";
-import { GrainId } from "@tsva/core/grain-id";
-import type { GrainStorage } from "@tsva/core/grain-storage";
-import { PersistentStateImpl } from "@tsva/persistence/persistent-state-impl";
-import { RedisGrainStorage } from "@tsva/persistence/redis-grain-storage";
+import { InconsistentStateError } from "@thresh/core/errors";
+import { GrainId } from "@thresh/core/grain-id";
+import type { GrainStorage } from "@thresh/core/grain-storage";
+import { PersistentStateImpl } from "@thresh/persistence/persistent-state-impl";
+import { RedisGrainStorage } from "@thresh/persistence/redis-grain-storage";
 
 const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
 
@@ -31,7 +31,7 @@ async function reachable(url: string): Promise<Client | undefined> {
 
 const client = await reachable(REDIS_URL);
 // A unique prefix isolates this run from anything else in the shared Redis.
-const prefix = `tsva-test:storage:${randomUUID()}`;
+const prefix = `thresh-test:storage:${randomUUID()}`;
 
 interface Balance {
   cents: number;

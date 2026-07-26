@@ -1,13 +1,13 @@
 // Ported from dotnet/orleans test/Orleans.Core.Tests/DurableJobs/ShardClaimBudgetTests.cs @ v10.1.0 (MIT).
 import { describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { durationToMs } from "@tsva/core/duration";
-import type { DurableJobsOptions } from "@tsva/core/durable-job";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { durationToMs } from "@thresh/core/duration";
+import type { DurableJobsOptions } from "@thresh/core/durable-job";
 import {
   computeClaimBudget,
   DurableJobsOptionsValidator,
   UNLIMITED_CLAIM_BUDGET,
-} from "@tsva/durable-jobs/local-durable-job-manager";
+} from "@thresh/durable-jobs/local-durable-job-manager";
 
 // Orleans' `LocalDurableJobManager.ComputeClaimBudget` ramps a freshly joined
 // silo's per-reconciliation claim budget linearly from `initialBudget` to

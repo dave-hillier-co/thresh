@@ -3,23 +3,23 @@
 // `DeactivationWithWorkTracingTestGrain`, `DeactivationWithExceptionTracingTestGrain`,
 // and `ActivationFailureDeactivationGrain`.
 import { trace } from "@opentelemetry/api";
-import { grain, persistentState } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
+import { grain, persistentState } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
 import type {
   DehydrationContext,
   IGrainMigrationParticipant,
   RehydrationContext,
-} from "@tsva/core/grain-migration-participant";
-import type { PersistentState } from "@tsva/core/persistent-state";
-import type { DeactivationReason } from "@tsva/core/reasons";
-import type { SiloAddress } from "@tsva/core/silo-address";
+} from "@thresh/core/grain-migration-participant";
+import type { PersistentState } from "@thresh/core/persistent-state";
+import type { DeactivationReason } from "@thresh/core/reasons";
+import type { SiloAddress } from "@thresh/core/silo-address";
 import {
   IActivationFailureDeactivationGrain,
   IDeactivationMigrationTracingTestGrain,
   IDeactivationTracingTestGrain,
   IDeactivationWithExceptionTracingTestGrain,
   IDeactivationWithWorkTracingTestGrain,
-} from "@tsva/parity/grains/interfaces/deactivation-tracing-grain-interfaces";
+} from "@thresh/parity/grains/interfaces/deactivation-tracing-grain-interfaces";
 
 export {
   IActivationFailureDeactivationGrain,

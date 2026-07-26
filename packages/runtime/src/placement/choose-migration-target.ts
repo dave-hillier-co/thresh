@@ -1,9 +1,9 @@
-import type { GrainType } from "@tsva/core/grain-type";
-import type { SiloAddress } from "@tsva/core/silo-address";
+import type { GrainType } from "@thresh/core/grain-type";
+import type { SiloAddress } from "@thresh/core/silo-address";
 import type {
   PlacementContext,
   PlacementStrategy,
-} from "@tsva/runtime/placement/placement-strategy";
+} from "@thresh/runtime/placement/placement-strategy";
 
 /**
  * Pick where a migrating activation should go. If a `directed` silo is named and

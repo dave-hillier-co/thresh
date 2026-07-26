@@ -1,15 +1,15 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import { GrainId } from "@tsva/core/grain-id";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithStringKey } from "@tsva/core/key-kinds";
-import type { MembershipService } from "@tsva/core/membership";
-import { SiloAddress } from "@tsva/core/silo-address";
-import { RejectionError } from "@tsva/core/errors";
-import { ConsistentHashRing } from "@tsva/directory/consistent-hash-ring";
-import { FakeTimeProvider } from "@tsva/core/test-support/fake-time-provider";
-import { InProcessNetwork, InProcessTransport } from "@tsva/messaging/in-process-transport";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import { GrainId } from "@thresh/core/grain-id";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { MembershipService } from "@thresh/core/membership";
+import { SiloAddress } from "@thresh/core/silo-address";
+import { RejectionError } from "@thresh/core/errors";
+import { ConsistentHashRing } from "@thresh/directory/consistent-hash-ring";
+import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
+import { InProcessNetwork, InProcessTransport } from "@thresh/messaging/in-process-transport";
 import type {
   Connection,
   ConnectionAcceptHandler,
@@ -17,9 +17,9 @@ import type {
   Listener,
   MessageHandler,
   Transport,
-} from "@tsva/messaging/transport";
-import { ClusterNode } from "@tsva/runtime/cluster-node";
-import { StaticMembershipService } from "@tsva/runtime/static-membership";
+} from "@thresh/messaging/transport";
+import { ClusterNode } from "@thresh/runtime/cluster-node";
+import { StaticMembershipService } from "@thresh/runtime/static-membership";
 
 interface ICounter extends GrainWithStringKey {
   increment(by: number): Promise<number>;

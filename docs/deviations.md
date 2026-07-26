@@ -17,7 +17,7 @@ summary of the deliberate deviations. [`EPICS.md`](../EPICS.md) tracks what is s
 - **Transport is WebSocket over HTTP**, behind an abstraction.
 - **Single-threaded turns** are enforced by a per-activation turn scheduler. The guarantee is
   identical to Orleans; the mechanism differs because `await` yields the Node event loop.
-- The code is a **pnpm workspace of small `@tsva/*` packages** with no barrel files and standard
+- The code is a **pnpm workspace of small `@thresh/*` packages** with no barrel files and standard
   TC39 decorators (no `reflect-metadata`), run straight from source.
 
 ## Kubernetes-native hosting

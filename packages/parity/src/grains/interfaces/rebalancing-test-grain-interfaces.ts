@@ -8,8 +8,8 @@
 // skewed distribution across silos entirely via the
 // `IPlacementDirector.PlacementHintKey` `RequestContext` hint, not via a
 // dedicated placement strategy.
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithGuidKey } from "@tsva/core/key-kinds";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithGuidKey } from "@thresh/core/key-kinds";
 
 export interface IRebalancingTestGrain extends GrainWithGuidKey {
   ping(): Promise<void>;

@@ -3,14 +3,14 @@
 // See durable-value-tests.test.ts for why this drives a real grain
 // (DurableCollectionsGrain) through TestCluster rather than the internal
 // StateMachineManager/DurableDictionary surface (out of bounds for
-// @tsva/parity), and why "new manager, same storage" becomes a silo restart.
+// @thresh/parity), and why "new manager, same storage" becomes a silo restart.
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
 import {
   DurableCollectionsGrain,
   IDurableCollectionsGrain,
-} from "@tsva/parity/grains/impl/durable-collections-grain";
+} from "@thresh/parity/grains/impl/durable-collections-grain";
 
 describe("Orleans.Journaling.Tests.DurableDictionaryTests", () => {
   let cluster: TestCluster;

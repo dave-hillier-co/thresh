@@ -2,15 +2,15 @@
 // Upstream `DoIt()`/`DoMore()`/`DoThat()` return `GetType().Name`; each ported
 // grain hardcodes its own class name since there is no runtime type-name
 // reflection here.
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
 import {
   IDoSomethingCombinedGrain,
   IDoSomethingEmptyGrain,
   IDoSomethingEmptyWithMoreGrain,
   IDoSomethingWithMoreEmptyGrain,
   IDoSomethingWithMoreGrain,
-} from "@tsva/parity/grains/interfaces/grain-interface-hierarchy-interfaces";
+} from "@thresh/parity/grains/interfaces/grain-interface-hierarchy-interfaces";
 
 export {
   IDoSomethingCombinedGrain,

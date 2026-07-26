@@ -1,6 +1,6 @@
 // Ported from dotnet/orleans test/Orleans.Streaming.Tests/StreamingTests/PlugableQueueBalancerTests/PluggableQueueBalancerTestsWithMemoryStreamProvider.cs @ v10.1.0 (MIT).
 import { it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 orleansTest.excluded(
   "skipped upstream (dotnet/orleans#4317)",

@@ -1,12 +1,12 @@
 // Ported from dotnet/orleans test/Orleans.DefaultCluster.Tests/MemoryStorageProviderTests.cs @ v10.1.0 (MIT).
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
 import {
   IInitialStateGrain,
   InitialStateGrain,
-} from "@tsva/parity/grains/impl/initial-state-grain";
-import { INullStateGrain, NullStateGrain } from "@tsva/parity/grains/impl/null-state-grain";
+} from "@thresh/parity/grains/impl/initial-state-grain";
+import { INullStateGrain, NullStateGrain } from "@thresh/parity/grains/impl/null-state-grain";
 
 describe("DefaultCluster.Tests.StorageTests.MemoryStorageProviderTests", () => {
   let cluster: TestCluster;

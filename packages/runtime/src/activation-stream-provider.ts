@@ -1,4 +1,4 @@
-import type { GrainKey } from "@tsva/core/grain-key";
+import type { GrainKey } from "@thresh/core/grain-key";
 import type {
   AsyncStream,
   StreamHandler,
@@ -7,7 +7,7 @@ import type {
   StreamSubscriptionHandle,
   StreamSubscriptionManager,
   SubscribeOptions,
-} from "@tsva/core/stream";
+} from "@thresh/core/stream";
 
 /** Runs a stream callback as a turn on the consumer's activation. */
 export type RunTurn = (callback: () => Promise<void>) => Promise<unknown>;

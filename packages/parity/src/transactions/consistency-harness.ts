@@ -20,17 +20,17 @@
 // "golden path" invariant that holds when `avoidDeadlocks` is on and
 // `readWrite` is `PerGrain`/`PerTransaction`) relies on Orleans'
 // non-killing lock-group batching (see the exclusive-lock file's header for
-// why `@tsva/transactions`' strict wait-die `ReaderWriterLock` cannot
+// why `@thresh/transactions`' strict wait-die `ReaderWriterLock` cannot
 // reproduce that specific "nobody ever aborts" property). This port's harness
 // still tracks and exposes `numAborted`; the two callers simply choose
 // `RandomizedConsistency` cases that don't assert it, the same way other
 // ported Theories here select a representative case subset rather than every
 // upstream `[InlineData]` row.
-import { defineGrain, useTransactionalState } from "@tsva/core/define-grain";
-import { defineGrainInterface, type GrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithStringKey } from "@tsva/core/key-kinds";
-import { TransactionAbortedError, TransactionInDoubtError } from "@tsva/core/errors";
-import type { TestCluster } from "@tsva/testing/test-cluster";
+import { defineGrain, useTransactionalState } from "@thresh/core/define-grain";
+import { defineGrainInterface, type GrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import { TransactionAbortedError, TransactionInDoubtError } from "@thresh/core/errors";
+import type { TestCluster } from "@thresh/testing/test-cluster";
 
 /** Orleans `ReadWriteDetermination`. */
 export type ReadWriteDetermination = "perTransaction" | "perGrain" | "perAccess";

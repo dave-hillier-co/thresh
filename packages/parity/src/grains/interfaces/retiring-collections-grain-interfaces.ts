@@ -6,7 +6,7 @@
 // each time (some tests register a "dictToKeep" and a "dictToRetire", others
 // only "dictToKeep") to simulate a durable structure being removed from a
 // grain's dependencies across a deploy. Reaching the manager surface directly
-// is out of bounds for @tsva/parity (see durable-collections-grain-interfaces.ts),
+// is out of bounds for @thresh/parity (see durable-collections-grain-interfaces.ts),
 // so instead this uses two grain *classes* sharing one grain type name
 // ("Orleans.Journaling.Tests.RetiringCollectionsGrain"): one with both durable
 // dictionaries ("full", `IRetiringCollectionsGrain`), one with only the
@@ -16,8 +16,8 @@
 // (with a shared journal-storage instance, see the test) reproduces the same
 // "structure disappeared from the grain's registered set" scenario upstream
 // exercises by constructing a manager with fewer machines.
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithStringKey } from "@tsva/core/key-kinds";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithStringKey } from "@thresh/core/key-kinds";
 
 export interface IRetiringCollectionsGrainPartial extends GrainWithStringKey {
   keepSet(key: unknown, value: unknown): Promise<void>;

@@ -1,6 +1,6 @@
 // Ported from dotnet/orleans test/Orleans.Core.Tests/OrleansRuntime/AsyncSerialExecutorTests.cs @ v10.1.0 (MIT).
 import { describe, expect, it } from "vitest";
-import { AsyncSerialExecutor } from "@tsva/core/async-serial-executor";
+import { AsyncSerialExecutor } from "@thresh/core/async-serial-executor";
 
 describe("UnitTests.OrleansRuntime.AsyncSerialExecutorTests", () => {
   let operationsInProgress = 0;

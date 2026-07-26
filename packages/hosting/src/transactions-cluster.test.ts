@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { defineGrain, useTransactionalState } from "@tsva/core/define-grain";
-import { GrainId } from "@tsva/core/grain-id";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainType } from "@tsva/core/grain-type";
-import type { GrainWithStringKey } from "@tsva/core/key-kinds";
-import { TestCluster } from "@tsva/testing/test-cluster";
+import { defineGrain, useTransactionalState } from "@thresh/core/define-grain";
+import { GrainId } from "@thresh/core/grain-id";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainType } from "@thresh/core/grain-type";
+import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import { TestCluster } from "@thresh/testing/test-cluster";
 
 interface Balance {
   cents: number;

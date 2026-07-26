@@ -1,5 +1,5 @@
 {
-  "name": "@tsva/durable-jobs",
+  "name": "@thresh/durable-jobs",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -7,8 +7,8 @@
     "./*": "./src/*.ts"
   },
   "dependencies": {
-    "@tsva/core": "workspace:*",
-    "@tsva/observability": "workspace:*",
+    "@thresh/core": "workspace:*",
+    "@thresh/observability": "workspace:*",
     "redis": "^5.12.1"
   }
 }

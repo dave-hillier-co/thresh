@@ -1,26 +1,26 @@
 import type { createClient } from "redis";
-import type { GrainKey } from "@tsva/core/grain-key";
-import type { GrainType } from "@tsva/core/grain-type";
+import type { GrainKey } from "@thresh/core/grain-key";
+import type { GrainType } from "@thresh/core/grain-type";
 import type {
   ActivationBoundStreamProvider,
   AsyncStream,
   StreamActivationBinding,
   StreamProducerHandle,
   StreamProvider,
-} from "@tsva/core/stream";
+} from "@thresh/core/stream";
 import {
   PullingStreamProviderCore,
   validateQueueCount,
-} from "@tsva/streams/pulling-stream-provider-core";
-import type { StreamFailureHandler } from "@tsva/streams/queue-pulling-agent";
-import type { HashRange } from "@tsva/streams/queue-ownership";
-import { RedisStreamQueue } from "@tsva/streams/redis-stream-queue";
-import { RedisSubscriptionRegistry } from "@tsva/streams/redis-subscription-registry";
-import type { StreamDeliver } from "@tsva/streams/stream-deliver";
+} from "@thresh/streams/pulling-stream-provider-core";
+import type { StreamFailureHandler } from "@thresh/streams/queue-pulling-agent";
+import type { HashRange } from "@thresh/streams/queue-ownership";
+import { RedisStreamQueue } from "@thresh/streams/redis-stream-queue";
+import { RedisSubscriptionRegistry } from "@thresh/streams/redis-subscription-registry";
+import type { StreamDeliver } from "@thresh/streams/stream-deliver";
 
 export type RedisClient = ReturnType<typeof createClient>;
-export type { StreamDeliver } from "@tsva/streams/stream-deliver";
-export type { StreamFailureHandler } from "@tsva/streams/queue-pulling-agent";
+export type { StreamDeliver } from "@thresh/streams/stream-deliver";
+export type { StreamFailureHandler } from "@thresh/streams/queue-pulling-agent";
 
 export interface RedisPullingStreamProviderOptions {
   keyPrefix?: string;
@@ -60,7 +60,7 @@ export class RedisPullingStreamProvider implements ActivationBoundStreamProvider
     options: RedisPullingStreamProviderOptions = {},
   ) {
     const queueCount = validateQueueCount(name, options.queueCount);
-    const keyPrefix = options.keyPrefix ?? "tsva";
+    const keyPrefix = options.keyPrefix ?? "thresh";
     const registry = new RedisSubscriptionRegistry(client, keyPrefix, name);
     const queues = Array.from(
       { length: queueCount },

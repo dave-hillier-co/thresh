@@ -20,7 +20,7 @@ export interface GrainStorage {
    * `RedisGrainStorage` via node-redis's `withAbortSignal`); a provider that
    * cannot cancel mid-flight (e.g. `PostgresGrainStorage`, whose client has no
    * abort hook) may instead only abandon the *wait* for an already-sent call
-   * (`@tsva/core/abort`'s `raceSignal`), or ignore it entirely.
+   * (`@thresh/core/abort`'s `raceSignal`), or ignore it entirely.
    */
   read<T>(
     stateName: string,

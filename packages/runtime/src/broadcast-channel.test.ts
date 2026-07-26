@@ -3,16 +3,16 @@ import {
   BROADCAST_CHANNEL_OBSERVER,
   type BroadcastChannelHandler,
   channelKey,
-} from "@tsva/core/broadcast-channel";
-import { grain, implicitChannelSubscription } from "@tsva/core/decorators";
-import { defineGrain } from "@tsva/core/define-grain";
-import { Grain } from "@tsva/core/grain";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithStringKey } from "@tsva/core/key-kinds";
-import { SiloAddress } from "@tsva/core/silo-address";
-import { InProcessNetwork, InProcessTransport } from "@tsva/messaging/in-process-transport";
-import { ClusterNode } from "@tsva/runtime/cluster-node";
-import { StaticMembershipService } from "@tsva/runtime/static-membership";
+} from "@thresh/core/broadcast-channel";
+import { grain, implicitChannelSubscription } from "@thresh/core/decorators";
+import { defineGrain } from "@thresh/core/define-grain";
+import { Grain } from "@thresh/core/grain";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import { SiloAddress } from "@thresh/core/silo-address";
+import { InProcessNetwork, InProcessTransport } from "@thresh/messaging/in-process-transport";
+import { ClusterNode } from "@thresh/runtime/cluster-node";
+import { StaticMembershipService } from "@thresh/runtime/static-membership";
 
 // Module sink so observed items survive across activations (keyed by grain key).
 let observed: Array<{ key: string; namespace: string; item: unknown }> = [];

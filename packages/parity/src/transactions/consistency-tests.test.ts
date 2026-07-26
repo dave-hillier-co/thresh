@@ -24,14 +24,14 @@
 // about: concurrent recursive transactions plus the serializable-history
 // checker.
 import { describe } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
 import {
   ConsistencyTestGrainImpl,
   ConsistencyTestGrainInterface,
   runRandomizedConsistency,
   type ReadWriteDetermination,
-} from "@tsva/parity/transactions/consistency-harness";
+} from "@thresh/parity/transactions/consistency-harness";
 
 async function buildCluster(): Promise<TestCluster> {
   return TestCluster.start({

@@ -1,5 +1,5 @@
-import { keyToString, type GrainKey } from "@tsva/core/grain-key";
-import type { StreamId, StreamProducerHandle } from "@tsva/core/stream";
+import { keyToString, type GrainKey } from "@thresh/core/grain-key";
+import type { StreamId, StreamProducerHandle } from "@thresh/core/stream";
 
 /**
  * Tracks which producers are currently registered against a stream (Orleans'

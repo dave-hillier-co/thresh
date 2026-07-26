@@ -1,6 +1,6 @@
-import { runClusterDemo } from "@tsva/example-cluster/demo";
+import { runClusterDemo } from "@thresh/example-cluster/demo";
 
-// Runnable entry point: `pnpm --filter @tsva/example-cluster start`.
+// Runnable entry point: `pnpm --filter @thresh/example-cluster start`.
 async function main(): Promise<void> {
   const result = await runClusterDemo();
   console.log("WebSocket cluster demo (3 silos)");

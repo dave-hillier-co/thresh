@@ -8,12 +8,12 @@
 // about its own current OpenTelemetry span through the public `@opentelemetry/api`
 // surface (trace/span id, whether one is active, and the raw `traceparent`
 // header) — `Kind`/`IsRemote`/parent linkage are instead asserted from the
-// captured finished spans in `@tsva/parity/support/tracing`'s in-memory
+// captured finished spans in `@thresh/parity/support/tracing`'s in-memory
 // exporter, which is the SAME data upstream's `Started` `ConcurrentBag`
 // (populated by an `ActivityListener`) captures for its own linking
 // assertions (`ClientAndServerSpansAreProperlyLinked`, etc).
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithIntegerKey } from "@tsva/core/key-kinds";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithIntegerKey } from "@thresh/core/key-kinds";
 
 export interface TraceContextInfo {
   readonly hasActivity: boolean;

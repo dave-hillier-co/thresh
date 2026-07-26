@@ -1,7 +1,7 @@
-import type { GrainId } from "@tsva/core/grain-id";
-import type { JournalStorage } from "@tsva/core/journal-storage";
-import type { DurableStateMachine, StateMachineManager } from "@tsva/core/durable-state-machine";
-import { deserializeValue, serializeValue } from "@tsva/core/value-codec";
+import type { GrainId } from "@thresh/core/grain-id";
+import type { JournalStorage } from "@thresh/core/journal-storage";
+import type { DurableStateMachine, StateMachineManager } from "@thresh/core/durable-state-machine";
+import { deserializeValue, serializeValue } from "@thresh/core/value-codec";
 
 /** A framed log record: which machine, whether it is an op or a snapshot, and the payload. */
 interface LogEnvelope {

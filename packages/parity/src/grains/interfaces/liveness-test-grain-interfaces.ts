@@ -5,8 +5,8 @@
 // assertion attached; this framework has no silo-identity accessor exposed to
 // a running grain to implement them faithfully, so they are dropped along
 // with that logging-only call site (see liveness-tests.test.ts).
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithIntegerKey } from "@tsva/core/key-kinds";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithIntegerKey } from "@thresh/core/key-kinds";
 
 export interface ILivenessTestGrain extends GrainWithIntegerKey {
   getPrimaryKeyLong(): Promise<bigint>;

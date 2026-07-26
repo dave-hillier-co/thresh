@@ -10,8 +10,8 @@
 // to give one grain three different bodies for one method name. `commonMethod`
 // is therefore omitted from every interface below; the one upstream test that
 // exercises it (`Polymorphic_InheritedMethodAmbiguity`) is excluded.
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithIntegerKey } from "@tsva/core/key-kinds";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithIntegerKey } from "@thresh/core/key-kinds";
 
 export interface IA extends GrainWithIntegerKey {
   a1Method(): Promise<string>;

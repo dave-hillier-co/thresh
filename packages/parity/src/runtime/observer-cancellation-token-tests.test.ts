@@ -24,21 +24,21 @@
 // crosses the wire (silo -> gateway -> client), which is what exercises the
 // new client-side cancellation binding under test here.
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { GrainTaskCanceledError } from "@tsva/core/errors";
-import type { GrainCancellationToken } from "@tsva/core/grain-cancellation-token";
-import { Guid } from "@tsva/core/guid";
-import type { ClientNode } from "@tsva/client/client-node";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
-import { waitFor } from "@tsva/testing/wait";
+import { GrainTaskCanceledError } from "@thresh/core/errors";
+import type { GrainCancellationToken } from "@thresh/core/grain-cancellation-token";
+import { Guid } from "@thresh/core/guid";
+import type { ClientNode } from "@thresh/client/client-node";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
+import { waitFor } from "@thresh/testing/wait";
 import {
   ILongRunningObserver,
   IObserverWithCancellationGrain,
   ObserverWithCancellationGrain,
-} from "@tsva/parity/grains/impl/observer-with-cancellation-grain";
-import { randomGuidKey } from "@tsva/parity/support/keys";
-import { cancelUntilSettled } from "@tsva/parity/support/cancellation";
-import { createClusterClient } from "@tsva/parity/support/client";
+} from "@thresh/parity/grains/impl/observer-with-cancellation-grain";
+import { randomGuidKey } from "@thresh/parity/support/keys";
+import { cancelUntilSettled } from "@thresh/parity/support/cancellation";
+import { createClusterClient } from "@thresh/parity/support/client";
 
 /** Same cross-silo caveat noted in `cancellation-token-tests.test.ts`: assert
  * on the rejection message, not the error class/instance — the observer

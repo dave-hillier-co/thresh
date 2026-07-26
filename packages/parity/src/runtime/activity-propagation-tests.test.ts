@@ -5,7 +5,7 @@
 // requiring `.AddActivityPropagation()` on both silo and client builders.
 //
 // This framework has the OTel analogue via
-// `@tsva/observability/tracing`'s `tracingFilters()` (wired through
+// `@thresh/observability/tracing`'s `tracingFilters()` (wired through
 // `SiloBuilder.useTracing()`/`ClientConfig.outgoingCallFilters`, the same
 // mechanism `grain-call-trace-context-propagation-tests.test.ts` exercises
 // for pure trace-context propagation) plus `setupTracePropagation()`'s W3C
@@ -27,14 +27,14 @@
 // that a separately meaningful port.
 import { afterAll, beforeAll, beforeEach, describe, expect } from "vitest";
 import { context, propagation } from "@opentelemetry/api";
-import { tracingFilters } from "@tsva/observability/tracing";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
-import type { ClientNode } from "@tsva/client/client-node";
-import { ActivityGrain, IActivityGrain } from "@tsva/parity/grains/impl/activation-tracing-grain";
-import { createClusterClient } from "@tsva/parity/support/client";
-import { randomIntegerKey } from "@tsva/parity/support/keys";
-import { createTracingHarness } from "@tsva/parity/support/tracing";
+import { tracingFilters } from "@thresh/observability/tracing";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
+import type { ClientNode } from "@thresh/client/client-node";
+import { ActivityGrain, IActivityGrain } from "@thresh/parity/grains/impl/activation-tracing-grain";
+import { createClusterClient } from "@thresh/parity/support/client";
+import { randomIntegerKey } from "@thresh/parity/support/keys";
+import { createTracingHarness } from "@thresh/parity/support/tracing";
 
 describe("UnitTests.General.ActivityPropagationTests", () => {
   const harness = createTracingHarness();

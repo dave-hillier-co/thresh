@@ -9,7 +9,7 @@ import {
 import {
   recordDirectoryLookup,
   recordDirectoryRegistration,
-} from "@tsva/observability/directory-metrics";
+} from "@thresh/observability/directory-metrics";
 
 const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
 const reader = new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 100_000 });
@@ -36,10 +36,10 @@ describe("directory metrics", () => {
     recordDirectoryLookup("remote");
     recordDirectoryRegistration("local");
 
-    const lookups = await metric("tsva.directory.lookups");
-    const registrations = await metric("tsva.directory.registrations");
-    const localities = lookups!.dataPoints.map((dp) => dp.attributes["tsva.directory.locality"]);
+    const lookups = await metric("thresh.directory.lookups");
+    const registrations = await metric("thresh.directory.registrations");
+    const localities = lookups!.dataPoints.map((dp) => dp.attributes["thresh.directory.locality"]);
     expect(localities.sort()).toEqual(["local", "remote"]);
-    expect(registrations!.dataPoints[0]!.attributes["tsva.directory.locality"]).toBe("local");
+    expect(registrations!.dataPoints[0]!.attributes["thresh.directory.locality"]).toBe("local");
   });
 });

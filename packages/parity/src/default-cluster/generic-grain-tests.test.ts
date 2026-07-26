@@ -9,19 +9,19 @@
 // (GrainWithNoProperties, GrainWithListFields, ValueTypeTestGrain) or a
 // different, already-tagged gap are ported or otherwise accounted for below.
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
 import {
   GrainWithListFields,
   GrainWithNoProperties,
   IGrainWithListFields,
   IGrainWithNoProperties,
-} from "@tsva/parity/grains/impl/generic-grain-tests-grains";
+} from "@thresh/parity/grains/impl/generic-grain-tests-grains";
 import {
   IValueTypeTestGrain,
   ValueTypeTestGrain,
-} from "@tsva/parity/grains/impl/value-type-test-grain";
-import { randomIntegerKey, randomGuidKey } from "@tsva/parity/support/keys";
+} from "@thresh/parity/grains/impl/value-type-test-grain";
+import { randomIntegerKey, randomGuidKey } from "@thresh/parity/support/keys";
 
 describe("DefaultCluster.Tests.General.GenericGrainTests", () => {
   let cluster: TestCluster;

@@ -10,7 +10,7 @@
  * plain millisecond numbers (`*Ms`), matching this codebase's existing convention (see
  * `packages/runtime/src/grain-timer-impl.ts`).
  */
-import type { RebalancerOptions } from "@tsva/runtime/placement/rebalancing/rebalancer-model";
+import type { RebalancerOptions } from "@thresh/runtime/placement/rebalancing/rebalancer-model";
 import {
   DEFAULT_ACTIVATION_MIGRATION_COUNT_LIMIT,
   DEFAULT_ALLOWED_ENTROPY_DEVIATION,
@@ -21,7 +21,7 @@ import {
   DEFAULT_SCALED_ENTROPY_DEVIATION_ACTIVATION_THRESHOLD,
   DEFAULT_SILO_NUMBER_WEIGHT,
   MAX_SCALED_ENTROPY_DEVIATION,
-} from "@tsva/runtime/placement/rebalancing/rebalancer-model";
+} from "@thresh/runtime/placement/rebalancing/rebalancer-model";
 
 export { MAX_SCALED_ENTROPY_DEVIATION };
 

@@ -9,7 +9,7 @@ import {
   defaultResourceOptimizedPlacementOptions,
   ResourceOptimizedPlacementOptionsValidator,
   type ResourceOptimizedPlacementOptions,
-} from "@tsva/runtime/placement/resource-optimized-placement-options";
+} from "@thresh/runtime/placement/resource-optimized-placement-options";
 
 const optionsWith = (
   overrides: Partial<ResourceOptimizedPlacementOptions>,

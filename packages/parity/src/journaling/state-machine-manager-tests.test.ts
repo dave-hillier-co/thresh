@@ -4,22 +4,22 @@
 // (DurableCollectionsGrain, which registers a value/dictionary/list/queue/set
 // durable facet all on one manager) through TestCluster rather than the
 // internal StateMachineManager surface directly (out of bounds for
-// @tsva/parity), and why "new manager, same storage" becomes a silo restart.
+// @thresh/parity), and why "new manager, same storage" becomes a silo restart.
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
 import {
   DurableCollectionsGrain,
   IDurableCollectionsGrain,
-} from "@tsva/parity/grains/impl/durable-collections-grain";
+} from "@thresh/parity/grains/impl/durable-collections-grain";
 import {
   RetiringCollectionsGrain,
   RetiringCollectionsGrainPartial,
-} from "@tsva/parity/grains/impl/retiring-collections-grain";
+} from "@thresh/parity/grains/impl/retiring-collections-grain";
 import {
   IRetiringCollectionsGrain,
   IRetiringCollectionsGrainPartial,
-} from "@tsva/parity/grains/interfaces/retiring-collections-grain-interfaces";
+} from "@thresh/parity/grains/interfaces/retiring-collections-grain-interfaces";
 
 describe("Orleans.Journaling.Tests.StateMachineManagerTests", () => {
   let cluster: TestCluster;

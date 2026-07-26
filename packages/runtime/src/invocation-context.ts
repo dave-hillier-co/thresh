@@ -1,9 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { combineSignals } from "@tsva/core/abort";
-import type { GrainId } from "@tsva/core/grain-id";
-import { Guid } from "@tsva/core/guid";
-import { RequestContext, requestContextStore } from "@tsva/core/request-context";
-import type { TransactionInfo } from "@tsva/core/transaction-info";
+import { combineSignals } from "@thresh/core/abort";
+import type { GrainId } from "@thresh/core/grain-id";
+import { Guid } from "@thresh/core/guid";
+import { RequestContext, requestContextStore } from "@thresh/core/request-context";
+import type { TransactionInfo } from "@thresh/core/transaction-info";
 
 /**
  * Ambient context for the turn currently executing on an activation. A grain
@@ -11,7 +11,7 @@ import type { TransactionInfo } from "@tsva/core/transaction-info";
  * and the call-chain reentrancy id onto the outgoing request.
  *
  * The request-context headers bag itself is NOT stored here — it lives in
- * `@tsva/core`'s `RequestContext`, the same ambient store a non-grain (client)
+ * `@thresh/core`'s `RequestContext`, the same ambient store a non-grain (client)
  * caller uses. A turn scopes a fresh copy into that store (see `activation.ts`
  * / `client-node.ts`, which wrap `invocationContext.run` in
  * `runWithRequestContext`), so `requestContext.get`/`set` below and
@@ -75,7 +75,7 @@ export const invocationContext = new AsyncLocalStorage<InvocationContext>();
 /**
  * The ambient request context for the current turn (Orleans `RequestContext`).
  * `set` requires a turn in scope; values flow to downstream grain calls and
- * across silos via the message envelope. Backed by `@tsva/core`'s
+ * across silos via the message envelope. Backed by `@thresh/core`'s
  * `RequestContext` — the same ambient store a non-grain (client) caller uses,
  * so a client-set header and a grain-set header are the same mechanism.
  */

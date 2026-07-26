@@ -8,11 +8,11 @@
 // defect where a value statically typed as the base `JsonNode` but holding a
 // derived-type instance (`JsonValue`/`JsonArray`/`JsonObject`) at runtime
 // threw `InvalidCastException` during Orleans' type-tagged wire format. This
-// framework's wire codec (`@tsva/core/value-codec`) is structural JSON with
+// framework's wire codec (`@thresh/core/value-codec`) is structural JSON with
 // no declared-type tagging, so there is no base/derived distinction to get
 // wrong — `unknown` is the faithful equivalent of "any JSON-shaped value".
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithIntegerKey } from "@tsva/core/key-kinds";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithIntegerKey } from "@thresh/core/key-kinds";
 
 export interface IJsonNodeTestGrain extends GrainWithIntegerKey {
   processJsonNode(node: unknown): Promise<unknown>;

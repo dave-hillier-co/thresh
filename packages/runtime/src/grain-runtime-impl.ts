@@ -1,25 +1,25 @@
-import { durationToMs, type Duration } from "@tsva/core/duration";
-import type { GrainInterface } from "@tsva/core/grain-interface";
-import type { GrainKey } from "@tsva/core/grain-key";
-import type { GrainRuntime } from "@tsva/core/grain-runtime";
-import type { GrainTimer, TimerOptions } from "@tsva/core/grain-timer";
-import type { GrainReminder, ReminderEntry, ReminderRegistry } from "@tsva/core/reminder";
-import type { DurableJob, DurableJobScheduler, ScheduleJobRequest } from "@tsva/core/durable-job";
-import type { SiloAddress } from "@tsva/core/silo-address";
-import type { BroadcastChannelProvider } from "@tsva/core/broadcast-channel";
-import { isActivationBound, type StreamProvider } from "@tsva/core/stream";
-import { forkTransaction } from "@tsva/core/transaction-info";
-import type { ActivationData } from "@tsva/runtime/activation";
-import { ActivationStreamProvider } from "@tsva/runtime/activation-stream-provider";
-import type { GrainFactory } from "@tsva/runtime/grain-factory";
+import { durationToMs, type Duration } from "@thresh/core/duration";
+import type { GrainInterface } from "@thresh/core/grain-interface";
+import type { GrainKey } from "@thresh/core/grain-key";
+import type { GrainRuntime } from "@thresh/core/grain-runtime";
+import type { GrainTimer, TimerOptions } from "@thresh/core/grain-timer";
+import type { GrainReminder, ReminderEntry, ReminderRegistry } from "@thresh/core/reminder";
+import type { DurableJob, DurableJobScheduler, ScheduleJobRequest } from "@thresh/core/durable-job";
+import type { SiloAddress } from "@thresh/core/silo-address";
+import type { BroadcastChannelProvider } from "@thresh/core/broadcast-channel";
+import { isActivationBound, type StreamProvider } from "@thresh/core/stream";
+import { forkTransaction } from "@thresh/core/transaction-info";
+import type { ActivationData } from "@thresh/runtime/activation";
+import { ActivationStreamProvider } from "@thresh/runtime/activation-stream-provider";
+import type { GrainFactory } from "@thresh/runtime/grain-factory";
 import {
   currentSignal,
   currentTransaction,
   requestContext,
   requireTransaction,
-} from "@tsva/runtime/invocation-context";
-import type { SiloLoadSheddingTestHooks } from "@tsva/runtime/load-shedding";
-import type { GrainServiceRegistry } from "@tsva/runtime/grain-service";
+} from "@thresh/runtime/invocation-context";
+import type { SiloLoadSheddingTestHooks } from "@thresh/runtime/load-shedding";
+import type { GrainServiceRegistry } from "@thresh/runtime/grain-service";
 
 export interface GrainRuntimeServices {
   reminders?: () => ReminderRegistry | undefined;
@@ -206,7 +206,7 @@ export class GrainRuntimeImpl implements GrainRuntime {
     if (registry === undefined) throw new Error("grain services are not configured on this silo");
     // `GrainServiceRegistry.get` is constrained to `GrainService` (its actual
     // stored type); `GrainRuntime.getGrainService`'s `T` is unconstrained
-    // (core has no dependency on `@tsva/runtime`), so the cast bridges that —
+    // (core has no dependency on `@thresh/runtime`), so the cast bridges that —
     // same shape as `getGrain`'s reliance on the caller supplying the right `T`.
     return registry.get(name) as unknown as T;
   }

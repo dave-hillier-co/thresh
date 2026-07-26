@@ -1,6 +1,6 @@
-import { InconsistentStateError } from "@tsva/core/errors";
-import type { GrainId } from "@tsva/core/grain-id";
-import type { JournalEntry, JournalSegment, JournalStorage } from "@tsva/core/journal-storage";
+import { InconsistentStateError } from "@thresh/core/errors";
+import type { GrainId } from "@thresh/core/grain-id";
+import type { JournalEntry, JournalSegment, JournalStorage } from "@thresh/core/journal-storage";
 
 interface Log {
   entries: JournalEntry[];

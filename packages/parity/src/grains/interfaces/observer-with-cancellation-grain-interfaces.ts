@@ -6,9 +6,9 @@
 // here (`CancellationTokenCallbacksExecutionContext` is .NET-only and excluded,
 // see `observer-cancellation-token-tests.test.ts`), so both are left out rather
 // than ported as dead surface — GAP-OBSERVERS if a later test needs them.
-import type { GrainCancellationToken } from "@tsva/core/grain-cancellation-token";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithGuidKey, GrainWithStringKey } from "@tsva/core/key-kinds";
+import type { GrainCancellationToken } from "@thresh/core/grain-cancellation-token";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithGuidKey, GrainWithStringKey } from "@thresh/core/key-kinds";
 
 /**
  * A client-hosted observer supporting long-running, cancellable operations

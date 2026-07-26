@@ -32,7 +32,7 @@ spec:
       terminationGracePeriodSeconds: 30 # time to drain in-flight turns + flush state
       containers:
         - name: silo
-          image: tsva-k8s-silo:dev
+          image: thresh-k8s-silo:dev
           imagePullPolicy: IfNotPresent # built into the local Docker daemon (docker-desktop / kind load)
           ports:
             - { name: silo, containerPort: 11111 }

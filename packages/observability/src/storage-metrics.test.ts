@@ -6,7 +6,7 @@ import {
   MeterProvider,
   PeriodicExportingMetricReader,
 } from "@opentelemetry/sdk-metrics";
-import { withStorageOpMetrics } from "@tsva/observability/storage-metrics";
+import { withStorageOpMetrics } from "@thresh/observability/storage-metrics";
 
 const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
 const reader = new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 100_000 });
@@ -38,12 +38,12 @@ describe("withStorageOpMetrics", () => {
     expect(result).toBe("value");
 
     const recorded = await collected();
-    const ops = recorded.find((m) => m.name === "tsva.storage.ops");
-    const duration = recorded.find((m) => m.name === "tsva.storage.op.duration");
+    const ops = recorded.find((m) => m.name === "thresh.storage.ops");
+    const duration = recorded.find((m) => m.name === "thresh.storage.op.duration");
     expect(ops).toBeDefined();
     expect(duration).toBeDefined();
-    expect(ops!.dataPoints[0]!.attributes["tsva.status"]).toBe("ok");
-    expect(ops!.dataPoints[0]!.attributes["tsva.storage.operation"]).toBe("read");
+    expect(ops!.dataPoints[0]!.attributes["thresh.status"]).toBe("ok");
+    expect(ops!.dataPoints[0]!.attributes["thresh.storage.operation"]).toBe("read");
   });
 
   it("records an error status and rethrows on failure", async () => {
@@ -57,8 +57,8 @@ describe("withStorageOpMetrics", () => {
     ).rejects.toThrow("boom");
 
     const recorded = await collected();
-    const ops = recorded.find((m) => m.name === "tsva.storage.ops");
-    const errored = ops!.dataPoints.find((dp) => dp.attributes["tsva.status"] === "error");
+    const ops = recorded.find((m) => m.name === "thresh.storage.ops");
+    const errored = ops!.dataPoints.find((dp) => dp.attributes["thresh.status"] === "error");
     expect(errored).toBeDefined();
   });
 });

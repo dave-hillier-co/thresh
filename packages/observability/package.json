@@ -1,5 +1,5 @@
 {
-  "name": "@tsva/observability",
+  "name": "@thresh/observability",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -9,6 +9,6 @@
   "dependencies": {
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/core": "^2.7.1",
-    "@tsva/core": "workspace:*"
+    "@thresh/core": "workspace:*"
   }
 }

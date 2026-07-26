@@ -1,6 +1,6 @@
 // Ported from dotnet/orleans test/Orleans.Core.Tests/Directory/DhtGrainLocatorTests.cs @ v10.1.0 (MIT).
 import { describe, it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 // DhtGrainLocator is a thin adapter over Orleans' ILocalGrainDirectory (the
 // legacy in-silo DHT directory implementation) that marshals Unregister calls

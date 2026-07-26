@@ -8,7 +8,7 @@ import {
   planCycle,
   shannonEntropy,
   type CycleState,
-} from "@tsva/runtime/placement/rebalancing/rebalancer-model";
+} from "@thresh/runtime/placement/rebalancing/rebalancer-model";
 
 const snap = (entries: Record<string, number>): Map<string, number> =>
   new Map(Object.entries(entries));

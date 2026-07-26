@@ -1,11 +1,11 @@
 // Ported from dotnet/orleans test/Grains/TestInternalGrains/TimerGrain.cs @ v10.1.0 (MIT).
 // Trimmed to the members the ported DefaultCluster timer tests exercise; upstream's
 // StartTimer/SetCounter/LongWait on ITimerGrain aren't reached by any ported test.
-import type { Duration } from "@tsva/core/duration";
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import type { GrainTimer } from "@tsva/core/grain-timer";
-import { ITimerGrain } from "@tsva/parity/grains/interfaces/timer-grain-interfaces";
+import type { Duration } from "@thresh/core/duration";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import type { GrainTimer } from "@thresh/core/grain-timer";
+import { ITimerGrain } from "@thresh/parity/grains/interfaces/timer-grain-interfaces";
 
 export { ITimerGrain };
 

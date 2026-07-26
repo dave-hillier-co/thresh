@@ -1,6 +1,6 @@
-import type { GrainId } from "@tsva/core/grain-id";
-import type { GrainStorage, StateHolder } from "@tsva/core/grain-storage";
-import type { Reducer, ReducerState } from "@tsva/core/reducer-state";
+import type { GrainId } from "@thresh/core/grain-id";
+import type { GrainStorage, StateHolder } from "@thresh/core/grain-storage";
+import type { Reducer, ReducerState } from "@thresh/core/reducer-state";
 
 /**
  * Reducer state: keeps the folded state in memory and persists it (a snapshot)

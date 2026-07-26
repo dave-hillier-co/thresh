@@ -1,5 +1,5 @@
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithStringKey } from "@tsva/core/key-kinds";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithStringKey } from "@thresh/core/key-kinds";
 
 /** A counter read: its current value and the silo (pod) the activation runs on. */
 export interface CounterReply {

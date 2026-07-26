@@ -13,11 +13,11 @@
 // match against varies, mirroring upstream's per-silo
 // `GetSiloServiceProvider(...).GetRequiredService<IClusterClient>()`.
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import type { GrainInterface } from "@tsva/core/grain-interface";
-import type { SiloAddress } from "@tsva/core/silo-address";
-import { TestCluster } from "@tsva/testing/test-cluster";
-import type { IHostReportingGrain } from "@tsva/parity/grains/interfaces/silo-metadata-placement-filter-test-grain-interfaces";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import type { GrainInterface } from "@thresh/core/grain-interface";
+import type { SiloAddress } from "@thresh/core/silo-address";
+import { TestCluster } from "@thresh/testing/test-cluster";
+import type { IHostReportingGrain } from "@thresh/parity/grains/interfaces/silo-metadata-placement-filter-test-grain-interfaces";
 import {
   IPreferredMatchFilteredGrain,
   IPreferredMatchMin2FilteredGrain,
@@ -29,12 +29,12 @@ import {
   PreferredMatchMultipleFilteredGrain,
   PreferredMatchNoMetadataFilteredGrain,
   UniqueRequiredMatchFilteredGrain,
-} from "@tsva/parity/grains/impl/silo-metadata-placement-filter-test-grain";
+} from "@thresh/parity/grains/impl/silo-metadata-placement-filter-test-grain";
 import {
   IUnfilteredGrain,
   UnfilteredGrain,
-} from "@tsva/parity/grains/impl/placement-filter-test-grain";
-import { randomIntegerKey } from "@tsva/parity/support/keys";
+} from "@thresh/parity/grains/impl/placement-filter-test-grain";
+import { randomIntegerKey } from "@thresh/parity/support/keys";
 
 describe("UnitTests.PlacementFilterTests.SiloMetadataPlacementFilterTests", () => {
   let cluster: TestCluster;

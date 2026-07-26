@@ -3,18 +3,18 @@
 // Grain: test/Grains/TestGrainInterfaces/IStreamBatchingTestConsumerGrain.cs,
 // test/Grains/TestGrains/StreamBatchingTestConsumerGrain.cs @ v10.1.0 (MIT).
 import { describe, expect } from "vitest";
-import { grain, implicitStreamSubscription } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithGuidKey } from "@tsva/core/key-kinds";
+import { grain, implicitStreamSubscription } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithGuidKey } from "@thresh/core/key-kinds";
 import {
   STREAM_SUBSCRIPTION_OBSERVER,
   type BatchedStreamItem,
   type StreamHandler,
-} from "@tsva/core/stream";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
-import { randomGuidKey } from "@tsva/parity/support/keys";
+} from "@thresh/core/stream";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
+import { randomGuidKey } from "@thresh/parity/support/keys";
 
 const BATCHING_NAMESPACE = "batching";
 const NON_BATCHING_NAMESPACE = "nonbatching";

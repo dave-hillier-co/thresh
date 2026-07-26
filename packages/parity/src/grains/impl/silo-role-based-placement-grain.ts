@@ -10,9 +10,9 @@
 // "role a silo actually advertises" success path, which additionally needs a
 // way to configure a silo's advertised role that `TestCluster` does not
 // expose (GAP-SILO-ROLE-CONFIG).
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import { ISiloRoleBasedPlacementGrain } from "@tsva/parity/grains/interfaces/silo-role-based-placement-grain-interfaces";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import { ISiloRoleBasedPlacementGrain } from "@thresh/parity/grains/interfaces/silo-role-based-placement-grain-interfaces";
 
 export { ISiloRoleBasedPlacementGrain };
 

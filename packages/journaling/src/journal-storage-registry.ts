@@ -1,4 +1,4 @@
-import type { JournalStorage } from "@tsva/core/journal-storage";
+import type { JournalStorage } from "@thresh/core/journal-storage";
 
 export const DEFAULT_JOURNAL_PROVIDER = "default";
 

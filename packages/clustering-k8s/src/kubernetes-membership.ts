@@ -1,6 +1,6 @@
-import type { MembershipService, MembershipSnapshot, SiloMember } from "@tsva/core/membership";
-import type { SiloAddress } from "@tsva/core/silo-address";
-import { readySilosFromSlices, type EndpointSlice } from "@tsva/clustering-k8s/endpoint-slice";
+import type { MembershipService, MembershipSnapshot, SiloMember } from "@thresh/core/membership";
+import type { SiloAddress } from "@thresh/core/silo-address";
+import { readySilosFromSlices, type EndpointSlice } from "@thresh/clustering-k8s/endpoint-slice";
 
 /**
  * Source of EndpointSlice updates. The production implementation wraps the

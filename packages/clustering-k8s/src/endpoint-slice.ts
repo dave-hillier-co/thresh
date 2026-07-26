@@ -1,4 +1,4 @@
-import { SiloAddress } from "@tsva/core/silo-address";
+import { SiloAddress } from "@thresh/core/silo-address";
 
 // The subset of the Kubernetes EndpointSlice shape the membership watch reads.
 export interface EndpointSliceEndpoint {

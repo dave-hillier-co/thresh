@@ -1,19 +1,19 @@
 import { randomUUID } from "node:crypto";
 import type { createClient } from "redis";
-import { InconsistentStateError } from "@tsva/core/errors";
-import type { GrainId } from "@tsva/core/grain-id";
-import type { GrainStorage, StateHolder } from "@tsva/core/grain-storage";
-import { deserializeValue, serializeValue } from "@tsva/core/value-codec";
+import { InconsistentStateError } from "@thresh/core/errors";
+import type { GrainId } from "@thresh/core/grain-id";
+import type { GrainStorage, StateHolder } from "@thresh/core/grain-storage";
+import { deserializeValue, serializeValue } from "@thresh/core/value-codec";
 
 /** A connected node-redis client (the subset this provider drives). */
 export type RedisClient = ReturnType<typeof createClient>;
 
 export interface RedisGrainStorageOptions {
-  /** Namespace for keys in the shared Redis (defaults to `"tsva"`). */
+  /** Namespace for keys in the shared Redis (defaults to `"thresh"`). */
   keyPrefix?: string;
 }
 
-const CONFLICT = "TSVA_ETAG_CONFLICT";
+const CONFLICT = "THRESH_ETAG_CONFLICT";
 
 // Conditional write: only set when the caller's expected etag matches the
 // stored one (or no record exists yet). Atomic on the server so two silos
@@ -54,7 +54,7 @@ export class RedisGrainStorage implements GrainStorage {
     private readonly client: RedisClient,
     options: RedisGrainStorageOptions = {},
   ) {
-    this.keyPrefix = options.keyPrefix ?? "tsva";
+    this.keyPrefix = options.keyPrefix ?? "thresh";
   }
 
   async read<T>(

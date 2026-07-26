@@ -1,10 +1,10 @@
-import type { Grain } from "@tsva/core/grain";
-import type { IncomingGrainCallFilter, OutgoingGrainCallFilter } from "@tsva/core/grain-call-filter";
-import type { GrainInterface } from "@tsva/core/grain-interface";
-import { SiloAddress } from "@tsva/core/silo-address";
-import { InProcessTransport } from "@tsva/messaging/in-process-transport";
-import { createClient, type ClientNode } from "@tsva/client/client-node";
-import type { TestCluster } from "@tsva/testing/test-cluster";
+import type { Grain } from "@thresh/core/grain";
+import type { IncomingGrainCallFilter, OutgoingGrainCallFilter } from "@thresh/core/grain-call-filter";
+import type { GrainInterface } from "@thresh/core/grain-interface";
+import { SiloAddress } from "@thresh/core/silo-address";
+import { InProcessTransport } from "@thresh/messaging/in-process-transport";
+import { createClient, type ClientNode } from "@thresh/client/client-node";
+import type { TestCluster } from "@thresh/testing/test-cluster";
 
 /**
  * Build a `ClientNode` joined to `cluster` through its primary silo as

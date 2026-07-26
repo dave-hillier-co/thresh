@@ -1,6 +1,6 @@
 // Ported from dotnet/orleans test/Orleans.Core.Tests/General/HistogramAggregatorTests.cs @ v10.1.0 (MIT).
 import { describe, it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 // Tests Orleans.Runtime.HistogramAggregator, a custom cumulative-bucket histogram Orleans built
 // for its .NET Meter-based instrumentation. This framework's metrics (packages/observability/

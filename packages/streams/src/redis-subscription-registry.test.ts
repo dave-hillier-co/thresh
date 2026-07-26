@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { createClient } from "redis";
-import { GrainId } from "@tsva/core/grain-id";
-import { Guid } from "@tsva/core/guid";
-import { RedisSubscriptionRegistry } from "@tsva/streams/redis-subscription-registry";
+import { GrainId } from "@thresh/core/grain-id";
+import { Guid } from "@thresh/core/guid";
+import { RedisSubscriptionRegistry } from "@thresh/streams/redis-subscription-registry";
 
 const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
 type Client = ReturnType<typeof createClient>;
@@ -32,7 +32,7 @@ async function deleteAll(c: Client, match: string): Promise<void> {
 }
 
 const client = await reachable(REDIS_URL);
-const prefix = `tsva-test:subs:${randomUUID()}`;
+const prefix = `thresh-test:subs:${randomUUID()}`;
 const makeRegistry = () => new RedisSubscriptionRegistry(client!, prefix, "default");
 
 const ids = (subs: GrainId[]) => subs.map((g) => g.toString()).sort();

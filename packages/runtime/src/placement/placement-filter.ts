@@ -1,6 +1,6 @@
-import type { GrainType } from "@tsva/core/grain-type";
-import type { SiloAddress } from "@tsva/core/silo-address";
-import type { PlacementContext } from "@tsva/runtime/placement/placement-strategy";
+import type { GrainType } from "@thresh/core/grain-type";
+import type { SiloAddress } from "@thresh/core/silo-address";
+import type { PlacementContext } from "@thresh/runtime/placement/placement-strategy";
 
 /**
  * Prunes the candidate silos by metadata before a placement strategy chooses

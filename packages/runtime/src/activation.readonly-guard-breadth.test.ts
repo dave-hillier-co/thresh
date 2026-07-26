@@ -1,16 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { Grain } from "@tsva/core/grain";
-import { GrainId } from "@tsva/core/grain-id";
-import { registerReducerField } from "@tsva/core/reducer-state-metadata";
-import { registerDurableField } from "@tsva/core/durable-state-metadata";
-import { registerTransactionalField } from "@tsva/core/transactional-state-metadata";
-import { ReadOnlyStateViolationError } from "@tsva/core/errors";
-import type { ReducerState } from "@tsva/core/reducer-state";
-import type { DurableValue } from "@tsva/core/durable-state";
-import type { TransactionalState } from "@tsva/core/transactional-state";
-import type { InvocationRequest } from "@tsva/core/request";
-import { ActivationData } from "@tsva/runtime/activation";
-import { FakeTimeProvider } from "@tsva/runtime/test-support/fake-time-provider";
+import { Grain } from "@thresh/core/grain";
+import { GrainId } from "@thresh/core/grain-id";
+import { registerReducerField } from "@thresh/core/reducer-state-metadata";
+import { registerDurableField } from "@thresh/core/durable-state-metadata";
+import { registerTransactionalField } from "@thresh/core/transactional-state-metadata";
+import { ReadOnlyStateViolationError } from "@thresh/core/errors";
+import type { ReducerState } from "@thresh/core/reducer-state";
+import type { DurableValue } from "@thresh/core/durable-state";
+import type { TransactionalState } from "@thresh/core/transactional-state";
+import type { InvocationRequest } from "@thresh/core/request";
+import { ActivationData } from "@thresh/runtime/activation";
+import { FakeTimeProvider } from "@thresh/runtime/test-support/fake-time-provider";
 
 /**
  * Extends `activation.readonly-guard.test.ts` (which covers `@persistentState`

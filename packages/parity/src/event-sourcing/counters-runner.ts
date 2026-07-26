@@ -2,7 +2,7 @@
 // dotnet/orleans test/Orleans.EventSourcing.Tests/EventSourcingTests/CountersGrainTests*.cs
 // @ v10.1.0, which share this helper as `ConcurrentIncrementsRunner`).
 import { expect } from "vitest";
-import type { ICountersGrain } from "@tsva/parity/grains/impl/counters-grain";
+import type { ICountersGrain } from "@thresh/parity/grains/impl/counters-grain";
 
 const keys = ["a", "b", "c", "d", "e", "f", "g", "h"];
 

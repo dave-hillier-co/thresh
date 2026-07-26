@@ -1,15 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { RejectionError } from "@tsva/core/errors";
-import { Grain } from "@tsva/core/grain";
-import { GrainId } from "@tsva/core/grain-id";
+import { RejectionError } from "@thresh/core/errors";
+import { Grain } from "@thresh/core/grain";
+import { GrainId } from "@thresh/core/grain-id";
 import type {
   DehydrationContext,
   RehydrationContext,
-} from "@tsva/core/grain-migration-participant";
-import type { InvocationRequest } from "@tsva/core/request";
-import { SiloAddress } from "@tsva/core/silo-address";
-import { ActivationData } from "@tsva/runtime/activation";
-import { FakeTimeProvider } from "@tsva/runtime/test-support/fake-time-provider";
+} from "@thresh/core/grain-migration-participant";
+import type { InvocationRequest } from "@thresh/core/request";
+import { SiloAddress } from "@thresh/core/silo-address";
+import { ActivationData } from "@thresh/runtime/activation";
+import { FakeTimeProvider } from "@thresh/runtime/test-support/fake-time-provider";
 
 class MigratableGrain extends Grain {
   count = 0;

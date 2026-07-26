@@ -3,14 +3,14 @@
 // Upstream persists `Reader`/`Writer` grain references in storage-backed state;
 // the ported tests only observe state within one activation, so in-memory
 // fields suffice (see chained-grain.ts for the same simplification).
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
 import {
   IMultifacetFactoryTestGrain,
   IMultifacetReader,
   IMultifacetTestGrain,
   IMultifacetWriter,
-} from "@tsva/parity/grains/interfaces/multifacet-grain-interfaces";
+} from "@thresh/parity/grains/interfaces/multifacet-grain-interfaces";
 
 export { IMultifacetFactoryTestGrain, IMultifacetReader, IMultifacetTestGrain, IMultifacetWriter };
 

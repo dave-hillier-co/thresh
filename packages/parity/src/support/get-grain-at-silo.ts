@@ -1,8 +1,8 @@
-import { PLACEMENT_HINT_KEY, RequestContext } from "@tsva/core/request-context";
-import type { SiloAddress } from "@tsva/core/silo-address";
-import type { TestCluster } from "@tsva/testing/test-cluster";
-import { IRandomPlacementTestGrain } from "@tsva/parity/grains/impl/placement-test-grain";
-import { randomGuidKey } from "@tsva/parity/support/keys";
+import { PLACEMENT_HINT_KEY, RequestContext } from "@thresh/core/request-context";
+import type { SiloAddress } from "@thresh/core/silo-address";
+import type { TestCluster } from "@thresh/testing/test-cluster";
+import { IRandomPlacementTestGrain } from "@thresh/parity/grains/impl/placement-test-grain";
+import { randomGuidKey } from "@thresh/parity/support/keys";
 
 /**
  * Upstream `ElasticPlacementTests.GetGrainAtSilo` (and other ported suites'
@@ -14,7 +14,7 @@ import { randomGuidKey } from "@tsva/parity/support/keys";
  * upstream.
  *
  * `RequestContext` is ambient here (an `AsyncLocalStorage`, see
- * `@tsva/core/request-context`): unlike upstream, where the hint rides one
+ * `@thresh/core/request-context`): unlike upstream, where the hint rides one
  * captured-at-send-time message header per call, `RequestContext.set` stays
  * in scope for every subsequent call this same async chain makes. So the
  * hint is removed again once a match is found — a caller that pins a grain

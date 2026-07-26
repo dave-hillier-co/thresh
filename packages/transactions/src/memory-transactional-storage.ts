@@ -1,18 +1,18 @@
-import { InconsistentStateError } from "@tsva/core/errors";
-import type { GrainId } from "@tsva/core/grain-id";
+import { InconsistentStateError } from "@thresh/core/errors";
+import type { GrainId } from "@thresh/core/grain-id";
 import type {
   PendingTransactionState,
   TransactionalStateMetadata,
   TransactionalStateStorage,
   TransactionalStorageLoadResponse,
-} from "@tsva/core/transactional-storage";
-import { decodeValue, encodeValue } from "@tsva/core/value-codec";
+} from "@thresh/core/transactional-storage";
+import { decodeValue, encodeValue } from "@thresh/core/value-codec";
 import {
   applyStore,
   EMPTY_METADATA,
   emptyRecord,
   type StoredRecord,
-} from "@tsva/transactions/transactional-storage-apply";
+} from "@thresh/transactions/transactional-storage-apply";
 
 // Clone through the value-codec so a record's runtime types (GrainId, Date)
 // survive load/store — matching the Redis provider's serialization fidelity.

@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { Pool } from "pg";
-import { GrainId } from "@tsva/core/grain-id";
-import { Guid } from "@tsva/core/guid";
-import { PostgresSubscriptionRegistry } from "@tsva/streams/postgres-subscription-registry";
+import { GrainId } from "@thresh/core/grain-id";
+import { Guid } from "@thresh/core/guid";
+import { PostgresSubscriptionRegistry } from "@thresh/streams/postgres-subscription-registry";
 
 const PG_URL = process.env.PG_URL ?? "postgres://localhost:5432/postgres";
 
@@ -20,7 +20,7 @@ async function reachable(connectionString: string): Promise<Pool | undefined> {
 }
 
 const pool = await reachable(PG_URL);
-const prefix = `tsva_test_ps_${randomUUID().replace(/-/g, "")}`;
+const prefix = `thresh_test_ps_${randomUUID().replace(/-/g, "")}`;
 const makeRegistry = (provider = "default") =>
   new PostgresSubscriptionRegistry(pool!, prefix, provider);
 

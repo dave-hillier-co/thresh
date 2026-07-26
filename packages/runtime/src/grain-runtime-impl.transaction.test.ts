@@ -1,16 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { GrainId } from "@tsva/core/grain-id";
-import type { TransactionInfo } from "@tsva/core/transaction-info";
-import { ActivationData } from "@tsva/runtime/activation";
-import { GrainFactory } from "@tsva/runtime/grain-factory";
-import { GrainRuntimeImpl } from "@tsva/runtime/grain-runtime-impl";
-import { invocationContext } from "@tsva/runtime/invocation-context";
-import { FakeTimeProvider } from "@tsva/runtime/test-support/fake-time-provider";
+import { GrainId } from "@thresh/core/grain-id";
+import type { TransactionInfo } from "@thresh/core/transaction-info";
+import { ActivationData } from "@thresh/runtime/activation";
+import { GrainFactory } from "@thresh/runtime/grain-factory";
+import { GrainRuntimeImpl } from "@thresh/runtime/grain-runtime-impl";
+import { invocationContext } from "@thresh/runtime/invocation-context";
+import { FakeTimeProvider } from "@thresh/runtime/test-support/fake-time-provider";
 
 // GAP-TRANSACTION-CONTEXT-INTROSPECTION: grain code has no way to observe
 // whether its turn is running inside a transaction, or that transaction's id
 // (Orleans' `TransactionContext.GetTransactionInfo()`). `currentTransaction()`
-// (@tsva/runtime/invocation-context) already tracks the ambient transaction
+// (@thresh/runtime/invocation-context) already tracks the ambient transaction
 // for boundary resolution, but nothing on `GrainRuntime` exposes it.
 function makeRuntime(): GrainRuntimeImpl {
   const id = new GrainId("TxIntrospectionGrain", "a");

@@ -1,6 +1,6 @@
 // Ported from dotnet/orleans test/Orleans.Core.Tests/Directory/DirectoryMembershipSnapshotTests.cs @ v10.1.0 (MIT).
 import { describe, it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 // DirectoryMembershipSnapshot is Orleans' per-membership-version view of ring
 // ownership, exposing RingRange/RingRangeCollection arithmetic (Intersects,

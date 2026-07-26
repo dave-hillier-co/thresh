@@ -5,9 +5,9 @@
 // DurableQueue and DurableSet through generic operations, so the journaling
 // parity suite can drive every durable structure through a real grain
 // activation instead of reaching for the internal state-machine-manager
-// package directly (out of bounds for @tsva/parity).
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithStringKey } from "@tsva/core/key-kinds";
+// package directly (out of bounds for @thresh/parity).
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithStringKey } from "@thresh/core/key-kinds";
 
 export interface IDurableCollectionsGrain extends GrainWithStringKey {
   // DurableValue<unknown>

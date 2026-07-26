@@ -9,9 +9,9 @@ import {
   serializeValue,
   unregisterSurrogate,
   type SurrogateDescriptor,
-} from "@tsva/core/value-codec";
-import { GrainId } from "@tsva/core/grain-id";
-import { Guid } from "@tsva/core/guid";
+} from "@thresh/core/value-codec";
+import { GrainId } from "@thresh/core/grain-id";
+import { Guid } from "@thresh/core/guid";
 
 describe("value-codec", () => {
   afterEach(() => {
@@ -58,7 +58,7 @@ describe("value-codec", () => {
 
   describe("wire compatibility", () => {
     it("decodes an envelope with no version field (the pre-existing wire shape)", () => {
-      const legacy = { $tsva: "date", value: 0 };
+      const legacy = { $thresh: "date", value: 0 };
       expect(decodeValue(legacy)).toEqual(new Date(0));
     });
 
@@ -73,7 +73,7 @@ describe("value-codec", () => {
     });
 
     it("decodes an unknown tag as a plain object instead of throwing", () => {
-      const fromTheFuture = { $tsva: "some-future-type", $tsvv: 2, value: 1 };
+      const fromTheFuture = { $thresh: "some-future-type", $tsvv: 2, value: 1 };
       expect(decodeValue(fromTheFuture)).toEqual(fromTheFuture);
     });
   });

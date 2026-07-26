@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { combineSignals, raceSignal } from "@tsva/core/abort";
-import { GrainCallAbortedError } from "@tsva/core/errors";
+import { combineSignals, raceSignal } from "@thresh/core/abort";
+import { GrainCallAbortedError } from "@thresh/core/errors";
 
 describe("combineSignals", () => {
   it("returns undefined given no signals", () => {

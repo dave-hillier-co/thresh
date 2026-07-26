@@ -18,8 +18,8 @@
 // full silo restart. Ported against `TestCluster`'s `serviceId` option and
 // `getServiceId()` accessor, with no stream provider configured.
 import { expect } from "vitest";
-import { TestCluster } from "@tsva/testing/test-cluster";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 orleansTest.excluded(
   "asserts a specific CLR exception type (KeyNotFoundException) for a missing DI-registered provider config — CLR exception classes are a documented deviation; this port has no config-loading layer distinct from a plain missing-provider error",

@@ -1,4 +1,4 @@
-import type { TransactionalStateStorage } from "@tsva/core/transactional-storage";
+import type { TransactionalStateStorage } from "@thresh/core/transactional-storage";
 
 export const DEFAULT_TRANSACTIONAL_PROVIDER = "default";
 

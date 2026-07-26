@@ -14,23 +14,23 @@
 // both fixtures; the "no wait" option is not modelled since no ported test
 // distinguishes it, so both fixtures below exercise identical behaviour.
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { Guid } from "@tsva/core/guid";
-import type { ClientNode } from "@tsva/client/client-node";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
-import { waitFor } from "@tsva/testing/wait";
+import { Guid } from "@thresh/core/guid";
+import type { ClientNode } from "@thresh/client/client-node";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
+import { waitFor } from "@thresh/testing/wait";
 import {
   ILongRunningTaskGrain,
   LongRunningTaskGrain,
-} from "@tsva/parity/grains/impl/long-running-task-grain";
-import { randomGuidKey } from "@tsva/parity/support/keys";
+} from "@thresh/parity/grains/impl/long-running-task-grain";
+import { randomGuidKey } from "@thresh/parity/support/keys";
 import {
   cancelUntilSettled,
   clientTwoGrains,
   flushPerDelay,
   twoGrains,
-} from "@tsva/parity/support/cancellation";
-import { createClusterClient } from "@tsva/parity/support/client";
+} from "@thresh/parity/support/cancellation";
+import { createClusterClient } from "@thresh/parity/support/client";
 
 /** Same cross-silo caveat as the sibling suite: assert on the rejection
  * message, not the error class/instance, since a rejection crossing a silo

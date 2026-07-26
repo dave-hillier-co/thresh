@@ -1,6 +1,6 @@
 // Ported from dotnet/orleans test/Orleans.Core.Tests/SchedulerTests/OrleansTaskSchedulerAdvancedTests.cs @ v10.1.0 (MIT).
 import { describe, it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 // Same rationale as OrleansTaskSchedulerBasicTests: every method here drives Orleans' internal
 // OrleansTaskScheduler/WorkItemGroup turn-execution-order guarantees over a shared .NET thread

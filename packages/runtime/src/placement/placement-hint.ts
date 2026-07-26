@@ -1,5 +1,5 @@
-import { PLACEMENT_HINT_KEY } from "@tsva/core/request-context";
-import type { SiloAddress } from "@tsva/core/silo-address";
+import { PLACEMENT_HINT_KEY } from "@thresh/core/request-context";
+import type { SiloAddress } from "@thresh/core/silo-address";
 
 export { PLACEMENT_HINT_KEY };
 

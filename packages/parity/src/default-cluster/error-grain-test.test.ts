@@ -1,20 +1,20 @@
 // Ported from dotnet/orleans test/Orleans.DefaultCluster.Tests/ErrorGrainTest.cs @ v10.1.0 (MIT).
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
-import { Guid } from "@tsva/core/guid";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
+import { Guid } from "@thresh/core/guid";
 import {
   AsyncSimpleGrain,
   ISimpleGrainWithAsyncMethods,
-} from "@tsva/parity/grains/impl/async-simple-grain";
-import { EchoGrain, IEchoGrain } from "@tsva/parity/grains/impl/echo-task-grain";
-import { ErrorGrain, IErrorGrain } from "@tsva/parity/grains/impl/error-grain";
+} from "@thresh/parity/grains/impl/async-simple-grain";
+import { EchoGrain, IEchoGrain } from "@thresh/parity/grains/impl/echo-task-grain";
+import { ErrorGrain, IErrorGrain } from "@thresh/parity/grains/impl/error-grain";
 import {
   PromiseForwardGrain,
   IPromiseForwardGrain,
-} from "@tsva/parity/grains/impl/promise-forward-grain";
-import { ISimpleGrain, SimpleGrain } from "@tsva/parity/grains/impl/simple-grain";
-import { randomIntegerKey } from "@tsva/parity/support/keys";
+} from "@thresh/parity/grains/impl/promise-forward-grain";
+import { ISimpleGrain, SimpleGrain } from "@thresh/parity/grains/impl/simple-grain";
+import { randomIntegerKey } from "@thresh/parity/support/keys";
 
 // Ported from dotnet/orleans test/Orleans.DefaultCluster.Tests/LocalErrorGrain.cs @ v10.1.0
 // (MIT): "Not a real Orleans grain - used as a local mock for testing error cases", so it

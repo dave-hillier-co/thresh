@@ -1,8 +1,8 @@
-import { runBankDemo } from "@tsva/example-bank/demo";
+import { runBankDemo } from "@thresh/example-bank/demo";
 
 const dollars = (cents: number) => `$${(cents / 100).toFixed(2)}`;
 
-// Runnable entry point: `pnpm --filter @tsva/example-bank start`.
+// Runnable entry point: `pnpm --filter @thresh/example-bank start`.
 async function main(): Promise<void> {
   const { alice, bob, aliceAfterRestart } = await runBankDemo();
   console.log("Bank demo (reducer grains)");

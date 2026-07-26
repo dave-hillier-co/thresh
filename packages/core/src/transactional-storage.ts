@@ -50,7 +50,7 @@ export interface TransactionalStorageLoadResponse<T> {
  * (see `GrainStorage`'s doc — same contract). A provider honours it on a
  * best-effort basis against its own network calls; a provider that cannot
  * cancel mid-flight may instead only abandon the *wait* for an already-sent
- * call (`@tsva/core/abort`'s `raceSignal`), or ignore it entirely.
+ * call (`@thresh/core/abort`'s `raceSignal`), or ignore it entirely.
  */
 export interface TransactionalStateStorage<T = unknown> {
   load(

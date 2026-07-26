@@ -3,7 +3,7 @@ import {
   backwardCompatible,
   compatibilityDirector,
   strict,
-} from "@tsva/core/version-compatibility";
+} from "@thresh/core/version-compatibility";
 
 describe("backwardCompatible director", () => {
   it("accepts an implementation newer than or equal to the request", () => {

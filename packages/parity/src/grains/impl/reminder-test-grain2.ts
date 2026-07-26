@@ -1,11 +1,11 @@
 // Ported from dotnet/orleans test/Grains/TestInternalGrains/ReminderTestGrain2.cs @ v10.1.0
 // (MIT) — only the subset needed for MinimalReminderInterval (start/get/stop a reminder by
 // name); see the interface file for what upstream members were left out.
-import type { Duration } from "@tsva/core/duration";
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import type { GrainReminder, Remindable, TickStatus } from "@tsva/core/reminder";
-import { IReminderTestGrain2 } from "@tsva/parity/grains/interfaces/reminder-test-grain-interfaces";
+import type { Duration } from "@thresh/core/duration";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import type { GrainReminder, Remindable, TickStatus } from "@thresh/core/reminder";
+import { IReminderTestGrain2 } from "@thresh/parity/grains/interfaces/reminder-test-grain-interfaces";
 
 export { IReminderTestGrain2 };
 

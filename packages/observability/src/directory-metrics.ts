@@ -1,9 +1,9 @@
 import { metrics, type Attributes, type Counter } from "@opentelemetry/api";
 
 /**
- * OpenTelemetry counters for the grain directory (`@tsva/directory`):
- * `tsva.directory.lookups` and `tsva.directory.registrations`, each tagged
- * `tsva.directory.locality` (`"local"` when this silo owns the grain's
+ * OpenTelemetry counters for the grain directory (`@thresh/directory`):
+ * `thresh.directory.lookups` and `thresh.directory.registrations`, each tagged
+ * `thresh.directory.locality` (`"local"` when this silo owns the grain's
  * partition, `"remote"` when the call routed to a peer). Distinct from the
  * location-cache hit/miss gauge in `runtime-metrics.ts`, which measures the
  * caller-side cache in front of the directory, not the directory itself.
@@ -22,13 +22,13 @@ let instruments: Instruments | undefined;
 
 function instrumentsOf(): Instruments {
   if (instruments === undefined) {
-    const meter = metrics.getMeter("@tsva/observability");
+    const meter = metrics.getMeter("@thresh/observability");
     instruments = {
-      lookups: meter.createCounter("tsva.directory.lookups", {
+      lookups: meter.createCounter("thresh.directory.lookups", {
         description: "Grain directory lookups",
         unit: "{lookup}",
       }),
-      registrations: meter.createCounter("tsva.directory.registrations", {
+      registrations: meter.createCounter("thresh.directory.registrations", {
         description: "Grain directory registrations",
         unit: "{registration}",
       }),
@@ -40,12 +40,12 @@ function instrumentsOf(): Instruments {
 export type DirectoryLocality = "local" | "remote";
 
 export function recordDirectoryLookup(locality: DirectoryLocality, attrs: Attributes = {}): void {
-  instrumentsOf().lookups.add(1, { "tsva.directory.locality": locality, ...attrs });
+  instrumentsOf().lookups.add(1, { "thresh.directory.locality": locality, ...attrs });
 }
 
 export function recordDirectoryRegistration(
   locality: DirectoryLocality,
   attrs: Attributes = {},
 ): void {
-  instrumentsOf().registrations.add(1, { "tsva.directory.locality": locality, ...attrs });
+  instrumentsOf().registrations.add(1, { "thresh.directory.locality": locality, ...attrs });
 }

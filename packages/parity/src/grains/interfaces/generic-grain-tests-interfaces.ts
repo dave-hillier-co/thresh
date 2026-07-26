@@ -2,8 +2,8 @@
 // Only the non-generic members these grains actually need are ported; every
 // generic interface in the upstream file is unrepresentable here
 // (GAP-GENERIC-GRAINS — see generic-grain-tests.test.ts).
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithIntegerKey } from "@tsva/core/key-kinds";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithIntegerKey } from "@thresh/core/key-kinds";
 
 export interface IGrainWithNoProperties extends GrainWithIntegerKey {
   getAxB(a: number, b: number): Promise<string>;

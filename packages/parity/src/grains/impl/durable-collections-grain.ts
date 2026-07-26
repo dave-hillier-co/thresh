@@ -8,16 +8,16 @@ import {
   durableSet,
   durableState,
   grain,
-} from "@tsva/core/decorators";
+} from "@thresh/core/decorators";
 import type {
   DurableDictionary,
   DurableList,
   DurableQueue,
   DurableSet,
   DurableValue,
-} from "@tsva/core/durable-state";
-import { Grain } from "@tsva/core/grain";
-import { IDurableCollectionsGrain } from "@tsva/parity/grains/interfaces/durable-collections-grain-interfaces";
+} from "@thresh/core/durable-state";
+import { Grain } from "@thresh/core/grain";
+import { IDurableCollectionsGrain } from "@thresh/parity/grains/interfaces/durable-collections-grain-interfaces";
 
 export { IDurableCollectionsGrain };
 

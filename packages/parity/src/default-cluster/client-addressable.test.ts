@@ -12,21 +12,21 @@
 // cross-silo gossip-propagation race to contend with — see observer.test.ts
 // for that rationale.
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
-import type { ClientNode } from "@tsva/client/client-node";
-import { ClientAddressableTestGrain } from "@tsva/parity/grains/impl/client-addressable-test-grain";
-import { ClientAddressableTestConsumerGrain } from "@tsva/parity/grains/impl/client-addressable-test-consumer-grain";
-import { ClientAddressableTestRendezvousGrain } from "@tsva/parity/grains/impl/client-addressable-test-rendezvous-grain";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
+import type { ClientNode } from "@thresh/client/client-node";
+import { ClientAddressableTestGrain } from "@thresh/parity/grains/impl/client-addressable-test-grain";
+import { ClientAddressableTestConsumerGrain } from "@thresh/parity/grains/impl/client-addressable-test-consumer-grain";
+import { ClientAddressableTestRendezvousGrain } from "@thresh/parity/grains/impl/client-addressable-test-rendezvous-grain";
 import {
   IClientAddressableTestClientObject,
   IClientAddressableTestConsumer,
   IClientAddressableTestGrain,
   IClientAddressableTestProducer,
   IClientAddressableTestRendezvousGrain,
-} from "@tsva/parity/grains/interfaces/client-addressable-interfaces";
-import { randomIntegerKey } from "@tsva/parity/support/keys";
-import { createClusterClient } from "@tsva/parity/support/client";
+} from "@thresh/parity/grains/interfaces/client-addressable-interfaces";
+import { randomIntegerKey } from "@thresh/parity/support/keys";
+import { createClusterClient } from "@thresh/parity/support/client";
 
 describe("DefaultCluster.Tests.ClientAddressableTests", () => {
   let cluster: TestCluster;

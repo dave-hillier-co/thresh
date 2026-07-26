@@ -12,7 +12,7 @@
 // test-access. There is no equivalent internal component to port these
 // mock-driven white-box tests to.
 import { it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 const REASON =
   "white-box unit tests of Orleans' internal PersistentStreamPullingAgent system target (mocked IStreamPubSub/IQueueAdapter, ITestAccessor into private registration-task/pub-sub-cache state); this framework's MemoryStreamProvider has no pulling-agent system target, queue adapter, or pub/sub cache to test-access";

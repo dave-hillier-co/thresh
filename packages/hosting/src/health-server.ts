@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import type { HealthCheck, ProbeResult } from "@tsva/hosting/health-check";
+import type { HealthCheck, ProbeResult } from "@thresh/hosting/health-check";
 
 /** Serves the `/live`, `/ready` and `/startup` probe endpoints over HTTP. */
 export class HealthServer {

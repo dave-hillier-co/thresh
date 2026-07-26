@@ -1,29 +1,29 @@
 import type { Pool } from "pg";
-import type { GrainKey } from "@tsva/core/grain-key";
-import type { GrainType } from "@tsva/core/grain-type";
-import type { Duration } from "@tsva/core/duration";
+import type { GrainKey } from "@thresh/core/grain-key";
+import type { GrainType } from "@thresh/core/grain-type";
+import type { Duration } from "@thresh/core/duration";
 import type {
   ActivationBoundStreamProvider,
   AsyncStream,
   StreamActivationBinding,
   StreamProducerHandle,
   StreamProvider,
-} from "@tsva/core/stream";
+} from "@thresh/core/stream";
 import {
   PullingStreamProviderCore,
   validateQueueCount,
-} from "@tsva/streams/pulling-stream-provider-core";
-import type { StreamFailureHandler } from "@tsva/streams/queue-pulling-agent";
-import type { HashRange } from "@tsva/streams/queue-ownership";
-import { PostgresStreamQueue } from "@tsva/streams/postgres-stream-queue";
-import { PostgresSubscriptionRegistry } from "@tsva/streams/postgres-subscription-registry";
-import type { StreamDeliver } from "@tsva/streams/stream-deliver";
+} from "@thresh/streams/pulling-stream-provider-core";
+import type { StreamFailureHandler } from "@thresh/streams/queue-pulling-agent";
+import type { HashRange } from "@thresh/streams/queue-ownership";
+import { PostgresStreamQueue } from "@thresh/streams/postgres-stream-queue";
+import { PostgresSubscriptionRegistry } from "@thresh/streams/postgres-subscription-registry";
+import type { StreamDeliver } from "@thresh/streams/stream-deliver";
 
-export type { StreamDeliver } from "@tsva/streams/stream-deliver";
-export type { StreamFailureHandler } from "@tsva/streams/queue-pulling-agent";
+export type { StreamDeliver } from "@thresh/streams/stream-deliver";
+export type { StreamFailureHandler } from "@thresh/streams/queue-pulling-agent";
 
 export interface PostgresPullingStreamProviderOptions {
-  /** Table prefix the four backing tables share (defaults to `"tsva_stream"`). */
+  /** Table prefix the four backing tables share (defaults to `"thresh_stream"`). */
   tablePrefix?: string;
   /** Number of physical queues streams are multiplexed over (defaults to 8). */
   queueCount?: number;
@@ -72,7 +72,7 @@ export class PostgresPullingStreamProvider implements ActivationBoundStreamProvi
     options: PostgresPullingStreamProviderOptions = {},
   ) {
     const queueCount = validateQueueCount(name, options.queueCount);
-    const tablePrefix = options.tablePrefix ?? "tsva_stream";
+    const tablePrefix = options.tablePrefix ?? "thresh_stream";
     this.registry = new PostgresSubscriptionRegistry(pool, tablePrefix, name);
     this.queues = Array.from(
       { length: queueCount },

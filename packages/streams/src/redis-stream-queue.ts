@@ -1,5 +1,5 @@
 import type { createClient } from "redis";
-import { deserializeValue, serializeValue } from "@tsva/core/value-codec";
+import { deserializeValue, serializeValue } from "@thresh/core/value-codec";
 
 export type RedisClient = ReturnType<typeof createClient>;
 

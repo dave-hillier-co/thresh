@@ -6,19 +6,19 @@
 // `AnchoredGrainsFilterTests` exercises `AnchoredGrainsFilter`'s generational
 // rotation (`Add`/`Contains`/`Rotate`/`Reset` across 2- and 3-generation
 // configurations). Ported onto
-// `@tsva/runtime/placement/repartitioning/blocked-bloom-filter`
+// `@thresh/runtime/placement/repartitioning/blocked-bloom-filter`
 // (`BlockedBloomFilter`/`AnchoredGrainsFilter`), a faithful port of the
 // block/mask structure and generational rotation; see that module's header
 // for the one deliberate simplification (a portable 64-bit hash in place of
 // .NET's `XxHash3`, which does not change observable add/contains/rotate
 // behavior).
-import { GrainId } from "@tsva/core/grain-id";
+import { GrainId } from "@thresh/core/grain-id";
 import {
   AnchoredGrainsFilter,
   BlockedBloomFilter,
-} from "@tsva/runtime/placement/repartitioning/blocked-bloom-filter";
+} from "@thresh/runtime/placement/repartitioning/blocked-bloom-filter";
 import { describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 const grainId = new GrainId("test", "key");
 

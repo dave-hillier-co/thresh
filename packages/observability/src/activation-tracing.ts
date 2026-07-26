@@ -151,7 +151,7 @@ export function withStorageWriteSpan<T>(
 
 /**
  * Wraps a grain's `OnDeactivateAsync` hook execution (Lifecycle source).
- * `reason` is the formatted `DeactivationReason` (`@tsva/core/reasons`'
+ * `reason` is the formatted `DeactivationReason` (`@thresh/core/reasons`'
  * `formatDeactivationReason`, upstream's `DeactivationReason.ToString()`
  * shape — `"{ReasonCode}: {Description}"`) recorded as
  * `orleans.deactivation.reason`. On a thrown exception, records it AND sets

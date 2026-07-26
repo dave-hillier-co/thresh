@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { grain, implicitStreamSubscription } from "@tsva/core/decorators";
-import { defineGrain } from "@tsva/core/define-grain";
-import { Grain } from "@tsva/core/grain";
-import { getGrainMetadata } from "@tsva/core/grain-metadata";
+import { grain, implicitStreamSubscription } from "@thresh/core/decorators";
+import { defineGrain } from "@thresh/core/define-grain";
+import { Grain } from "@thresh/core/grain";
+import { getGrainMetadata } from "@thresh/core/grain-metadata";
 import {
   implicitStreamObserver,
   STREAM_SUBSCRIPTION_OBSERVER,
   type StreamHandler,
-} from "@tsva/core/stream";
+} from "@thresh/core/stream";
 
 describe("implicit stream subscriptions — declaration", () => {
   it("records the namespace on a class grain via the decorator", () => {

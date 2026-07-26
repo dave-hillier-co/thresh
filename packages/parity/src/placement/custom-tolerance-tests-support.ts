@@ -1,11 +1,11 @@
 // Ported from dotnet/orleans test/Orleans.Placement.Tests/ActivationRepartitioningTests/CustomToleranceTests.cs
 // (the nested grain interfaces/classes) @ v10.1.0 (MIT).
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithIntegerKey } from "@tsva/core/key-kinds";
-import { PLACEMENT_HINT_KEY, RequestContext } from "@tsva/core/request-context";
-import type { SiloAddress } from "@tsva/core/silo-address";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithIntegerKey } from "@thresh/core/key-kinds";
+import { PLACEMENT_HINT_KEY, RequestContext } from "@thresh/core/request-context";
+import type { SiloAddress } from "@thresh/core/silo-address";
 
 export interface IE extends GrainWithIntegerKey {
   firstPing(silo2: string): Promise<void>;

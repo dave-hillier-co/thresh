@@ -73,7 +73,7 @@ export interface DefineGrainOptions extends Omit<GrainOptions, "name"> {
 // The grain instance is carried on the setup behind a private symbol so the
 // facet hooks can register their field metadata against it without widening the
 // public `GrainSetup` surface.
-const INSTANCE = Symbol("tsva.functional.instance");
+const INSTANCE = Symbol("thresh.functional.instance");
 
 interface InternalSetup extends GrainSetup {
   [INSTANCE]: object;
@@ -187,7 +187,7 @@ export function useReducerState<TState, TEvent>(
   options: UseReducerStateOptions<TState, TEvent>,
 ): ReducerState<TState, TEvent> {
   const instance = instanceOf(ctx);
-  const fieldName = `__tsva_reducer$${stateName}`;
+  const fieldName = `__thresh_reducer$${stateName}`;
   registerReducerField(instance, {
     fieldName,
     stateName,
@@ -236,7 +236,7 @@ export function usePersistentState<TState>(
   options: UsePersistentStateOptions<TState> = {},
 ): PersistentState<TState> {
   const instance = instanceOf(ctx);
-  const fieldName = `__tsva_state$${stateName}`;
+  const fieldName = `__thresh_state$${stateName}`;
   registerPersistentField(instance, {
     fieldName,
     stateName,
@@ -286,7 +286,7 @@ export function useTransactionalState<TState>(
   options: UseTransactionalStateOptions<TState>,
 ): TransactionalState<TState> {
   const instance = instanceOf(ctx);
-  const fieldName = `__tsva_tx$${stateName}`;
+  const fieldName = `__thresh_tx$${stateName}`;
   registerTransactionalField(instance, {
     fieldName,
     stateName,
@@ -355,7 +355,7 @@ export function useDurableState<T>(
     ctx,
     stateName,
     "value",
-    "__tsva_durable$",
+    "__thresh_durable$",
     "durable value",
     options,
   );
@@ -382,7 +382,7 @@ export function useDurableDictionary<K, V>(
     ctx,
     stateName,
     "dictionary",
-    "__tsva_durabledict$",
+    "__thresh_durabledict$",
     "durable dictionary",
     options,
   );
@@ -414,7 +414,7 @@ export function useDurableList<T>(
     ctx,
     stateName,
     "list",
-    "__tsva_durablelist$",
+    "__thresh_durablelist$",
     "durable list",
     options,
   );
@@ -448,7 +448,7 @@ export function useDurableQueue<T>(
     ctx,
     stateName,
     "queue",
-    "__tsva_durablequeue$",
+    "__thresh_durablequeue$",
     "durable queue",
     options,
   );
@@ -480,7 +480,7 @@ export function useDurableSet<T>(
     ctx,
     stateName,
     "set",
-    "__tsva_durableset$",
+    "__thresh_durableset$",
     "durable set",
     options,
   );

@@ -1,8 +1,8 @@
 import type {
   PendingTransactionState,
   TransactionalStateMetadata,
-} from "@tsva/core/transactional-storage";
-import { decodeValue, encodeValue } from "@tsva/core/value-codec";
+} from "@thresh/core/transactional-storage";
+import { decodeValue, encodeValue } from "@thresh/core/value-codec";
 
 /** The durable record a transactional-storage provider keeps per (grain, state). */
 export interface StoredRecord<T> {

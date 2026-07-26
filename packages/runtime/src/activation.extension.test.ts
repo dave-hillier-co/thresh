@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { GrainExtensionNotInstalledException } from "@tsva/core/errors";
-import { Grain } from "@tsva/core/grain";
-import { GrainId } from "@tsva/core/grain-id";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { InvocationRequest } from "@tsva/core/request";
-import { ActivationData } from "@tsva/runtime/activation";
-import { FakeTimeProvider } from "@tsva/runtime/test-support/fake-time-provider";
+import { GrainExtensionNotInstalledException } from "@thresh/core/errors";
+import { Grain } from "@thresh/core/grain";
+import { GrainId } from "@thresh/core/grain-id";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { InvocationRequest } from "@thresh/core/request";
+import { ActivationData } from "@thresh/runtime/activation";
+import { FakeTimeProvider } from "@thresh/runtime/test-support/fake-time-provider";
 
 /** A trivial `GrainExtension` interface — an orthogonal method surface. */
 interface ITestExtension {

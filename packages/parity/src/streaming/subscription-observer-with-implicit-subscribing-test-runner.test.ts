@@ -12,7 +12,7 @@
 // [SkippableFact] methods ever runs as part of Orleans.Streaming.Tests
 // itself, so there is nothing to port here.
 import { it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 const REASON =
   "abstract runner has no concrete subclass within Orleans.Streaming.Tests; only driven by out-of-scope AdoNet/Azure/Redis/EventHubs backend test projects";

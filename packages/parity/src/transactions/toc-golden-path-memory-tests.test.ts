@@ -6,7 +6,7 @@
 // it is permanently disabled upstream pending that issue and never runs
 // against the real Orleans transaction commit-service (TOC) protocol.
 import { it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 orleansTest.excluded(
   "skipped upstream: SkippableTheory(Skip) pending dotnet/orleans#9556",

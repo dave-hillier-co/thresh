@@ -15,9 +15,9 @@
 // provides — and that API validates lazily by design (Orleans parity for
 // `AsReference`/`Cast`, exercised by the sibling file's FailSideCast* tests).
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
-import { castGrainReference } from "@tsva/core/grain-reference";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
+import { castGrainReference } from "@thresh/core/grain-reference";
 import {
   IMultifacetFactoryTestGrain,
   IMultifacetReader,
@@ -25,8 +25,8 @@ import {
   IMultifacetWriter,
   MultifacetFactoryTestGrain,
   MultifacetTestGrain,
-} from "@tsva/parity/grains/impl/multifacet-grain";
-import { randomIntegerKey } from "@tsva/parity/support/keys";
+} from "@thresh/parity/grains/impl/multifacet-grain";
+import { randomIntegerKey } from "@thresh/parity/support/keys";
 
 describe("DefaultCluster.Tests.General.MultifacetGrainTest", () => {
   let cluster: TestCluster;

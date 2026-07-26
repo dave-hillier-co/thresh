@@ -11,10 +11,10 @@
 // constructor DI, so the plugin instead exposes an `@exampleStorage` FIELD
 // decorator — a thin wrapper around `@grainFacet` — bound by the same
 // activator that binds `@persistentState`/`@reducerState` fields.
-import type { GrainId } from "@tsva/core/grain-id";
-import { grainFacet } from "@tsva/core/decorators";
-import type { GrainFacetFactory } from "@tsva/persistence/grain-facet-registry";
-import type { SiloBuilder } from "@tsva/hosting/silo-builder";
+import type { GrainId } from "@thresh/core/grain-id";
+import { grainFacet } from "@thresh/core/decorators";
+import type { GrainFacetFactory } from "@thresh/persistence/grain-facet-registry";
+import type { SiloBuilder } from "@thresh/hosting/silo-builder";
 
 /** The facet family name `addGrainFacetFactory`/`@grainFacet` namespace this plugin's providers under. */
 export const EXAMPLE_STORAGE_KIND = "exampleStorage";

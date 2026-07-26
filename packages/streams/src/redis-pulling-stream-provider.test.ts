@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { createClient } from "redis";
-import type { StreamFailureHandler } from "@tsva/streams/queue-pulling-agent";
-import { RedisPullingStreamProvider } from "@tsva/streams/redis-pulling-stream-provider";
+import type { StreamFailureHandler } from "@thresh/streams/queue-pulling-agent";
+import { RedisPullingStreamProvider } from "@thresh/streams/redis-pulling-stream-provider";
 
 const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
 type Client = ReturnType<typeof createClient>;
@@ -33,7 +33,7 @@ async function waitFor(predicate: () => boolean, timeoutMs = 4000): Promise<void
 }
 
 const client = await reachable(REDIS_URL);
-const prefix = `tsva-test:redis-pulling:${randomUUID()}`;
+const prefix = `thresh-test:redis-pulling:${randomUUID()}`;
 
 describe.skipIf(client === undefined)("RedisPullingStreamProvider", () => {
   it("forwards the failureHandler option to every queue's pulling agent", async () => {

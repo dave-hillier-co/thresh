@@ -69,7 +69,7 @@ export interface GrainRuntime {
    * applies (Orleans has no analogue — JS-only cooperative cancellation; see
    * `docs/deviations.md`). Composed from whatever of these are in play: the
    * caller's `InvokeCallOptions.signal`/per-call deadline
-   * (`@tsva/runtime/dispatcher`) and any `GrainCancellationToken` bound
+   * (`@thresh/runtime/dispatcher`) and any `GrainCancellationToken` bound
    * during this call. Aborting it does NOT stop an already-started turn — JS
    * has no thread interruption — so this is for grain code that wants to
    * observe cancellation cooperatively mid-turn (e.g. pass it to a
@@ -93,7 +93,7 @@ export interface GrainRuntime {
    * .Fork()`). Marks the transaction as having an outstanding "orphaned" call
    * so its root boundary aborts rather than commits if that call is never
    * matched by a completion — see `TransactionOrphanCallError`
-   * (`@tsva/core/errors`). Throws if no transaction is ambient.
+   * (`@thresh/core/errors`). Throws if no transaction is ambient.
    */
   forkTransaction(): void;
   /**
@@ -143,7 +143,7 @@ export interface GrainRuntime {
    * Get a per-silo grain-service instance by the name it was registered
    * under (Orleans `GrainServiceClient<T>.GetGrainService`, simplified to
    * same-silo resolution — see `GrainService`'s doc in
-   * `@tsva/runtime/grain-service` for the ring-ownership deviation this
+   * `@thresh/runtime/grain-service` for the ring-ownership deviation this
    * implies). Throws if no grain service was registered under `name` on this
    * silo.
    */

@@ -1,5 +1,5 @@
-import type { DurableStateMachine, StateMachineManager } from "@tsva/core/durable-state-machine";
-import type { DurableValue } from "@tsva/core/durable-state";
+import type { DurableStateMachine, StateMachineManager } from "@thresh/core/durable-state-machine";
+import type { DurableValue } from "@thresh/core/durable-state";
 
 type ValueOp<T> = { t: "set"; v: T } | { t: "clear" };
 

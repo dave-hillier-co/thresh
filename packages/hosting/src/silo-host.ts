@@ -1,20 +1,20 @@
-import type { GrainId } from "@tsva/core/grain-id";
-import type { GrainInterface } from "@tsva/core/grain-interface";
-import type { GrainKeyFor } from "@tsva/core/key-kinds";
-import type { MembershipService } from "@tsva/core/membership";
-import type { StreamProvider } from "@tsva/core/stream";
-import type { GrainDirectory } from "@tsva/directory/grain-directory";
-import type { ClusterNode } from "@tsva/runtime/cluster-node";
-import type { SiloLoadSheddingTestHooks } from "@tsva/runtime/load-shedding";
+import type { GrainId } from "@thresh/core/grain-id";
+import type { GrainInterface } from "@thresh/core/grain-interface";
+import type { GrainKeyFor } from "@thresh/core/key-kinds";
+import type { MembershipService } from "@thresh/core/membership";
+import type { StreamProvider } from "@thresh/core/stream";
+import type { GrainDirectory } from "@thresh/directory/grain-directory";
+import type { ClusterNode } from "@thresh/runtime/cluster-node";
+import type { SiloLoadSheddingTestHooks } from "@thresh/runtime/load-shedding";
 import type {
   ActivationRebalancerWorker,
   RebalancerReportListener,
-} from "@tsva/runtime/placement/rebalancing/rebalancer-worker";
-import type { RebalancingReport } from "@tsva/runtime/placement/rebalancing/rebalancing-report";
-import type { Edge } from "@tsva/runtime/placement/repartitioning/edge";
-import { GracefulShutdown } from "@tsva/hosting/graceful-shutdown";
-import type { HealthCheck } from "@tsva/hosting/health-check";
-import type { HealthServer } from "@tsva/hosting/health-server";
+} from "@thresh/runtime/placement/rebalancing/rebalancer-worker";
+import type { RebalancingReport } from "@thresh/runtime/placement/rebalancing/rebalancing-report";
+import type { Edge } from "@thresh/runtime/placement/repartitioning/edge";
+import { GracefulShutdown } from "@thresh/hosting/graceful-shutdown";
+import type { HealthCheck } from "@thresh/hosting/health-check";
+import type { HealthServer } from "@thresh/hosting/health-server";
 
 /** The reminder service the host drives (a `LocalReminderService`). */
 export interface ReminderService {

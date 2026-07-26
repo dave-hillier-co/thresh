@@ -1,5 +1,5 @@
-import type { RedisClient } from "@tsva/streams/redis-stream-queue";
-import type { StreamCursorStore } from "@tsva/streams/stream-cursor-store";
+import type { RedisClient } from "@thresh/streams/redis-stream-queue";
+import type { StreamCursorStore } from "@thresh/streams/stream-cursor-store";
 
 /**
  * `StreamCursorStore` backed by a plain Redis key per `(provider, queueIdx)`,
@@ -12,7 +12,7 @@ import type { StreamCursorStore } from "@tsva/streams/stream-cursor-store";
 export class RedisStreamCursorStore implements StreamCursorStore {
   constructor(
     private readonly client: RedisClient,
-    private readonly keyPrefix = "tsva",
+    private readonly keyPrefix = "thresh",
   ) {}
 
   private key(provider: string, queueIdx: number): string {

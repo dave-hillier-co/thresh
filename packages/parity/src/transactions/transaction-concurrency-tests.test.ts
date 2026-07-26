@@ -9,7 +9,7 @@
 // — all three are permanently disabled upstream pending that issue and never
 // run against the real Orleans transaction concurrency machinery.
 import { it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 const SKIP_REASON = "skipped upstream: SkippableTheory(Skip) pending dotnet/orleans#9554";
 

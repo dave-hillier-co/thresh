@@ -4,8 +4,8 @@ import {
   executeWithRetries,
   fixedBackoff,
   INFINITE_RETRIES,
-} from "@tsva/core/async-executor-with-retries";
-import { FakeTimeProvider } from "@tsva/core/test-support/fake-time-provider";
+} from "@thresh/core/async-executor-with-retries";
+import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
 
 /**
  * Pumps the microtask queue and advances `time` in lockstep until `promise`

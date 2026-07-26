@@ -1,4 +1,4 @@
-import { systemTimeProvider, type TimeProvider } from "@tsva/core/time-provider";
+import { systemTimeProvider, type TimeProvider } from "@thresh/core/time-provider";
 
 /**
  * Options for transaction-rate load shedding (Orleans

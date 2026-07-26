@@ -1,10 +1,10 @@
 // Ported from dotnet/orleans test/Orleans.EventSourcing.Tests/EventSourcingTests/PersonGrainTests.cs @ v10.1.0 (MIT).
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
-import { IPersonGrain, PersonGrain } from "@tsva/parity/grains/impl/person-grain";
-import { Guid } from "@tsva/core/guid";
-import { randomGuidKey } from "@tsva/parity/support/keys";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
+import { IPersonGrain, PersonGrain } from "@thresh/parity/grains/impl/person-grain";
+import { Guid } from "@thresh/core/guid";
+import { randomGuidKey } from "@thresh/parity/support/keys";
 
 describe("Tester.EventSourcingTests.PersonGrainTests", () => {
   let cluster: TestCluster;

@@ -1,6 +1,6 @@
 // Ported from dotnet/orleans test/Orleans.Runtime.Tests/ClientConnectionTests/InvalidPreambleConnectionTests.cs @ v10.1.0 (MIT).
 import { describe, it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 describe("Tester.ClientConnectionTests.InvalidPreambleConnectionTests", () => {
   // Opens a raw TCP socket to the gateway endpoint and sends an oversized

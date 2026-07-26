@@ -10,14 +10,14 @@
 // `OverloadDetector` this silo's gateway path (`ClusterNode.receiveRequest`)
 // consults before dispatching a client-originated request.
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { GatewayTooBusyException } from "@tsva/core/errors";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
-import type { ClientNode } from "@tsva/client/client-node";
-import { SimpleGrain } from "@tsva/parity/grains/impl/simple-grain";
-import { ISimpleGrain } from "@tsva/parity/grains/interfaces/simple-grain-interfaces";
-import { createClusterClient } from "@tsva/parity/support/client";
-import { randomIntegerKey } from "@tsva/parity/support/keys";
+import { GatewayTooBusyException } from "@thresh/core/errors";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
+import type { ClientNode } from "@thresh/client/client-node";
+import { SimpleGrain } from "@thresh/parity/grains/impl/simple-grain";
+import { ISimpleGrain } from "@thresh/parity/grains/interfaces/simple-grain-interfaces";
+import { createClusterClient } from "@thresh/parity/support/client";
+import { randomIntegerKey } from "@thresh/parity/support/keys";
 
 const CPU_THRESHOLD = 98;
 

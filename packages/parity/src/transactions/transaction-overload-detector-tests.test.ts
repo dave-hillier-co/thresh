@@ -6,19 +6,19 @@
 // overloaded, then asserts the achieved admission rate lands within +/-10% of
 // the configured limit. The detector is entirely clock-driven (a decaying
 // transactions-per-second estimate snapshotted every 15s — see
-// `@tsva/transactions/transaction-overload-detector`), so it reproduces
+// `@thresh/transactions/transaction-overload-detector`), so it reproduces
 // deterministically under a `FakeTimeProvider`: the busy loop is simulated by
 // advancing virtual time a fixed slice per iteration, offering far more
 // opportunities per second than any limit so the detector — not the loop — is
 // the throttle. No real time passes.
 import { describe, expect } from "vitest";
-import { FakeTimeProvider } from "@tsva/core/test-support/fake-time-provider";
+import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
 import {
   DEFAULT_TRANSACTION_RATE_LIMIT,
   TransactionAgentStatisticsImpl,
   TransactionOverloadDetector,
-} from "@tsva/transactions/transaction-overload-detector";
-import { orleansTest } from "@tsva/testing/orleans-test";
+} from "@thresh/transactions/transaction-overload-detector";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 // One iteration of virtual time. At 0.1ms/iteration the loop offers 10,000
 // starts per simulated second — well above every limit under test, so the

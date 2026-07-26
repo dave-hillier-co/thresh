@@ -1,12 +1,12 @@
 // Ported from dotnet/orleans test/Grains/TestGrains/RoundtripSerializationGrain.cs @ v10.1.0 (MIT).
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
 import type {
   CampaignEnemyTestType,
   ParamVal,
   RetVal,
-} from "@tsva/parity/grains/interfaces/roundtrip-serialization-grain-interfaces";
-import { IRoundtripSerializationGrain } from "@tsva/parity/grains/interfaces/roundtrip-serialization-grain-interfaces";
+} from "@thresh/parity/grains/interfaces/roundtrip-serialization-grain-interfaces";
+import { IRoundtripSerializationGrain } from "@thresh/parity/grains/interfaces/roundtrip-serialization-grain-interfaces";
 
 export { IRoundtripSerializationGrain };
 

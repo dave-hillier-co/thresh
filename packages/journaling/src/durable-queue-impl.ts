@@ -1,5 +1,5 @@
-import type { DurableStateMachine, StateMachineManager } from "@tsva/core/durable-state-machine";
-import type { DurableQueue } from "@tsva/core/durable-state";
+import type { DurableStateMachine, StateMachineManager } from "@thresh/core/durable-state-machine";
+import type { DurableQueue } from "@thresh/core/durable-state";
 
 type QueueOp<T> = { t: "enq"; v: T } | { t: "deq" } | { t: "clear" } | { t: "load"; items: T[] };
 

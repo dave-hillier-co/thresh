@@ -1,8 +1,8 @@
 // Ported from dotnet/orleans test/Grains/TestInternalGrains/ErrorGrain.cs @ v10.1.0 (MIT).
 // Trimmed to the members IErrorGrain declares (see error-grain-interfaces.ts).
-import { grain } from "@tsva/core/decorators";
-import { SimpleGrain } from "@tsva/parity/grains/impl/simple-grain";
-import { IErrorGrain } from "@tsva/parity/grains/interfaces/error-grain-interfaces";
+import { grain } from "@thresh/core/decorators";
+import { SimpleGrain } from "@thresh/parity/grains/impl/simple-grain";
+import { IErrorGrain } from "@thresh/parity/grains/interfaces/error-grain-interfaces";
 
 export { IErrorGrain };
 

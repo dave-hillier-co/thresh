@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Guid } from "@tsva/core/guid";
+import { Guid } from "@thresh/core/guid";
 
 describe("Guid", () => {
   it("round-trips through its string form", () => {

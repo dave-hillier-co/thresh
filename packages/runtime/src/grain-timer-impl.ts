@@ -1,6 +1,6 @@
-import { durationToMs, type Duration } from "@tsva/core/duration";
-import type { GrainTimer } from "@tsva/core/grain-timer";
-import type { TimeProvider, TimerHandle } from "@tsva/runtime/time-provider";
+import { durationToMs, type Duration } from "@thresh/core/duration";
+import type { GrainTimer } from "@thresh/core/grain-timer";
+import type { TimeProvider, TimerHandle } from "@thresh/runtime/time-provider";
 
 // Mirrors Orleans' `TimerQueueTimer.ValidateArguments` (see
 // src/Orleans.Runtime/Timers/GrainTimer.cs @ v10.1.0), which in turn matches the

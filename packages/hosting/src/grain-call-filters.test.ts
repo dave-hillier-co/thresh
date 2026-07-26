@@ -1,18 +1,18 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { grain } from "@tsva/core/decorators";
-import { defineGrain } from "@tsva/core/define-grain";
-import { Grain } from "@tsva/core/grain";
+import { grain } from "@thresh/core/decorators";
+import { defineGrain } from "@thresh/core/define-grain";
+import { Grain } from "@thresh/core/grain";
 import {
   INCOMING_CALL_FILTER,
   type IncomingGrainCallContext,
   type IncomingGrainCallFilter,
   type OutgoingGrainCallFilter,
-} from "@tsva/core/grain-call-filter";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithStringKey } from "@tsva/core/key-kinds";
-import { SiloAddress } from "@tsva/core/silo-address";
-import { InProcessNetwork } from "@tsva/messaging/in-process-transport";
-import { createSilo } from "@tsva/hosting/silo-builder";
+} from "@thresh/core/grain-call-filter";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import { SiloAddress } from "@thresh/core/silo-address";
+import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
+import { createSilo } from "@thresh/hosting/silo-builder";
 
 interface Greeter extends GrainWithStringKey {
   greet(name: string): Promise<string>;

@@ -59,125 +59,125 @@ importers:
 
   examples/bank:
     dependencies:
-      '@tsva/core':
+      '@thresh/core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@tsva/hosting':
+      '@thresh/hosting':
         specifier: workspace:*
         version: link:../../packages/hosting
-      '@tsva/messaging':
+      '@thresh/messaging':
         specifier: workspace:*
         version: link:../../packages/messaging
-      '@tsva/persistence':
+      '@thresh/persistence':
         specifier: workspace:*
         version: link:../../packages/persistence
 
   examples/broadcast:
     dependencies:
-      '@tsva/core':
+      '@thresh/core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@tsva/hosting':
+      '@thresh/hosting':
         specifier: workspace:*
         version: link:../../packages/hosting
-      '@tsva/messaging':
+      '@thresh/messaging':
         specifier: workspace:*
         version: link:../../packages/messaging
 
   examples/chat:
     dependencies:
-      '@tsva/core':
+      '@thresh/core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@tsva/hosting':
+      '@thresh/hosting':
         specifier: workspace:*
         version: link:../../packages/hosting
-      '@tsva/messaging':
+      '@thresh/messaging':
         specifier: workspace:*
         version: link:../../packages/messaging
 
   examples/cluster:
     dependencies:
-      '@tsva/core':
+      '@thresh/core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@tsva/hosting':
+      '@thresh/hosting':
         specifier: workspace:*
         version: link:../../packages/hosting
-      '@tsva/messaging':
+      '@thresh/messaging':
         specifier: workspace:*
         version: link:../../packages/messaging
-      '@tsva/runtime':
+      '@thresh/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
 
   examples/greeter:
     dependencies:
-      '@tsva/core':
+      '@thresh/core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@tsva/hosting':
+      '@thresh/hosting':
         specifier: workspace:*
         version: link:../../packages/hosting
-      '@tsva/messaging':
+      '@thresh/messaging':
         specifier: workspace:*
         version: link:../../packages/messaging
 
   examples/k8s-silo:
     dependencies:
-      '@tsva/clustering-k8s':
+      '@thresh/clustering-k8s':
         specifier: workspace:*
         version: link:../../packages/clustering-k8s
-      '@tsva/core':
+      '@thresh/core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@tsva/hosting':
+      '@thresh/hosting':
         specifier: workspace:*
         version: link:../../packages/hosting
-      '@tsva/messaging':
+      '@thresh/messaging':
         specifier: workspace:*
         version: link:../../packages/messaging
 
   examples/migration:
     dependencies:
-      '@tsva/core':
+      '@thresh/core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@tsva/hosting':
+      '@thresh/hosting':
         specifier: workspace:*
         version: link:../../packages/hosting
-      '@tsva/messaging':
+      '@thresh/messaging':
         specifier: workspace:*
         version: link:../../packages/messaging
-      '@tsva/persistence':
+      '@thresh/persistence':
         specifier: workspace:*
         version: link:../../packages/persistence
 
   examples/thermostat:
     dependencies:
-      '@tsva/core':
+      '@thresh/core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@tsva/hosting':
+      '@thresh/hosting':
         specifier: workspace:*
         version: link:../../packages/hosting
-      '@tsva/messaging':
+      '@thresh/messaging':
         specifier: workspace:*
         version: link:../../packages/messaging
 
   packages/client:
     dependencies:
-      '@tsva/core':
+      '@thresh/core':
         specifier: workspace:*
         version: link:../core
-      '@tsva/messaging':
+      '@thresh/messaging':
         specifier: workspace:*
         version: link:../messaging
-      '@tsva/runtime':
+      '@thresh/runtime':
         specifier: workspace:*
         version: link:../runtime
     devDependencies:
-      '@tsva/testing':
+      '@thresh/testing':
         specifier: workspace:*
         version: link:../testing
 
@@ -186,7 +186,7 @@ importers:
       '@kubernetes/client-node':
         specifier: ^1.4.0
         version: 1.4.0
-      '@tsva/core':
+      '@thresh/core':
         specifier: workspace:*
         version: link:../core
 
@@ -194,19 +194,19 @@ importers:
 
   packages/directory:
     dependencies:
-      '@tsva/core':
+      '@thresh/core':
         specifier: workspace:*
         version: link:../core
-      '@tsva/observability':
+      '@thresh/observability':
         specifier: workspace:*
         version: link:../observability
 
   packages/durable-jobs:
     dependencies:
-      '@tsva/core':
+      '@thresh/core':
         specifier: workspace:*
         version: link:../core
-      '@tsva/observability':
+      '@thresh/observability':
         specifier: workspace:*
         version: link:../observability
       redis:
@@ -215,43 +215,43 @@ importers:
 
   packages/hosting:
     dependencies:
-      '@tsva/client':
+      '@thresh/client':
         specifier: workspace:*
         version: link:../client
-      '@tsva/clustering-k8s':
+      '@thresh/clustering-k8s':
         specifier: workspace:*
         version: link:../clustering-k8s
-      '@tsva/core':
+      '@thresh/core':
         specifier: workspace:*
         version: link:../core
-      '@tsva/directory':
+      '@thresh/directory':
         specifier: workspace:*
         version: link:../directory
-      '@tsva/durable-jobs':
+      '@thresh/durable-jobs':
         specifier: workspace:*
         version: link:../durable-jobs
-      '@tsva/journaling':
+      '@thresh/journaling':
         specifier: workspace:*
         version: link:../journaling
-      '@tsva/messaging':
+      '@thresh/messaging':
         specifier: workspace:*
         version: link:../messaging
-      '@tsva/observability':
+      '@thresh/observability':
         specifier: workspace:*
         version: link:../observability
-      '@tsva/persistence':
+      '@thresh/persistence':
         specifier: workspace:*
         version: link:../persistence
-      '@tsva/reminders':
+      '@thresh/reminders':
         specifier: workspace:*
         version: link:../reminders
-      '@tsva/runtime':
+      '@thresh/runtime':
         specifier: workspace:*
         version: link:../runtime
-      '@tsva/streams':
+      '@thresh/streams':
         specifier: workspace:*
         version: link:../streams
-      '@tsva/transactions':
+      '@thresh/transactions':
         specifier: workspace:*
         version: link:../transactions
       kafkajs:
@@ -264,13 +264,13 @@ importers:
         specifier: ^5.12.1
         version: 5.12.1(@opentelemetry/api@1.9.1)
     devDependencies:
-      '@tsva/testing':
+      '@thresh/testing':
         specifier: workspace:*
         version: link:../testing
 
   packages/journaling:
     dependencies:
-      '@tsva/core':
+      '@thresh/core':
         specifier: workspace:*
         version: link:../core
       redis:
@@ -282,10 +282,10 @@ importers:
       '@msgpack/msgpack':
         specifier: ^3.1.3
         version: 3.1.3
-      '@tsva/core':
+      '@thresh/core':
         specifier: workspace:*
         version: link:../core
-      '@tsva/observability':
+      '@thresh/observability':
         specifier: workspace:*
         version: link:../observability
       ws:
@@ -304,7 +304,7 @@ importers:
       '@opentelemetry/core':
         specifier: ^2.7.1
         version: 2.7.1(@opentelemetry/api@1.9.1)
-      '@tsva/core':
+      '@thresh/core':
         specifier: workspace:*
         version: link:../core
 
@@ -322,37 +322,37 @@ importers:
       '@opentelemetry/sdk-trace-base':
         specifier: ^2.7.1
         version: 2.7.1(@opentelemetry/api@1.9.1)
-      '@tsva/client':
+      '@thresh/client':
         specifier: workspace:*
         version: link:../client
-      '@tsva/core':
+      '@thresh/core':
         specifier: workspace:*
         version: link:../core
-      '@tsva/directory':
+      '@thresh/directory':
         specifier: workspace:*
         version: link:../directory
-      '@tsva/durable-jobs':
+      '@thresh/durable-jobs':
         specifier: workspace:*
         version: link:../durable-jobs
-      '@tsva/hosting':
+      '@thresh/hosting':
         specifier: workspace:*
         version: link:../hosting
-      '@tsva/messaging':
+      '@thresh/messaging':
         specifier: workspace:*
         version: link:../messaging
-      '@tsva/observability':
+      '@thresh/observability':
         specifier: workspace:*
         version: link:../observability
-      '@tsva/runtime':
+      '@thresh/runtime':
         specifier: workspace:*
         version: link:../runtime
-      '@tsva/streams':
+      '@thresh/streams':
         specifier: workspace:*
         version: link:../streams
-      '@tsva/testing':
+      '@thresh/testing':
         specifier: workspace:*
         version: link:../testing
-      '@tsva/transactions':
+      '@thresh/transactions':
         specifier: workspace:*
         version: link:../transactions
     devDependencies:
@@ -365,10 +365,10 @@ importers:
       '@opentelemetry/api':
         specifier: ^1.9.1
         version: 1.9.1
-      '@tsva/core':
+      '@thresh/core':
         specifier: workspace:*
         version: link:../core
-      '@tsva/observability':
+      '@thresh/observability':
         specifier: workspace:*
         version: link:../observability
       pg:
@@ -380,10 +380,10 @@ importers:
 
   packages/reminders:
     dependencies:
-      '@tsva/core':
+      '@thresh/core':
         specifier: workspace:*
         version: link:../core
-      '@tsva/observability':
+      '@thresh/observability':
         specifier: workspace:*
         version: link:../observability
       pg:
@@ -398,29 +398,29 @@ importers:
       '@opentelemetry/api':
         specifier: ^1.9.1
         version: 1.9.1
-      '@tsva/core':
+      '@thresh/core':
         specifier: workspace:*
         version: link:../core
-      '@tsva/directory':
+      '@thresh/directory':
         specifier: workspace:*
         version: link:../directory
-      '@tsva/messaging':
+      '@thresh/messaging':
         specifier: workspace:*
         version: link:../messaging
-      '@tsva/observability':
+      '@thresh/observability':
         specifier: workspace:*
         version: link:../observability
     devDependencies:
-      '@tsva/testing':
+      '@thresh/testing':
         specifier: workspace:*
         version: link:../testing
 
   packages/streams:
     dependencies:
-      '@tsva/core':
+      '@thresh/core':
         specifier: workspace:*
         version: link:../core
-      '@tsva/observability':
+      '@thresh/observability':
         specifier: workspace:*
         version: link:../observability
       kafkajs:
@@ -435,34 +435,34 @@ importers:
 
   packages/testing:
     dependencies:
-      '@tsva/core':
+      '@thresh/core':
         specifier: workspace:*
         version: link:../core
-      '@tsva/durable-jobs':
+      '@thresh/durable-jobs':
         specifier: workspace:*
         version: link:../durable-jobs
-      '@tsva/hosting':
+      '@thresh/hosting':
         specifier: workspace:*
         version: link:../hosting
-      '@tsva/journaling':
+      '@thresh/journaling':
         specifier: workspace:*
         version: link:../journaling
-      '@tsva/messaging':
+      '@thresh/messaging':
         specifier: workspace:*
         version: link:../messaging
-      '@tsva/persistence':
+      '@thresh/persistence':
         specifier: workspace:*
         version: link:../persistence
-      '@tsva/reminders':
+      '@thresh/reminders':
         specifier: workspace:*
         version: link:../reminders
-      '@tsva/runtime':
+      '@thresh/runtime':
         specifier: workspace:*
         version: link:../runtime
-      '@tsva/streams':
+      '@thresh/streams':
         specifier: workspace:*
         version: link:../streams
-      '@tsva/transactions':
+      '@thresh/transactions':
         specifier: workspace:*
         version: link:../transactions
     devDependencies:
@@ -472,10 +472,10 @@ importers:
 
   packages/transactions:
     dependencies:
-      '@tsva/core':
+      '@thresh/core':
         specifier: workspace:*
         version: link:../core
-      '@tsva/runtime':
+      '@thresh/runtime':
         specifier: workspace:*
         version: link:../runtime
 

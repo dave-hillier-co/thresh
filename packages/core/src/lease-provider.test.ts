@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { InMemoryLeaseProvider } from "@tsva/core/lease-provider";
-import { FakeTimeProvider } from "@tsva/core/test-support/fake-time-provider";
+import { InMemoryLeaseProvider } from "@thresh/core/lease-provider";
+import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
 
 describe("InMemoryLeaseProvider", () => {
   it("lets another caller acquire once the lease has expired", async () => {

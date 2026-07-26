@@ -1,7 +1,7 @@
 // Ported from dotnet/orleans test/Orleans.Runtime.Tests/LocalhostSiloTests.cs @ v10.1.0 (MIT).
 // (Upstream class is `Tester.LocalhostClusterTests`, despite the file name.)
 import { describe, it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 describe("Tester.LocalhostClusterTests", () => {
   // Both tests build raw `HostBuilder().UseOrleans(...)`/`UseOrleansClient(...)`

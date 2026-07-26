@@ -14,9 +14,9 @@
 // activation by default — so these 3 are un-gapped onto a plain
 // `@mayInterleave()` grain rather than left blocked on GAP-STATELESS-WORKER.
 import { afterAll, beforeAll, beforeEach, describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
-import { randomIntegerKey } from "@tsva/parity/support/keys";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
+import { randomIntegerKey } from "@thresh/parity/support/keys";
 import {
   IMayInterleaveGrain,
   MayInterleaveGrain,
@@ -24,11 +24,11 @@ import {
   mayInterleaveStartedTags,
   releaseMayInterleaveCalls,
   resetMayInterleaveTestState,
-} from "@tsva/parity/grains/impl/may-interleave-grain";
+} from "@thresh/parity/grains/impl/may-interleave-grain";
 import {
   IStatelessWorkerGrain,
   StatelessWorkerGrain,
-} from "@tsva/parity/grains/impl/stateless-worker-grain";
+} from "@thresh/parity/grains/impl/stateless-worker-grain";
 
 /** Flush pending microtasks/macrotasks so any admitted-but-not-yet-observed turn gets a chance to start. */
 const flush = () => new Promise((r) => setTimeout(r, 0));

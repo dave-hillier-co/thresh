@@ -1,5 +1,5 @@
-import type { SiloAddress } from "@tsva/core/silo-address";
-import type { GatewayListProvider } from "@tsva/client/gateway-provider";
+import type { SiloAddress } from "@thresh/core/silo-address";
+import type { GatewayListProvider } from "@thresh/client/gateway-provider";
 
 /**
  * Tracks the live gateways a client may use and hands them out round-robin

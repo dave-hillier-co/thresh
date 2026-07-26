@@ -1,4 +1,4 @@
-import type { TimeProvider } from "@tsva/core/time-provider";
+import type { TimeProvider } from "@thresh/core/time-provider";
 
 /**
  * An `AbortSignal` that fires once `deadlineMs` (absolute epoch ms) passes,

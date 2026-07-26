@@ -11,7 +11,7 @@ import { SiloAddress } from "./silo-address";
 // Tag key for the plain, transport-safe form of a runtime value type. The JSON
 // and MessagePack serializers and the durable providers share this
 // transformation so what they can represent stays identical.
-const T = "$tsva";
+const T = "$thresh";
 // Schema-version key, carried alongside `T` on every tagged envelope. Bumping
 // it (per tag, if a tag's wire shape ever needs to change) lets a decoder
 // distinguish old and new shapes during a rolling upgrade. Payloads produced
@@ -128,7 +128,7 @@ function encodeInner(value: unknown, seen: Set<unknown>, path: string): unknown 
   // A placeholder re-entering `encodeValue` (e.g. a call re-forwarded to
   // another silo, over a stale directory cache, before this silo ever bound
   // it to a live `GrainCancellationToken`) must re-tag with its wire shape —
-  // without this, the generic plain-object branch below strips the `$tsva`
+  // without this, the generic plain-object branch below strips the `$thresh`
   // tag (only `tokenId`/`cancelled` survive as bare own properties), and the
   // next hop's `decodeValue` can no longer recognise it as a cancellation
   // token, leaving the eventual callee with a signal-less plain object.

@@ -1,5 +1,5 @@
-import { defineGrain } from "@tsva/core/define-grain";
-import { CHAT, type ChatMessage, type IChatRoom } from "@tsva/example-chat/interfaces";
+import { defineGrain } from "@thresh/core/define-grain";
+import { CHAT, type ChatMessage, type IChatRoom } from "@thresh/example-chat/interfaces";
 
 /**
  * A chat room is a pure fan-out point: `say` publishes to the room's telemetry

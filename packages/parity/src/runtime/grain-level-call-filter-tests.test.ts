@@ -1,11 +1,11 @@
 // Ported from dotnet/orleans test/Orleans.Runtime.Tests/GrainLevelCallFilterTests.cs @ v10.1.0 (MIT).
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
 import {
   IMethodInterceptionGrain,
   MethodInterceptionGrain,
-} from "@tsva/parity/grains/impl/method-interception-grain";
+} from "@thresh/parity/grains/impl/method-interception-grain";
 
 describe("UnitTests.General.GrainLevelCallFilterTests", () => {
   let cluster: TestCluster;

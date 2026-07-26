@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { runThermostatDemo } from "@tsva/example-thermostat/demo";
+import { runThermostatDemo } from "@thresh/example-thermostat/demo";
 
 // Smoke test: runs the worked example end-to-end so it can't silently rot.
 describe("thermostat example", () => {

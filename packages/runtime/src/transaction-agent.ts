@@ -2,17 +2,17 @@ import {
   TransactionAbortedError,
   TransactionInDoubtError,
   TransactionOrphanCallError,
-} from "@tsva/core/errors";
-import { Guid } from "@tsva/core/guid";
+} from "@thresh/core/errors";
+import { Guid } from "@thresh/core/guid";
 import type {
   EnlistedParticipant,
   ParticipantId,
   TransactionInfo,
-} from "@tsva/core/transaction-info";
-import { TransactionResourceInterface } from "@tsva/core/transaction-resource";
-import { CausalClock } from "@tsva/runtime/causal-clock";
-import type { Dispatcher } from "@tsva/runtime/dispatcher";
-import type { TimeProvider } from "@tsva/runtime/time-provider";
+} from "@thresh/core/transaction-info";
+import { TransactionResourceInterface } from "@thresh/core/transaction-resource";
+import { CausalClock } from "@thresh/runtime/causal-clock";
+import type { Dispatcher } from "@thresh/runtime/dispatcher";
+import type { TimeProvider } from "@thresh/runtime/time-provider";
 
 /**
  * The per-silo transaction agent (Orleans `TransactionAgent`). It begins a
@@ -53,7 +53,7 @@ export class TransactionAgent {
   /** Commit the transaction across its participants, or abort all and throw. */
   async resolve(info: TransactionInfo): Promise<void> {
     // Orleans `TransactionInfo.MustAbort`: a call forked off this transaction
-    // (see `forkTransaction`, `@tsva/core/transaction-info`) that never
+    // (see `forkTransaction`, `@thresh/core/transaction-info`) that never
     // completed leaves the transaction's true read/write set unknowable, so it
     // may not commit — abort instead, even if it enlisted no participants at
     // all (an orphan fork with no other work still must not silently "succeed").

@@ -1,12 +1,12 @@
-import type { GrainType } from "@tsva/core/grain-type";
-import type { SiloAddress } from "@tsva/core/silo-address";
-import { roleMatchFilter } from "@tsva/runtime/placement/metadata-match-filter";
-import type { PlacementFilter } from "@tsva/runtime/placement/placement-filter";
+import type { GrainType } from "@thresh/core/grain-type";
+import type { SiloAddress } from "@thresh/core/silo-address";
+import { roleMatchFilter } from "@thresh/runtime/placement/metadata-match-filter";
+import type { PlacementFilter } from "@thresh/runtime/placement/placement-filter";
 import {
   pickRandom,
   type PlacementContext,
   type PlacementStrategy,
-} from "@tsva/runtime/placement/placement-strategy";
+} from "@thresh/runtime/placement/placement-strategy";
 
 /**
  * Places the grain on a silo advertising a given role (Orleans

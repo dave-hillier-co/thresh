@@ -1,15 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { transactionalState } from "@tsva/core/decorators";
-import { GrainId } from "@tsva/core/grain-id";
-import type { GrainType } from "@tsva/core/grain-type";
-import type { TimeProvider, TimerHandle } from "@tsva/core/time-provider";
-import type { TransactionalState } from "@tsva/core/transactional-state";
-import { MemoryTransactionalStorage } from "@tsva/transactions/memory-transactional-storage";
+import { transactionalState } from "@thresh/core/decorators";
+import { GrainId } from "@thresh/core/grain-id";
+import type { GrainType } from "@thresh/core/grain-type";
+import type { TimeProvider, TimerHandle } from "@thresh/core/time-provider";
+import type { TransactionalState } from "@thresh/core/transactional-state";
+import { MemoryTransactionalStorage } from "@thresh/transactions/memory-transactional-storage";
 import {
   bindTransactionalStates,
   unbindTransactionalStates,
-} from "@tsva/transactions/transactional-state-activator";
-import { TransactionalStorageRegistry } from "@tsva/transactions/transactional-storage-registry";
+} from "@thresh/transactions/transactional-state-activator";
+import { TransactionalStorageRegistry } from "@thresh/transactions/transactional-storage-registry";
 
 interface Balance {
   cents: number;

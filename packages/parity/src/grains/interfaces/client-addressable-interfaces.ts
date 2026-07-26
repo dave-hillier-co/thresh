@@ -8,8 +8,8 @@
 // client-hosted methods here are request/response: the grain awaits a
 // return value from the client object rather than firing-and-forgetting a
 // notification. None of these methods are one-way.
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithIntegerKey, GrainWithStringKey } from "@tsva/core/key-kinds";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithIntegerKey, GrainWithStringKey } from "@thresh/core/key-kinds";
 
 /** Client-hosted object a grain calls back into and awaits a result from. */
 export interface IClientAddressableTestClientObject extends GrainWithStringKey {

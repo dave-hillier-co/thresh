@@ -23,20 +23,20 @@
 // than matching upstream's silo count, and a 1-silo cluster removes any
 // cross-silo queue-ownership timing from the test.
 import { expect } from "vitest";
-import { grain, implicitStreamSubscription } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithStringKey } from "@tsva/core/key-kinds";
-import { IManagementGrain } from "@tsva/core/management-grain";
+import { grain, implicitStreamSubscription } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import { IManagementGrain } from "@thresh/core/management-grain";
 import {
   STREAM_GENERATOR_COMMAND_CONFIGURE,
   STREAM_SUBSCRIPTION_OBSERVER,
   type StreamHandler,
-} from "@tsva/core/stream";
-import type { GeneratedEvent } from "@tsva/streams/generator-stream-queue";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
-import { waitFor } from "@tsva/testing/wait";
+} from "@thresh/core/stream";
+import type { GeneratedEvent } from "@thresh/streams/generator-stream-queue";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
+import { waitFor } from "@thresh/testing/wait";
 
 const STREAM_PROVIDER_NAME = "GeneratedStreamProvider";
 const STREAM_NAMESPACE = "Generated";

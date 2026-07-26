@@ -2,24 +2,24 @@ import { randomUUID } from "node:crypto";
 import { Kafka } from "kafkajs";
 import { Pool } from "pg";
 import { afterAll, describe, expect, it } from "vitest";
-import { GrainId } from "@tsva/core/grain-id";
-import type { StreamFailureHandler } from "@tsva/streams/queue-pulling-agent";
-import { KafkaPullingStreamProvider } from "@tsva/streams/kafka-pulling-stream-provider";
-import { PostgresSubscriptionRegistry } from "@tsva/streams/postgres-subscription-registry";
-import { PostgresStreamCursorStore } from "@tsva/streams/postgres-stream-cursor-store";
-import { PostgresStreamFailureStore } from "@tsva/streams/postgres-stream-failure-store";
+import { GrainId } from "@thresh/core/grain-id";
+import type { StreamFailureHandler } from "@thresh/streams/queue-pulling-agent";
+import { KafkaPullingStreamProvider } from "@thresh/streams/kafka-pulling-stream-provider";
+import { PostgresSubscriptionRegistry } from "@thresh/streams/postgres-subscription-registry";
+import { PostgresStreamCursorStore } from "@thresh/streams/postgres-stream-cursor-store";
+import { PostgresStreamFailureStore } from "@thresh/streams/postgres-stream-failure-store";
 import {
   DurableStreamFailureHandler,
   type StreamDeliveryFailure,
-} from "@tsva/streams/stream-failure-store";
-import { StreamProviderConfigurationError } from "@tsva/streams/stream-provider-config-error";
+} from "@thresh/streams/stream-failure-store";
+import { StreamProviderConfigurationError } from "@thresh/streams/stream-provider-config-error";
 
 const KAFKA_BROKERS = process.env.KAFKA_BROKERS ?? "localhost:9092";
 const PG_URL = process.env.PG_URL ?? "postgres://localhost:5432/postgres";
 
 async function reachableKafka(): Promise<Kafka | undefined> {
   const kafka = new Kafka({
-    clientId: "tsva-test-kpsp",
+    clientId: "thresh-test-kpsp",
     brokers: [KAFKA_BROKERS],
     connectionTimeout: 2000,
     logLevel: 1,
@@ -59,7 +59,7 @@ async function waitFor(
 
 const [kafka, pool] = await Promise.all([reachableKafka(), reachablePostgres(PG_URL)]);
 const ready = kafka !== undefined && pool !== undefined;
-const prefix = `tsva_test_kpsp_${randomUUID().replace(/-/g, "")}`;
+const prefix = `thresh_test_kpsp_${randomUUID().replace(/-/g, "")}`;
 const createdTopics: string[] = [];
 
 /**
@@ -68,7 +68,7 @@ const createdTopics: string[] = [];
  * returns the `topicPrefix` to pass to the provider's constructor.
  */
 async function createTopic(name: string, numPartitions: number): Promise<string> {
-  const topicPrefix = `tsva_test_kpsp_${randomUUID().replace(/-/g, "")}`;
+  const topicPrefix = `thresh_test_kpsp_${randomUUID().replace(/-/g, "")}`;
   const topic = `${topicPrefix}.${name}`;
   const admin = kafka!.admin();
   await admin.connect();
@@ -298,7 +298,7 @@ describe.skipIf(!ready)("KafkaPullingStreamProvider", () => {
     const registry = new PostgresSubscriptionRegistry(pool!, prefix, name);
     const cursorStore = new PostgresStreamCursorStore(pool!, prefix);
     const provider = new KafkaPullingStreamProvider(kafka!, name, {
-      topicPrefix: "tsva.streams.nonexistent",
+      topicPrefix: "thresh.streams.nonexistent",
       queueCount: 1,
       registry,
       cursorStore,

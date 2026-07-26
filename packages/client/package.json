@@ -1,5 +1,5 @@
 {
-  "name": "@tsva/client",
+  "name": "@thresh/client",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -7,11 +7,11 @@
     "./*": "./src/*.ts"
   },
   "dependencies": {
-    "@tsva/core": "workspace:*",
-    "@tsva/messaging": "workspace:*",
-    "@tsva/runtime": "workspace:*"
+    "@thresh/core": "workspace:*",
+    "@thresh/messaging": "workspace:*",
+    "@thresh/runtime": "workspace:*"
   },
   "devDependencies": {
-    "@tsva/testing": "workspace:*"
+    "@thresh/testing": "workspace:*"
   }
 }

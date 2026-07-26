@@ -1,5 +1,5 @@
-import type { GrainType } from "@tsva/core/grain-type";
-import type { SiloAddress } from "@tsva/core/silo-address";
+import type { GrainType } from "@thresh/core/grain-type";
+import type { SiloAddress } from "@thresh/core/silo-address";
 
 /** Per-silo resource signals for load-aware placement; extensible with cpu/memory later. */
 export interface SiloResourceStats {

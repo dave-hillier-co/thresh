@@ -6,11 +6,11 @@
 // respecting the configured tolerance for "acceptable" remote calls, and that
 // re-triggering after convergence yields no further migrations.
 import { describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
-import { PLACEMENT_HINT_KEY, RequestContext } from "@tsva/core/request-context";
-import type { SiloAddress } from "@tsva/core/silo-address";
-import type { ImbalanceToleranceRule } from "@tsva/runtime/placement/repartitioning/activation-repartitioner";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
+import { PLACEMENT_HINT_KEY, RequestContext } from "@thresh/core/request-context";
+import type { SiloAddress } from "@thresh/core/silo-address";
+import type { ImbalanceToleranceRule } from "@thresh/runtime/placement/repartitioning/activation-repartitioner";
 import { E, F, IE, IF, IX, X } from "./custom-tolerance-tests-support";
 
 const TEST_TIMEOUT_MS = 20_000;

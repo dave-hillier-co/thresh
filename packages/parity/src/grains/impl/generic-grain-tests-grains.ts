@@ -1,12 +1,12 @@
 // Ported from dotnet/orleans test/Grains/TestGrains/GenericGrains.cs @ v10.1.0 (MIT)
 // (GrainWithNoProperties, GrainWithListFields only — see
 // generic-grain-tests-interfaces.ts).
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
 import {
   IGrainWithListFields,
   IGrainWithNoProperties,
-} from "@tsva/parity/grains/interfaces/generic-grain-tests-interfaces";
+} from "@thresh/parity/grains/interfaces/generic-grain-tests-interfaces";
 
 export { IGrainWithListFields, IGrainWithNoProperties };
 

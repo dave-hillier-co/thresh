@@ -1,6 +1,6 @@
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithStringKey } from "@tsva/core/key-kinds";
-import type { SiloAddress } from "@tsva/core/silo-address";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { SiloAddress } from "@thresh/core/silo-address";
 
 /**
  * A shopping cart whose live activation can be moved to another silo without

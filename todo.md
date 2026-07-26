@@ -1,6 +1,6 @@
 # todo
 
-Outstanding work is tracked as [GitHub issues](https://github.com/dave-hillier-co/ts-virtual-actors/issues);
+Outstanding work is tracked as [GitHub issues](https://github.com/dave-hillier-co/thresh/issues);
 this file is the index. See [`EPICS.md`](EPICS.md) for the status board and
 [`docs/deviations.md`](docs/deviations.md) for how the design differs from Orleans. Test-first,
 vertical slices (see [`CLAUDE.md`](CLAUDE.md)).
@@ -11,12 +11,12 @@ deadline API, keepalive unbind on deactivation, and full-facet `@readOnly` guard
 
 ## Beyond parity
 
-- [ ] [#38](https://github.com/dave-hillier-co/ts-virtual-actors/issues/38) Browser state
+- [ ] [#38](https://github.com/dave-hillier-co/thresh/issues/38) Browser state
       replication & browser-hosted grains (read-only live read-views first).
 
 ## Deferred
 
-- [ ] [#39](https://github.com/dave-hillier-co/ts-virtual-actors/issues/39) Additional stream
+- [ ] [#39](https://github.com/dave-hillier-co/thresh/issues/39) Additional stream
       backings behind the existing interfaces —
       [`docs/stream-backings-postgres-kafka.md`](docs/stream-backings-postgres-kafka.md). Phase 0
       (shared provider core), Phase 1 (Postgres backing, `addPostgresStreams`) and Phase 2 (Kafka

@@ -1,6 +1,6 @@
 // Ported from dotnet/orleans test/Orleans.Runtime.Tests/OneWayDeactivationTests.cs @ v10.1.0 (MIT).
 import { describe, it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 describe("UnitTests.General.OneWayDeactivationTests", () => {
   // Upstream injects a custom IGrainDirectoryCache (via

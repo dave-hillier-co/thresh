@@ -1,7 +1,7 @@
-import { RejectionError } from "@tsva/core/errors";
-import type { SiloAddress } from "@tsva/core/silo-address";
-import { recordMessageReceived } from "@tsva/observability/messaging-metrics";
-import type { Message } from "@tsva/messaging/message";
+import { RejectionError } from "@thresh/core/errors";
+import type { SiloAddress } from "@thresh/core/silo-address";
+import { recordMessageReceived } from "@thresh/observability/messaging-metrics";
+import type { Message } from "@thresh/messaging/message";
 import type {
   Connection,
   ConnectionAcceptHandler,
@@ -9,7 +9,7 @@ import type {
   Listener,
   MessageHandler,
   Transport,
-} from "@tsva/messaging/transport";
+} from "@thresh/messaging/transport";
 
 interface Endpoint {
   onMessage: MessageHandler;
@@ -60,8 +60,8 @@ export class InProcessTransport implements Transport {
     this.network.register({
       onMessage: (message, from) => {
         recordMessageReceived({
-          "tsva.peer": from.endpoint,
-          "tsva.message.direction": message.direction,
+          "thresh.peer": from.endpoint,
+          "thresh.message.direction": message.direction,
         });
         return onMessage(message, from);
       },

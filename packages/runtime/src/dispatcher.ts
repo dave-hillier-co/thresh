@@ -1,4 +1,4 @@
-import type { InvocationRequest } from "@tsva/core/request";
+import type { InvocationRequest } from "@thresh/core/request";
 
 /**
  * Local, per-call ambient cancellation for a `Dispatcher.invoke` — distinct

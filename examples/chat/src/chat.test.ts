@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { GrainId } from "@tsva/core/grain-id";
-import { SiloAddress } from "@tsva/core/silo-address";
-import { FakeTimeProvider } from "@tsva/core/test-support/fake-time-provider";
-import { InProcessNetwork } from "@tsva/messaging/in-process-transport";
-import { createSilo } from "@tsva/hosting/silo-builder";
-import type { SiloHost } from "@tsva/hosting/silo-host";
-import { ChatRoomGrain } from "@tsva/example-chat/chat-room-grain";
-import { ChatUserGrain } from "@tsva/example-chat/chat-user-grain";
-import { runChatDemo } from "@tsva/example-chat/demo";
-import { IChatRoom, IChatUser } from "@tsva/example-chat/interfaces";
+import { GrainId } from "@thresh/core/grain-id";
+import { SiloAddress } from "@thresh/core/silo-address";
+import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
+import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
+import { createSilo } from "@thresh/hosting/silo-builder";
+import type { SiloHost } from "@thresh/hosting/silo-host";
+import { ChatRoomGrain } from "@thresh/example-chat/chat-room-grain";
+import { ChatUserGrain } from "@thresh/example-chat/chat-user-grain";
+import { runChatDemo } from "@thresh/example-chat/demo";
+import { IChatRoom, IChatUser } from "@thresh/example-chat/interfaces";
 
 const local = new SiloAddress("silo-0", "uid-0", "silo-0:11111");
 const flush = () => new Promise((r) => setTimeout(r, 0));

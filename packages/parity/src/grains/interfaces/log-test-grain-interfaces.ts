@@ -2,8 +2,8 @@
 // Upstream declares a much larger surface (reservations, conditional writes,
 // raw event-log reads, etc.) used across many log-consistency-provider test
 // suites. Only the members `LogTestGrainClearTests` needs are ported here.
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithIntegerKey } from "@tsva/core/key-kinds";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithIntegerKey } from "@thresh/core/key-kinds";
 
 export interface AB {
   a: number;

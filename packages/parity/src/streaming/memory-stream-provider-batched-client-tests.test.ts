@@ -5,7 +5,7 @@
 // why both tests are excluded (client-process membership/reconnect is a
 // .NET-specific mechanism this framework does not model).
 import { it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 // Tester.StreamingTests.MemoryStreamProviderBatchedClientTests
 orleansTest.excluded(

@@ -1,18 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import { GrainId } from "@tsva/core/grain-id";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithStringKey } from "@tsva/core/key-kinds";
-import type { Remindable, TickStatus } from "@tsva/core/reminder";
-import { SiloAddress } from "@tsva/core/silo-address";
-import { FakeTimeProvider } from "@tsva/core/test-support/fake-time-provider";
-import { ConsistentHashRing } from "@tsva/directory/consistent-hash-ring";
-import { InProcessNetwork } from "@tsva/messaging/in-process-transport";
-import { MemoryReminderTable } from "@tsva/reminders/memory-reminder-table";
-import { StaticMembershipService } from "@tsva/runtime/static-membership";
-import { createSilo } from "@tsva/hosting/silo-builder";
-import type { SiloHost } from "@tsva/hosting/silo-host";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import { GrainId } from "@thresh/core/grain-id";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { Remindable, TickStatus } from "@thresh/core/reminder";
+import { SiloAddress } from "@thresh/core/silo-address";
+import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
+import { ConsistentHashRing } from "@thresh/directory/consistent-hash-ring";
+import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
+import { MemoryReminderTable } from "@thresh/reminders/memory-reminder-table";
+import { StaticMembershipService } from "@thresh/runtime/static-membership";
+import { createSilo } from "@thresh/hosting/silo-builder";
+import type { SiloHost } from "@thresh/hosting/silo-host";
 
 interface IBeacon extends GrainWithStringKey {
   begin(): Promise<void>;

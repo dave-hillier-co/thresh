@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { GrainId } from "@tsva/core/grain-id";
-import type { GrainType } from "@tsva/core/grain-type";
-import { runCallFilters, type GrainCallContext } from "@tsva/core/grain-call-filter";
+import { GrainId } from "@thresh/core/grain-id";
+import type { GrainType } from "@thresh/core/grain-type";
+import { runCallFilters, type GrainCallContext } from "@thresh/core/grain-call-filter";
 
 type GrainCallFilter = (context: GrainCallContext) => Promise<void>;
 

@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import { GrainId } from "@tsva/core/grain-id";
-import { getGrainMetadata } from "@tsva/core/grain-metadata";
-import { Catalog, type RegisteredGrain } from "@tsva/runtime/catalog";
-import { GrainFactory } from "@tsva/runtime/grain-factory";
-import { FakeTimeProvider } from "@tsva/runtime/test-support/fake-time-provider";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import { GrainId } from "@thresh/core/grain-id";
+import { getGrainMetadata } from "@thresh/core/grain-metadata";
+import { Catalog, type RegisteredGrain } from "@thresh/runtime/catalog";
+import { GrainFactory } from "@thresh/runtime/grain-factory";
+import { FakeTimeProvider } from "@thresh/runtime/test-support/fake-time-provider";
 
 @grain()
 class DeactivateStateGrain extends Grain {}

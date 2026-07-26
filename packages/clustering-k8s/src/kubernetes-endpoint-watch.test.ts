@@ -1,14 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
-import { activeSilos } from "@tsva/core/membership";
-import { SiloAddress } from "@tsva/core/silo-address";
-import { KubernetesMembership } from "@tsva/clustering-k8s/kubernetes-membership";
+import { activeSilos } from "@thresh/core/membership";
+import { SiloAddress } from "@thresh/core/silo-address";
+import { KubernetesMembership } from "@thresh/clustering-k8s/kubernetes-membership";
 import {
   KubernetesEndpointWatch,
   toEndpointSlice,
   type EndpointSliceSource,
   type RawEndpointSlice,
-} from "@tsva/clustering-k8s/kubernetes-endpoint-watch";
-import type { WatchEventType } from "@tsva/clustering-k8s/watched-endpoints";
+} from "@thresh/clustering-k8s/kubernetes-endpoint-watch";
+import type { WatchEventType } from "@thresh/clustering-k8s/watched-endpoints";
 
 function rawSlice(name: string, uid: string, ip: string, ready = true): RawEndpointSlice {
   return {

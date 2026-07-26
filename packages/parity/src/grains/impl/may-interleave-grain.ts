@@ -12,9 +12,9 @@
 // reproduces the exact scenario the original test exercises — the interleaving
 // behavior under test is a per-activation `TurnScheduler` concern, not a
 // multi-activation placement one.
-import { grain, mayInterleave } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import { IMayInterleaveGrain } from "@tsva/parity/grains/interfaces/may-interleave-grain-interfaces";
+import { grain, mayInterleave } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import { IMayInterleaveGrain } from "@thresh/parity/grains/interfaces/may-interleave-grain-interfaces";
 
 export { IMayInterleaveGrain };
 

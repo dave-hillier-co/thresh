@@ -13,13 +13,13 @@
 // matching message stands in, same as every other ported "throws
 // InvalidOperationException" assertion in this codebase.
 import { describe, expect, it } from "vitest";
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import { Guid } from "@tsva/core/guid";
-import type { GrainWithIntegerKey } from "@tsva/core/key-kinds";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import { Guid } from "@thresh/core/guid";
+import type { GrainWithIntegerKey } from "@thresh/core/key-kinds";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
 
 const STREAM_NAMESPACE = "StatelessWorkerStreamingNamespace";
 const STREAM_PROVIDER = "StreamProvider";

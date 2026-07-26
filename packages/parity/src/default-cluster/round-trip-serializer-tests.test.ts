@@ -1,12 +1,12 @@
 // Ported from dotnet/orleans test/Orleans.DefaultCluster.Tests/SerializationTests/RoundTripSerializerTests.cs @ v10.1.0 (MIT).
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
 import {
   IRoundtripSerializationGrain,
   RoundtripSerializationGrain,
-} from "@tsva/parity/grains/impl/roundtrip-serialization-grain";
-import { randomIntegerKey } from "@tsva/parity/support/keys";
+} from "@thresh/parity/grains/impl/roundtrip-serialization-grain";
+import { randomIntegerKey } from "@thresh/parity/support/keys";
 
 describe("UnitTests.SerializerTests.RoundTripSerializerTests", () => {
   let cluster: TestCluster;

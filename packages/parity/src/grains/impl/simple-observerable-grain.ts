@@ -1,13 +1,13 @@
 // Ported from dotnet/orleans test/Grains/TestGrains/SimpleObserverableGrain.cs @ v10.1.0 (MIT).
-import { grain } from "@tsva/core/decorators";
-import { grainReferenceIdentity } from "@tsva/core/grain-reference";
-import { ObserverManager } from "@tsva/core/observer-manager";
-import { systemTimeProvider } from "@tsva/core/time-provider";
-import { SimpleGrain } from "@tsva/parity/grains/impl/simple-grain";
+import { grain } from "@thresh/core/decorators";
+import { grainReferenceIdentity } from "@thresh/core/grain-reference";
+import { ObserverManager } from "@thresh/core/observer-manager";
+import { systemTimeProvider } from "@thresh/core/time-provider";
+import { SimpleGrain } from "@thresh/parity/grains/impl/simple-grain";
 import type {
   ISimpleGrainObserver,
   ISimpleObserverableGrain,
-} from "@tsva/parity/grains/interfaces/simple-observerable-grain-interfaces";
+} from "@thresh/parity/grains/interfaces/simple-observerable-grain-interfaces";
 
 // Upstream raises the notification after a 1000ms `EventDelay`; this port
 // notifies synchronously instead of porting a literal `Task.Delay` (there is

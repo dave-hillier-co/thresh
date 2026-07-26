@@ -1,9 +1,9 @@
 // Ported from dotnet/orleans test/Orleans.DefaultCluster.Tests/EchoTaskGrainTests.cs @ v10.1.0 (MIT).
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { GrainCallTimeoutError } from "@tsva/core/errors";
-import { FakeTimeProvider } from "@tsva/core/test-support/fake-time-provider";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
+import { GrainCallTimeoutError } from "@thresh/core/errors";
+import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
 import {
   BlockingEchoTaskGrain,
   EchoGrain,
@@ -13,8 +13,8 @@ import {
   IEchoTaskGrain,
   IReentrantBlockingEchoTaskGrain,
   ReentrantBlockingEchoTaskGrain,
-} from "@tsva/parity/grains/impl/echo-task-grain";
-import { randomGuidKey, randomIntegerKey } from "@tsva/parity/support/keys";
+} from "@thresh/parity/grains/impl/echo-task-grain";
+import { randomGuidKey, randomIntegerKey } from "@thresh/parity/support/keys";
 
 const expectedEcho = "Hello from EchoGrain";
 const expectedEchoError = "Error from EchoGrain";

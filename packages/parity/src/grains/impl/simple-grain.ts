@@ -1,7 +1,7 @@
 // Ported from dotnet/orleans test/Grains/TestGrains/SimpleGrain.cs @ v10.1.0 (MIT).
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import { ISimpleGrain } from "@tsva/parity/grains/interfaces/simple-grain-interfaces";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import { ISimpleGrain } from "@thresh/parity/grains/interfaces/simple-grain-interfaces";
 
 export { ISimpleGrain };
 

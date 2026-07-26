@@ -2,12 +2,12 @@
 // Upstream is a stateful storage-backed grain; the ported tests only observe
 // state within one activation, so an in-memory field suffices (see
 // echo-task-grain.ts for the same simplification).
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
 import {
   IChainedGrain,
   type ChainGrainHolder,
-} from "@tsva/parity/grains/interfaces/chained-grain-interfaces";
+} from "@thresh/parity/grains/interfaces/chained-grain-interfaces";
 
 export { IChainedGrain };
 export type { ChainGrainHolder };

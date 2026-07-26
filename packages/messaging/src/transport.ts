@@ -1,6 +1,6 @@
-import type { GrainId } from "@tsva/core/grain-id";
-import type { SiloAddress } from "@tsva/core/silo-address";
-import type { Message } from "@tsva/messaging/message";
+import type { GrainId } from "@thresh/core/grain-id";
+import type { SiloAddress } from "@thresh/core/silo-address";
+import type { Message } from "@thresh/messaging/message";
 
 /** Identifies a peer when a connection is established, mirroring Orleans' ConnectionPreamble. */
 export interface ConnectionPreamble {

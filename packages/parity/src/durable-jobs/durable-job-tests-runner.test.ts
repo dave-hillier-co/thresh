@@ -3,11 +3,11 @@
 // (test/Orleans.DefaultCluster.Tests/InMemoryDurableJobsTests.cs @ v10.1.0), whose
 // namespace/class/method names are the upstream xunit ids used below.
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
-import { Guid } from "@tsva/core/guid";
-import { FakeTimeProvider } from "@tsva/core/test-support/fake-time-provider";
-import type { DurableJob } from "@tsva/core/durable-job";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
+import { Guid } from "@thresh/core/guid";
+import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
+import type { DurableJob } from "@thresh/core/durable-job";
 import {
   DurableJobGrain,
   IDurableJobGrain,
@@ -15,7 +15,7 @@ import {
   ISchedulerGrain,
   RetryTestGrain,
   SchedulerGrain,
-} from "@tsva/parity/grains/impl/durable-job-grain";
+} from "@thresh/parity/grains/impl/durable-job-grain";
 
 /** Let queued microtasks (dispatch + result application) settle after advancing the clock. */
 async function flush(times = 5): Promise<void> {

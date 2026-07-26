@@ -1,11 +1,11 @@
 // Ported from dotnet/orleans test/Grains/TestGrains/PromiseForwardGrain.cs @ v10.1.0 (MIT).
 // Trimmed to the members ISimpleGrain declares that the ported test reaches
 // (getAxBArgs, forwarded to a fresh SimpleGrain instance).
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import { ISimpleGrain } from "@tsva/parity/grains/impl/simple-grain";
-import { IPromiseForwardGrain } from "@tsva/parity/grains/interfaces/promise-forward-grain-interfaces";
-import { randomIntegerKey } from "@tsva/parity/support/keys";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import { ISimpleGrain } from "@thresh/parity/grains/impl/simple-grain";
+import { IPromiseForwardGrain } from "@thresh/parity/grains/interfaces/promise-forward-grain-interfaces";
+import { randomIntegerKey } from "@thresh/parity/support/keys";
 
 export { IPromiseForwardGrain };
 

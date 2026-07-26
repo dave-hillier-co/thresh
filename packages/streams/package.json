@@ -1,5 +1,5 @@
 {
-  "name": "@tsva/streams",
+  "name": "@thresh/streams",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -7,8 +7,8 @@
     "./*": "./src/*.ts"
   },
   "dependencies": {
-    "@tsva/core": "workspace:*",
-    "@tsva/observability": "workspace:*",
+    "@thresh/core": "workspace:*",
+    "@thresh/observability": "workspace:*",
     "kafkajs": "^2.2.4",
     "pg": "^8.21.0",
     "redis": "^5.12.1"

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { HealthCheck } from "@tsva/hosting/health-check";
-import { HealthServer } from "@tsva/hosting/health-server";
+import { HealthCheck } from "@thresh/hosting/health-check";
+import { HealthServer } from "@thresh/hosting/health-server";
 
 let server: HealthServer | undefined;
 afterEach(async () => {

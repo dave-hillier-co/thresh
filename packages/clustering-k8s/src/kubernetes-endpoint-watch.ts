@@ -1,6 +1,6 @@
-import type { EndpointSlice, EndpointSliceEndpoint } from "@tsva/clustering-k8s/endpoint-slice";
-import type { EndpointWatch } from "@tsva/clustering-k8s/kubernetes-membership";
-import { WatchedEndpoints, type WatchEventType } from "@tsva/clustering-k8s/watched-endpoints";
+import type { EndpointSlice, EndpointSliceEndpoint } from "@thresh/clustering-k8s/endpoint-slice";
+import type { EndpointWatch } from "@thresh/clustering-k8s/kubernetes-membership";
+import { WatchedEndpoints, type WatchEventType } from "@thresh/clustering-k8s/watched-endpoints";
 
 /** An EndpointSlice as returned by the Kubernetes API (the fields we read). */
 export interface RawEndpointSlice {

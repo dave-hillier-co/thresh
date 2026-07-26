@@ -1,5 +1,5 @@
 {
-  "name": "@tsva/example-cluster",
+  "name": "@thresh/example-cluster",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -10,9 +10,9 @@
     "start": "vite-node --config ../../vitest.config.ts src/main.ts"
   },
   "dependencies": {
-    "@tsva/core": "workspace:*",
-    "@tsva/messaging": "workspace:*",
-    "@tsva/runtime": "workspace:*",
-    "@tsva/hosting": "workspace:*"
+    "@thresh/core": "workspace:*",
+    "@thresh/messaging": "workspace:*",
+    "@thresh/runtime": "workspace:*",
+    "@thresh/hosting": "workspace:*"
   }
 }

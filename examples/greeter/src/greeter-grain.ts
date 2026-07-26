@@ -1,5 +1,5 @@
-import { defineGrain } from "@tsva/core/define-grain";
-import type { IGreeter } from "@tsva/example-greeter/interfaces";
+import { defineGrain } from "@thresh/core/define-grain";
+import type { IGreeter } from "@thresh/example-greeter/interfaces";
 
 /**
  * A minimal grain showing the core actor guarantees with no providers:

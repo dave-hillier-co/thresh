@@ -4,14 +4,14 @@
 // `RunTentativeConfirmedStateTest`) raises without waiting, so the tentative
 // and confirmed state can diverge for a short time, matching the upstream
 // test's use of that gap.
-import { grain } from "@tsva/core/decorators";
-import { JournaledGrain } from "@tsva/core/journaled-grain";
+import { grain } from "@thresh/core/decorators";
+import { JournaledGrain } from "@thresh/core/journaled-grain";
 import {
   IPersonGrain,
   type GenderType,
   type PersonAttributes,
-} from "@tsva/parity/grains/interfaces/person-grain-interfaces";
-import type { Guid } from "@tsva/core/guid";
+} from "@thresh/parity/grains/interfaces/person-grain-interfaces";
+import type { Guid } from "@thresh/core/guid";
 
 export { IPersonGrain };
 

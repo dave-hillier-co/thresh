@@ -1,7 +1,7 @@
-import type { GrainId } from "@tsva/core/grain-id";
-import { getPersistentFields } from "@tsva/core/persistent-state-metadata";
-import { PersistentStateImpl } from "@tsva/persistence/persistent-state-impl";
-import type { StorageRegistry } from "@tsva/persistence/storage-registry";
+import type { GrainId } from "@thresh/core/grain-id";
+import { getPersistentFields } from "@thresh/core/persistent-state-metadata";
+import { PersistentStateImpl } from "@thresh/persistence/persistent-state-impl";
+import type { StorageRegistry } from "@thresh/persistence/storage-registry";
 
 const emptyDefault = () => ({});
 

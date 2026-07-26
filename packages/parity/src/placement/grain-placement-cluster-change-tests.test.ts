@@ -3,19 +3,19 @@
 // This test kills a silo mid-test, so (per convention) it gets its own
 // cluster per case rather than sharing one across the describe block.
 import { describe, expect } from "vitest";
-import { GrainId } from "@tsva/core/grain-id";
-import { getGrainMetadata } from "@tsva/core/grain-metadata";
-import type { Guid } from "@tsva/core/guid";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster, type TestSiloHandle } from "@tsva/testing/test-cluster";
-import { waitFor } from "@tsva/testing/wait";
+import { GrainId } from "@thresh/core/grain-id";
+import { getGrainMetadata } from "@thresh/core/grain-metadata";
+import type { Guid } from "@thresh/core/guid";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster, type TestSiloHandle } from "@thresh/testing/test-cluster";
+import { waitFor } from "@thresh/testing/wait";
 import {
   IPreferLocalPlacementTestGrain,
   IRandomPlacementTestGrain,
   PreferLocalPlacementTestGrain,
   RandomPlacementTestGrain,
-} from "@tsva/parity/grains/impl/placement-test-grain";
-import { randomGuidKey } from "@tsva/parity/support/keys";
+} from "@thresh/parity/grains/impl/placement-test-grain";
+import { randomGuidKey } from "@thresh/parity/support/keys";
 
 const randomGrainType = getGrainMetadata(RandomPlacementTestGrain)!.grainType;
 const preferLocalGrainType = getGrainMetadata(PreferLocalPlacementTestGrain)!.grainType;

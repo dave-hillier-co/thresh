@@ -1,7 +1,7 @@
-import { supportedVersion, type SiloManifest } from "@tsva/core/grain-manifest";
-import type { CompatibilityDirector } from "@tsva/core/version-compatibility";
-import type { SiloAddress } from "@tsva/core/silo-address";
-import type { VersionSelectorStrategy } from "@tsva/core/version-selector";
+import { supportedVersion, type SiloManifest } from "@thresh/core/grain-manifest";
+import type { CompatibilityDirector } from "@thresh/core/version-compatibility";
+import type { SiloAddress } from "@thresh/core/silo-address";
+import type { VersionSelectorStrategy } from "@thresh/core/version-selector";
 
 export interface VersionFilterDeps {
   director: CompatibilityDirector;

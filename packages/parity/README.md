@@ -1,4 +1,4 @@
-# @tsva/parity — the Orleans parity suite
+# @thresh/parity — the Orleans parity suite
 
 A 1:1 traceable port of Microsoft Orleans' functional test suite, run against
 this framework. Passing tests are evidence of parity; skipped tests are the
@@ -11,7 +11,7 @@ parity backlog.
   `git -C <orleans-checkout> show <tag>:<path>` — never a working tree, which
   may be ahead of the tag.
 - **Traceability.** Every test is declared with `orleansTest(id, fn)` from
-  `@tsva/testing/orleans-test`, where `id` is the fully-qualified upstream
+  `@thresh/testing/orleans-test`, where `id` is the fully-qualified upstream
   xunit test id (`Namespace.Class.Method`). The id is the vitest test name, so
   reporter output traces straight back to the original test.
 - **Gaps.** A test whose feature does not exist here yet is registered with

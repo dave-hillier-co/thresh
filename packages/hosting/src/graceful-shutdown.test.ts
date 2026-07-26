@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { HealthCheck } from "@tsva/hosting/health-check";
-import { GracefulShutdown, type Drainable } from "@tsva/hosting/graceful-shutdown";
+import { HealthCheck } from "@thresh/hosting/health-check";
+import { GracefulShutdown, type Drainable } from "@thresh/hosting/graceful-shutdown";
 
 const ready = {
   started: true,

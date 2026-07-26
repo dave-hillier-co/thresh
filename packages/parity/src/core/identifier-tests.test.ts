@@ -1,6 +1,6 @@
 // Ported from dotnet/orleans test/Orleans.Core.Tests/General/Identifiertests.cs @ v10.1.0 (MIT).
 import { describe, it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 // This framework's GrainId (packages/core/src/grain-id.ts) is a plain (type, key) value object
 // with a custom string hash - it has no UniqueKey type (32-bit type-code + Guid/long + key-ext

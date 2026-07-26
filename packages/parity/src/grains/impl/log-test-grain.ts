@@ -5,12 +5,12 @@
 // Only the subset `LogTestGrainClearTests` exercises is ported — upstream's
 // much larger surface (reservations, conditional writes, raw log reads) isn't
 // needed here.
-import { grain } from "@tsva/core/decorators";
-import { JournaledGrain } from "@tsva/core/journaled-grain";
+import { grain } from "@thresh/core/decorators";
+import { JournaledGrain } from "@thresh/core/journaled-grain";
 import {
   ILogTestGrain,
   type AB,
-} from "@tsva/parity/grains/interfaces/log-test-grain-interfaces";
+} from "@thresh/parity/grains/interfaces/log-test-grain-interfaces";
 
 export { ILogTestGrain };
 

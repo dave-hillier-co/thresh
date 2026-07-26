@@ -1,8 +1,8 @@
 // Ported from dotnet/orleans test/Grains/TestGrainInterfaces/IDurableJobGrain.cs,
 // ISchedulerGrain.cs, IRetryTestGrain.cs @ v10.1.0 (MIT).
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { DurableJob, JobRunContext } from "@tsva/core/durable-job";
-import type { GrainWithStringKey } from "@tsva/core/key-kinds";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { DurableJob, JobRunContext } from "@thresh/core/durable-job";
+import type { GrainWithStringKey } from "@thresh/core/key-kinds";
 
 /** Upstream `UnitTests.GrainInterfaces.IDurableJobGrain`. */
 export interface IDurableJobGrain extends GrainWithStringKey {

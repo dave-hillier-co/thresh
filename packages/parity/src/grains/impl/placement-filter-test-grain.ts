@@ -1,6 +1,6 @@
 // Ported from dotnet/orleans test/Orleans.Placement.Tests/PlacementFilterTests/GrainPlacementFilterTests.cs @ v10.1.0 (MIT).
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
 import {
   ITestAB12FilteredGrain,
   ITestAB21FilteredGrain,
@@ -9,7 +9,7 @@ import {
   ITestDuplicateOrderFilteredGrain,
   ITestFilteredGrain,
   IUnfilteredGrain,
-} from "@tsva/parity/grains/interfaces/placement-filter-test-grain-interfaces";
+} from "@thresh/parity/grains/interfaces/placement-filter-test-grain-interfaces";
 
 export {
   ITestAB12FilteredGrain,

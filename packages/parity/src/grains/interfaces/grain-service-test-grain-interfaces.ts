@@ -9,8 +9,8 @@
 // class doc) — only `IGrainServiceTestGrain` (the ported test's own surface)
 // and `IEchoExtension` (the grain-extension the service hosts) need declaring
 // here.
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithIntegerKey } from "@tsva/core/key-kinds";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithIntegerKey } from "@thresh/core/key-kinds";
 
 export interface IGrainServiceTestGrain extends GrainWithIntegerKey {
   getHelloWorldUsingCustomService(): Promise<string>;

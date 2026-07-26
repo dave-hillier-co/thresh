@@ -15,24 +15,24 @@
 // other streams" steps have nothing to exercise; they're dropped here. What's
 // left, and what's actually ported, is the delivery guarantee upstream is
 // really testing: every published event reaches its subscriber, synchronized
-// via the streaming diagnostic bus (`@tsva/core/streaming-diagnostics`,
+// via the streaming diagnostic bus (`@thresh/core/streaming-diagnostics`,
 // `StreamingDiagnosticObserver`) instead of racing `publish()`.
 import { describe, expect } from "vitest";
-import { grain, implicitStreamSubscription, persistentState } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithGuidKey } from "@tsva/core/key-kinds";
-import type { PersistentState } from "@tsva/core/persistent-state";
+import { grain, implicitStreamSubscription, persistentState } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithGuidKey } from "@thresh/core/key-kinds";
+import type { PersistentState } from "@thresh/core/persistent-state";
 import {
   STREAM_SUBSCRIPTION_OBSERVER,
   type StreamFilter,
   type StreamHandler,
   type StreamId,
-} from "@tsva/core/stream";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
-import { randomGuidKey } from "@tsva/parity/support/keys";
-import { StreamingDiagnosticObserver } from "@tsva/parity/support/streaming-diagnostics";
+} from "@thresh/core/stream";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
+import { randomGuidKey } from "@thresh/parity/support/keys";
+import { StreamingDiagnosticObserver } from "@thresh/parity/support/streaming-diagnostics";
 
 const StreamProviderName = "StreamingCacheMissTests";
 const NAMESPACE = "IImplicitSubscriptionCounterGrain";

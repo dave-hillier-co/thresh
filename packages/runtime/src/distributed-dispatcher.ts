@@ -1,30 +1,30 @@
-import { newActivationId } from "@tsva/core/activation-id";
-import { RejectionError } from "@tsva/core/errors";
-import type { GrainAddress } from "@tsva/core/grain-address";
-import type { GrainId } from "@tsva/core/grain-id";
-import type { GrainType } from "@tsva/core/grain-type";
-import type { InvocationRequest } from "@tsva/core/request";
-import type { SiloAddress } from "@tsva/core/silo-address";
-import type { GrainDirectory } from "@tsva/directory/grain-directory";
-import type { LocationCache } from "@tsva/directory/location-cache";
+import { newActivationId } from "@thresh/core/activation-id";
+import { RejectionError } from "@thresh/core/errors";
+import type { GrainAddress } from "@thresh/core/grain-address";
+import type { GrainId } from "@thresh/core/grain-id";
+import type { GrainType } from "@thresh/core/grain-type";
+import type { InvocationRequest } from "@thresh/core/request";
+import type { SiloAddress } from "@thresh/core/silo-address";
+import type { GrainDirectory } from "@thresh/directory/grain-directory";
+import type { LocationCache } from "@thresh/directory/location-cache";
 import {
   withActivateGrainSpan,
   withFilterPlacementCandidatesSpan,
   withPlaceGrainSpan,
   withRegisterDirectoryEntrySpan,
-} from "@tsva/observability/activation-tracing";
-import type { Catalog } from "@tsva/runtime/catalog";
+} from "@thresh/observability/activation-tracing";
+import type { Catalog } from "@thresh/runtime/catalog";
 import {
   withCallDeadline,
   type Dispatcher,
   type InvokeCallOptions,
-} from "@tsva/runtime/dispatcher";
-import type { PlacementFilter } from "@tsva/runtime/placement/placement-filter";
-import { resolvePlacementHint } from "@tsva/runtime/placement/placement-hint";
+} from "@thresh/runtime/dispatcher";
+import type { PlacementFilter } from "@thresh/runtime/placement/placement-filter";
+import { resolvePlacementHint } from "@thresh/runtime/placement/placement-hint";
 import type {
   PlacementContext,
   PlacementStrategy,
-} from "@tsva/runtime/placement/placement-strategy";
+} from "@thresh/runtime/placement/placement-strategy";
 
 /** Sends a request to a remote silo and awaits its response. */
 export interface RemoteInvoker {

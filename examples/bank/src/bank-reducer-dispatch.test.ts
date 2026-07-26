@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { SiloAddress } from "@tsva/core/silo-address";
-import { InProcessNetwork } from "@tsva/messaging/in-process-transport";
-import { MemoryGrainStorage } from "@tsva/persistence/memory-grain-storage";
-import { createSilo } from "@tsva/hosting/silo-builder";
-import type { SiloHost } from "@tsva/hosting/silo-host";
-import { Account } from "@tsva/example-bank/account-reducer-grain";
+import { SiloAddress } from "@thresh/core/silo-address";
+import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
+import { MemoryGrainStorage } from "@thresh/persistence/memory-grain-storage";
+import { createSilo } from "@thresh/hosting/silo-builder";
+import type { SiloHost } from "@thresh/hosting/silo-host";
+import { Account } from "@thresh/example-bank/account-reducer-grain";
 
 const local = new SiloAddress("silo-0", "uid-0", "silo-0:11111");
 

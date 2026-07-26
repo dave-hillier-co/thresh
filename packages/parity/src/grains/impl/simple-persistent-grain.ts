@@ -1,10 +1,10 @@
 // Ported from dotnet/orleans test/Grains/TestGrains/SimplePersistentGrain.cs @ v10.1.0 (MIT).
-import { grain, persistentState } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import { Guid } from "@tsva/core/guid";
-import type { PersistentState } from "@tsva/core/persistent-state";
-import { requestContext } from "@tsva/runtime/invocation-context";
-import { ISimplePersistentGrain } from "@tsva/parity/grains/interfaces/simple-persistent-grain-interfaces";
+import { grain, persistentState } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import { Guid } from "@thresh/core/guid";
+import type { PersistentState } from "@thresh/core/persistent-state";
+import { requestContext } from "@thresh/runtime/invocation-context";
+import { ISimplePersistentGrain } from "@thresh/parity/grains/interfaces/simple-persistent-grain-interfaces";
 
 export { ISimplePersistentGrain };
 

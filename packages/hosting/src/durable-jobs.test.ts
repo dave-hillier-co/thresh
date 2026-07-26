@@ -1,16 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { defineGrain, useDurableJobHandler } from "@tsva/core/define-grain";
-import { completed, pollAfter, type DurableJob } from "@tsva/core/durable-job";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import { GrainId } from "@tsva/core/grain-id";
-import type { GrainWithStringKey } from "@tsva/core/key-kinds";
-import { PLACEMENT_HINT_KEY, RequestContext } from "@tsva/core/request-context";
-import { SiloAddress } from "@tsva/core/silo-address";
-import { FakeTimeProvider } from "@tsva/core/test-support/fake-time-provider";
-import { InProcessNetwork } from "@tsva/messaging/in-process-transport";
-import { MemoryJobShardStore } from "@tsva/durable-jobs/memory-job-shard-store";
-import { StaticMembershipService } from "@tsva/runtime/static-membership";
-import { createSilo } from "@tsva/hosting/silo-builder";
+import { defineGrain, useDurableJobHandler } from "@thresh/core/define-grain";
+import { completed, pollAfter, type DurableJob } from "@thresh/core/durable-job";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import { GrainId } from "@thresh/core/grain-id";
+import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import { PLACEMENT_HINT_KEY, RequestContext } from "@thresh/core/request-context";
+import { SiloAddress } from "@thresh/core/silo-address";
+import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
+import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
+import { MemoryJobShardStore } from "@thresh/durable-jobs/memory-job-shard-store";
+import { StaticMembershipService } from "@thresh/runtime/static-membership";
+import { createSilo } from "@thresh/hosting/silo-builder";
 
 // A module sink keeps observable run records across (re)activations and restarts —
 // the grain activation itself may be fresh.

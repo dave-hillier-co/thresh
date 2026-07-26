@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { Admin, Consumer, Kafka, KafkaMessage, Producer } from "kafkajs";
-import { deserializeValue, serializeValue } from "@tsva/core/value-codec";
-import type { AppendableQueue } from "@tsva/streams/pulling-stream-provider-core";
-import type { QueueEntry } from "@tsva/streams/redis-stream-queue";
-import type { StreamFailureHandler } from "@tsva/streams/queue-pulling-agent";
-import type { StreamCursorStore } from "@tsva/streams/stream-cursor-store";
+import { deserializeValue, serializeValue } from "@thresh/core/value-codec";
+import type { AppendableQueue } from "@thresh/streams/pulling-stream-provider-core";
+import type { QueueEntry } from "@thresh/streams/redis-stream-queue";
+import type { StreamFailureHandler } from "@thresh/streams/queue-pulling-agent";
+import type { StreamCursorStore } from "@thresh/streams/stream-cursor-store";
 
 const DEFAULT_HIGH_WATER_MARK = 1000;
 // Kafka's ListOffsets protocol timestamp constant for "earliest available offset".
@@ -65,7 +65,7 @@ export class KafkaTopicQueues {
     this.failureHandler = options.failureHandler;
     this.producer = kafka.producer({ idempotent: true });
     this.consumer = kafka.consumer({
-      groupId: `tsva-kafka-streams-${providerName}-${randomUUID()}`,
+      groupId: `thresh-kafka-streams-${providerName}-${randomUUID()}`,
     });
     this.admin = kafka.admin();
   }

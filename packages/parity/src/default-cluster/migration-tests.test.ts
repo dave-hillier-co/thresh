@@ -12,13 +12,13 @@
 // `collectionAgeSeconds` and drives a `FakeTimeProvider` past it plus the
 // default collection interval to force a sweep.
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { FakeTimeProvider } from "@tsva/core/test-support/fake-time-provider";
-import { GrainId } from "@tsva/core/grain-id";
-import { getGrainMetadata } from "@tsva/core/grain-metadata";
-import { PLACEMENT_HINT_KEY, RequestContext } from "@tsva/core/request-context";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster, type TestSiloHandle } from "@tsva/testing/test-cluster";
-import { waitFor } from "@tsva/testing/wait";
+import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
+import { GrainId } from "@thresh/core/grain-id";
+import { getGrainMetadata } from "@thresh/core/grain-metadata";
+import { PLACEMENT_HINT_KEY, RequestContext } from "@thresh/core/request-context";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster, type TestSiloHandle } from "@thresh/testing/test-cluster";
+import { waitFor } from "@thresh/testing/wait";
 import {
   IMigrationTestGrain,
   IMigrationTestGrainGrainOfT,
@@ -26,8 +26,8 @@ import {
   MigrationTestGrain,
   MigrationTestGrainWithInjectedMemoryStorage,
   MigrationTestGrainWithMemoryStorage,
-} from "@tsva/parity/grains/impl/migration-test-grain";
-import { randomIntegerKey } from "@tsva/parity/support/keys";
+} from "@thresh/parity/grains/impl/migration-test-grain";
+import { randomIntegerKey } from "@thresh/parity/support/keys";
 
 const migrationGrainType = getGrainMetadata(MigrationTestGrain)!.grainType;
 const grainOfTGrainType = getGrainMetadata(MigrationTestGrainWithMemoryStorage)!.grainType;

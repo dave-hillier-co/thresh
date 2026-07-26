@@ -1,10 +1,10 @@
 // Ported from dotnet/orleans test/Grains/TestInternalGrains/TestGrain.cs @ v10.1.0 (MIT).
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
 import {
   ITestGrain,
   ITestGrainLongOnActivateAsync,
-} from "@tsva/parity/grains/interfaces/test-grain-interfaces";
+} from "@thresh/parity/grains/interfaces/test-grain-interfaces";
 
 export { ITestGrain, ITestGrainLongOnActivateAsync };
 

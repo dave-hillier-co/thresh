@@ -1,13 +1,13 @@
 // Ported from dotnet/orleans test/Orleans.Core.Tests/Lease/GoldenPathInMemoryLeaseProviderTests.cs
 // and test/TestInfrastructure/TestExtensions/Runners/GoldenPathLeaseProviderTestRunner.cs @ v10.1.0 (MIT).
 import { describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 import {
   InMemoryLeaseProvider,
   type AcquiredLease,
   type LeaseRequest,
-} from "@tsva/core/lease-provider";
-import { FakeTimeProvider } from "@tsva/core/test-support/fake-time-provider";
+} from "@thresh/core/lease-provider";
+import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
 
 const LEASE_CATEGORY = "TestLeaseCategory";
 

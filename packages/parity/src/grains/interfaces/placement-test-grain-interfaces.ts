@@ -11,9 +11,9 @@
 // *the pinned grain's own hosting silo* (an `IRandomPlacementTestGrain`
 // pinned there via `getGrainAtSilo`), then separately samples placement
 // through `IActivationCountBasedPlacementTestGrain`.
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { Guid } from "@tsva/core/guid";
-import type { GrainWithGuidKey } from "@tsva/core/key-kinds";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { Guid } from "@thresh/core/guid";
+import type { GrainWithGuidKey } from "@thresh/core/key-kinds";
 
 export interface IPlacementTestGrain extends GrainWithGuidKey {
   nop(): Promise<void>;

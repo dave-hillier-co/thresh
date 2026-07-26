@@ -1,6 +1,6 @@
 // Ported from dotnet/orleans test/Orleans.Runtime.Tests/HeterogeneousSilosTests/HeterogeneousTests.cs @ v10.1.0 (MIT).
 import { describe, it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 describe("Tester.HeterogeneousSilosTests.HeterogeneousTests", () => {
   // The whole file depends on DI/hosting-builder machinery this harness does

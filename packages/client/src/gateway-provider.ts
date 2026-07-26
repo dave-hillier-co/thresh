@@ -1,5 +1,5 @@
-import { activeSilos, type MembershipService } from "@tsva/core/membership";
-import { SiloAddress } from "@tsva/core/silo-address";
+import { activeSilos, type MembershipService } from "@thresh/core/membership";
+import { SiloAddress } from "@thresh/core/silo-address";
 
 /**
  * Supplies the set of gateway silos a client may connect through (Orleans'

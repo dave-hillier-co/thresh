@@ -1,6 +1,6 @@
 // Ported from dotnet/orleans test/Orleans.Core.Tests/IdSpanTests.cs @ v10.1.0 (MIT).
 import { describe, it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 // Tests Orleans.Runtime.IdSpan, a byte-array-backed identity primitive with default-vs-empty
 // distinctions, custom hashing, and ordinal comparison. This framework's GrainType

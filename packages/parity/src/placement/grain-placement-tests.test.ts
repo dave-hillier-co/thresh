@@ -14,8 +14,8 @@
 // (`packages/parity/src/grains/impl/placement-test-grain.ts`) now exist, so
 // both are ported below.
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
 import {
   IOtherStatelessWorkerPlacementTestGrain,
   IPreferLocalPlacementTestGrain,
@@ -25,9 +25,9 @@ import {
   PreferLocalPlacementTestGrain,
   RandomPlacementTestGrain,
   StatelessWorkerPlacementTestGrain,
-} from "@tsva/parity/grains/impl/placement-test-grain";
-import type { IPlacementTestGrain } from "@tsva/parity/grains/interfaces/placement-test-grain-interfaces";
-import { randomGuidKey } from "@tsva/parity/support/keys";
+} from "@thresh/parity/grains/impl/placement-test-grain";
+import type { IPlacementTestGrain } from "@thresh/parity/grains/interfaces/placement-test-grain-interfaces";
+import { randomGuidKey } from "@thresh/parity/support/keys";
 
 /** Upstream `GrainPlacementTests.CollectActivationIds`. */
 async function collectActivationIds(

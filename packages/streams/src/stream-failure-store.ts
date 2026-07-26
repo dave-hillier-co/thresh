@@ -1,4 +1,4 @@
-import type { StreamFailureHandler } from "@tsva/streams/queue-pulling-agent";
+import type { StreamFailureHandler } from "@thresh/streams/queue-pulling-agent";
 
 /** One permanently-failed (poison) delivery, as recorded by `DurableStreamFailureHandler`. */
 export interface StreamDeliveryFailure {

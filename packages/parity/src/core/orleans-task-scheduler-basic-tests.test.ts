@@ -1,6 +1,6 @@
 // Ported from dotnet/orleans test/Orleans.Core.Tests/SchedulerTests/OrleansTaskSchedulerBasicTests.cs @ v10.1.0 (MIT).
 import { describe, it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 // Every method in this file exercises Orleans' internal OrleansTaskScheduler / WorkItemGroup /
 // ActivationTaskScheduler thread-pool scheduling machinery directly (turn ordering across a

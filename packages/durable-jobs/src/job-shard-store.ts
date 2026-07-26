@@ -1,4 +1,4 @@
-import type { DurableJob } from "@tsva/core/durable-job";
+import type { DurableJob } from "@thresh/core/durable-job";
 
 /**
  * The durable record of a shard's ownership and bookkeeping (Orleans' shard

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { GrainId } from "@tsva/core/grain-id";
-import { MemoryGrainStorage } from "@tsva/persistence/memory-grain-storage";
-import { ReducerStateImpl } from "@tsva/persistence/reducer-state-impl";
+import { GrainId } from "@thresh/core/grain-id";
+import { MemoryGrainStorage } from "@thresh/persistence/memory-grain-storage";
+import { ReducerStateImpl } from "@thresh/persistence/reducer-state-impl";
 
 interface Counter {
   total: number;

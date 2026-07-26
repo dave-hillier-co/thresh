@@ -11,7 +11,7 @@
 // inventing a whole new grain-call kind, so every test in this file is
 // excluded rather than gapped against a single missing primitive.
 import { describe, it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 const reason =
   "IAsyncEnumerable<T> grain-method return values are a distinct Orleans wire " +

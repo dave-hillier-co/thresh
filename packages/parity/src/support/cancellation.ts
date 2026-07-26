@@ -2,17 +2,17 @@
 // `grain-cancellation-token-tests.test.ts` (Orleans `GrainCancellationTokenTests`)
 // and `cancellation-token-tests.test.ts` (Orleans `CancellationTokenTests`) drive
 // the same `LongRunningTaskGrain` fixture through the same cancel/observe idioms.
-import type { GrainCancellationTokenSource } from "@tsva/core/grain-cancellation-token";
-import { GrainId } from "@tsva/core/grain-id";
-import { getGrainMetadata } from "@tsva/core/grain-metadata";
-import type { ClientNode } from "@tsva/client/client-node";
-import type { TestCluster, TestSiloHandle } from "@tsva/testing/test-cluster";
-import { waitFor } from "@tsva/testing/wait";
+import type { GrainCancellationTokenSource } from "@thresh/core/grain-cancellation-token";
+import { GrainId } from "@thresh/core/grain-id";
+import { getGrainMetadata } from "@thresh/core/grain-metadata";
+import type { ClientNode } from "@thresh/client/client-node";
+import type { TestCluster, TestSiloHandle } from "@thresh/testing/test-cluster";
+import { waitFor } from "@thresh/testing/wait";
 import {
   ILongRunningTaskGrain,
   LongRunningTaskGrain,
-} from "@tsva/parity/grains/impl/long-running-task-grain";
-import { randomGuidKey } from "@tsva/parity/support/keys";
+} from "@thresh/parity/grains/impl/long-running-task-grain";
+import { randomGuidKey } from "@thresh/parity/support/keys";
 
 export const grainType = getGrainMetadata(LongRunningTaskGrain)!.grainType;
 

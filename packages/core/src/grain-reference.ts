@@ -5,7 +5,7 @@ import type { GrainInterface } from "./grain-interface";
  * Marker exposed by grain-reference proxies so the serializer can recognise one
  * and reduce it to its identity on the wire (rehydrated as a proxy on receive).
  */
-export const GRAIN_REF: unique symbol = Symbol.for("tsva.grainRef");
+export const GRAIN_REF: unique symbol = Symbol.for("thresh.grainRef");
 
 /**
  * Marker exposed by grain-reference proxies for runtime re-typing — the
@@ -14,7 +14,7 @@ export const GRAIN_REF: unique symbol = Symbol.for("tsva.grainRef");
  * a function that rebuilds a reference to the SAME grain id under a different
  * `GrainInterface<T>` token; see `packages/runtime/src/grain-factory.ts`.
  */
-export const GRAIN_REF_CAST: unique symbol = Symbol.for("tsva.grainRefCast");
+export const GRAIN_REF_CAST: unique symbol = Symbol.for("thresh.grainRefCast");
 
 export interface GrainReferenceIdentity {
   grainId: GrainId;

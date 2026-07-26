@@ -1,8 +1,8 @@
 // Ported from dotnet/orleans test/Orleans.Runtime.Tests/StartupTaskTests.cs @ v10.1.0 (MIT).
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
-import { ISimpleGrain, SimpleGrain } from "@tsva/parity/grains/impl/simple-grain";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
+import { ISimpleGrain, SimpleGrain } from "@thresh/parity/grains/impl/simple-grain";
 
 describe("DefaultCluster.Tests.StartupTaskTests", () => {
   let cluster: TestCluster;

@@ -1,6 +1,6 @@
 // Ported from dotnet/orleans test/Orleans.Core.Tests/Directory/RingRangeCollectionTests.cs @ v10.1.0 (MIT).
 import { describe, it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 // RingRangeCollection is a union-of-arcs value type over Orleans' RingRange
 // (Contains, Intersects, Difference, ordered-arc containment with wraparound),

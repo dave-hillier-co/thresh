@@ -18,13 +18,13 @@ export interface JournalSegment {
  * the snapshot replace are conditional on the caller's last-seen `version`
  * (`undefined` = "no log yet"), carrying `GrainStorage`'s etag optimistic-
  * concurrency contract over to a log. A losing writer raises
- * `InconsistentStateError` (see `@tsva/core/errors`).
+ * `InconsistentStateError` (see `@thresh/core/errors`).
  *
  * `signal`, when given, is an ambient cancellation/deadline signal for a call
  * (see `GrainStorage`'s doc — same contract). A provider honours it on a
  * best-effort basis against its own network calls; a provider that cannot
  * cancel mid-flight may instead only abandon the *wait* for an already-sent
- * call (`@tsva/core/abort`'s `raceSignal`), or ignore it entirely.
+ * call (`@thresh/core/abort`'s `raceSignal`), or ignore it entirely.
  */
 export interface JournalStorage {
   /** Read the whole log for `(logName, grainId)`. */

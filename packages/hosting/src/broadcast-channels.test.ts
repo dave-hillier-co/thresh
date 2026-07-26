@@ -2,14 +2,14 @@ import { describe, expect, it } from "vitest";
 import {
   BROADCAST_CHANNEL_OBSERVER,
   type BroadcastChannelHandler,
-} from "@tsva/core/broadcast-channel";
-import { grain, implicitChannelSubscription } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithStringKey } from "@tsva/core/key-kinds";
-import { SiloAddress } from "@tsva/core/silo-address";
-import { InProcessNetwork } from "@tsva/messaging/in-process-transport";
-import { createSilo } from "@tsva/hosting/silo-builder";
+} from "@thresh/core/broadcast-channel";
+import { grain, implicitChannelSubscription } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import { SiloAddress } from "@thresh/core/silo-address";
+import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
+import { createSilo } from "@thresh/hosting/silo-builder";
 
 interface IRaiser extends GrainWithStringKey {
   raise(message: string): Promise<void>;

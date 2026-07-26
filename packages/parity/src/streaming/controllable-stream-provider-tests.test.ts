@@ -11,11 +11,11 @@
 // both. The provider does no actual streaming — it exists only to be addressed
 // by name and echo a command, exactly as upstream's `ControllableTestAdapterFactory`.
 import { expect } from "vitest";
-import type { GrainKey } from "@tsva/core/grain-key";
-import { IManagementGrain } from "@tsva/core/management-grain";
-import type { AsyncStream, Controllable, StreamProvider } from "@tsva/core/stream";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
+import type { GrainKey } from "@thresh/core/grain-key";
+import { IManagementGrain } from "@thresh/core/management-grain";
+import type { AsyncStream, Controllable, StreamProvider } from "@thresh/core/stream";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
 
 const StreamProviderName = "ControllableTestStreamProvider";
 

@@ -2,8 +2,8 @@
 // Trimmed to the members the ported DefaultCluster error-handling tests exercise;
 // upstream's LogMessage/SetAError/SetBError/GetAxBError(a,b)/Dispose/Unobserved*
 // aren't reached by any ported test.
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { ISimpleGrain } from "@tsva/parity/grains/interfaces/simple-grain-interfaces";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { ISimpleGrain } from "@thresh/parity/grains/interfaces/simple-grain-interfaces";
 
 export interface IErrorGrain extends ISimpleGrain {
   getAxBError(): Promise<number>;

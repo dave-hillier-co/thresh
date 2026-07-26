@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { SequenceToken, type BatchedStreamItem, type StreamHandler } from "@tsva/core/stream";
-import { MemoryStreamProvider } from "@tsva/streams/memory-stream-provider";
+import { SequenceToken, type BatchedStreamItem, type StreamHandler } from "@thresh/core/stream";
+import { MemoryStreamProvider } from "@thresh/streams/memory-stream-provider";
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 

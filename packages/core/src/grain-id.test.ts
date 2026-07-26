@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { GrainId } from "@tsva/core/grain-id";
-import { Guid } from "@tsva/core/guid";
+import { GrainId } from "@thresh/core/grain-id";
+import { Guid } from "@thresh/core/guid";
 
 describe("GrainId", () => {
   it("renders a string key as Type/key", () => {

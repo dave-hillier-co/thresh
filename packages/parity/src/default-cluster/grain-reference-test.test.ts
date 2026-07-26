@@ -12,12 +12,12 @@
 // returned the identity correctly. `buildProxy` now also implements a `has`
 // trap for good measure, so `in` works too.
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
-import { grainReferenceIdentity } from "@tsva/core/grain-reference";
-import { ISimpleGrain, SimpleGrain } from "@tsva/parity/grains/impl/simple-grain";
-import { ChainedGrain, IChainedGrain } from "@tsva/parity/grains/impl/chained-grain";
-import { randomIntegerKey } from "@tsva/parity/support/keys";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
+import { grainReferenceIdentity } from "@thresh/core/grain-reference";
+import { ISimpleGrain, SimpleGrain } from "@thresh/parity/grains/impl/simple-grain";
+import { ChainedGrain, IChainedGrain } from "@thresh/parity/grains/impl/chained-grain";
+import { randomIntegerKey } from "@thresh/parity/support/keys";
 
 describe("DefaultCluster.Tests.General.GrainReferenceTest", () => {
   let cluster: TestCluster;
@@ -98,7 +98,7 @@ describe("DefaultCluster.Tests.General.GrainReferenceTest", () => {
   );
 
   const jsonSerializationReason =
-    "round-trips a GrainReference through Newtonsoft.Json using Orleans' custom JsonConverter (OrleansJsonSerializerSettings); this framework has no JSON serializer layer for grain references — the wire codec (@tsva/messaging serializer) is exercised directly by every ported test that passes a grain reference, e.g. GrainReference_Pass_this above";
+    "round-trips a GrainReference through Newtonsoft.Json using Orleans' custom JsonConverter (OrleansJsonSerializerSettings); this framework has no JSON serializer layer for grain references — the wire codec (@thresh/messaging serializer) is exercised directly by every ported test that passes a grain reference, e.g. GrainReference_Pass_this above";
 
   orleansTest.excluded(
     jsonSerializationReason,

@@ -1,41 +1,41 @@
 import { context, propagation } from "@opentelemetry/api";
-import { newActivationId } from "@tsva/core/activation-id";
-import { clientIdOf, isClient } from "@tsva/core/client-grain-id";
-import { GrainCallError, RejectionError } from "@tsva/core/errors";
-import type { Grain } from "@tsva/core/grain";
-import { grainAddressEquals, type GrainAddress } from "@tsva/core/grain-address";
-import { GrainId } from "@tsva/core/grain-id";
-import type { GrainInterface } from "@tsva/core/grain-interface";
-import { getGrainInterface } from "@tsva/core/grain-interface";
-import type { InterfaceVersionEntry, SiloManifest } from "@tsva/core/grain-manifest";
-import { getGrainMetadata } from "@tsva/core/grain-metadata";
-import type { GrainType } from "@tsva/core/grain-type";
+import { newActivationId } from "@thresh/core/activation-id";
+import { clientIdOf, isClient } from "@thresh/core/client-grain-id";
+import { GrainCallError, RejectionError } from "@thresh/core/errors";
+import type { Grain } from "@thresh/core/grain";
+import { grainAddressEquals, type GrainAddress } from "@thresh/core/grain-address";
+import { GrainId } from "@thresh/core/grain-id";
+import type { GrainInterface } from "@thresh/core/grain-interface";
+import { getGrainInterface } from "@thresh/core/grain-interface";
+import type { InterfaceVersionEntry, SiloManifest } from "@thresh/core/grain-manifest";
+import { getGrainMetadata } from "@thresh/core/grain-metadata";
+import type { GrainType } from "@thresh/core/grain-type";
 import {
   compatibilityDirector,
   type CompatibilityDirector,
   type CompatibilityKind,
-} from "@tsva/core/version-compatibility";
+} from "@thresh/core/version-compatibility";
 import {
   versionSelector,
   type VersionSelectorKind,
   type VersionSelectorStrategy,
-} from "@tsva/core/version-selector";
-import type { GrainKeyFor } from "@tsva/core/key-kinds";
-import { activeSilos, type MembershipService } from "@tsva/core/membership";
+} from "@thresh/core/version-selector";
+import type { GrainKeyFor } from "@thresh/core/key-kinds";
+import { activeSilos, type MembershipService } from "@thresh/core/membership";
 import type {
   IncomingGrainCallFilter,
   OutgoingGrainCallFilter,
-} from "@tsva/core/grain-call-filter";
-import { Guid } from "@tsva/core/guid";
-import type { GrainReferenceIdentity } from "@tsva/core/grain-reference";
-import { RemindableInterface, type ReminderRegistry, type TickStatus } from "@tsva/core/reminder";
+} from "@thresh/core/grain-call-filter";
+import { Guid } from "@thresh/core/guid";
+import type { GrainReferenceIdentity } from "@thresh/core/grain-reference";
+import { RemindableInterface, type ReminderRegistry, type TickStatus } from "@thresh/core/reminder";
 import {
   DurableJobConsumerInterface,
   type DurableJob,
   type DurableJobRunResult,
   type DurableJobScheduler,
   type JobRunContext,
-} from "@tsva/core/durable-job";
+} from "@thresh/core/durable-job";
 import {
   BroadcastChannelPublisherInterface,
   BroadcastConsumerInterface,
@@ -43,103 +43,103 @@ import {
   type BroadcastChannelOptions,
   type BroadcastChannelProvider,
   type ChannelId,
-} from "@tsva/core/broadcast-channel";
-import { emitBroadcastChannelEvent } from "@tsva/core/broadcast-channel-diagnostics";
+} from "@thresh/core/broadcast-channel";
+import { emitBroadcastChannelEvent } from "@thresh/core/broadcast-channel-diagnostics";
 import {
   ConstructorChannelNamespacePredicateProvider,
   matchesChannelNamespace,
-} from "@tsva/core/channel-namespace-predicate";
-import { StreamConsumerInterface, type Controllable, type StreamProvider } from "@tsva/core/stream";
-import type { InvocationRequest } from "@tsva/core/request";
+} from "@thresh/core/channel-namespace-predicate";
+import { StreamConsumerInterface, type Controllable, type StreamProvider } from "@thresh/core/stream";
+import type { InvocationRequest } from "@thresh/core/request";
 import {
   IManagementGrain,
   type DetailedGrainStatistic,
   type SimpleGrainStatistic,
-} from "@tsva/core/management-grain";
-import type { SiloAddress } from "@tsva/core/silo-address";
+} from "@thresh/core/management-grain";
+import type { SiloAddress } from "@thresh/core/silo-address";
 import {
   participantKey,
   type ParticipantId,
   type TransactionInfo,
-} from "@tsva/core/transaction-info";
-import { TransactionResourceInterface } from "@tsva/core/transaction-resource";
-import { ConsistentHashRing } from "@tsva/directory/consistent-hash-ring";
-import type { DirectoryPeer } from "@tsva/directory/directory-peer";
-import { DistributedGrainDirectory } from "@tsva/directory/distributed-grain-directory";
-import type { GrainDirectory } from "@tsva/directory/grain-directory";
-import { LocalDirectoryPartition } from "@tsva/directory/local-directory-partition";
-import { LocationCache } from "@tsva/directory/location-cache";
-import { ConnectionManager } from "@tsva/messaging/connection-manager";
-import { CorrelationTable } from "@tsva/messaging/correlation-table";
+} from "@thresh/core/transaction-info";
+import { TransactionResourceInterface } from "@thresh/core/transaction-resource";
+import { ConsistentHashRing } from "@thresh/directory/consistent-hash-ring";
+import type { DirectoryPeer } from "@thresh/directory/directory-peer";
+import { DistributedGrainDirectory } from "@thresh/directory/distributed-grain-directory";
+import type { GrainDirectory } from "@thresh/directory/grain-directory";
+import { LocalDirectoryPartition } from "@thresh/directory/local-directory-partition";
+import { LocationCache } from "@thresh/directory/location-cache";
+import { ConnectionManager } from "@thresh/messaging/connection-manager";
+import { CorrelationTable } from "@thresh/messaging/correlation-table";
 import {
   nextCorrelationId,
   responseTo,
   type Message,
   type ResponseKind,
-} from "@tsva/messaging/message";
-import { MessagePackSerializer } from "@tsva/messaging/msgpack-serializer";
-import type { Serializer } from "@tsva/messaging/serializer";
+} from "@thresh/messaging/message";
+import { MessagePackSerializer } from "@thresh/messaging/msgpack-serializer";
+import type { Serializer } from "@thresh/messaging/serializer";
 import type {
   Connection,
   ConnectionPreamble,
   Listener,
   Transport,
-} from "@tsva/messaging/transport";
-import { ActivationCollector } from "@tsva/runtime/activation-collector";
-import { ICancellationSourcesExtension } from "@tsva/runtime/cancellation-extension";
-import { Catalog, type GrainActivator, type RegisteredGrain } from "@tsva/runtime/catalog";
+} from "@thresh/messaging/transport";
+import { ActivationCollector } from "@thresh/runtime/activation-collector";
+import { ICancellationSourcesExtension } from "@thresh/runtime/cancellation-extension";
+import { Catalog, type GrainActivator, type RegisteredGrain } from "@thresh/runtime/catalog";
 import {
   withFilterPlacementCandidatesSpan,
   withPlaceGrainSpan,
-} from "@tsva/observability/activation-tracing";
-import { ClientDirectory } from "@tsva/runtime/client-directory";
-import type { ActivationData, ActivationOptions } from "@tsva/runtime/activation";
-import { DistributedDispatcher } from "@tsva/runtime/distributed-dispatcher";
-import { BroadcastChannelProviderImpl } from "@tsva/runtime/broadcast-channel-provider";
-import { GrainFactory } from "@tsva/runtime/grain-factory";
-import type { GrainServiceRegistry } from "@tsva/runtime/grain-service";
-import { createManagementGrainType } from "@tsva/runtime/management-grain";
-import { chooseMigrationTarget } from "@tsva/runtime/placement/choose-migration-target";
+} from "@thresh/observability/activation-tracing";
+import { ClientDirectory } from "@thresh/runtime/client-directory";
+import type { ActivationData, ActivationOptions } from "@thresh/runtime/activation";
+import { DistributedDispatcher } from "@thresh/runtime/distributed-dispatcher";
+import { BroadcastChannelProviderImpl } from "@thresh/runtime/broadcast-channel-provider";
+import { GrainFactory } from "@thresh/runtime/grain-factory";
+import type { GrainServiceRegistry } from "@thresh/runtime/grain-service";
+import { createManagementGrainType } from "@thresh/runtime/management-grain";
+import { chooseMigrationTarget } from "@thresh/runtime/placement/choose-migration-target";
 import {
   placementFiltersFor,
   placementStrategyFor,
-} from "@tsva/runtime/placement/placement-director";
-import { resolvePlacementHintValue } from "@tsva/runtime/placement/placement-hint";
-import type { PlacementFilter } from "@tsva/runtime/placement/placement-filter";
-import type { PlacementFilterRegistry } from "@tsva/runtime/placement/placement-filter-registry";
-import { RandomPlacement } from "@tsva/runtime/placement/random-placement";
+} from "@thresh/runtime/placement/placement-director";
+import { resolvePlacementHintValue } from "@thresh/runtime/placement/placement-hint";
+import type { PlacementFilter } from "@thresh/runtime/placement/placement-filter";
+import type { PlacementFilterRegistry } from "@thresh/runtime/placement/placement-filter-registry";
+import { RandomPlacement } from "@thresh/runtime/placement/random-placement";
 import type {
   PlacementContext,
   PlacementStrategy,
-} from "@tsva/runtime/placement/placement-strategy";
-import { filterByVersion } from "@tsva/runtime/placement/version-placement-filter";
+} from "@thresh/runtime/placement/placement-strategy";
+import { filterByVersion } from "@thresh/runtime/placement/version-placement-filter";
 import {
   ActivationRepartitioner,
   rebalancerCompatibleTolerance,
   type AcceptExchangeRequest,
   type AcceptExchangeResponse,
   type ImbalanceToleranceRule,
-} from "@tsva/runtime/placement/repartitioning/activation-repartitioner";
-import type { ActivationRepartitionerOptions } from "@tsva/runtime/placement/repartitioning/activation-repartitioner-options";
-import type { Edge } from "@tsva/runtime/placement/repartitioning/edge";
+} from "@thresh/runtime/placement/repartitioning/activation-repartitioner";
+import type { ActivationRepartitionerOptions } from "@thresh/runtime/placement/repartitioning/activation-repartitioner-options";
+import type { Edge } from "@thresh/runtime/placement/repartitioning/edge";
 import {
   DEFAULT_REBALANCER_OPTIONS,
   planCycle,
   type CycleState,
   type RebalancerOptions,
   type StopReason,
-} from "@tsva/runtime/placement/rebalancing/rebalancer-model";
-import { systemTimeProvider, type TimeProvider } from "@tsva/runtime/time-provider";
-import { TransactionAgent } from "@tsva/runtime/transaction-agent";
+} from "@thresh/runtime/placement/rebalancing/rebalancer-model";
+import { systemTimeProvider, type TimeProvider } from "@thresh/runtime/time-provider";
+import { TransactionAgent } from "@thresh/runtime/transaction-agent";
 import {
   DEFAULT_LOAD_SHEDDING_OPTIONS,
   OverloadDetector,
   TestHooksEnvironmentStatisticsProvider,
   type LoadSheddingOptions,
   type SiloLoadSheddingTestHooks,
-} from "@tsva/runtime/load-shedding";
-import { GatewayTooBusyException } from "@tsva/core/errors";
-import { executeWithRetries, fixedBackoff } from "@tsva/core/async-executor-with-retries";
+} from "@thresh/runtime/load-shedding";
+import { GatewayTooBusyException } from "@thresh/core/errors";
+import { executeWithRetries, fixedBackoff } from "@thresh/core/async-executor-with-retries";
 
 /**
  * Recovery-pull tuning (Orleans' directory partition recovery has no direct
@@ -767,7 +767,7 @@ export class ClusterNode {
    * as a `BroadcastConsumer` system call (directory → placement), reactivating an
    * idle subscriber, exactly like stream delivery. Emits an `itemPublished`
    * diagnostic event once, and an `itemDelivered` event per successful
-   * subscriber delivery (`@tsva/core/broadcast-channel-diagnostics`) — tests
+   * subscriber delivery (`@thresh/core/broadcast-channel-diagnostics`) — tests
    * synchronize on these instead of racing the fan-out.
    *
    * Delivery-failure semantics follow the named provider's
@@ -2554,7 +2554,7 @@ export class ClusterNode {
       // call chain) — so a first call that triggers activation runs
       // placement/register/activate inside the caller's trace, giving the
       // "place grain"/"activate grain"/"register directory entry" spans
-      // (`@tsva/observability/activation-tracing`) the same trace id as the
+      // (`@thresh/observability/activation-tracing`) the same trace id as the
       // triggering grain call, not a disconnected root trace.
       const headers = message.requestContext?.headers;
       const extracted =

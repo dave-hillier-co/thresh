@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { GrainCallTimeoutError, RejectionError } from "@tsva/core/errors";
-import { GrainId } from "@tsva/core/grain-id";
-import { SiloAddress } from "@tsva/core/silo-address";
-import { CorrelationTable, type CorrelationTimer } from "@tsva/messaging/correlation-table";
-import { InProcessNetwork, InProcessTransport } from "@tsva/messaging/in-process-transport";
-import { nextCorrelationId, responseTo, type Message } from "@tsva/messaging/message";
-import { JsonSerializer } from "@tsva/messaging/json-serializer";
-import type { ConnectionPreamble } from "@tsva/messaging/transport";
+import { GrainCallTimeoutError, RejectionError } from "@thresh/core/errors";
+import { GrainId } from "@thresh/core/grain-id";
+import { SiloAddress } from "@thresh/core/silo-address";
+import { CorrelationTable, type CorrelationTimer } from "@thresh/messaging/correlation-table";
+import { InProcessNetwork, InProcessTransport } from "@thresh/messaging/in-process-transport";
+import { nextCorrelationId, responseTo, type Message } from "@thresh/messaging/message";
+import { JsonSerializer } from "@thresh/messaging/json-serializer";
+import type { ConnectionPreamble } from "@thresh/messaging/transport";
 
 const CLUSTER = "c1";
 const A = new SiloAddress("silo-A", "ua", "a:1");

@@ -1,16 +1,16 @@
 // Ported from dotnet/orleans test/Orleans.DefaultCluster.Tests/TimerOrleansTest.cs @ v10.1.0 (MIT).
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
-import { durationToMs, type Duration } from "@tsva/core/duration";
-import { FakeTimeProvider } from "@tsva/core/test-support/fake-time-provider";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
+import { durationToMs, type Duration } from "@thresh/core/duration";
+import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
 import {
   NonReentrantTimerCallGrain,
   INonReentrantTimerCallGrain,
-} from "@tsva/parity/grains/impl/non-reentrant-timer-call-grain";
-import { ITimerCallGrain, TimerCallGrain } from "@tsva/parity/grains/impl/timer-call-grain";
-import { ITimerGrain, TimerGrain } from "@tsva/parity/grains/impl/timer-grain";
-import { randomIntegerKey } from "@tsva/parity/support/keys";
+} from "@thresh/parity/grains/impl/non-reentrant-timer-call-grain";
+import { ITimerCallGrain, TimerCallGrain } from "@thresh/parity/grains/impl/timer-call-grain";
+import { ITimerGrain, TimerGrain } from "@thresh/parity/grains/impl/timer-grain";
+import { randomIntegerKey } from "@thresh/parity/support/keys";
 
 // Lets pending timer-callback turns (scheduled via the fake clock) run to
 // completion before the test observes grain state.

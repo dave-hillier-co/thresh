@@ -1,15 +1,15 @@
-import { durationToMs, type Duration } from "@tsva/core/duration";
-import type { GrainId } from "@tsva/core/grain-id";
-import { isHashInRanges, type HashRange } from "@tsva/core/hash-ring";
-import { noopLogger, type Logger } from "@tsva/core/logger";
-import { recordReminderFired, recordReminderMissed } from "@tsva/observability/reminder-metrics";
+import { durationToMs, type Duration } from "@thresh/core/duration";
+import type { GrainId } from "@thresh/core/grain-id";
+import { isHashInRanges, type HashRange } from "@thresh/core/hash-ring";
+import { noopLogger, type Logger } from "@thresh/core/logger";
+import { recordReminderFired, recordReminderMissed } from "@thresh/observability/reminder-metrics";
 import type {
   ReminderEntry,
   ReminderRegistry,
   ReminderTable,
   TickStatus,
-} from "@tsva/core/reminder";
-import type { TimeProvider, TimerHandle } from "@tsva/core/time-provider";
+} from "@thresh/core/reminder";
+import type { TimeProvider, TimerHandle } from "@thresh/core/time-provider";
 
 /** Delivers a due reminder: the silo wires this to reactivate the grain and call `receiveReminder`. */
 export type ReminderFire = (grainId: GrainId, name: string, status: TickStatus) => Promise<void>;
@@ -190,9 +190,9 @@ export class LocalReminderService implements ReminderRegistry {
       currentTickAt: new Date(this.time.now()),
     };
     void this.onFire(entry.grainId, entry.name, status)
-      .then(() => recordReminderFired({ "tsva.reminder.name": entry.name }))
+      .then(() => recordReminderFired({ "thresh.reminder.name": entry.name }))
       .catch((error: unknown) => {
-        recordReminderMissed({ "tsva.reminder.name": entry.name });
+        recordReminderMissed({ "thresh.reminder.name": entry.name });
         this.logger.error("reminder delivery failed", {
           error,
           grainId: entry.grainId.toString(),

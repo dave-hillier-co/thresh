@@ -1,7 +1,7 @@
 // Ported from dotnet/orleans test/Grains/TestGrainInterfaces/IStatelessWorkerGrain.cs
 // and test/Grains/TestGrainInterfaces/IStatelessWorkerScalingGrain.cs @ v10.1.0 (MIT).
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithIntegerKey } from "@tsva/core/key-kinds";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithIntegerKey } from "@thresh/core/key-kinds";
 
 /** Upstream `IStatelessWorkerGrain`: `[StatelessWorker(1)]`, exercised for capacity/queuing behaviour. */
 export interface IStatelessWorkerGrain extends GrainWithIntegerKey {

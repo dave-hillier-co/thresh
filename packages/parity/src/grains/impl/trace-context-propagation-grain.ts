@@ -1,13 +1,13 @@
 // Ported from dotnet/orleans test/Orleans.Runtime.Tests/GrainCallTraceContextPropagationTests.cs
 // @ v10.1.0 (MIT) — `TraceContextPropagationGrain`.
 import { trace } from "@opentelemetry/api";
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import { requestContext } from "@tsva/runtime/invocation-context";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import { requestContext } from "@thresh/runtime/invocation-context";
 import {
   ITraceContextPropagationGrain,
   type TraceContextInfo,
-} from "@tsva/parity/grains/interfaces/trace-context-propagation-grain-interfaces";
+} from "@thresh/parity/grains/interfaces/trace-context-propagation-grain-interfaces";
 
 export { ITraceContextPropagationGrain };
 

@@ -2,7 +2,7 @@
 //
 // Upstream builds a bare StateMachineManager + DurableValue<T> in-process and
 // calls WriteStateAsync explicitly; that internal surface lives in
-// @tsva/journaling, which packages/parity cannot depend on (workspace
+// @thresh/journaling, which packages/parity cannot depend on (workspace
 // boundary). Instead this drives a real grain (DurableCollectionsGrain,
 // @durableState-backed) through TestCluster: each mutator already persists
 // synchronously (no separate flush step), and "recreate the manager from the
@@ -10,12 +10,12 @@
 // the cluster's journal storage is shared cluster-wide, exactly like the
 // upstream test's shared `sut.Storage`.
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
 import {
   DurableCollectionsGrain,
   IDurableCollectionsGrain,
-} from "@tsva/parity/grains/impl/durable-collections-grain";
+} from "@thresh/parity/grains/impl/durable-collections-grain";
 
 describe("Orleans.Journaling.Tests.DurableValueTests", () => {
   let cluster: TestCluster;

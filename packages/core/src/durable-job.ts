@@ -87,7 +87,7 @@ export type DurableJobHandler = (job: JobRunContext) => Promise<DurableJobRunRes
  * (`BROADCAST_CHANNEL_OBSERVER` / `STREAM_SUBSCRIPTION_OBSERVER`); the symbol key
  * keeps it from colliding with the grain's own (string-named) methods.
  */
-export const DURABLE_JOB_HANDLER = Symbol.for("tsva.durableJobHandler");
+export const DURABLE_JOB_HANDLER = Symbol.for("thresh.durableJobHandler");
 
 /** A grain that handles durable jobs delivered to it. */
 export interface DurableJobReceiver {

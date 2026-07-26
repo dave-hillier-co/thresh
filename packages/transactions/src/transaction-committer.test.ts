@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { GrainId } from "@tsva/core/grain-id";
-import type { GrainType } from "@tsva/core/grain-type";
-import type { TransactionInfo } from "@tsva/core/transaction-info";
-import { TransactionInDoubtError, TransactionReadOnlyViolatedError } from "@tsva/core/errors";
-import { invocationContext } from "@tsva/runtime/invocation-context";
-import { systemTimeProvider } from "@tsva/runtime/time-provider";
-import { TransactionAgent } from "@tsva/runtime/transaction-agent";
-import { TransactionCommitter } from "@tsva/transactions/transaction-committer";
+import { GrainId } from "@thresh/core/grain-id";
+import type { GrainType } from "@thresh/core/grain-type";
+import type { TransactionInfo } from "@thresh/core/transaction-info";
+import { TransactionInDoubtError, TransactionReadOnlyViolatedError } from "@thresh/core/errors";
+import { invocationContext } from "@thresh/runtime/invocation-context";
+import { systemTimeProvider } from "@thresh/runtime/time-provider";
+import { TransactionAgent } from "@thresh/runtime/transaction-agent";
+import { TransactionCommitter } from "@thresh/transactions/transaction-committer";
 
 const grainId = (key: string) => new GrainId("CommitterTest" as GrainType, key);
 

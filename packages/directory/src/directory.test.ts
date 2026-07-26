@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { newActivationId } from "@tsva/core/activation-id";
-import { RejectionError } from "@tsva/core/errors";
-import type { GrainAddress } from "@tsva/core/grain-address";
-import { GrainId } from "@tsva/core/grain-id";
-import { SiloAddress } from "@tsva/core/silo-address";
-import { LocalDirectoryPartition } from "@tsva/directory/local-directory-partition";
-import { LocationCache } from "@tsva/directory/location-cache";
+import { newActivationId } from "@thresh/core/activation-id";
+import { RejectionError } from "@thresh/core/errors";
+import type { GrainAddress } from "@thresh/core/grain-address";
+import { GrainId } from "@thresh/core/grain-id";
+import { SiloAddress } from "@thresh/core/silo-address";
+import { LocalDirectoryPartition } from "@thresh/directory/local-directory-partition";
+import { LocationCache } from "@thresh/directory/location-cache";
 
 const siloA = new SiloAddress("silo-A", "ua", "a:1");
 const siloB = new SiloAddress("silo-B", "ub", "b:1");

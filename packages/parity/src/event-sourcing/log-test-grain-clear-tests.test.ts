@@ -5,10 +5,10 @@
 // journal-storage substrate, so a single `LogTestGrain` covers the same
 // protocol behaviour the theory checks.
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
-import { ILogTestGrain, LogTestGrain } from "@tsva/parity/grains/impl/log-test-grain";
-import { randomIntegerKey } from "@tsva/parity/support/keys";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
+import { ILogTestGrain, LogTestGrain } from "@thresh/parity/grains/impl/log-test-grain";
+import { randomIntegerKey } from "@thresh/parity/support/keys";
 
 async function runConcurrentOperationsAroundClear(grain: ILogTestGrain): Promise<unknown[]> {
   const exceptions: unknown[] = [];

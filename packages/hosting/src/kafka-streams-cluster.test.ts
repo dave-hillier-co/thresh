@@ -2,19 +2,19 @@ import { randomUUID } from "node:crypto";
 import { Kafka } from "kafkajs";
 import { Pool } from "pg";
 import { afterAll, describe, expect, it } from "vitest";
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import { stableHash32 } from "@tsva/core/hash";
-import type { GrainWithStringKey } from "@tsva/core/key-kinds";
-import { SiloAddress } from "@tsva/core/silo-address";
-import type { StreamHandler } from "@tsva/core/stream";
-import { ConsistentHashRing } from "@tsva/directory/consistent-hash-ring";
-import { InProcessNetwork } from "@tsva/messaging/in-process-transport";
-import { StaticMembershipService } from "@tsva/runtime/static-membership";
-import { queueRingHash } from "@tsva/streams/queue-ownership";
-import { createSilo } from "@tsva/hosting/silo-builder";
-import type { SiloHost } from "@tsva/hosting/silo-host";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import { stableHash32 } from "@thresh/core/hash";
+import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import { SiloAddress } from "@thresh/core/silo-address";
+import type { StreamHandler } from "@thresh/core/stream";
+import { ConsistentHashRing } from "@thresh/directory/consistent-hash-ring";
+import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
+import { StaticMembershipService } from "@thresh/runtime/static-membership";
+import { queueRingHash } from "@thresh/streams/queue-ownership";
+import { createSilo } from "@thresh/hosting/silo-builder";
+import type { SiloHost } from "@thresh/hosting/silo-host";
 
 const KAFKA_BROKERS = process.env.KAFKA_BROKERS ?? "localhost:9092";
 const PG_URL = process.env.PG_URL ?? "postgres://localhost:5432/postgres";
@@ -22,7 +22,7 @@ const QUEUE_COUNT = 4; // topic partition count must match; kept small for a fas
 
 async function reachableKafka(): Promise<Kafka | undefined> {
   const kafka = new Kafka({
-    clientId: "tsva-test-kafka-cluster",
+    clientId: "thresh-test-kafka-cluster",
     brokers: [KAFKA_BROKERS],
     connectionTimeout: 2000,
     logLevel: 1,
@@ -59,8 +59,8 @@ async function waitFor(predicate: () => boolean, timeoutMs = 8000): Promise<void
 
 const [kafka, admin] = await Promise.all([reachableKafka(), reachablePostgres(PG_URL)]);
 const ready = kafka !== undefined && admin !== undefined;
-const tablePrefix = `tsva_test_kfcl_${randomUUID().replace(/-/g, "")}`;
-const topicPrefix = `tsva_test_kfcl_${randomUUID().replace(/-/g, "")}`;
+const tablePrefix = `thresh_test_kfcl_${randomUUID().replace(/-/g, "")}`;
+const topicPrefix = `thresh_test_kfcl_${randomUUID().replace(/-/g, "")}`;
 const topic = `${topicPrefix}.default`;
 
 // Cross-activation sinks (a reactivated consumer keeps accumulating here).

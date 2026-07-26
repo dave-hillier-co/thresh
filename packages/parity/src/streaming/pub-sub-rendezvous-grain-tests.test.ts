@@ -14,7 +14,7 @@
 // reference, no per-stream consumer/producer counts, and no storage-fault
 // grain to wire up.
 import { it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 const REASON =
   "exercises Orleans' internal PubSubRendezvousGrain (persistent-storage-backed stream subscription broker) via IStorageFaultGrain fault injection; this framework's MemoryStreamProvider keeps subscriptions as in-memory provider state with no persistent rendezvous grain or storage-fault grain to address";

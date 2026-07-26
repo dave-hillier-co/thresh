@@ -1,13 +1,13 @@
 // Ported from dotnet/orleans test/Grains/TestGrains/StatelessWorkerGrain.cs
 // and test/Grains/TestGrains/StatelessWorkerScalingGrain.cs @ v10.1.0 (MIT).
-import { grain, mayInterleave } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import { Guid } from "@tsva/core/guid";
-import type { ActivationReason } from "@tsva/core/reasons";
+import { grain, mayInterleave } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import { Guid } from "@thresh/core/guid";
+import type { ActivationReason } from "@thresh/core/reasons";
 import {
   IStatelessWorkerGrain,
   IStatelessWorkerScalingGrain,
-} from "@tsva/parity/grains/interfaces/stateless-worker-grain-interfaces";
+} from "@thresh/parity/grains/interfaces/stateless-worker-grain-interfaces";
 
 export { IStatelessWorkerGrain, IStatelessWorkerScalingGrain };
 

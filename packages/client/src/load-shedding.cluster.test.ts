@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { grain } from "@tsva/core/decorators";
-import { GatewayTooBusyException } from "@tsva/core/errors";
-import { Grain } from "@tsva/core/grain";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithStringKey } from "@tsva/core/key-kinds";
-import { SiloAddress } from "@tsva/core/silo-address";
-import { InProcessNetwork, InProcessTransport } from "@tsva/messaging/in-process-transport";
-import { ClusterNode } from "@tsva/runtime/cluster-node";
-import { StaticMembershipService } from "@tsva/runtime/static-membership";
-import { createClient } from "@tsva/client/client-node";
+import { grain } from "@thresh/core/decorators";
+import { GatewayTooBusyException } from "@thresh/core/errors";
+import { Grain } from "@thresh/core/grain";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import { SiloAddress } from "@thresh/core/silo-address";
+import { InProcessNetwork, InProcessTransport } from "@thresh/messaging/in-process-transport";
+import { ClusterNode } from "@thresh/runtime/cluster-node";
+import { StaticMembershipService } from "@thresh/runtime/static-membership";
+import { createClient } from "@thresh/client/client-node";
 
 interface IPing extends GrainWithStringKey {
   ping(): Promise<string>;

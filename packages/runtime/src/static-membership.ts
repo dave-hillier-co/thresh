@@ -3,8 +3,8 @@ import type {
   MembershipSnapshot,
   SiloMember,
   SiloStatus,
-} from "@tsva/core/membership";
-import type { SiloAddress } from "@tsva/core/silo-address";
+} from "@thresh/core/membership";
+import type { SiloAddress } from "@thresh/core/silo-address";
 
 /**
  * A membership service backed by an explicit, mutable silo list. Used for local

@@ -1,122 +1,122 @@
-import { durationToMs, type Duration } from "@tsva/core/duration";
-import type { Grain } from "@tsva/core/grain";
+import { durationToMs, type Duration } from "@thresh/core/duration";
+import type { Grain } from "@thresh/core/grain";
 import type {
   IncomingGrainCallFilter,
   OutgoingGrainCallFilter,
-} from "@tsva/core/grain-call-filter";
-import type { GrainInterface } from "@tsva/core/grain-interface";
-import type { GrainKeyFor } from "@tsva/core/key-kinds";
-import type { MembershipService } from "@tsva/core/membership";
-import { SiloAddress } from "@tsva/core/silo-address";
-import type { CompatibilityKind } from "@tsva/core/version-compatibility";
-import type { VersionSelectorKind } from "@tsva/core/version-selector";
+} from "@thresh/core/grain-call-filter";
+import type { GrainInterface } from "@thresh/core/grain-interface";
+import type { GrainKeyFor } from "@thresh/core/key-kinds";
+import type { MembershipService } from "@thresh/core/membership";
+import { SiloAddress } from "@thresh/core/silo-address";
+import type { CompatibilityKind } from "@thresh/core/version-compatibility";
+import type { VersionSelectorKind } from "@thresh/core/version-selector";
 import {
   KubernetesMembership,
   type EndpointWatch,
   type KubernetesMembershipOptions,
-} from "@tsva/clustering-k8s/kubernetes-membership";
-import type { GrainStorage } from "@tsva/core/grain-storage";
-import { InProcessTransport, type InProcessNetwork } from "@tsva/messaging/in-process-transport";
-import type { Transport } from "@tsva/messaging/transport";
-import { WebSocketTransport } from "@tsva/messaging/web-socket-transport";
-import { createClient as createClientNode, type ClientNode } from "@tsva/client/client-node";
-import type { ReminderTable } from "@tsva/core/reminder";
-import { systemTimeProvider, type TimeProvider } from "@tsva/core/time-provider";
+} from "@thresh/clustering-k8s/kubernetes-membership";
+import type { GrainStorage } from "@thresh/core/grain-storage";
+import { InProcessTransport, type InProcessNetwork } from "@thresh/messaging/in-process-transport";
+import type { Transport } from "@thresh/messaging/transport";
+import { WebSocketTransport } from "@thresh/messaging/web-socket-transport";
+import { createClient as createClientNode, type ClientNode } from "@thresh/client/client-node";
+import type { ReminderTable } from "@thresh/core/reminder";
+import { systemTimeProvider, type TimeProvider } from "@thresh/core/time-provider";
 import { createClient } from "redis";
 import { Pool } from "pg";
-import { MemoryGrainStorage } from "@tsva/persistence/memory-grain-storage";
-import { PostgresGrainStorage } from "@tsva/persistence/postgres-grain-storage";
-import { RedisGrainStorage } from "@tsva/persistence/redis-grain-storage";
-import { bindPersistentStates } from "@tsva/persistence/state-activator";
-import { bindReducerStates } from "@tsva/persistence/reducer-state-activator";
-import { StorageRegistry } from "@tsva/persistence/storage-registry";
-import { bindGrainFacets } from "@tsva/persistence/grain-facet-activator";
-import { GrainFacetRegistry, type GrainFacetFactory } from "@tsva/persistence/grain-facet-registry";
-import { PlacementFilterRegistry } from "@tsva/runtime/placement/placement-filter-registry";
-import type { PlacementFilter } from "@tsva/runtime/placement/placement-filter";
+import { MemoryGrainStorage } from "@thresh/persistence/memory-grain-storage";
+import { PostgresGrainStorage } from "@thresh/persistence/postgres-grain-storage";
+import { RedisGrainStorage } from "@thresh/persistence/redis-grain-storage";
+import { bindPersistentStates } from "@thresh/persistence/state-activator";
+import { bindReducerStates } from "@thresh/persistence/reducer-state-activator";
+import { StorageRegistry } from "@thresh/persistence/storage-registry";
+import { bindGrainFacets } from "@thresh/persistence/grain-facet-activator";
+import { GrainFacetRegistry, type GrainFacetFactory } from "@thresh/persistence/grain-facet-registry";
+import { PlacementFilterRegistry } from "@thresh/runtime/placement/placement-filter-registry";
+import type { PlacementFilter } from "@thresh/runtime/placement/placement-filter";
 import {
   bindTransactionalStates,
   unbindTransactionalStates,
-} from "@tsva/transactions/transactional-state-activator";
-import type { Logger } from "@tsva/core/logger";
-import { setupTracePropagation, tracingFilters } from "@tsva/observability/tracing";
-import { metricsFilters } from "@tsva/observability/metrics";
-import { registerRuntimeMetrics } from "@tsva/observability/runtime-metrics";
-import { loggingFilter } from "@tsva/observability/logging";
-import { MemoryTransactionalStorage } from "@tsva/transactions/memory-transactional-storage";
-import { RedisTransactionalStorage } from "@tsva/transactions/redis-transactional-storage";
-import { TransactionalStorageRegistry } from "@tsva/transactions/transactional-storage-registry";
-import type { TransactionalStateStorage } from "@tsva/core/transactional-storage";
-import type { JournalStorage } from "@tsva/core/journal-storage";
-import { MemoryJournalStorage } from "@tsva/journaling/memory-journal-storage";
-import { RedisJournalStorage } from "@tsva/journaling/redis-journal-storage";
-import { JournalStorageRegistry } from "@tsva/journaling/journal-storage-registry";
-import { bindDurableStates } from "@tsva/journaling/durable-state-activator";
-import { bindJournaledGrain } from "@tsva/journaling/journaled-grain-binder";
-import type { BroadcastChannelOptions } from "@tsva/core/broadcast-channel";
-import type { StreamFilter, StreamProvider } from "@tsva/core/stream";
-import type { DurableJobsOptions } from "@tsva/core/durable-job";
-import { activeSilos } from "@tsva/core/membership";
+} from "@thresh/transactions/transactional-state-activator";
+import type { Logger } from "@thresh/core/logger";
+import { setupTracePropagation, tracingFilters } from "@thresh/observability/tracing";
+import { metricsFilters } from "@thresh/observability/metrics";
+import { registerRuntimeMetrics } from "@thresh/observability/runtime-metrics";
+import { loggingFilter } from "@thresh/observability/logging";
+import { MemoryTransactionalStorage } from "@thresh/transactions/memory-transactional-storage";
+import { RedisTransactionalStorage } from "@thresh/transactions/redis-transactional-storage";
+import { TransactionalStorageRegistry } from "@thresh/transactions/transactional-storage-registry";
+import type { TransactionalStateStorage } from "@thresh/core/transactional-storage";
+import type { JournalStorage } from "@thresh/core/journal-storage";
+import { MemoryJournalStorage } from "@thresh/journaling/memory-journal-storage";
+import { RedisJournalStorage } from "@thresh/journaling/redis-journal-storage";
+import { JournalStorageRegistry } from "@thresh/journaling/journal-storage-registry";
+import { bindDurableStates } from "@thresh/journaling/durable-state-activator";
+import { bindJournaledGrain } from "@thresh/journaling/journaled-grain-binder";
+import type { BroadcastChannelOptions } from "@thresh/core/broadcast-channel";
+import type { StreamFilter, StreamProvider } from "@thresh/core/stream";
+import type { DurableJobsOptions } from "@thresh/core/durable-job";
+import { activeSilos } from "@thresh/core/membership";
 import {
   LocalDurableJobManager,
   resolveOptions as resolveDurableJobOptions,
-} from "@tsva/durable-jobs/local-durable-job-manager";
-import type { JobShardStore } from "@tsva/durable-jobs/job-shard-store";
-import { MemoryJobShardStore } from "@tsva/durable-jobs/memory-job-shard-store";
-import { RedisJobShardStore } from "@tsva/durable-jobs/redis-job-shard-store";
+} from "@thresh/durable-jobs/local-durable-job-manager";
+import type { JobShardStore } from "@thresh/durable-jobs/job-shard-store";
+import { MemoryJobShardStore } from "@thresh/durable-jobs/memory-job-shard-store";
+import { RedisJobShardStore } from "@thresh/durable-jobs/redis-job-shard-store";
 import {
   LocalReminderService,
   type ReminderServiceOptions,
-} from "@tsva/reminders/local-reminder-service";
-import { MemoryReminderTable } from "@tsva/reminders/memory-reminder-table";
-import { PostgresReminderTable } from "@tsva/reminders/postgres-reminder-table";
-import { RedisReminderTable } from "@tsva/reminders/redis-reminder-table";
+} from "@thresh/reminders/local-reminder-service";
+import { MemoryReminderTable } from "@thresh/reminders/memory-reminder-table";
+import { PostgresReminderTable } from "@thresh/reminders/postgres-reminder-table";
+import { RedisReminderTable } from "@thresh/reminders/redis-reminder-table";
 import { Kafka } from "kafkajs";
-import { MemoryStreamProvider } from "@tsva/streams/memory-stream-provider";
-import { RedisPullingStreamProvider } from "@tsva/streams/redis-pulling-stream-provider";
-import { PostgresPullingStreamProvider } from "@tsva/streams/postgres-pulling-stream-provider";
-import { KafkaPullingStreamProvider } from "@tsva/streams/kafka-pulling-stream-provider";
+import { MemoryStreamProvider } from "@thresh/streams/memory-stream-provider";
+import { RedisPullingStreamProvider } from "@thresh/streams/redis-pulling-stream-provider";
+import { PostgresPullingStreamProvider } from "@thresh/streams/postgres-pulling-stream-provider";
+import { KafkaPullingStreamProvider } from "@thresh/streams/kafka-pulling-stream-provider";
 import {
   GeneratorPullingStreamProvider,
   type GeneratorPullingStreamProviderOptions,
-} from "@tsva/streams/generator-pulling-stream-provider";
-import type { StreamGeneratorConfig } from "@tsva/streams/generator-stream-queue";
-import type { SubscriptionRegistry } from "@tsva/streams/pulling-stream-provider-core";
+} from "@thresh/streams/generator-pulling-stream-provider";
+import type { StreamGeneratorConfig } from "@thresh/streams/generator-stream-queue";
+import type { SubscriptionRegistry } from "@thresh/streams/pulling-stream-provider-core";
 import type {
   PullingStreamProviderHost,
   StreamFailureHandler,
-} from "@tsva/streams/queue-pulling-agent";
+} from "@thresh/streams/queue-pulling-agent";
 import {
   DurableStreamFailureHandler,
   MemoryStreamFailureStore,
   type DurableStreamFailureStore,
-} from "@tsva/streams/stream-failure-store";
-import { PostgresSubscriptionRegistry } from "@tsva/streams/postgres-subscription-registry";
-import { RedisSubscriptionRegistry } from "@tsva/streams/redis-subscription-registry";
-import { PostgresStreamCursorStore } from "@tsva/streams/postgres-stream-cursor-store";
-import { RedisStreamCursorStore } from "@tsva/streams/redis-stream-cursor-store";
-import type { StreamCursorStore } from "@tsva/streams/stream-cursor-store";
-import { StreamProviderConfigurationError } from "@tsva/streams/stream-provider-config-error";
-import { ClusterNode } from "@tsva/runtime/cluster-node";
-import type { ActivationOptions } from "@tsva/runtime/activation";
-import type { GrainActivator } from "@tsva/runtime/catalog";
-import { GrainServiceRegistry, type GrainService } from "@tsva/runtime/grain-service";
-import type { LoadSheddingOptions } from "@tsva/runtime/load-shedding";
-import { StaticMembershipService } from "@tsva/runtime/static-membership";
-import { ActivationRebalancerWorker } from "@tsva/runtime/placement/rebalancing/rebalancer-worker";
-import type { ImbalanceToleranceRule } from "@tsva/runtime/placement/repartitioning/activation-repartitioner";
+} from "@thresh/streams/stream-failure-store";
+import { PostgresSubscriptionRegistry } from "@thresh/streams/postgres-subscription-registry";
+import { RedisSubscriptionRegistry } from "@thresh/streams/redis-subscription-registry";
+import { PostgresStreamCursorStore } from "@thresh/streams/postgres-stream-cursor-store";
+import { RedisStreamCursorStore } from "@thresh/streams/redis-stream-cursor-store";
+import type { StreamCursorStore } from "@thresh/streams/stream-cursor-store";
+import { StreamProviderConfigurationError } from "@thresh/streams/stream-provider-config-error";
+import { ClusterNode } from "@thresh/runtime/cluster-node";
+import type { ActivationOptions } from "@thresh/runtime/activation";
+import type { GrainActivator } from "@thresh/runtime/catalog";
+import { GrainServiceRegistry, type GrainService } from "@thresh/runtime/grain-service";
+import type { LoadSheddingOptions } from "@thresh/runtime/load-shedding";
+import { StaticMembershipService } from "@thresh/runtime/static-membership";
+import { ActivationRebalancerWorker } from "@thresh/runtime/placement/rebalancing/rebalancer-worker";
+import type { ImbalanceToleranceRule } from "@thresh/runtime/placement/repartitioning/activation-repartitioner";
 import {
   defaultActivationRepartitionerOptions,
   validateActivationRepartitionerOptions,
   type ActivationRepartitionerOptions,
-} from "@tsva/runtime/placement/repartitioning/activation-repartitioner-options";
+} from "@thresh/runtime/placement/repartitioning/activation-repartitioner-options";
 import {
   DEFAULT_REBALANCER_OPTIONS,
   type RebalancerOptions,
-} from "@tsva/runtime/placement/rebalancing/rebalancer-model";
-import { HealthCheck } from "@tsva/hosting/health-check";
-import { HealthServer } from "@tsva/hosting/health-server";
-import { buildSiloHost, type SiloHost } from "@tsva/hosting/silo-host";
+} from "@thresh/runtime/placement/rebalancing/rebalancer-model";
+import { HealthCheck } from "@thresh/hosting/health-check";
+import { HealthServer } from "@thresh/hosting/health-server";
+import { buildSiloHost, type SiloHost } from "@thresh/hosting/silo-host";
 
 export interface SiloConfig {
   clusterId: string;
@@ -321,7 +321,7 @@ export class SiloBuilder {
   /**
    * Enable durable reminders backed by Redis. The client connects when the silo
    * starts and disconnects when it stops; `keyPrefix` namespaces keys (defaults
-   * to `"tsva"`). `serviceOptions` mirrors Orleans `ReminderOptions` (e.g.
+   * to `"thresh"`). `serviceOptions` mirrors Orleans `ReminderOptions` (e.g.
    * `minimumPeriod`).
    */
   useRedisReminders(
@@ -340,7 +340,7 @@ export class SiloBuilder {
   /**
    * Enable durable reminders backed by Postgres. The connection pool is created
    * here, the reminder table is created on silo start (`start()`), and the pool
-   * is closed on stop; `tableName` namespaces rows (defaults to `"tsva_reminders"`).
+   * is closed on stop; `tableName` namespaces rows (defaults to `"thresh_reminders"`).
    */
   usePostgresReminders(options: { connectionString: string; tableName?: string }): this {
     const pool = new Pool({ connectionString: options.connectionString });
@@ -373,7 +373,7 @@ export class SiloBuilder {
   /**
    * Enable durable jobs backed by Redis (the default store). The client
    * connects when the silo starts and disconnects when it stops; `keyPrefix`
-   * namespaces keys (defaults to `"tsva"`). `options` mirrors Orleans
+   * namespaces keys (defaults to `"thresh"`). `options` mirrors Orleans
    * `DurableJobsOptions`.
    */
   useRedisDurableJobs(options: {
@@ -507,7 +507,7 @@ export class SiloBuilder {
    * Register a Redis-backed stream provider (durable, cluster-shared). The
    * client connects when the silo starts and disconnects when it stops; the
    * provider's poll loops are stopped on shutdown. `keyPrefix` namespaces keys
-   * (defaults to `"tsva"`). `options.failureHandler` (Orleans
+   * (defaults to `"thresh"`). `options.failureHandler` (Orleans
    * `IStreamFailureHandler`) is forwarded to every queue's pulling agent,
    * defaulting to a handler backed by `useDurableStreamFailureStore`'s store
    * when one was registered and this call supplies none of its own.
@@ -547,7 +547,7 @@ export class SiloBuilder {
    * `<tablePrefix>_cursors`, `<tablePrefix>_subscriptions`) are provisioned
    * on silo start, and the pool is closed on stop; the provider's poll loops
    * are stopped on shutdown too. `tablePrefix` namespaces the tables
-   * (defaults to `"tsva_stream"`). `options.failureHandler` (Orleans
+   * (defaults to `"thresh_stream"`). `options.failureHandler` (Orleans
    * `IStreamFailureHandler`) is forwarded to every queue's pulling agent,
    * defaulting to a handler backed by `useDurableStreamFailureStore`'s store
    * when one was registered and this call supplies none of its own.
@@ -595,7 +595,7 @@ export class SiloBuilder {
    * teams with Kafka as their event backbone publish/consume streams without
    * a second durable system for the transport
    * (docs/stream-backings-postgres-kafka.md Phase 2). One topic per provider
-   * (`<topicPrefix>.<name>`, default `"tsva.streams"`); one Kafka partition
+   * (`<topicPrefix>.<name>`, default `"thresh.streams"`); one Kafka partition
    * per physical queue, validated to match `queueCount` when the silo
    * starts (topic auto-creation is not assumed — create the topic with the
    * desired partition count out of band).
@@ -629,13 +629,13 @@ export class SiloBuilder {
     if (!Array.isArray(options.brokers) || options.brokers.length === 0) {
       throw new StreamProviderConfigurationError(name, "brokers must be a non-empty array");
     }
-    const kafka = new Kafka({ clientId: `tsva-streams-${name}`, brokers: options.brokers });
+    const kafka = new Kafka({ clientId: `thresh-streams-${name}`, brokers: options.brokers });
 
     let registry: SubscriptionRegistry;
     let cursorStore: StreamCursorStore;
     if ("postgres" in options.metadata) {
       const { connectionString, tablePrefix } = options.metadata.postgres;
-      const prefix = tablePrefix ?? "tsva_stream";
+      const prefix = tablePrefix ?? "thresh_stream";
       const pool = new Pool({ connectionString });
       pool.on("error", () => {}); // surfaced by start()/queries; don't crash the process
       registry = new PostgresSubscriptionRegistry(pool, prefix, name);
@@ -645,7 +645,7 @@ export class SiloBuilder {
       });
     } else {
       const { url, keyPrefix } = options.metadata.redis;
-      const prefix = keyPrefix ?? "tsva";
+      const prefix = keyPrefix ?? "thresh";
       const client = createClient({ url });
       client.on("error", () => {});
       registry = new RedisSubscriptionRegistry(client, prefix, name);
@@ -854,7 +854,7 @@ export class SiloBuilder {
   /**
    * Register a Redis-backed storage provider. The client connects when the silo
    * starts and disconnects when it stops; `keyPrefix` namespaces keys in a Redis
-   * shared by several clusters (defaults to `"tsva"`).
+   * shared by several clusters (defaults to `"thresh"`).
    */
   addRedisStorage(name: string, options: { url: string; keyPrefix?: string }): this {
     const client = this.createManagedRedisClient(options);
@@ -868,7 +868,7 @@ export class SiloBuilder {
    * Register a Postgres-backed storage provider. The connection pool is created
    * here, the backing table is created on silo start (`start()`), and the pool is
    * closed on stop; `tableName` namespaces rows in a Postgres shared by several
-   * clusters (defaults to `"tsva_grain_state"`). Good when state must also be
+   * clusters (defaults to `"thresh_grain_state"`). Good when state must also be
    * queried outside the actor model.
    */
   addPostgresStorage(
@@ -890,7 +890,7 @@ export class SiloBuilder {
   /**
    * Register a Redis-backed transactional-storage provider for
    * `@transactionalState` facets. Connects on start, disconnects on stop;
-   * `keyPrefix` namespaces keys (defaults to `"tsva"`).
+   * `keyPrefix` namespaces keys (defaults to `"thresh"`).
    */
   addRedisTransactionalStorage(name: string, options: { url: string; keyPrefix?: string }): this {
     const client = this.createManagedRedisClient(options);
@@ -917,7 +917,7 @@ export class SiloBuilder {
   /**
    * Register a Redis-backed journal provider for durable-journalling facets. The
    * client connects when the silo starts and disconnects when it stops;
-   * `keyPrefix` namespaces keys (defaults to `"tsva"`).
+   * `keyPrefix` namespaces keys (defaults to `"thresh"`).
    */
   addRedisJournaling(name: string, options: { url: string; keyPrefix?: string }): this {
     const client = this.createManagedRedisClient(options);

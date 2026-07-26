@@ -1,6 +1,6 @@
 // Ported from dotnet/orleans test/Orleans.Runtime.Tests/ClientConnectionTests/ClusterClientTests.cs @ v10.1.0 (MIT).
 import { describe, it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 describe("Tester.ClientConnectionTests.ClusterClientTests", () => {
   // Builds a bare `HostBuilder().UseOrleansClient(...)` with a custom

@@ -2,7 +2,7 @@
  * Cross-grain transaction context and participant contracts. Mirrors Orleans'
  * `TransactionInfo` / `ParticipantId` / `AccessCounter` from
  * `Orleans.Transactions`. These are pure contracts; the agent, the wait-die lock
- * and the commit protocol live in the runtime and `@tsva/transactions`.
+ * and the commit protocol live in the runtime and `@thresh/transactions`.
  */
 
 import type { GrainId } from "./grain-id";
@@ -103,7 +103,7 @@ export interface TransactionInfo {
    * that have not yet been matched by a completion, mirroring Orleans
    * `TransactionInfo.PendingCalls`. The root boundary must see this at zero
    * before it may resolve (commit) — see `TransactionAgent.resolve` and
-   * `TransactionOrphanCallError` (`@tsva/core/errors`).
+   * `TransactionOrphanCallError` (`@thresh/core/errors`).
    */
   pendingCalls: number;
 }

@@ -9,12 +9,12 @@
 // internal StateMachineManager/DurableList surface, and why "new manager,
 // same storage" becomes a silo restart.
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
 import {
   DurableCollectionsGrain,
   IDurableCollectionsGrain,
-} from "@tsva/parity/grains/impl/durable-collections-grain";
+} from "@thresh/parity/grains/impl/durable-collections-grain";
 
 describe("Orleans.Journaling.Tests.AzureStorageLogSegmentTests", () => {
   orleansTest.excluded(

@@ -1,15 +1,15 @@
 // Ported from dotnet/orleans test/Orleans.Core.Tests/DurableJobs/InMemoryJobShardManagerTests.cs @ v10.1.0 (MIT).
 import { describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { completed } from "@tsva/core/durable-job";
-import { GrainId } from "@tsva/core/grain-id";
-import { FakeTimeProvider } from "@tsva/core/test-support/fake-time-provider";
-import { MemoryJobShardStore } from "@tsva/durable-jobs/memory-job-shard-store";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { completed } from "@thresh/core/durable-job";
+import { GrainId } from "@thresh/core/grain-id";
+import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
+import { MemoryJobShardStore } from "@thresh/durable-jobs/memory-job-shard-store";
 import {
   LocalDurableJobManager,
   resolveOptions,
   type ShardOwnershipContext,
-} from "@tsva/durable-jobs/local-durable-job-manager";
+} from "@thresh/durable-jobs/local-durable-job-manager";
 
 // Orleans' `InMemoryJobShardManager` is a SiloAddress/IClusterMembershipService-
 // aware DI service backed by static in-process state; the "AssignJobShardsAsync"

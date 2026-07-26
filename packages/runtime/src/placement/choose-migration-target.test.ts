@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { SiloAddress } from "@tsva/core/silo-address";
-import { chooseMigrationTarget } from "@tsva/runtime/placement/choose-migration-target";
-import type { PlacementContext } from "@tsva/runtime/placement/placement-strategy";
-import { RandomPlacement } from "@tsva/runtime/placement/random-placement";
+import { SiloAddress } from "@thresh/core/silo-address";
+import { chooseMigrationTarget } from "@thresh/runtime/placement/choose-migration-target";
+import type { PlacementContext } from "@thresh/runtime/placement/placement-strategy";
+import { RandomPlacement } from "@thresh/runtime/placement/random-placement";
 
 const silo = (n: number) => new SiloAddress(`silo-${n}`, `uid-${n}`, `silo-${n}:1`);
 const candidates = [silo(0), silo(1), silo(2)];

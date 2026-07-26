@@ -1,10 +1,10 @@
 // Ported from dotnet/orleans test/Grains/TestGrains/GenericGrains.cs (LongRunningTaskGrain<T>) @ v10.1.0 (MIT).
 // See long-running-task-grain-interfaces.ts for what was narrowed and why.
-import { grain } from "@tsva/core/decorators";
-import { GrainTaskCanceledError } from "@tsva/core/errors";
-import { Grain } from "@tsva/core/grain";
-import type { GrainCancellationToken } from "@tsva/core/grain-cancellation-token";
-import { ILongRunningTaskGrain } from "@tsva/parity/grains/interfaces/long-running-task-grain-interfaces";
+import { grain } from "@thresh/core/decorators";
+import { GrainTaskCanceledError } from "@thresh/core/errors";
+import { Grain } from "@thresh/core/grain";
+import type { GrainCancellationToken } from "@thresh/core/grain-cancellation-token";
+import { ILongRunningTaskGrain } from "@thresh/parity/grains/interfaces/long-running-task-grain-interfaces";
 
 export { ILongRunningTaskGrain };
 

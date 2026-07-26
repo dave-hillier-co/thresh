@@ -1,10 +1,10 @@
-import type { InvocationRequest } from "@tsva/core/request";
-import type { Catalog } from "@tsva/runtime/catalog";
+import type { InvocationRequest } from "@thresh/core/request";
+import type { Catalog } from "@thresh/runtime/catalog";
 import {
   withCallDeadline,
   type Dispatcher,
   type InvokeCallOptions,
-} from "@tsva/runtime/dispatcher";
+} from "@thresh/runtime/dispatcher";
 
 /**
  * Phase-1 dispatcher: every grain lives in this one process, so a call is

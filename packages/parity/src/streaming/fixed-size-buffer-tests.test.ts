@@ -9,7 +9,7 @@
 // events as plain in-memory JS values, not serialized byte segments — so
 // there is no equivalent internal data structure to port these tests to.
 import { it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 const REASON =
   "white-box unit tests of Orleans' internal FixedSizeBuffer pooled byte-segment allocator (Orleans.Providers.Streams.Common), part of the persistent-stream pulling-agent message cache; this framework's MemoryStreamProvider holds events as plain in-memory values with no byte-buffer pooling to test-access";

@@ -1,4 +1,4 @@
-import type { GrainReferenceIdentity } from "@tsva/core/grain-reference";
+import type { GrainReferenceIdentity } from "@thresh/core/grain-reference";
 
 /** Pluggable codec for grain method arguments, results and state. */
 export interface Serializer {

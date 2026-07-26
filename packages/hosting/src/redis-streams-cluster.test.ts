@@ -1,19 +1,19 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import { createClient } from "redis";
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import { stableHash32 } from "@tsva/core/hash";
-import type { GrainWithStringKey } from "@tsva/core/key-kinds";
-import { SiloAddress } from "@tsva/core/silo-address";
-import type { StreamHandler } from "@tsva/core/stream";
-import { ConsistentHashRing } from "@tsva/directory/consistent-hash-ring";
-import { InProcessNetwork } from "@tsva/messaging/in-process-transport";
-import { StaticMembershipService } from "@tsva/runtime/static-membership";
-import { queueRingHash } from "@tsva/streams/queue-ownership";
-import { createSilo } from "@tsva/hosting/silo-builder";
-import type { SiloHost } from "@tsva/hosting/silo-host";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import { stableHash32 } from "@thresh/core/hash";
+import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import { SiloAddress } from "@thresh/core/silo-address";
+import type { StreamHandler } from "@thresh/core/stream";
+import { ConsistentHashRing } from "@thresh/directory/consistent-hash-ring";
+import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
+import { StaticMembershipService } from "@thresh/runtime/static-membership";
+import { queueRingHash } from "@thresh/streams/queue-ownership";
+import { createSilo } from "@thresh/hosting/silo-builder";
+import type { SiloHost } from "@thresh/hosting/silo-host";
 
 const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
 type Client = ReturnType<typeof createClient>;
@@ -44,7 +44,7 @@ async function waitFor(predicate: () => boolean, timeoutMs = 4000): Promise<void
 }
 
 const admin = await reachable(REDIS_URL);
-const keyPrefix = `tsva-test:stream-cluster:${randomUUID()}`;
+const keyPrefix = `thresh-test:stream-cluster:${randomUUID()}`;
 const QUEUE_COUNT = 8; // RedisPullingStreamProvider default
 
 // Cross-activation sinks (a reactivated consumer keeps accumulating here).

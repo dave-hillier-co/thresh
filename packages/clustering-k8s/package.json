@@ -1,5 +1,5 @@
 {
-  "name": "@tsva/clustering-k8s",
+  "name": "@thresh/clustering-k8s",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -8,6 +8,6 @@
   },
   "dependencies": {
     "@kubernetes/client-node": "^1.4.0",
-    "@tsva/core": "workspace:*"
+    "@thresh/core": "workspace:*"
   }
 }

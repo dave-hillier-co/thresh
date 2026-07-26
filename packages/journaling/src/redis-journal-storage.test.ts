@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { createClient } from "redis";
-import { InconsistentStateError } from "@tsva/core/errors";
-import { GrainId } from "@tsva/core/grain-id";
-import { DurableValueImpl } from "@tsva/journaling/durable-value-impl";
-import { RedisJournalStorage } from "@tsva/journaling/redis-journal-storage";
-import { StateMachineManagerImpl } from "@tsva/journaling/state-machine-manager-impl";
+import { InconsistentStateError } from "@thresh/core/errors";
+import { GrainId } from "@thresh/core/grain-id";
+import { DurableValueImpl } from "@thresh/journaling/durable-value-impl";
+import { RedisJournalStorage } from "@thresh/journaling/redis-journal-storage";
+import { StateMachineManagerImpl } from "@thresh/journaling/state-machine-manager-impl";
 
 const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
 
@@ -30,7 +30,7 @@ async function reachable(url: string): Promise<Client | undefined> {
 }
 
 const client = await reachable(REDIS_URL);
-const prefix = `tsva-test:journal:${randomUUID()}`;
+const prefix = `thresh-test:journal:${randomUUID()}`;
 
 const id = new GrainId("Agg", "g1");
 const makeStorage = () => new RedisJournalStorage(client!, { keyPrefix: prefix });

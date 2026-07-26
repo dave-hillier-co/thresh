@@ -1,6 +1,6 @@
 // Ported from dotnet/orleans test/Orleans.Core.Tests/Directory/RingRangeTests.cs @ v10.1.0 (MIT).
 import { describe, it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 // RingRange is Orleans' single-arc value type over the hash ring (Create,
 // Complement, Difference, Intersection, Contains, IsEmpty, IsFull), exercised

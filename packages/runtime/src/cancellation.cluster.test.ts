@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { grain } from "@tsva/core/decorators";
-import { GrainTaskCanceledError } from "@tsva/core/errors";
-import { Grain } from "@tsva/core/grain";
-import type { GrainCancellationToken } from "@tsva/core/grain-cancellation-token";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithStringKey } from "@tsva/core/key-kinds";
-import { TestCluster, type TestSiloHandle } from "@tsva/testing/test-cluster";
+import { grain } from "@thresh/core/decorators";
+import { GrainTaskCanceledError } from "@thresh/core/errors";
+import { Grain } from "@thresh/core/grain";
+import type { GrainCancellationToken } from "@thresh/core/grain-cancellation-token";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import { TestCluster, type TestSiloHandle } from "@thresh/testing/test-cluster";
 
 /** A grain whose `longWait` honours a `GrainCancellationToken` (Orleans cooperative cancellation). */
 interface ILongWaitGrain extends GrainWithStringKey {

@@ -1,5 +1,5 @@
-import { defineGrain, usePersistentState } from "@tsva/core/define-grain";
-import type { CounterReply, ICounter } from "@tsva/example-k8s-silo/interfaces";
+import { defineGrain, usePersistentState } from "@thresh/core/define-grain";
+import type { CounterReply, ICounter } from "@thresh/example-k8s-silo/interfaces";
 
 interface CounterState {
   value: number;

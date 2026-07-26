@@ -1,19 +1,19 @@
 import { randomUUID } from "node:crypto";
-import { InconsistentStateError } from "@tsva/core/errors";
-import type { GrainId } from "@tsva/core/grain-id";
+import { InconsistentStateError } from "@thresh/core/errors";
+import type { GrainId } from "@thresh/core/grain-id";
 import type {
   PendingTransactionState,
   TransactionalStateMetadata,
   TransactionalStateStorage,
   TransactionalStorageLoadResponse,
-} from "@tsva/core/transactional-storage";
-import { deserializeValue, serializeValue } from "@tsva/core/value-codec";
+} from "@thresh/core/transactional-storage";
+import { deserializeValue, serializeValue } from "@thresh/core/value-codec";
 import {
   applyStore,
   EMPTY_METADATA,
   emptyRecord,
   type StoredRecord,
-} from "@tsva/transactions/transactional-storage-apply";
+} from "@thresh/transactions/transactional-storage-apply";
 
 /** A connected node-redis client (the subset this provider drives). */
 type RedisClient = {
@@ -23,11 +23,11 @@ type RedisClient = {
 };
 
 export interface RedisTransactionalStorageOptions {
-  /** Namespace for keys in the shared Redis (defaults to `"tsva"`). */
+  /** Namespace for keys in the shared Redis (defaults to `"thresh"`). */
   keyPrefix?: string;
 }
 
-const CONFLICT = "TSVA_TX_ETAG_CONFLICT";
+const CONFLICT = "THRESH_TX_ETAG_CONFLICT";
 
 // Conditional write of the whole record: set only when the caller's expected
 // etag matches the stored one (or no record exists). Atomic on the server, so a
@@ -59,7 +59,7 @@ export class RedisTransactionalStorage implements TransactionalStateStorage {
     private readonly client: RedisClient,
     options: RedisTransactionalStorageOptions = {},
   ) {
-    this.keyPrefix = options.keyPrefix ?? "tsva";
+    this.keyPrefix = options.keyPrefix ?? "thresh";
   }
 
   async load(

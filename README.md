@@ -1,6 +1,6 @@
-# ts-virtual-actors
+# Thresh
 
-A TypeScript implementation of the **virtual actor model** popularised by
+Thresh is a TypeScript implementation of the **virtual actor model** popularised by
 [Microsoft Orleans](https://github.com/dotnet/orleans), designed to run on **Kubernetes**.
 
 The runtime delegates cluster concerns — membership, failure detection, discovery, scaling and
@@ -64,7 +64,7 @@ docs cover only what is worth writing down here:
 
 ## Developing
 
-A [pnpm](https://pnpm.io) workspace of `@tsva/*` packages. Requires Node 22+ and pnpm.
+A [pnpm](https://pnpm.io) workspace of `@thresh/*` packages. Requires Node 22+ and pnpm.
 
 ```sh
 pnpm install      # install workspace dependencies
@@ -79,11 +79,11 @@ Each example runs end-to-end over in-memory providers and the in-process transpo
 exercised as a smoke test in the suite so it can't rot. Start with the greeter.
 
 ```sh
-pnpm --filter @tsva/example-greeter start     # core actor model: activation, turns, idle reset
-pnpm --filter @tsva/example-chat start         # stream fan-out to many members + durable resume
-pnpm --filter @tsva/example-cluster start      # 3 silos over WebSocket: cross-silo routing + failover
-pnpm --filter @tsva/example-bank start         # reducer grains: events fold to immutable state
-pnpm --filter @tsva/example-thermostat start   # durable state + a reminder + a telemetry stream
+pnpm --filter @thresh/example-greeter start     # core actor model: activation, turns, idle reset
+pnpm --filter @thresh/example-chat start         # stream fan-out to many members + durable resume
+pnpm --filter @thresh/example-cluster start      # 3 silos over WebSocket: cross-silo routing + failover
+pnpm --filter @thresh/example-bank start         # reducer grains: events fold to immutable state
+pnpm --filter @thresh/example-thermostat start   # durable state + a reminder + a telemetry stream
 ```
 
 - [`examples/greeter`](examples/greeter) — the smallest grain: `onActivate` runs before the first

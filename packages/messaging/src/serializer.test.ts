@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { GrainId } from "@tsva/core/grain-id";
-import { GRAIN_REF, type GrainReferenceIdentity } from "@tsva/core/grain-reference";
-import { Guid } from "@tsva/core/guid";
-import { SiloAddress } from "@tsva/core/silo-address";
-import { JsonSerializer } from "@tsva/messaging/json-serializer";
-import { MessagePackSerializer } from "@tsva/messaging/msgpack-serializer";
-import type { Serializer, SerializerOptions } from "@tsva/messaging/serializer";
+import { GrainId } from "@thresh/core/grain-id";
+import { GRAIN_REF, type GrainReferenceIdentity } from "@thresh/core/grain-reference";
+import { Guid } from "@thresh/core/guid";
+import { SiloAddress } from "@thresh/core/silo-address";
+import { JsonSerializer } from "@thresh/messaging/json-serializer";
+import { MessagePackSerializer } from "@thresh/messaging/msgpack-serializer";
+import type { Serializer, SerializerOptions } from "@thresh/messaging/serializer";
 
 const serializers: Array<[string, (o?: SerializerOptions) => Serializer]> = [
   ["JsonSerializer", (o) => new JsonSerializer(o)],

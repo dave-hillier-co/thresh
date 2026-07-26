@@ -8,7 +8,7 @@
 // TypeScript runtime), and there is no direct serializer-internals entry point
 // exposed by the test harness to call in its place.
 import { describe, it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 const reason =
   "Exercises System.Text.Json's converter for Orleans' .NET GrainId type via " +

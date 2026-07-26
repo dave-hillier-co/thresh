@@ -1,13 +1,13 @@
-import type { GrainId } from "@tsva/core/grain-id";
+import type { GrainId } from "@thresh/core/grain-id";
 import type {
   DehydrationContext,
   IGrainMigrationParticipant,
   RehydrationContext,
-} from "@tsva/core/grain-migration-participant";
-import type { GrainStorage, StateHolder } from "@tsva/core/grain-storage";
-import type { PersistentState } from "@tsva/core/persistent-state";
-import { withStorageReadSpan, withStorageWriteSpan } from "@tsva/observability/activation-tracing";
-import { withStorageOpMetrics } from "@tsva/observability/storage-metrics";
+} from "@thresh/core/grain-migration-participant";
+import type { GrainStorage, StateHolder } from "@thresh/core/grain-storage";
+import type { PersistentState } from "@thresh/core/persistent-state";
+import { withStorageReadSpan, withStorageWriteSpan } from "@thresh/observability/activation-tracing";
+import { withStorageOpMetrics } from "@thresh/observability/storage-metrics";
 
 /**
  * Binds a named state to a grain identity and a storage provider. Keeps the

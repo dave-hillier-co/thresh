@@ -10,8 +10,8 @@ import {
   isObserverGrainId,
   observerId,
   scopeOf,
-} from "@tsva/core/client-grain-id";
-import { GrainId } from "@tsva/core/grain-id";
+} from "@thresh/core/client-grain-id";
+import { GrainId } from "@thresh/core/grain-id";
 
 describe("isClientGrainType", () => {
   it("is true for the reserved client grain type", () => {

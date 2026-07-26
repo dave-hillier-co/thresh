@@ -1,10 +1,10 @@
 import { once } from "node:events";
 import { WebSocket, WebSocketServer } from "ws";
-import { RejectionError } from "@tsva/core/errors";
-import { SiloAddress } from "@tsva/core/silo-address";
-import { recordMessageReceived } from "@tsva/observability/messaging-metrics";
-import type { Message } from "@tsva/messaging/message";
-import { MessagePackSerializer } from "@tsva/messaging/msgpack-serializer";
+import { RejectionError } from "@thresh/core/errors";
+import { SiloAddress } from "@thresh/core/silo-address";
+import { recordMessageReceived } from "@thresh/observability/messaging-metrics";
+import type { Message } from "@thresh/messaging/message";
+import { MessagePackSerializer } from "@thresh/messaging/msgpack-serializer";
 import type {
   Connection,
   ConnectionAcceptHandler,
@@ -12,7 +12,7 @@ import type {
   Listener,
   MessageHandler,
   Transport,
-} from "@tsva/messaging/transport";
+} from "@thresh/messaging/transport";
 
 const ACK = Uint8Array.of(1);
 
@@ -80,8 +80,8 @@ export class WebSocketTransport implements Transport {
         }
         const message = this.serializer.deserialize<Message>(bytes);
         recordMessageReceived({
-          "tsva.peer": from.endpoint,
-          "tsva.message.direction": message.direction,
+          "thresh.peer": from.endpoint,
+          "thresh.message.direction": message.direction,
         });
         void onMessage(message, from);
       });

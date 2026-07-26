@@ -4,12 +4,12 @@
 // internal `MaxHeap<T>`/`IHeapElement<T>` and asserts extraction always
 // returns them in descending order, including after priorities are mutated
 // and re-heapified via `OnIncreaseElementPriority`/`OnDecreaseElementPriority`.
-// Ported onto `@tsva/runtime/placement/repartitioning/max-heap`
+// Ported onto `@thresh/runtime/placement/repartitioning/max-heap`
 // (`MaxHeap`/`HeapElement`), a faithful port of the quaternary array-backed
 // max-heap.
-import { type HeapElement, MaxHeap } from "@tsva/runtime/placement/repartitioning/max-heap";
+import { type HeapElement, MaxHeap } from "@thresh/runtime/placement/repartitioning/max-heap";
 import { describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 class MyHeapElement implements HeapElement<MyHeapElement> {
   heapIndex = -1;

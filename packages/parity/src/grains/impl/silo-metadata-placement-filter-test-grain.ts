@@ -1,14 +1,14 @@
 // Ported from dotnet/orleans test/Orleans.Placement.Tests/PlacementFilterTests/SiloMetadataPlacementFilterTests.cs @ v10.1.0 (MIT).
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import type { SiloAddress } from "@tsva/core/silo-address";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import type { SiloAddress } from "@thresh/core/silo-address";
 import {
   IPreferredMatchFilteredGrain,
   IPreferredMatchMin2FilteredGrain,
   IPreferredMatchMultipleFilteredGrain,
   IPreferredMatchNoMetadataFilteredGrain,
   IUniqueRequiredMatchFilteredGrain,
-} from "@tsva/parity/grains/interfaces/silo-metadata-placement-filter-test-grain-interfaces";
+} from "@thresh/parity/grains/interfaces/silo-metadata-placement-filter-test-grain-interfaces";
 
 export {
   IPreferredMatchFilteredGrain,

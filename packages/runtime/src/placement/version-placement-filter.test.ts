@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { SiloManifest } from "@tsva/core/grain-manifest";
-import { backwardCompatible, strict } from "@tsva/core/version-compatibility";
-import { all, latest, minimum } from "@tsva/core/version-selector";
-import { SiloAddress } from "@tsva/core/silo-address";
-import { filterByVersion } from "@tsva/runtime/placement/version-placement-filter";
+import type { SiloManifest } from "@thresh/core/grain-manifest";
+import { backwardCompatible, strict } from "@thresh/core/version-compatibility";
+import { all, latest, minimum } from "@thresh/core/version-selector";
+import { SiloAddress } from "@thresh/core/silo-address";
+import { filterByVersion } from "@thresh/runtime/placement/version-placement-filter";
 
 const IFACE = 42;
 const silo = (n: number) => new SiloAddress(`silo-${n}`, `uid-${n}`, `silo-${n}:1`);

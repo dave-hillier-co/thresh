@@ -2,7 +2,7 @@ import type {
   BroadcastChannelProvider,
   BroadcastChannelWriter,
   ChannelId,
-} from "@tsva/core/broadcast-channel";
+} from "@thresh/core/broadcast-channel";
 
 /**
  * A named broadcast-channel provider. Its writers are thin: each `publish`

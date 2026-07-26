@@ -26,7 +26,7 @@ export class CancellationTokenPlaceholder {
  * the same "hidden symbol field + accessor" shape `grain-reference.ts` uses
  * for `GRAIN_REF`.
  */
-const SOURCE: unique symbol = Symbol("tsva.cancellationTokenSource");
+const SOURCE: unique symbol = Symbol("thresh.cancellationTokenSource");
 
 /**
  * Non-enumerable, module-internal back-reference from a callee-side
@@ -36,7 +36,7 @@ const SOURCE: unique symbol = Symbol("tsva.cancellationTokenSource");
  * with `SOURCE` in practice: a token either was minted by a source
  * (caller-side) or bound from the wire with this hook (callee-side).
  */
-const ON_DISPATCH: unique symbol = Symbol("tsva.cancellationTokenOnDispatch");
+const ON_DISPATCH: unique symbol = Symbol("thresh.cancellationTokenOnDispatch");
 
 /**
  * Per-`AbortSignal` sink of exceptions thrown by `register` callbacks when
@@ -50,7 +50,7 @@ const ON_DISPATCH: unique symbol = Symbol("tsva.cancellationTokenOnDispatch");
  * `GrainCancellationToken` callback's exception flows back to the caller of
  * `GrainCancellationTokenSource.Cancel()`.
  */
-const CALLBACK_ERRORS: unique symbol = Symbol("tsva.cancellationCallbackErrors");
+const CALLBACK_ERRORS: unique symbol = Symbol("thresh.cancellationCallbackErrors");
 
 type ErrorSink = { [CALLBACK_ERRORS]?: unknown[] };
 
@@ -214,11 +214,11 @@ export function recordCancellationTarget(token: GrainCancellationToken, target: 
  * tells every recorded target grain to abort its bound copy too, via
  * `canceller` — cross-silo propagation rides the already-built
  * `IGrainExtension` substrate (`ICancellationSourcesExtension`,
- * `@tsva/runtime/cancellation-extension`).
+ * `@thresh/runtime/cancellation-extension`).
  *
  * `canceller` is injected rather than reaching for an ambient runtime/factory
- * so this class stays a plain `@tsva/core` value type with no dependency on
- * `@tsva/runtime`. What the *public* API for constructing a
+ * so this class stays a plain `@thresh/core` value type with no dependency on
+ * `@thresh/runtime`. What the *public* API for constructing a
  * `GrainCancellationTokenSource` inside a grain looks like (e.g. wiring
  * `canceller` from `this.runtime` automatically) is left to the later parity
  * port — this task only builds the mechanism.

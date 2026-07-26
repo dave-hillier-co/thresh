@@ -1,7 +1,7 @@
 // Ported from dotnet/orleans test/Grains/TestGrainInterfaces/ITestGrain.cs @ v10.1.0 (MIT).
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithGuidKey } from "@tsva/core/key-kinds";
-import type { ISimpleGrainObserver } from "@tsva/parity/grains/interfaces/simple-observerable-grain-interfaces";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithGuidKey } from "@thresh/core/key-kinds";
+import type { ISimpleGrainObserver } from "@thresh/parity/grains/interfaces/simple-observerable-grain-interfaces";
 
 export interface IOneWayGrain extends GrainWithGuidKey {
   notify(observer: ISimpleGrainObserver): Promise<void>;

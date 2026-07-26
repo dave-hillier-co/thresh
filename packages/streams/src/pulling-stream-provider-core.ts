@@ -1,7 +1,7 @@
-import { keyToString, type GrainKey } from "@tsva/core/grain-key";
-import type { GrainId } from "@tsva/core/grain-id";
-import type { GrainType } from "@tsva/core/grain-type";
-import { stableHash32 } from "@tsva/core/hash";
+import { keyToString, type GrainKey } from "@thresh/core/grain-key";
+import type { GrainId } from "@thresh/core/grain-id";
+import type { GrainType } from "@thresh/core/grain-type";
+import { stableHash32 } from "@thresh/core/hash";
 import type {
   ActivationBoundStreamProvider,
   AsyncStream,
@@ -12,17 +12,17 @@ import type {
   StreamProvider,
   StreamSubscriptionHandle,
   SubscribeOptions,
-} from "@tsva/core/stream";
-import { implicitSubscriberIds } from "@tsva/streams/implicit-subscriptions";
+} from "@thresh/core/stream";
+import { implicitSubscriberIds } from "@thresh/streams/implicit-subscriptions";
 import {
   QueuePullingAgent,
   type PullableQueue,
   type StreamFailureHandler,
-} from "@tsva/streams/queue-pulling-agent";
-import { ownedQueueIndices, type HashRange } from "@tsva/streams/queue-ownership";
-import type { StreamDeliver } from "@tsva/streams/stream-deliver";
-import { StreamProducerRegistry } from "@tsva/streams/stream-producer-registry";
-import { StreamProviderConfigurationError } from "@tsva/streams/stream-provider-config-error";
+} from "@thresh/streams/queue-pulling-agent";
+import { ownedQueueIndices, type HashRange } from "@thresh/streams/queue-ownership";
+import type { StreamDeliver } from "@thresh/streams/stream-deliver";
+import { StreamProducerRegistry } from "@thresh/streams/stream-producer-registry";
+import { StreamProviderConfigurationError } from "@thresh/streams/stream-provider-config-error";
 
 /**
  * The shape a physical queue must offer to be multiplexed by

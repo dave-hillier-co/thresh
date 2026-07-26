@@ -1,12 +1,12 @@
 // Ported from dotnet/orleans test/Orleans.EventSourcing.Tests/EventSourcingTests/AccountGrainTests.cs @ v10.1.0 (MIT).
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
 import {
   AccountGrainPersistStateOnly,
   IAccountGrain,
-} from "@tsva/parity/grains/impl/account-grain";
-import { Guid } from "@tsva/core/guid";
+} from "@thresh/parity/grains/impl/account-grain";
+import { Guid } from "@thresh/core/guid";
 
 describe("Tester.EventSourcingTests.AccountGrainTests", () => {
   let cluster: TestCluster;
@@ -23,7 +23,7 @@ describe("Tester.EventSourcingTests.AccountGrainTests", () => {
   });
 
   // Upstream skipped: https://github.com/dotnet/orleans/issues/5605. This
-  // framework now has `JournaledGrain` (see `@tsva/core/journaled-grain`), but
+  // framework now has `JournaledGrain` (see `@thresh/core/journaled-grain`), but
   // there is no reason to port a real `AccountGrain` event-log variant just to
   // exercise a test upstream itself never runs.
   orleansTest.excluded(

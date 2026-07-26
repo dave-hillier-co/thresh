@@ -3,12 +3,12 @@
 // GetSimpleGrainStatistics) — the system management grain that surfaces
 // cluster topology and per-grain-type activation counts.
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { IManagementGrain } from "@tsva/core/management-grain";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
-import { ISimpleGrain, SimpleGrain } from "@tsva/parity/grains/impl/simple-grain";
-import { ITestGrain, TestGrain } from "@tsva/parity/grains/impl/test-grain";
-import { randomIntegerKey } from "@tsva/parity/support/keys";
+import { IManagementGrain } from "@thresh/core/management-grain";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
+import { ISimpleGrain, SimpleGrain } from "@thresh/parity/grains/impl/simple-grain";
+import { ITestGrain, TestGrain } from "@thresh/parity/grains/impl/test-grain";
+import { randomIntegerKey } from "@thresh/parity/support/keys";
 
 describe("UnitTests.Management.ManagementGrainTests", () => {
   let cluster: TestCluster;

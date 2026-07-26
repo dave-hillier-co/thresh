@@ -1,18 +1,18 @@
 import { describe, expect, it } from "vitest";
-import type { GrainMetadata } from "@tsva/core/grain-metadata";
-import { SiloAddress } from "@tsva/core/silo-address";
-import { ActivationCountPlacement } from "@tsva/runtime/placement/activation-count-placement";
-import { MetadataMatchFilter } from "@tsva/runtime/placement/metadata-match-filter";
+import type { GrainMetadata } from "@thresh/core/grain-metadata";
+import { SiloAddress } from "@thresh/core/silo-address";
+import { ActivationCountPlacement } from "@thresh/runtime/placement/activation-count-placement";
+import { MetadataMatchFilter } from "@thresh/runtime/placement/metadata-match-filter";
 import {
   placementFiltersFor,
   placementStrategyFor,
-} from "@tsva/runtime/placement/placement-director";
-import type { PlacementContext } from "@tsva/runtime/placement/placement-strategy";
-import { PreferLocalPlacement } from "@tsva/runtime/placement/prefer-local-placement";
-import { RandomPlacement } from "@tsva/runtime/placement/random-placement";
-import { ResourceOptimizedPlacement } from "@tsva/runtime/placement/resource-optimized-placement";
-import { SiloRoleBasedPlacement } from "@tsva/runtime/placement/silo-role-based-placement";
-import { StatelessWorkerPlacement } from "@tsva/runtime/placement/stateless-worker-placement";
+} from "@thresh/runtime/placement/placement-director";
+import type { PlacementContext } from "@thresh/runtime/placement/placement-strategy";
+import { PreferLocalPlacement } from "@thresh/runtime/placement/prefer-local-placement";
+import { RandomPlacement } from "@thresh/runtime/placement/random-placement";
+import { ResourceOptimizedPlacement } from "@thresh/runtime/placement/resource-optimized-placement";
+import { SiloRoleBasedPlacement } from "@thresh/runtime/placement/silo-role-based-placement";
+import { StatelessWorkerPlacement } from "@thresh/runtime/placement/stateless-worker-placement";
 
 const silo = (n: number) => new SiloAddress(`silo-${n}`, `uid-${n}`, `silo-${n}:1`);
 const candidates = [silo(0), silo(1), silo(2)];

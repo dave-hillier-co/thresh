@@ -2,16 +2,16 @@
 // Upstream's namespace is literally `UnitTDefaultCluster.Tests.General` (a typo in the
 // original source, preserved here so the id traces back exactly).
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
-import type { ClientNode } from "@tsva/client/client-node";
-import { RequestContext } from "@tsva/core/request-context";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
+import type { ClientNode } from "@thresh/client/client-node";
+import { RequestContext } from "@thresh/core/request-context";
 import {
   ISimplePersistentGrain,
   SimplePersistentGrain,
-} from "@tsva/parity/grains/impl/simple-persistent-grain";
-import { randomIntegerKey } from "@tsva/parity/support/keys";
-import { createClusterClient } from "@tsva/parity/support/client";
+} from "@thresh/parity/grains/impl/simple-persistent-grain";
+import { randomIntegerKey } from "@thresh/parity/support/keys";
+import { createClusterClient } from "@thresh/parity/support/client";
 
 describe("UnitTDefaultCluster.Tests.General.RequestContextTests", () => {
   let cluster: TestCluster;
@@ -34,7 +34,7 @@ describe("UnitTDefaultCluster.Tests.General.RequestContextTests", () => {
 
   // Upstream sets `RequestContext.Set(...)` directly from the test method (i.e. from a
   // non-grain "client" caller) before invoking the grain, then reads `RequestContext.Keys`
-  // back afterwards on the same ambient (.NET AsyncLocal) context. `@tsva/core`'s
+  // back afterwards on the same ambient (.NET AsyncLocal) context. `@thresh/core`'s
   // `RequestContext` (backed by `AsyncLocalStorage.enterWith`) gives a non-grain caller the
   // same ambient-set/read semantics, and the client's `GrainFactory` now injects that ambient
   // bag onto its outgoing calls (same mechanism a grain-to-grain call already used).

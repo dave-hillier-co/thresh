@@ -4,8 +4,8 @@
 // this framework binds a grain interface to its implementation statically at
 // registration time, so that mechanism has no analogue here (see
 // grain-factory-tests.test.ts). Only the two key-kind probes are ported.
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithGuidKey, GrainWithStringKey } from "@tsva/core/key-kinds";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithGuidKey, GrainWithStringKey } from "@thresh/core/key-kinds";
 
 export interface IStringGrain extends GrainWithStringKey {
   foo(): Promise<boolean>;

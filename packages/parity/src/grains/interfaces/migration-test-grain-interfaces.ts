@@ -21,9 +21,9 @@
 // (set by an explicit `failNextRehydrate()` call before triggering migration),
 // which is carried into the dehydration bag exactly the way upstream's grain
 // itself does it internally.
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithIntegerKey } from "@tsva/core/key-kinds";
-import type { SiloAddress } from "@tsva/core/silo-address";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithIntegerKey } from "@thresh/core/key-kinds";
+import type { SiloAddress } from "@thresh/core/silo-address";
 
 export interface IMigrationTestGrain extends GrainWithIntegerKey {
   setState(state: number): Promise<void>;

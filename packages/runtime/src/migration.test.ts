@@ -1,18 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import { GrainId } from "@tsva/core/grain-id";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import { GrainId } from "@thresh/core/grain-id";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
 import type {
   DehydrationContext,
   IGrainMigrationParticipant,
   RehydrationContext,
-} from "@tsva/core/grain-migration-participant";
-import type { GrainWithStringKey } from "@tsva/core/key-kinds";
-import type { SiloAddress } from "@tsva/core/silo-address";
-import { Silo } from "@tsva/runtime/silo";
-import { FakeTimeProvider } from "@tsva/runtime/test-support/fake-time-provider";
-import { TestCluster } from "@tsva/testing/test-cluster";
+} from "@thresh/core/grain-migration-participant";
+import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { SiloAddress } from "@thresh/core/silo-address";
+import { Silo } from "@thresh/runtime/silo";
+import { FakeTimeProvider } from "@thresh/runtime/test-support/fake-time-provider";
+import { TestCluster } from "@thresh/testing/test-cluster";
 
 interface IMigratingCounter extends GrainWithStringKey {
   increment(by: number): Promise<number>;

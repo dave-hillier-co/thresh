@@ -1,5 +1,5 @@
-import type { DurableStateMachine, StateMachineManager } from "@tsva/core/durable-state-machine";
-import type { LogViewAdaptor } from "@tsva/core/journaled-grain";
+import type { DurableStateMachine, StateMachineManager } from "@thresh/core/durable-state-machine";
+import type { LogViewAdaptor } from "@thresh/core/journaled-grain";
 
 /** A framed log record for a `JournaledGrain`'s single log: either a raised event, or a confirmed-state snapshot (compaction). */
 type Frame<TState, TEvent> = { t: "event"; e: TEvent } | { t: "snap"; s: TState };

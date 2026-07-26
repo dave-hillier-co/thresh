@@ -6,12 +6,12 @@
 // non-empty top-K report — the upstream test itself only asserts the
 // formatted report is non-empty (it's a diagnostic/manual-inspection test,
 // not a precise-count assertion). Ported onto
-// `@tsva/runtime/placement/repartitioning/frequent-item-collection`
+// `@thresh/runtime/placement/repartitioning/frequent-item-collection`
 // (`FrequentItemCollection`), the same generic sketch that backs
 // `FrequentEdgeCounterTests`.
-import { FrequentItemCollection } from "@tsva/runtime/placement/repartitioning/frequent-item-collection";
+import { FrequentItemCollection } from "@thresh/runtime/placement/repartitioning/frequent-item-collection";
 import { describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 class UlongFrequentItemCollection extends FrequentItemCollection<bigint> {
   protected override getKey(element: bigint): bigint {

@@ -1,13 +1,13 @@
-import type { GrainType } from "@tsva/core/grain-type";
+import type { GrainType } from "@thresh/core/grain-type";
 import {
   recordAgentPoll,
   recordStreamDelivered,
   recordStreamFailed,
-} from "@tsva/observability/stream-metrics";
-import type { QueueEntry } from "@tsva/streams/redis-stream-queue";
-import type { HashRange } from "@tsva/streams/queue-ownership";
-import type { StreamDeliver } from "@tsva/streams/stream-deliver";
-import { RecoverableStreamDeliveryError } from "@tsva/streams/stream-recovery";
+} from "@thresh/observability/stream-metrics";
+import type { QueueEntry } from "@thresh/streams/redis-stream-queue";
+import type { HashRange } from "@thresh/streams/queue-ownership";
+import type { StreamDeliver } from "@thresh/streams/stream-deliver";
+import { RecoverableStreamDeliveryError } from "@thresh/streams/stream-recovery";
 
 /** Delivers one pulled event to the stream's subscribers; the agent supplies it. */
 export type DeliverEvent = (streamKey: string, event: unknown, token: number) => Promise<void>;
@@ -177,7 +177,7 @@ export class QueuePullingAgent {
       if (!this.running) return false;
       try {
         await this.deliver(streamKey, event, token);
-        recordStreamDelivered({ "tsva.stream.key": streamKey });
+        recordStreamDelivered({ "thresh.stream.key": streamKey });
         return true;
       } catch (err) {
         if (err instanceof RecoverableStreamDeliveryError) {
@@ -197,7 +197,7 @@ export class QueuePullingAgent {
     }
     // Retry budget exhausted: notify the failure handler, then advance past the
     // event so a single poison entry does not stall the rest of the queue.
-    recordStreamFailed({ "tsva.stream.key": streamKey });
+    recordStreamFailed({ "thresh.stream.key": streamKey });
     try {
       await this.failureHandler?.onDeliveryFailure(
         streamKey,

@@ -4,16 +4,16 @@
 // edge counter behind the repartitioner: incrementing an existing edge,
 // evicting the minimum-count edge once capacity is reached, and explicit
 // removal. Ported onto
-// `@tsva/runtime/placement/repartitioning/frequent-edge-counter`
+// `@thresh/runtime/placement/repartitioning/frequent-edge-counter`
 // (`FrequentEdgeCounter`, built on the generic `FrequentItemCollection`
 // "Filtered Space-Saving" sketch), a faithful port of the top-K
 // insert/evict/remove algorithm.
-import { GrainId } from "@tsva/core/grain-id";
-import { SiloAddress } from "@tsva/core/silo-address";
-import { edge, edgeVertex } from "@tsva/runtime/placement/repartitioning/edge";
-import { FrequentEdgeCounter } from "@tsva/runtime/placement/repartitioning/frequent-edge-counter";
+import { GrainId } from "@thresh/core/grain-id";
+import { SiloAddress } from "@thresh/core/silo-address";
+import { edge, edgeVertex } from "@thresh/runtime/placement/repartitioning/edge";
+import { FrequentEdgeCounter } from "@thresh/runtime/placement/repartitioning/frequent-edge-counter";
 import { describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 const zero = new SiloAddress("", "", "");
 const idA = new GrainId("A", "id-a");

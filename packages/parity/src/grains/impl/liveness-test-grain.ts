@@ -1,8 +1,8 @@
 // Ported from dotnet/orleans test/Grains/TestGrains/LivenessTestGrain.cs @ v10.1.0 (MIT).
 // See liveness-test-grain-interfaces.ts for which methods were dropped and why.
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import { ILivenessTestGrain } from "@tsva/parity/grains/interfaces/liveness-test-grain-interfaces";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import { ILivenessTestGrain } from "@thresh/parity/grains/interfaces/liveness-test-grain-interfaces";
 
 export { ILivenessTestGrain };
 

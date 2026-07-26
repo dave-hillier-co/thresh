@@ -1,11 +1,11 @@
 // Ported from dotnet/orleans test/Grains/TestGrains/ValueTypeTestGrain.cs @ v10.1.0 (MIT).
-import { grain, persistentState } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import type { PersistentState } from "@tsva/core/persistent-state";
+import { grain, persistentState } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import type { PersistentState } from "@thresh/core/persistent-state";
 import {
   IValueTypeTestGrain,
   type ValueTypeTestData,
-} from "@tsva/parity/grains/interfaces/value-type-test-grain-interfaces";
+} from "@thresh/parity/grains/interfaces/value-type-test-grain-interfaces";
 
 export { IValueTypeTestGrain };
 export type { ValueTypeTestData };

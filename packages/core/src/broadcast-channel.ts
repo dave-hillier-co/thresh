@@ -37,7 +37,7 @@ export interface BroadcastChannelHandler<T> {
  * (`BroadcastChannelSubscription.cs`), the grain never calls `subscribe()`. The
  * symbol key keeps it from colliding with the grain's own (string-named) methods.
  */
-export const BROADCAST_CHANNEL_OBSERVER = Symbol.for("tsva.broadcastChannelObserver");
+export const BROADCAST_CHANNEL_OBSERVER = Symbol.for("thresh.broadcastChannelObserver");
 
 /** A grain that observes its implicitly-subscribed broadcast channels. */
 export interface OnBroadcastChannelSubscribed {

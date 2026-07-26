@@ -3,9 +3,9 @@
 // Upstream listens to `System.Diagnostics.Activity` via an `ActivityListener`
 // bagging every started `Activity`; this port uses the OpenTelemetry
 // equivalent — a real `BasicTracerProvider` + in-memory exporter registered
-// by `@tsva/parity/support/tracing`'s `createTracingHarness()` — and the
+// by `@thresh/parity/support/tracing`'s `createTracingHarness()` — and the
 // framework's EXISTING tracing call filters (`tracingFilters()` in
-// `@tsva/observability/tracing`, wired via `SiloBuilder.useTracing()` and
+// `@thresh/observability/tracing`, wired via `SiloBuilder.useTracing()` and
 // `ClientConfig.outgoingCallFilters`) rather than any new instrumentation.
 //
 // Split (21 upstream cases):
@@ -16,7 +16,7 @@
 //    call filters — plus `ActivationSpanSharesTraceIdWithTriggeringGrainCall`
 //    and `FullTraceHierarchyIsCorrectWhenActivationTriggeredByGrainCall`,
 //    which lean on the ACTIVATION-path span taxonomy
-//    (`@tsva/observability/activation-tracing`'s `ActivateGrain` span, wired
+//    (`@thresh/observability/activation-tracing`'s `ActivateGrain` span, wired
 //    through `ClusterNode.receiveRequest` → `DistributedDispatcher.deliverLocal`
 //    so it shares the triggering call's trace id — see
 //    activation-tracing-tests.test.ts's `ActivationSpanIsCreatedOnFirstCall`).
@@ -27,30 +27,30 @@
 //    here would exercise propagation beyond what the other 18 already cover.
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { SpanKind, trace } from "@opentelemetry/api";
-import { GrainId } from "@tsva/core/grain-id";
-import { getGrainMetadata } from "@tsva/core/grain-metadata";
-import { SiloAddress } from "@tsva/core/silo-address";
-import { requestContext } from "@tsva/runtime/invocation-context";
-import { ActivityNames } from "@tsva/observability/activation-tracing";
-import { tracingFilters } from "@tsva/observability/tracing";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster, type TestSiloHandle } from "@tsva/testing/test-cluster";
-import { waitFor } from "@tsva/testing/wait";
-import { InProcessTransport } from "@tsva/messaging/in-process-transport";
-import { createClient, type ClientNode } from "@tsva/client/client-node";
+import { GrainId } from "@thresh/core/grain-id";
+import { getGrainMetadata } from "@thresh/core/grain-metadata";
+import { SiloAddress } from "@thresh/core/silo-address";
+import { requestContext } from "@thresh/runtime/invocation-context";
+import { ActivityNames } from "@thresh/observability/activation-tracing";
+import { tracingFilters } from "@thresh/observability/tracing";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster, type TestSiloHandle } from "@thresh/testing/test-cluster";
+import { waitFor } from "@thresh/testing/wait";
+import { InProcessTransport } from "@thresh/messaging/in-process-transport";
+import { createClient, type ClientNode } from "@thresh/client/client-node";
 import {
   ITraceContextPropagationGrain,
   TraceContextPropagationGrain,
-} from "@tsva/parity/grains/impl/trace-context-propagation-grain";
-import type { TraceContextInfo } from "@tsva/parity/grains/interfaces/trace-context-propagation-grain-interfaces";
-import { SimpleObserverableGrain } from "@tsva/parity/grains/impl/simple-observerable-grain";
+} from "@thresh/parity/grains/impl/trace-context-propagation-grain";
+import type { TraceContextInfo } from "@thresh/parity/grains/interfaces/trace-context-propagation-grain-interfaces";
+import { SimpleObserverableGrain } from "@thresh/parity/grains/impl/simple-observerable-grain";
 import {
   ISimpleGrainObserver,
   ISimpleObserverableGrain,
-} from "@tsva/parity/grains/interfaces/simple-observerable-grain-interfaces";
-import { createClusterClient } from "@tsva/parity/support/client";
-import { randomIntegerKey } from "@tsva/parity/support/keys";
-import { createTracingHarness } from "@tsva/parity/support/tracing";
+} from "@thresh/parity/grains/interfaces/simple-observerable-grain-interfaces";
+import { createClusterClient } from "@thresh/parity/support/client";
+import { randomIntegerKey } from "@thresh/parity/support/keys";
+import { createTracingHarness } from "@thresh/parity/support/tracing";
 
 const grainType = getGrainMetadata(TraceContextPropagationGrain)!.grainType;
 

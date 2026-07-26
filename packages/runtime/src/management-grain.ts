@@ -1,17 +1,17 @@
-import { durationToMs, type Duration } from "@tsva/core/duration";
-import type { GrainAddress } from "@tsva/core/grain-address";
-import { Grain } from "@tsva/core/grain";
-import type { GrainId } from "@tsva/core/grain-id";
-import { setGrainOptions } from "@tsva/core/grain-metadata";
-import { grainReferenceIdentity } from "@tsva/core/grain-reference";
-import type { GrainType } from "@tsva/core/grain-type";
+import { durationToMs, type Duration } from "@thresh/core/duration";
+import type { GrainAddress } from "@thresh/core/grain-address";
+import { Grain } from "@thresh/core/grain";
+import type { GrainId } from "@thresh/core/grain-id";
+import { setGrainOptions } from "@thresh/core/grain-metadata";
+import { grainReferenceIdentity } from "@thresh/core/grain-reference";
+import type { GrainType } from "@thresh/core/grain-type";
 import {
   IManagementGrain,
   type DetailedGrainStatistic,
   type SimpleGrainStatistic,
-} from "@tsva/core/management-grain";
-import type { MembershipSnapshot, SiloMember, SiloStatus } from "@tsva/core/membership";
-import type { SiloAddress } from "@tsva/core/silo-address";
+} from "@thresh/core/management-grain";
+import type { MembershipSnapshot, SiloMember, SiloStatus } from "@thresh/core/membership";
+import type { SiloAddress } from "@thresh/core/silo-address";
 
 export { IManagementGrain };
 

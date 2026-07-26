@@ -1,9 +1,9 @@
 // Ported from dotnet/orleans test/Grains/TestGrainInterfaces/IReminderTestGrain.cs
 // and IReminderTestGrain2.cs @ v10.1.0 (MIT).
-import type { Duration } from "@tsva/core/duration";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainReminder } from "@tsva/core/reminder";
-import type { GrainWithGuidKey, GrainWithIntegerKey } from "@tsva/core/key-kinds";
+import type { Duration } from "@thresh/core/duration";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainReminder } from "@thresh/core/reminder";
+import type { GrainWithGuidKey, GrainWithIntegerKey } from "@thresh/core/key-kinds";
 
 export interface IReminderTestGrain extends GrainWithIntegerKey {
   isReminderExists(reminderName: string): Promise<boolean>;

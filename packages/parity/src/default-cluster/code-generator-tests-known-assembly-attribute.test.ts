@@ -11,7 +11,7 @@
 // generator and .NET's `System.Type` reflection; this TypeScript framework has
 // no assemblies, no source-generator registry, and no F# interop to test.
 import { describe, it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 const reason =
   "Tests whether Orleans' Roslyn-generated serializer registry (optionally extended via " +

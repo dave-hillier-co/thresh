@@ -1,5 +1,5 @@
-import { durationToMs, type Duration } from "@tsva/core/duration";
-import type { ShouldRetry } from "@tsva/core/durable-job";
+import { durationToMs, type Duration } from "@thresh/core/duration";
+import type { ShouldRetry } from "@thresh/core/durable-job";
 
 /**
  * The time-bucket shard key for a due time: `floor(dueTime / shardDuration)`

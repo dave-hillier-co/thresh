@@ -1,13 +1,13 @@
 // Ported from dotnet/orleans test/Grains/TestGrains/DurableJobGrain.cs,
 // SchedulerGrain.cs, RetryTestGrain.cs @ v10.1.0 (MIT).
-import { defineGrain, useDurableJobHandler } from "@tsva/core/define-grain";
-import { completed, type DurableJob, type JobRunContext } from "@tsva/core/durable-job";
-import { GrainId } from "@tsva/core/grain-id";
+import { defineGrain, useDurableJobHandler } from "@thresh/core/define-grain";
+import { completed, type DurableJob, type JobRunContext } from "@thresh/core/durable-job";
+import { GrainId } from "@thresh/core/grain-id";
 import {
   IDurableJobGrain,
   IRetryTestGrain,
   ISchedulerGrain,
-} from "@tsva/parity/grains/interfaces/durable-job-grain-interfaces";
+} from "@thresh/parity/grains/interfaces/durable-job-grain-interfaces";
 
 export { IDurableJobGrain, IRetryTestGrain, ISchedulerGrain };
 

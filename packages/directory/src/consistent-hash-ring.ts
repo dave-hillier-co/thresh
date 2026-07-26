@@ -1,6 +1,6 @@
-import type { GrainId } from "@tsva/core/grain-id";
-import { stableHash32 } from "@tsva/core/hash";
-import type { SiloAddress } from "@tsva/core/silo-address";
+import type { GrainId } from "@thresh/core/grain-id";
+import { stableHash32 } from "@thresh/core/hash";
+import type { SiloAddress } from "@thresh/core/silo-address";
 
 interface RingNode {
   hash: number;

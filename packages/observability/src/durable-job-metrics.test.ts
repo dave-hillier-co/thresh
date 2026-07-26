@@ -11,7 +11,7 @@ import {
   recordJobFailed,
   recordJobStarted,
   registerDurableJobQueueDepth,
-} from "@tsva/observability/durable-job-metrics";
+} from "@thresh/observability/durable-job-metrics";
 
 const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
 const reader = new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 100_000 });
@@ -34,14 +34,14 @@ describe("durable-job metrics", () => {
   });
 
   it("counts started, completed, and failed attempts independently", async () => {
-    recordJobStarted({ "tsva.job.name": "j" });
-    recordJobStarted({ "tsva.job.name": "j" });
-    recordJobCompleted({ "tsva.job.id": "1" });
-    recordJobFailed({ "tsva.job.id": "2" });
+    recordJobStarted({ "thresh.job.name": "j" });
+    recordJobStarted({ "thresh.job.name": "j" });
+    recordJobCompleted({ "thresh.job.id": "1" });
+    recordJobFailed({ "thresh.job.id": "2" });
 
-    const started = await metric("tsva.durablejobs.started");
-    const completed = await metric("tsva.durablejobs.completed");
-    const failed = await metric("tsva.durablejobs.failed");
+    const started = await metric("thresh.durablejobs.started");
+    const completed = await metric("thresh.durablejobs.completed");
+    const failed = await metric("thresh.durablejobs.failed");
     expect(started!.dataPoints[0]!.value).toBe(2);
     expect(completed!.dataPoints[0]!.value).toBe(1);
     expect(failed!.dataPoints[0]!.value).toBe(1);
@@ -50,7 +50,7 @@ describe("durable-job metrics", () => {
   it("samples the queue-depth observable gauge from the given callback", async () => {
     const unregister = registerDurableJobQueueDepth(() => 7);
     try {
-      const gauge = await metric("tsva.durablejobs.queue.depth");
+      const gauge = await metric("thresh.durablejobs.queue.depth");
       expect(gauge!.dataPoints[0]!.value).toBe(7);
     } finally {
       unregister();

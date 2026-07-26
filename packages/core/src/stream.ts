@@ -173,7 +173,7 @@ export function tryGetStreamSubscriptionManager(
  * (the common implicit case) is not affected: absence, not a declined return,
  * is what silently drops delivery.
  */
-export const STREAM_SUBSCRIPTION_OBSERVER = Symbol.for("tsva.streamSubscriptionObserver");
+export const STREAM_SUBSCRIPTION_OBSERVER = Symbol.for("thresh.streamSubscriptionObserver");
 
 /** A grain that observes its implicitly- or administratively-subscribed streams. */
 export interface ImplicitStreamSubscriber {

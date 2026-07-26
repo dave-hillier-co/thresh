@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { SiloAddress } from "@tsva/core/silo-address";
-import type { MembershipService, MembershipSnapshot } from "@tsva/core/membership";
-import { FakeTimeProvider } from "@tsva/core/test-support/fake-time-provider";
-import type { CycleState, StopReason } from "@tsva/runtime/placement/rebalancing/rebalancer-model";
-import { DEFAULT_REBALANCER_OPTIONS } from "@tsva/runtime/placement/rebalancing/rebalancer-model";
+import { SiloAddress } from "@thresh/core/silo-address";
+import type { MembershipService, MembershipSnapshot } from "@thresh/core/membership";
+import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
+import type { CycleState, StopReason } from "@thresh/runtime/placement/rebalancing/rebalancer-model";
+import { DEFAULT_REBALANCER_OPTIONS } from "@thresh/runtime/placement/rebalancing/rebalancer-model";
 import {
   ActivationRebalancerWorker,
   type RebalanceCycleResult,
-} from "@tsva/runtime/placement/rebalancing/rebalancer-worker";
+} from "@thresh/runtime/placement/rebalancing/rebalancer-worker";
 
 const silo = (n: number) => new SiloAddress(`silo-${n}`, `uid-${n}`, `silo-${n}:1111${n}`);
 

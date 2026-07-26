@@ -6,7 +6,7 @@ import {
   MeterProvider,
   PeriodicExportingMetricReader,
 } from "@opentelemetry/sdk-metrics";
-import { recordReminderFired, recordReminderMissed } from "@tsva/observability/reminder-metrics";
+import { recordReminderFired, recordReminderMissed } from "@thresh/observability/reminder-metrics";
 
 const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
 const reader = new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 100_000 });
@@ -29,12 +29,12 @@ describe("reminder metrics", () => {
   });
 
   it("counts fired and missed ticks separately", async () => {
-    recordReminderFired({ "tsva.reminder.name": "r1" });
-    recordReminderFired({ "tsva.reminder.name": "r1" });
-    recordReminderMissed({ "tsva.reminder.name": "r2" });
+    recordReminderFired({ "thresh.reminder.name": "r1" });
+    recordReminderFired({ "thresh.reminder.name": "r1" });
+    recordReminderMissed({ "thresh.reminder.name": "r2" });
 
-    const fired = await metric("tsva.reminders.fired");
-    const missed = await metric("tsva.reminders.missed");
+    const fired = await metric("thresh.reminders.fired");
+    const missed = await metric("thresh.reminders.missed");
     expect(fired!.dataPoints[0]!.value).toBe(2);
     expect(missed!.dataPoints[0]!.value).toBe(1);
   });

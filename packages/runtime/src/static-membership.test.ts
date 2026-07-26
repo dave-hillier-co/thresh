@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { activeSilos } from "@tsva/core/membership";
-import { SiloAddress } from "@tsva/core/silo-address";
-import { StaticMembershipService } from "@tsva/runtime/static-membership";
+import { activeSilos } from "@thresh/core/membership";
+import { SiloAddress } from "@thresh/core/silo-address";
+import { StaticMembershipService } from "@thresh/runtime/static-membership";
 
 const silo = (n: number) => new SiloAddress(`silo-${n}`, `uid-${n}`, `silo-${n}:1`);
 

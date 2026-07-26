@@ -1,21 +1,21 @@
-import { durationToMs, type Duration } from "@tsva/core/duration";
+import { durationToMs, type Duration } from "@thresh/core/duration";
 import type {
   DurableJob,
   DurableJobsOptions,
   ScheduleJobRequest,
   ShouldRetry,
-} from "@tsva/core/durable-job";
-import { Guid } from "@tsva/core/guid";
-import type { TimeProvider } from "@tsva/core/time-provider";
-import { registerDurableJobQueueDepth } from "@tsva/observability/durable-job-metrics";
-import { claimBudget, defaultShouldRetry, shardKeyFor } from "@tsva/durable-jobs/job-model";
-import type { JobShardStore } from "@tsva/durable-jobs/job-shard-store";
+} from "@thresh/core/durable-job";
+import { Guid } from "@thresh/core/guid";
+import type { TimeProvider } from "@thresh/core/time-provider";
+import { registerDurableJobQueueDepth } from "@thresh/observability/durable-job-metrics";
+import { claimBudget, defaultShouldRetry, shardKeyFor } from "@thresh/durable-jobs/job-model";
+import type { JobShardStore } from "@thresh/durable-jobs/job-shard-store";
 import {
   ConcurrencyLimiter,
   ShardExecutor,
   type OverloadSignal,
   type RunJob,
-} from "@tsva/durable-jobs/shard-executor";
+} from "@thresh/durable-jobs/shard-executor";
 
 export interface ResolvedDurableJobsOptions {
   shardDurationMs: number;

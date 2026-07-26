@@ -1,5 +1,5 @@
 {
-  "name": "@tsva/example-bank",
+  "name": "@thresh/example-bank",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -10,9 +10,9 @@
     "start": "vite-node --config ../../vitest.config.ts src/main.ts"
   },
   "dependencies": {
-    "@tsva/core": "workspace:*",
-    "@tsva/hosting": "workspace:*",
-    "@tsva/messaging": "workspace:*",
-    "@tsva/persistence": "workspace:*"
+    "@thresh/core": "workspace:*",
+    "@thresh/hosting": "workspace:*",
+    "@thresh/messaging": "workspace:*",
+    "@thresh/persistence": "workspace:*"
   }
 }

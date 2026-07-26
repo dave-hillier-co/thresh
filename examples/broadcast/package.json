@@ -1,5 +1,5 @@
 {
-  "name": "@tsva/example-broadcast",
+  "name": "@thresh/example-broadcast",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -10,8 +10,8 @@
     "start": "vite-node --config ../../vitest.config.ts src/main.ts"
   },
   "dependencies": {
-    "@tsva/core": "workspace:*",
-    "@tsva/messaging": "workspace:*",
-    "@tsva/hosting": "workspace:*"
+    "@thresh/core": "workspace:*",
+    "@thresh/messaging": "workspace:*",
+    "@thresh/hosting": "workspace:*"
   }
 }

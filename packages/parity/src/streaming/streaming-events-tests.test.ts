@@ -10,7 +10,7 @@
 // diagnostics feed, and no `StreamingEvents` equivalent to subscribe to or
 // emit through — `MemoryStreamProvider` has no queue balancing at all.
 import { it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 orleansTest.excluded(
   "white-box unit test of Orleans' internal StreamingEvents diagnostics feed (Orleans.Streaming.Diagnostics), emitted by the persistent-stream pulling-agent's queue balancer; this framework has no pulling-agent queue balancer or diagnostics feed to test-access",

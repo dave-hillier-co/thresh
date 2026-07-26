@@ -6,7 +6,7 @@
 // equivalent (GAP-GRAIN-EXTENSION, now closed) is
 // `castGrainReference(grain, IGrainManagementExtension).deactivateOnIdle()` —
 // the built-in, auto-installed extension every activation gets (see
-// `@tsva/runtime/grain-management-extension`) — with `DurableCollectionsGrain`'s
+// `@thresh/runtime/grain-management-extension`) — with `DurableCollectionsGrain`'s
 // `activationTag()` standing in for Orleans' `GetActivationId()` (a per-
 // activation random tag rather than a real ActivationId, but the same "did a
 // fresh activation run" signal the upstream tests rely on).
@@ -19,14 +19,14 @@
 // `value` for simple/complex single-value state and its `dict`/`list`/`queue`/
 // `set` for the multi-collection cases.
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { castGrainReference } from "@tsva/core/grain-reference";
-import { IGrainManagementExtension } from "@tsva/runtime/grain-management-extension";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
+import { castGrainReference } from "@thresh/core/grain-reference";
+import { IGrainManagementExtension } from "@thresh/runtime/grain-management-extension";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
 import {
   DurableCollectionsGrain,
   IDurableCollectionsGrain,
-} from "@tsva/parity/grains/impl/durable-collections-grain";
+} from "@thresh/parity/grains/impl/durable-collections-grain";
 
 describe("Orleans.Journaling.Tests.DurableGrainTests", () => {
   let cluster: TestCluster;

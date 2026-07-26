@@ -13,18 +13,18 @@
 // same assertion through a coordinator grain whose own `[Transaction(Create)]`
 // method fans out `Set`/`Add` calls (`[Transaction(Join)]`) to several grains.
 //
-// `TestCluster` now supports `{ transactions: false }` (@tsva/testing), which
+// `TestCluster` now supports `{ transactions: false }` (@thresh/testing), which
 // builds every silo via `SiloBuilder.disableTransactions()` — no transactional
 // storage provider is wired, so `GrainFactory.resolveTransaction` throws
-// `TransactionsDisabledError` (@tsva/core/errors) before the call ever reaches
+// `TransactionsDisabledError` (@thresh/core/errors) before the call ever reaches
 // an activation.
 import { expect } from "vitest";
-import { defineGrain, useTransactionalState } from "@tsva/core/define-grain";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithStringKey } from "@tsva/core/key-kinds";
-import { TransactionsDisabledError } from "@tsva/core/errors";
-import { TestCluster } from "@tsva/testing/test-cluster";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { defineGrain, useTransactionalState } from "@thresh/core/define-grain";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import { TransactionsDisabledError } from "@thresh/core/errors";
+import { TestCluster } from "@thresh/testing/test-cluster";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 interface Counter {
   value: number;

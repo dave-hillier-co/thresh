@@ -1,6 +1,6 @@
 // Ported from dotnet/orleans test/Orleans.Core.Tests/SchedulerTests/OrleansTaskSchedulerAdvancedTests_Set2.cs @ v10.1.0 (MIT).
 import { describe, it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 // Same rationale as OrleansTaskSchedulerBasicTests/AdvancedTests: every method here drives
 // Orleans' internal ActivationTaskScheduler (Task.Run/Task.Delay/WhenAny semantics re-hosted on

@@ -12,9 +12,9 @@
 // replaces upstream's `WatchCancellations` channel/async-stream with a simple
 // poll, since the ported tests only need to know whether a given callId was
 // recorded cancelled, not to observe a live stream of cancellations.
-import type { GrainCancellationToken } from "@tsva/core/grain-cancellation-token";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithGuidKey } from "@tsva/core/key-kinds";
+import type { GrainCancellationToken } from "@thresh/core/grain-cancellation-token";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithGuidKey } from "@thresh/core/key-kinds";
 
 export interface ILongRunningTaskGrain extends GrainWithGuidKey {
   /** Awaits a cancellable delay; on cancellation records `callId` and throws `GrainTaskCanceledError`. */

@@ -6,13 +6,13 @@ import {
   MeterProvider,
   PeriodicExportingMetricReader,
 } from "@opentelemetry/sdk-metrics";
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithStringKey } from "@tsva/core/key-kinds";
-import { SiloAddress } from "@tsva/core/silo-address";
-import { InProcessNetwork } from "@tsva/messaging/in-process-transport";
-import { createSilo } from "@tsva/hosting/silo-builder";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import { SiloAddress } from "@thresh/core/silo-address";
+import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
+import { createSilo } from "@thresh/hosting/silo-builder";
 
 // Register a meter provider with an in-memory exporter before the silo builds
 // (useMetrics resolves the global meter at build time).
@@ -59,8 +59,8 @@ describe("OpenTelemetry metrics filter", () => {
         .flatMap((rm) => rm.scopeMetrics)
         .flatMap((sm) => sm.metrics);
 
-      const calls = recorded.find((m) => m.descriptor.name === "tsva.grain.calls");
-      const duration = recorded.find((m) => m.descriptor.name === "tsva.grain.call.duration");
+      const calls = recorded.find((m) => m.descriptor.name === "thresh.grain.calls");
+      const duration = recorded.find((m) => m.descriptor.name === "thresh.grain.call.duration");
       expect(calls).toBeDefined();
       expect(duration).toBeDefined();
 
@@ -90,7 +90,7 @@ describe("OpenTelemetry metrics filter", () => {
         .getMetrics()
         .flatMap((rm) => rm.scopeMetrics)
         .flatMap((sm) => sm.metrics)
-        .find((m) => m.descriptor.name === "tsva.activations");
+        .find((m) => m.descriptor.name === "thresh.activations");
       expect(gauge).toBeDefined();
       expect(gauge!.dataPoints.at(-1)!.value as number).toBeGreaterThanOrEqual(2);
     } finally {
@@ -117,8 +117,8 @@ describe("OpenTelemetry metrics filter", () => {
         .getMetrics()
         .flatMap((rm) => rm.scopeMetrics)
         .flatMap((sm) => sm.metrics);
-      const hits = recorded.find((m) => m.descriptor.name === "tsva.directory.cache.hits");
-      const misses = recorded.find((m) => m.descriptor.name === "tsva.directory.cache.misses");
+      const hits = recorded.find((m) => m.descriptor.name === "thresh.directory.cache.hits");
+      const misses = recorded.find((m) => m.descriptor.name === "thresh.directory.cache.misses");
       expect(hits).toBeDefined();
       expect(misses).toBeDefined();
       const total =

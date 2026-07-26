@@ -1,9 +1,9 @@
 // Ported from dotnet/orleans test/Grains/TestGrains/KeyExtensionTestGrain.cs @ v10.1.0 (MIT).
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import type { CompoundKey } from "@tsva/core/grain-key";
-import { Guid } from "@tsva/core/guid";
-import { IKeyExtensionTestGrain } from "@tsva/parity/grains/interfaces/key-extension-test-grain-interfaces";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import type { CompoundKey } from "@thresh/core/grain-key";
+import { Guid } from "@thresh/core/guid";
+import { IKeyExtensionTestGrain } from "@thresh/parity/grains/interfaces/key-extension-test-grain-interfaces";
 
 export { IKeyExtensionTestGrain };
 

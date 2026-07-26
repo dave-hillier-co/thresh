@@ -6,10 +6,10 @@
 // `builder.addPlacementFilter(name, director)` (Orleans
 // `AddPlacementFilter<TStrategy, TDirector>`); a grain opts in with a
 // `{ kind: "custom", name, order }` `placementFilters` entry.
-import type { GrainType } from "@tsva/core/grain-type";
-import type { SiloAddress } from "@tsva/core/silo-address";
-import type { PlacementFilter } from "@tsva/runtime/placement/placement-filter";
-import type { PlacementContext } from "@tsva/runtime/placement/placement-strategy";
+import type { GrainType } from "@thresh/core/grain-type";
+import type { SiloAddress } from "@thresh/core/silo-address";
+import type { PlacementFilter } from "@thresh/runtime/placement/placement-filter";
+import type { PlacementContext } from "@thresh/runtime/placement/placement-strategy";
 
 /**
  * Records each invocation and lets a test await the next one — the TS

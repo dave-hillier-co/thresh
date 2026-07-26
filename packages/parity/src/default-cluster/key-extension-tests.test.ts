@@ -4,16 +4,16 @@
 // `CompoundKey<Guid>` (packages/core/src/grain-key.ts) via the
 // `GrainWithGuidCompoundKey` marker interface (packages/core/src/key-kinds.ts).
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
-import { CompoundKey } from "@tsva/core/grain-key";
-import { grainReferenceIdentity } from "@tsva/core/grain-reference";
-import { Guid } from "@tsva/core/guid";
-import { IStringGrain, StringGrain } from "@tsva/parity/grains/impl/get-grain-grains";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
+import { CompoundKey } from "@thresh/core/grain-key";
+import { grainReferenceIdentity } from "@thresh/core/grain-reference";
+import { Guid } from "@thresh/core/guid";
+import { IStringGrain, StringGrain } from "@thresh/parity/grains/impl/get-grain-grains";
 import {
   IKeyExtensionTestGrain,
   KeyExtensionTestGrain,
-} from "@tsva/parity/grains/impl/key-extension-test-grain";
+} from "@thresh/parity/grains/impl/key-extension-test-grain";
 
 describe("DefaultCluster.Tests.General.KeyExtensionTests", () => {
   let cluster: TestCluster;

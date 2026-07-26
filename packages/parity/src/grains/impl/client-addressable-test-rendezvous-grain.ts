@@ -1,10 +1,10 @@
 // Ported from dotnet/orleans test/Grains/TestInternalGrains/ClientAddressableTestRendezvousGrain.cs @ v10.1.0 (MIT).
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
 import {
   IClientAddressableTestRendezvousGrain,
   type IClientAddressableTestProducer,
-} from "@tsva/parity/grains/interfaces/client-addressable-interfaces";
+} from "@thresh/parity/grains/interfaces/client-addressable-interfaces";
 
 export { IClientAddressableTestRendezvousGrain };
 

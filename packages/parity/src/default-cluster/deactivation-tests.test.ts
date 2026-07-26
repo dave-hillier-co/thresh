@@ -1,13 +1,13 @@
 // Ported from dotnet/orleans test/Orleans.DefaultCluster.Tests/DeactivationTests.cs @ v10.1.0 (MIT).
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
-import { FakeTimeProvider } from "@tsva/core/test-support/fake-time-provider";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
+import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
 import {
   ISimplePersistentGrain,
   SimplePersistentGrain,
-} from "@tsva/parity/grains/impl/simple-persistent-grain";
-import { randomIntegerKey } from "@tsva/parity/support/keys";
+} from "@thresh/parity/grains/impl/simple-persistent-grain";
+import { randomIntegerKey } from "@thresh/parity/support/keys";
 
 describe("DefaultCluster.Tests.General.DeactivationTests", () => {
   let cluster: TestCluster;

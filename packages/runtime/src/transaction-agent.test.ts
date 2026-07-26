@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { TransactionAbortedError, TransactionInDoubtError } from "@tsva/core/errors";
-import type { EnlistedParticipant, TransactionParticipant } from "@tsva/core/transaction-info";
-import { participantKey } from "@tsva/core/transaction-info";
-import { GrainId } from "@tsva/core/grain-id";
-import { FakeTimeProvider } from "@tsva/runtime/test-support/fake-time-provider";
-import { TransactionAgent } from "@tsva/runtime/transaction-agent";
+import { TransactionAbortedError, TransactionInDoubtError } from "@thresh/core/errors";
+import type { EnlistedParticipant, TransactionParticipant } from "@thresh/core/transaction-info";
+import { participantKey } from "@thresh/core/transaction-info";
+import { GrainId } from "@thresh/core/grain-id";
+import { FakeTimeProvider } from "@thresh/runtime/test-support/fake-time-provider";
+import { TransactionAgent } from "@thresh/runtime/transaction-agent";
 
 /** A trivial in-memory participant recording prepare/commit/abort calls. */
 class FakeParticipant implements TransactionParticipant {

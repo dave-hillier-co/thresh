@@ -1,7 +1,7 @@
-import { RejectionError } from "@tsva/core/errors";
-import { grainAddressEquals, type GrainAddress } from "@tsva/core/grain-address";
-import type { GrainId } from "@tsva/core/grain-id";
-import type { SiloAddress } from "@tsva/core/silo-address";
+import { RejectionError } from "@thresh/core/errors";
+import { grainAddressEquals, type GrainAddress } from "@thresh/core/grain-address";
+import type { GrainId } from "@thresh/core/grain-id";
+import type { SiloAddress } from "@thresh/core/silo-address";
 
 /**
  * The authoritative in-memory store for the grains whose hash lands in this

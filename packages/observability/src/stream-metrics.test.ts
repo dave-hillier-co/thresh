@@ -10,7 +10,7 @@ import {
   recordAgentPoll,
   recordStreamDelivered,
   recordStreamFailed,
-} from "@tsva/observability/stream-metrics";
+} from "@thresh/observability/stream-metrics";
 
 const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
 const reader = new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 100_000 });
@@ -33,14 +33,14 @@ describe("stream metrics", () => {
   });
 
   it("counts delivered events, failed events, and agent polls independently", async () => {
-    recordStreamDelivered({ "tsva.stream.key": "s1" });
-    recordStreamFailed({ "tsva.stream.key": "s1" });
+    recordStreamDelivered({ "thresh.stream.key": "s1" });
+    recordStreamFailed({ "thresh.stream.key": "s1" });
     recordAgentPoll();
     recordAgentPoll();
 
-    const delivered = await metric("tsva.streams.delivered");
-    const failed = await metric("tsva.streams.failed");
-    const polls = await metric("tsva.streams.agent.polls");
+    const delivered = await metric("thresh.streams.delivered");
+    const failed = await metric("thresh.streams.failed");
+    const polls = await metric("thresh.streams.agent.polls");
     expect(delivered!.dataPoints[0]!.value).toBe(1);
     expect(failed!.dataPoints[0]!.value).toBe(1);
     expect(polls!.dataPoints[0]!.value).toBe(2);

@@ -1,6 +1,6 @@
 import { createServer, type Server } from "node:http";
-import type { SiloHost } from "@tsva/hosting/silo-host";
-import { ICounter } from "@tsva/example-k8s-silo/interfaces";
+import type { SiloHost } from "@thresh/hosting/silo-host";
+import { ICounter } from "@thresh/example-k8s-silo/interfaces";
 
 const hostName = (): string => process.env.POD_NAME ?? "local";
 

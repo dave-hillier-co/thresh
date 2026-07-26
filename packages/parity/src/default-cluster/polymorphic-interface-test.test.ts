@@ -1,7 +1,7 @@
 // Ported from dotnet/orleans test/Orleans.DefaultCluster.Tests/PolymorphicInterfaceTest.cs @ v10.1.0 (MIT).
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
 import {
   IA,
   IB,
@@ -10,14 +10,14 @@ import {
   IE,
   IF,
   PolymorphicTestGrain,
-} from "@tsva/parity/grains/impl/polymorphic-test-grain";
+} from "@thresh/parity/grains/impl/polymorphic-test-grain";
 import {
   DerivedServiceType,
   IDerivedServiceType,
   IServiceType,
   ServiceType,
-} from "@tsva/parity/grains/impl/service-type-grain";
-import { randomIntegerKey } from "@tsva/parity/support/keys";
+} from "@thresh/parity/grains/impl/service-type-grain";
+import { randomIntegerKey } from "@thresh/parity/support/keys";
 
 describe("DefaultCluster.Tests.General.PolymorphicInterfaceTest", () => {
   let cluster: TestCluster;

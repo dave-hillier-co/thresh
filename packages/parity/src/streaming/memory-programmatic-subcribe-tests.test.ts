@@ -12,8 +12,8 @@
 // it lets a test add/remove/list a subscription for an arbitrary grain reference
 // *administratively*, without that grain ever calling `subscribe()` itself, and
 // independently of any implicit-subscription declaration. This is now ported as
-// `StreamSubscriptionManager` (`@tsva/core/stream`), backed per-provider by
-// `MemorySubscriptionManager` (`@tsva/streams/memory-subscription-manager`) and
+// `StreamSubscriptionManager` (`@thresh/core/stream`), backed per-provider by
+// `MemorySubscriptionManager` (`@thresh/streams/memory-subscription-manager`) and
 // retrieved via `provider.getStreamSubscriptionManager()`. Unlike upstream (one
 // provider-agnostic manager, parameterized per call by `streamProviderName`),
 // each memory provider owns its own manager — a test targeting a second
@@ -24,7 +24,7 @@
 // `pubSub`-mode knob a fuller port might add — see `memory-stream-provider.ts`).
 //
 // A subscriber grain reacts to an administrative subscription the same way an
-// implicit one does: `STREAM_SUBSCRIPTION_OBSERVER` (`@tsva/core/stream`),
+// implicit one does: `STREAM_SUBSCRIPTION_OBSERVER` (`@thresh/core/stream`),
 // resolved the first time delivery is attempted. Returning `undefined` there
 // is this port's analogue of upstream's `OnSubscribed` calling
 // `handle.UnsubscribeAsync()` without ever resuming — see `JerkConsumerGrain`
@@ -32,7 +32,7 @@
 //
 // Upstream also synchronizes several of these tests on `StreamingDiagnosticObserver`,
 // an internal pulling-agent diagnostic hook. This framework now has a
-// test-side equivalent (`@tsva/parity/support/streaming-diagnostics`, used by
+// test-side equivalent (`@thresh/parity/support/streaming-diagnostics`, used by
 // `memory-stream-resume-tests.test.ts`/`memory-stream-cache-miss-tests.test.ts`),
 // but it observes item-delivery/stream-inactive events, not the
 // subscription-count events these programmatic-subscribe tests need. Every
@@ -41,21 +41,21 @@
 // memory provider's fan-out is synchronous-enough in-process that a short
 // poll is reliably non-flaky.
 import { expect } from "vitest";
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import type { GrainKey } from "@tsva/core/grain-key";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import { grainReferenceIdentity } from "@tsva/core/grain-reference";
-import type { GrainWithGuidKey } from "@tsva/core/key-kinds";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import type { GrainKey } from "@thresh/core/grain-key";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import { grainReferenceIdentity } from "@thresh/core/grain-reference";
+import type { GrainWithGuidKey } from "@thresh/core/key-kinds";
 import {
   STREAM_SUBSCRIPTION_OBSERVER,
   tryGetStreamSubscriptionManager,
   type StreamHandler,
   type StreamId,
-} from "@tsva/core/stream";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
-import { randomGuidKey } from "@tsva/parity/support/keys";
+} from "@thresh/core/stream";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
+import { randomGuidKey } from "@thresh/parity/support/keys";
 
 const StreamProviderName = "StreamProvider1";
 const StreamProviderName2 = "StreamProvider2";

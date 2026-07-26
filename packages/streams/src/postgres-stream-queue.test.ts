@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { Pool } from "pg";
-import { PostgresStreamQueue } from "@tsva/streams/postgres-stream-queue";
+import { PostgresStreamQueue } from "@thresh/streams/postgres-stream-queue";
 
 const PG_URL = process.env.PG_URL ?? "postgres://localhost:5432/postgres";
 
@@ -18,7 +18,7 @@ async function reachable(connectionString: string): Promise<Pool | undefined> {
 }
 
 const pool = await reachable(PG_URL);
-const prefix = `tsva_test_pq_${randomUUID().replace(/-/g, "")}`;
+const prefix = `thresh_test_pq_${randomUUID().replace(/-/g, "")}`;
 
 afterAll(async () => {
   if (pool === undefined) return;

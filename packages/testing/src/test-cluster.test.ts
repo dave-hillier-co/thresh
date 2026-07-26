@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import { GrainId } from "@tsva/core/grain-id";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainType } from "@tsva/core/grain-type";
-import type { GrainWithStringKey } from "@tsva/core/key-kinds";
-import { TestCluster } from "@tsva/testing/test-cluster";
-import { waitFor } from "@tsva/testing/wait";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import { GrainId } from "@thresh/core/grain-id";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainType } from "@thresh/core/grain-type";
+import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import { TestCluster } from "@thresh/testing/test-cluster";
+import { waitFor } from "@thresh/testing/wait";
 
 interface ICounter extends GrainWithStringKey {
   increment(): Promise<number>;

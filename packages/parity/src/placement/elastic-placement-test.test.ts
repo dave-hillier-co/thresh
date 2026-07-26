@@ -13,13 +13,13 @@
 // `IActivationCountBasedPlacementTestGrain` latch/unlatch call, so a peer silo's
 // placement decision sees the change immediately rather than waiting on a
 // periodic gossip interval this framework does not otherwise run. Setup routes
-// through `getGrainAtSilo` (`@tsva/parity/support/get-grain-at-silo`), the port
+// through `getGrainAtSilo` (`@thresh/parity/support/get-grain-at-silo`), the port
 // of upstream's `GetGrainAtSilo` helper, which pins a fresh grain onto a
 // specific NEWLY STARTED silo via the `RequestContext`-driven placement hint
 // (`IPlacementDirector.PlacementHintKey`, ex-GAP-REQUEST-CONTEXT).
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster, type TestSiloHandle } from "@tsva/testing/test-cluster";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster, type TestSiloHandle } from "@thresh/testing/test-cluster";
 import {
   ActivationCountBasedPlacementTestGrain,
   IActivationCountBasedPlacementTestGrain,
@@ -27,10 +27,10 @@ import {
   IRandomPlacementTestGrain,
   PreferLocalPlacementTestGrain,
   RandomPlacementTestGrain,
-} from "@tsva/parity/grains/impl/placement-test-grain";
-import { getGrainAtSilo } from "@tsva/parity/support/get-grain-at-silo";
-import { randomGuidKey } from "@tsva/parity/support/keys";
-import type { IPlacementTestGrain } from "@tsva/parity/grains/interfaces/placement-test-grain-interfaces";
+} from "@thresh/parity/grains/impl/placement-test-grain";
+import { getGrainAtSilo } from "@thresh/parity/support/get-grain-at-silo";
+import { randomGuidKey } from "@thresh/parity/support/keys";
+import type { IPlacementTestGrain } from "@thresh/parity/grains/interfaces/placement-test-grain-interfaces";
 
 const SAMPLE_SIZE = 10;
 

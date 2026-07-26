@@ -3,10 +3,10 @@
 // types; this framework does not model the CLR exception hierarchy (see
 // echo-task-grain.ts), so plain `Error`s with the same messages stand in and
 // ported assertions check message text.
-import { grain } from "@tsva/core/decorators";
-import { GrainTaskCanceledError } from "@tsva/core/errors";
-import { Grain } from "@tsva/core/grain";
-import { IExceptionGrain } from "@tsva/parity/grains/interfaces/exception-grain-interfaces";
+import { grain } from "@thresh/core/decorators";
+import { GrainTaskCanceledError } from "@thresh/core/errors";
+import { Grain } from "@thresh/core/grain";
+import { IExceptionGrain } from "@thresh/parity/grains/interfaces/exception-grain-interfaces";
 
 export { IExceptionGrain };
 

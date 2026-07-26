@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { GrainType } from "@tsva/core/grain-type";
-import { implicitSubscriberIds } from "@tsva/streams/implicit-subscriptions";
+import type { GrainType } from "@thresh/core/grain-type";
+import { implicitSubscriberIds } from "@thresh/streams/implicit-subscriptions";
 
 describe("implicitSubscriberIds", () => {
   const table: Record<string, GrainType[]> = {

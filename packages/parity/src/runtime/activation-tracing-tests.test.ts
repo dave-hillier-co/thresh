@@ -6,7 +6,7 @@
 // `ActivitySources.ApplicationGrainActivitySourceName`.
 //
 // This framework now has the ACTIVATION-path span taxonomy
-// (`@tsva/observability/activation-tracing`: `place grain`/`activate grain`/
+// (`@thresh/observability/activation-tracing`: `place grain`/`activate grain`/
 // `register directory entry`/`read storage`, the Runtime/Lifecycle/Storage
 // source analogues), wired so `ClusterNode.receiveRequest` extracts the
 // incoming `traceparent` BEFORE placement/activation run
@@ -51,26 +51,26 @@
 // positive case matching the title: dehydrate/rehydrate spans ARE created,
 // via the state facet.
 import { afterAll, beforeAll, beforeEach, describe, expect } from "vitest";
-import { FakeTimeProvider } from "@tsva/core/test-support/fake-time-provider";
-import { getGrainMetadata } from "@tsva/core/grain-metadata";
-import { ActivityNames } from "@tsva/observability/activation-tracing";
-import { tracingFilters } from "@tsva/observability/tracing";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster, type TestSiloHandle } from "@tsva/testing/test-cluster";
-import { waitFor } from "@tsva/testing/wait";
-import type { ClientNode } from "@tsva/client/client-node";
+import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
+import { getGrainMetadata } from "@thresh/core/grain-metadata";
+import { ActivityNames } from "@thresh/observability/activation-tracing";
+import { tracingFilters } from "@thresh/observability/tracing";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster, type TestSiloHandle } from "@thresh/testing/test-cluster";
+import { waitFor } from "@thresh/testing/wait";
+import type { ClientNode } from "@thresh/client/client-node";
 import {
   ActivityGrain,
   IActivityGrain,
   IPersistentStateActivityGrain,
   PersistentStateActivityGrain,
-} from "@tsva/parity/grains/impl/activation-tracing-grain";
+} from "@thresh/parity/grains/impl/activation-tracing-grain";
 import {
   IMigrationTestGrain,
   IMigrationTestGrainGrainOfT,
   MigrationTestGrain,
   MigrationTestGrainWithMemoryStorage,
-} from "@tsva/parity/grains/impl/migration-test-grain";
+} from "@thresh/parity/grains/impl/migration-test-grain";
 import {
   IMigrationFilterTracingGrain,
   ISimpleMigrationTracingGrain,
@@ -78,11 +78,11 @@ import {
   MigrationFilterTracingGrain,
   SimpleMigrationTracingGrain,
   TracingTestPlacementFilterStrategy,
-} from "@tsva/parity/grains/impl/migration-tracing-grain";
-import { createClusterClient } from "@tsva/parity/support/client";
-import { randomIntegerKey } from "@tsva/parity/support/keys";
-import { createTracingHarness } from "@tsva/parity/support/tracing";
-import { GrainId } from "@tsva/core/grain-id";
+} from "@thresh/parity/grains/impl/migration-tracing-grain";
+import { createClusterClient } from "@thresh/parity/support/client";
+import { randomIntegerKey } from "@thresh/parity/support/keys";
+import { createTracingHarness } from "@thresh/parity/support/tracing";
+import { GrainId } from "@thresh/core/grain-id";
 
 function hostOf(cluster: TestCluster, grainId: GrainId): TestSiloHandle | undefined {
   return cluster.silos.find((s) => s.host.isActive(grainId));

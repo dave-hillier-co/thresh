@@ -1,5 +1,5 @@
-import { call, defineReducerGrain, type ReducerResult } from "@tsva/core/define-reducer-grain";
-import { initialAccount, type AccountState } from "@tsva/example-bank/interfaces";
+import { call, defineReducerGrain, type ReducerResult } from "@thresh/core/define-reducer-grain";
+import { initialAccount, type AccountState } from "@thresh/example-bank/interfaces";
 
 /**
  * The bank account as a single-dispatch reducer grain: its entire

@@ -9,9 +9,9 @@
 //
 // This is distinct from `runtime/grain-directory-tests.test.ts`, which ports the same
 // base-class facts against a miniature in-package reimplementation of the CAS contract
-// (because at the time it was written, `@tsva/parity` had no dependency on `@tsva/directory`
+// (because at the time it was written, `@thresh/parity` had no dependency on `@thresh/directory`
 // and no accessor onto a running silo's real directory instance). Both gaps are closed here:
-// `@tsva/parity` now depends on `@tsva/directory` for the `GrainDirectory` type, and
+// `@thresh/parity` now depends on `@thresh/directory` for the `GrainDirectory` type, and
 // `ClusterNode.grainDirectory()` / `SiloHost.directory` expose the real
 // `DistributedGrainDirectory` a silo runs — the TS analogue of
 // `Primary.SiloHost.Services.GetRequiredService<GrainDirectoryResolver>().DefaultGrainDirectory`.
@@ -20,13 +20,13 @@
 // same peer/transport plumbing production placement uses), so this exercises the full CAS
 // contract exactly as `DefaultClusterFixture`'s 2-silo `TestCluster` does upstream.
 import { afterEach, beforeEach, describe, expect } from "vitest";
-import { newActivationId } from "@tsva/core/activation-id";
-import { grainAddressEquals, type GrainAddress } from "@tsva/core/grain-address";
-import { GrainId } from "@tsva/core/grain-id";
-import type { SiloAddress } from "@tsva/core/silo-address";
-import type { GrainDirectory } from "@tsva/directory/grain-directory";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
+import { newActivationId } from "@thresh/core/activation-id";
+import { grainAddressEquals, type GrainAddress } from "@thresh/core/grain-address";
+import { GrainId } from "@thresh/core/grain-id";
+import type { SiloAddress } from "@thresh/core/silo-address";
+import type { GrainDirectory } from "@thresh/directory/grain-directory";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
 
 function randomGrainId(): GrainId {
   return new GrainId("user", `somerandomuser_${Math.random().toString(16).slice(2)}`);

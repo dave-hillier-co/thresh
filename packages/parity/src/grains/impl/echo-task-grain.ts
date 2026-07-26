@@ -3,17 +3,17 @@
 // ported tests only observe state within one activation, so instance fields
 // suffice. The Blocking grains' CallMethod* helpers call the echo grains with
 // `this.GetPrimaryKey()` — here a guid derived from the integer key.
-import { grain, reentrant } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import { Guid } from "@tsva/core/guid";
-import { IManagementGrain } from "@tsva/core/management-grain";
-import type { SiloAddress } from "@tsva/core/silo-address";
+import { grain, reentrant } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import { Guid } from "@thresh/core/guid";
+import { IManagementGrain } from "@thresh/core/management-grain";
+import type { SiloAddress } from "@thresh/core/silo-address";
 import {
   IBlockingEchoTaskGrain,
   IEchoGrain,
   IEchoTaskGrain,
   IReentrantBlockingEchoTaskGrain,
-} from "@tsva/parity/grains/interfaces/echo-task-grain-interfaces";
+} from "@thresh/parity/grains/interfaces/echo-task-grain-interfaces";
 
 export { IBlockingEchoTaskGrain, IEchoGrain, IEchoTaskGrain, IReentrantBlockingEchoTaskGrain };
 

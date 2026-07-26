@@ -1,5 +1,5 @@
-import { keyToString, type GrainKey } from "@tsva/core/grain-key";
-import type { GrainType } from "@tsva/core/grain-type";
+import { keyToString, type GrainKey } from "@thresh/core/grain-key";
+import type { GrainType } from "@thresh/core/grain-type";
 import {
   STREAM_GENERATOR_COMMAND_CONFIGURE,
   type AsyncStream,
@@ -9,19 +9,19 @@ import {
   type StreamProvider,
   type StreamSubscriptionHandle,
   type SubscribeOptions,
-} from "@tsva/core/stream";
-import { implicitSubscriberIds } from "@tsva/streams/implicit-subscriptions";
+} from "@thresh/core/stream";
+import { implicitSubscriberIds } from "@thresh/streams/implicit-subscriptions";
 import {
   GeneratorStreamQueue,
   type StreamGeneratorConfig,
-} from "@tsva/streams/generator-stream-queue";
+} from "@thresh/streams/generator-stream-queue";
 import {
   QueuePullingAgent,
   type PullingStreamProviderHost,
-} from "@tsva/streams/queue-pulling-agent";
-import { ownedQueueIndices, type HashRange } from "@tsva/streams/queue-ownership";
-import type { StreamDeliver } from "@tsva/streams/stream-deliver";
-import { StreamProviderConfigurationError } from "@tsva/streams/stream-provider-config-error";
+} from "@thresh/streams/queue-pulling-agent";
+import { ownedQueueIndices, type HashRange } from "@thresh/streams/queue-ownership";
+import type { StreamDeliver } from "@thresh/streams/stream-deliver";
+import { StreamProviderConfigurationError } from "@thresh/streams/stream-provider-config-error";
 
 export interface GeneratorPullingStreamProviderOptions {
   /** Number of physical queues, each generating one synthetic stream (defaults to 4). */

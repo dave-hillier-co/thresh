@@ -14,7 +14,7 @@
 //   - `manager.UnregisterShardAsync(shard, ct)` releases a shard (dropped only if it has no
 //     jobs remaining).
 //
-// This framework's durable-jobs subsystem (`@tsva/durable-jobs`) has no equivalent surface:
+// This framework's durable-jobs subsystem (`@thresh/durable-jobs`) has no equivalent surface:
 // sharding is implicit time-bucketing (`shardKeyFor(dueTime, shardDuration)` — one deterministic
 // shard per time bucket, not a freshly minted object per `CreateShardAsync` call), there is no
 // per-shard custom metadata dictionary (only per-*job* metadata), and shard ownership/claiming/
@@ -27,7 +27,7 @@
 // not this one. See `packages/durable-jobs/src/job-shard-store.ts` and
 // `packages/durable-jobs/src/local-durable-job-manager.ts`.
 import { it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 const NAMESPACE = "Tester.DurableJobs.InMemoryJobShardManagerTests";
 

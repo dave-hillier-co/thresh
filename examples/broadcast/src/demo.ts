@@ -1,11 +1,11 @@
-import { SiloAddress } from "@tsva/core/silo-address";
-import { InProcessNetwork } from "@tsva/messaging/in-process-transport";
-import { createSilo } from "@tsva/hosting/silo-builder";
-import type { SiloHost } from "@tsva/hosting/silo-host";
-import { AlertPublisherGrain } from "@tsva/example-broadcast/alert-publisher-grain";
-import { AuditLogGrain } from "@tsva/example-broadcast/audit-log-grain";
-import { RegionMonitorGrain } from "@tsva/example-broadcast/region-monitor-grain";
-import { IAlertPublisher, IAuditLog, IRegionMonitor } from "@tsva/example-broadcast/interfaces";
+import { SiloAddress } from "@thresh/core/silo-address";
+import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
+import { createSilo } from "@thresh/hosting/silo-builder";
+import type { SiloHost } from "@thresh/hosting/silo-host";
+import { AlertPublisherGrain } from "@thresh/example-broadcast/alert-publisher-grain";
+import { AuditLogGrain } from "@thresh/example-broadcast/audit-log-grain";
+import { RegionMonitorGrain } from "@thresh/example-broadcast/region-monitor-grain";
+import { IAlertPublisher, IAuditLog, IRegionMonitor } from "@thresh/example-broadcast/interfaces";
 
 const local = new SiloAddress("silo-0", "uid-0", "silo-0:11111");
 

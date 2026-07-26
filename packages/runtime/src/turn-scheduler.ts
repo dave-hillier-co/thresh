@@ -1,9 +1,9 @@
-import { GrainCallAbortedError } from "@tsva/core/errors";
-import type { InvokeMethodOptions } from "@tsva/core/invoke-options";
-import type { MayInterleavePredicate } from "@tsva/core/grain-metadata";
-import { LimitExceededException } from "@tsva/core/errors";
-import { type Logger, noopLogger } from "@tsva/core/logger";
-import { systemTimeProvider, type TimeProvider, type TimerHandle } from "@tsva/core/time-provider";
+import { GrainCallAbortedError } from "@thresh/core/errors";
+import type { InvokeMethodOptions } from "@thresh/core/invoke-options";
+import type { MayInterleavePredicate } from "@thresh/core/grain-metadata";
+import { LimitExceededException } from "@thresh/core/errors";
+import { type Logger, noopLogger } from "@thresh/core/logger";
+import { systemTimeProvider, type TimeProvider, type TimerHandle } from "@thresh/core/time-provider";
 
 /**
  * One unit of work admitted to a grain's activation. A turn is the whole

@@ -6,17 +6,17 @@
 // `IManagementGrain.getDetailedGrainStatistics()`. See that file's header for
 // the same fake-clock/tick-count adaptation this test makes.
 import { describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { FakeTimeProvider } from "@tsva/core/test-support/fake-time-provider";
-import { IManagementGrain } from "@tsva/core/management-grain";
-import { RebalancingTestGrain } from "@tsva/parity/grains/impl/rebalancing-test-grain";
-import { IRebalancingTestGrain } from "@tsva/parity/grains/interfaces/rebalancing-test-grain-interfaces";
-import { TestCluster } from "@tsva/testing/test-cluster";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
+import { IManagementGrain } from "@thresh/core/management-grain";
+import { RebalancingTestGrain } from "@thresh/parity/grains/impl/rebalancing-test-grain";
+import { IRebalancingTestGrain } from "@thresh/parity/grains/interfaces/rebalancing-test-grain-interfaces";
+import { TestCluster } from "@thresh/testing/test-cluster";
 import {
   addTestActivations,
   getActivationCount,
   settle,
-} from "@tsva/parity/placement/rebalancing-tests-support";
+} from "@thresh/parity/placement/rebalancing-tests-support";
 
 const sessionCyclePeriodMs = 1000;
 

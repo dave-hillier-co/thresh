@@ -1,5 +1,5 @@
-import type { GrainId } from "@tsva/core/grain-id";
-import type { SiloAddress } from "@tsva/core/silo-address";
+import type { GrainId } from "@thresh/core/grain-id";
+import type { SiloAddress } from "@thresh/core/silo-address";
 
 /**
  * A per-silo view of which gateway(s) each connected client is reachable

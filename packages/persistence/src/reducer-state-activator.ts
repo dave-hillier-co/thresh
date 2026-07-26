@@ -1,7 +1,7 @@
-import type { GrainId } from "@tsva/core/grain-id";
-import { getReducerFields } from "@tsva/core/reducer-state-metadata";
-import { ReducerStateImpl } from "@tsva/persistence/reducer-state-impl";
-import type { StorageRegistry } from "@tsva/persistence/storage-registry";
+import type { GrainId } from "@thresh/core/grain-id";
+import { getReducerFields } from "@thresh/core/reducer-state-metadata";
+import { ReducerStateImpl } from "@thresh/persistence/reducer-state-impl";
+import type { StorageRegistry } from "@thresh/persistence/storage-registry";
 
 /**
  * Inject a `ReducerState` facet into each `@reducerState` field of a grain

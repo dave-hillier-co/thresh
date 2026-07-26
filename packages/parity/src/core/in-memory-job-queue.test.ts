@@ -1,7 +1,7 @@
 // Ported from dotnet/orleans test/Orleans.Core.Tests/DurableJobs/InMemoryJobQueueTests.cs @ v10.1.0 (MIT).
 import { describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { InMemoryJobQueue } from "@tsva/durable-jobs/job-model";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { InMemoryJobQueue } from "@thresh/durable-jobs/job-model";
 
 // This framework's InMemoryJobQueue (job-model.ts) is a pure, pull-based due-time
 // queue: the caller passes "now" to dequeueDue(now) rather than the queue driving

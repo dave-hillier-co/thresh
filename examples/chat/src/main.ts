@@ -1,6 +1,6 @@
-import { runChatDemo } from "@tsva/example-chat/demo";
+import { runChatDemo } from "@thresh/example-chat/demo";
 
-// Runnable entry point: `pnpm --filter @tsva/example-chat start`.
+// Runnable entry point: `pnpm --filter @thresh/example-chat start`.
 async function main(): Promise<void> {
   const result = await runChatDemo();
   console.log("Chat demo");

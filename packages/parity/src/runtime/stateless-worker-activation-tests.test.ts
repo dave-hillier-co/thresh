@@ -1,14 +1,14 @@
 // Ported from dotnet/orleans test/Orleans.Runtime.Tests/StatelessWorkerActivationTests.cs @ v10.1.0 (MIT).
 import { afterAll, beforeAll, describe, expect } from "vitest";
-import { IManagementGrain } from "@tsva/core/management-grain";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
+import { IManagementGrain } from "@thresh/core/management-grain";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
 import {
   IStatelessWorkerGrain,
   IStatelessWorkerScalingGrain,
   StatelessWorkerGrain,
   StatelessWorkerScalingGrain,
-} from "@tsva/parity/grains/impl/stateless-worker-grain";
+} from "@thresh/parity/grains/impl/stateless-worker-grain";
 
 /** Upstream's `Until(condition, maxTimeout)` polling helper. */
 async function until(condition: () => Promise<boolean>, maxTimeoutMs = 40_000): Promise<void> {

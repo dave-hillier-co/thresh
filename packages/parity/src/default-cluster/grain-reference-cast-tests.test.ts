@@ -11,16 +11,16 @@
 // `IsAssignableFrom`/`GetType()`, so casts are asserted behaviourally: same
 // grain id via `grainReferenceIdentity`, and successful/failing calls.
 import { beforeAll, afterAll, describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
-import { castGrainReference, grainReferenceIdentity } from "@tsva/core/grain-reference";
-import { GrainCallError } from "@tsva/core/errors";
-import { ISimpleGrain, SimpleGrain } from "@tsva/parity/grains/impl/simple-grain";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
+import { castGrainReference, grainReferenceIdentity } from "@thresh/core/grain-reference";
+import { GrainCallError } from "@thresh/core/errors";
+import { ISimpleGrain, SimpleGrain } from "@thresh/parity/grains/impl/simple-grain";
 import {
   IMultifacetReader,
   IMultifacetWriter,
   MultifacetTestGrain,
-} from "@tsva/parity/grains/impl/multifacet-grain";
+} from "@thresh/parity/grains/impl/multifacet-grain";
 import {
   GeneratorTestDerivedDerivedGrain,
   GeneratorTestDerivedGrain1,
@@ -29,8 +29,8 @@ import {
   IGeneratorTestDerivedGrain1,
   IGeneratorTestDerivedGrain2,
   IGeneratorTestGrain,
-} from "@tsva/parity/grains/impl/generator-test-grain";
-import { randomIntegerKey } from "@tsva/parity/support/keys";
+} from "@thresh/parity/grains/impl/generator-test-grain";
+import { randomIntegerKey } from "@thresh/parity/support/keys";
 
 describe("DefaultCluster.Tests.GrainReferenceCastTests", () => {
   let cluster: TestCluster;

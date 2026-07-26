@@ -7,16 +7,16 @@
 // see `migration-test-grain.ts`'s `MigrationTestGrainWithMemoryStorage`, so a
 // *truly* participant-free grain needs plain instance state instead), so the
 // dehydrate/rehydrate spans' negative case is genuinely testable.
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import type { GrainType } from "@tsva/core/grain-type";
-import type { SiloAddress } from "@tsva/core/silo-address";
-import type { PlacementFilter } from "@tsva/runtime/placement/placement-filter";
-import type { PlacementContext } from "@tsva/runtime/placement/placement-strategy";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import type { GrainType } from "@thresh/core/grain-type";
+import type { SiloAddress } from "@thresh/core/silo-address";
+import type { PlacementFilter } from "@thresh/runtime/placement/placement-filter";
+import type { PlacementContext } from "@thresh/runtime/placement/placement-strategy";
 import {
   IMigrationFilterTracingGrain,
   ISimpleMigrationTracingGrain,
-} from "@tsva/parity/grains/interfaces/migration-tracing-grain-interfaces";
+} from "@thresh/parity/grains/interfaces/migration-tracing-grain-interfaces";
 
 export { IMigrationFilterTracingGrain, ISimpleMigrationTracingGrain };
 

@@ -3,7 +3,7 @@
 // exercising a shared CAS contract against external backends (Azure Table,
 // Redis, ADO.NET) supplied by concrete subclasses in other test projects, none
 // of which are in scope here. This harness's own directory CAS contract
-// (`@tsva/directory`'s `GrainDirectory`) is not a declared dependency of the
+// (`@thresh/directory`'s `GrainDirectory`) is not a declared dependency of the
 // parity package, so the contract is re-implemented in miniature here purely
 // to exercise the same register/lookup/unregister semantics the upstream
 // tests assert on: register wins on first write, later writes lose unless
@@ -13,11 +13,11 @@
 // framework's `GrainAddress` has no such field, so it is dropped from the
 // ported fixtures since none of these tests assert on it.
 import { describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { newActivationId } from "@tsva/core/activation-id";
-import { grainAddressEquals, type GrainAddress } from "@tsva/core/grain-address";
-import { GrainId } from "@tsva/core/grain-id";
-import { SiloAddress } from "@tsva/core/silo-address";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { newActivationId } from "@thresh/core/activation-id";
+import { grainAddressEquals, type GrainAddress } from "@thresh/core/grain-address";
+import { GrainId } from "@thresh/core/grain-id";
+import { SiloAddress } from "@thresh/core/silo-address";
 
 /** Miniature stand-in for `LocalDirectoryPartition`'s CAS contract. */
 class InMemoryGrainDirectory {

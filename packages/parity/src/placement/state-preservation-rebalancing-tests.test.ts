@@ -8,7 +8,7 @@
 // framework's rebalancer has no such migratable grain to relocate: every silo
 // runs its own `ActivationRebalancerWorker`, and exactly one — the lowest
 // active ring key — is deterministically elected leader from the shared
-// membership view (see `@tsva/hosting`'s `activation-rebalancer.cluster.test.ts`).
+// membership view (see `@thresh/hosting`'s `activation-rebalancer.cluster.test.ts`).
 // So there is nothing to "move onto a secondary silo" first; the adapted test
 // below instead stops whichever silo *is* currently elected (never the
 // lowest-indexed one that starts out that way, so the failover is exercised
@@ -20,17 +20,17 @@
 // once the old leader is gone, and rebalancing keeps converging the skew
 // afterwards.
 import { describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { FakeTimeProvider } from "@tsva/core/test-support/fake-time-provider";
-import { IManagementGrain } from "@tsva/core/management-grain";
-import { RebalancingTestGrain } from "@tsva/parity/grains/impl/rebalancing-test-grain";
-import { IRebalancingTestGrain } from "@tsva/parity/grains/interfaces/rebalancing-test-grain-interfaces";
-import { TestCluster, type TestSiloHandle } from "@tsva/testing/test-cluster";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
+import { IManagementGrain } from "@thresh/core/management-grain";
+import { RebalancingTestGrain } from "@thresh/parity/grains/impl/rebalancing-test-grain";
+import { IRebalancingTestGrain } from "@thresh/parity/grains/interfaces/rebalancing-test-grain-interfaces";
+import { TestCluster, type TestSiloHandle } from "@thresh/testing/test-cluster";
 import {
   addTestActivations,
   getActivationCount,
   settle,
-} from "@tsva/parity/placement/rebalancing-tests-support";
+} from "@thresh/parity/placement/rebalancing-tests-support";
 
 const sessionCyclePeriodMs = 1000;
 

@@ -1,5 +1,5 @@
-import type { StreamId } from "@tsva/core/stream";
-import { onStreamingEvent, type StreamingEvent } from "@tsva/core/streaming-diagnostics";
+import type { StreamId } from "@thresh/core/stream";
+import { onStreamingEvent, type StreamingEvent } from "@thresh/core/streaming-diagnostics";
 
 interface PendingWait {
   matches: (event: StreamingEvent) => boolean;
@@ -14,7 +14,7 @@ function sameStream(a: StreamId, b: StreamId): boolean {
  * Test-side counterpart of Orleans'
  * `test/TestInfrastructure/TestExtensions/Diagnostics/StreamingDiagnosticObserver.cs`
  * (a small subset: only `itemDelivered`/`streamInactive` counting, the events
- * these ported tests need). Records every `@tsva/core/streaming-diagnostics`
+ * these ported tests need). Records every `@thresh/core/streaming-diagnostics`
  * event from the moment it's created, like upstream's `Replay()`, so a
  * `waitFor*` call matches against events that already happened as well as
  * ones still to come — a test never races a `publish()`/timer whose effect

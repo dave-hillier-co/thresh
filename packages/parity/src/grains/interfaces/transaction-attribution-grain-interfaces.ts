@@ -9,9 +9,9 @@
 // rather than via a reflected attribute, so the same shape falls out
 // naturally: one `defineGrainInterface` per option, all implementing the
 // same `TransactionAttributionGrain` TS shape.
-import { defineGrainInterface, type GrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithStringKey } from "@tsva/core/key-kinds";
-import type { TransactionOption } from "@tsva/core/transaction-info";
+import { defineGrainInterface, type GrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { TransactionOption } from "@thresh/core/transaction-info";
 
 /** A `TransactionOption`, or `"none"` for a method with no `[Transaction]` attribute at all. */
 export type AttributionOption = TransactionOption | "none";

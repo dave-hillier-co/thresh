@@ -13,15 +13,15 @@
 // registered named factory). All four grains below therefore bind their
 // fields with `@exampleStorage`; the "Factory" grains are kept as distinct
 // classes only to preserve the four upstream xunit test identities.
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
 import {
   IStorageDefaultFacetGrain,
   IStorageDefaultFactoryGrain,
   IStorageFacetGrain,
   IStorageFactoryGrain,
-} from "@tsva/parity/grains/interfaces/storage-facet-grain-interfaces";
-import { exampleStorage, type ExampleStorage } from "@tsva/parity/support/example-storage";
+} from "@thresh/parity/grains/interfaces/storage-facet-grain-interfaces";
+import { exampleStorage, type ExampleStorage } from "@thresh/parity/support/example-storage";
 
 export {
   IStorageDefaultFacetGrain,

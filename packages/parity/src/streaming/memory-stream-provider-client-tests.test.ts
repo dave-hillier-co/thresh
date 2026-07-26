@@ -9,7 +9,7 @@
 // client membership entry — `TestCluster.getGrain` calls straight through a
 // silo — so there is nothing here to hard-kill or reconnect.
 import { it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 // Tester.StreamingTests.MemoryStreamProviderClientTests
 orleansTest.excluded(

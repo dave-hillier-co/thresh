@@ -3,7 +3,7 @@ import {
   isMigrationParticipant,
   MigrationBag,
   type IGrainMigrationParticipant,
-} from "@tsva/core/grain-migration-participant";
+} from "@thresh/core/grain-migration-participant";
 
 describe("isMigrationParticipant", () => {
   it("accepts an object exposing both migration hooks", () => {

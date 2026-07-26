@@ -13,7 +13,7 @@
 // serialization surface at all — this framework has neither a DI container
 // nor an Options-formatter/redaction system to port these against.
 import { describe, it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 describe("Tester.LogFomatterTests", () => {
   const reason =

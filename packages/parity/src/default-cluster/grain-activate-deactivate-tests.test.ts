@@ -1,8 +1,8 @@
 // Ported from dotnet/orleans test/Orleans.DefaultCluster.Tests/GrainActivateDeactivateTests.cs @ v10.1.0 (MIT).
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
-import { FakeTimeProvider } from "@tsva/core/test-support/fake-time-provider";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
+import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
 import {
   ActivateDeactivateWatcherGrain,
   BadActivateDeactivateTestGrain,
@@ -22,8 +22,8 @@ import {
   SimpleActivateDeactivateTestGrain,
   TailCallActivateDeactivateTestGrain,
   TaskActionActivateDeactivateTestGrain,
-} from "@tsva/parity/grains/impl/activate-deactivate-test-grain";
-import { ITestGrain, TestGrain } from "@tsva/parity/grains/impl/test-grain";
+} from "@thresh/parity/grains/impl/activate-deactivate-test-grain";
+import { ITestGrain, TestGrain } from "@thresh/parity/grains/impl/test-grain";
 
 // See basic-activation-tests.test.ts for the full description of this defect:
 // an activation whose `onActivate` throws surfaces a generic "activation

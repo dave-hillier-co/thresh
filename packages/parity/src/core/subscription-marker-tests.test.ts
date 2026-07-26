@@ -1,6 +1,6 @@
 // Ported from dotnet/orleans test/Orleans.Core.Tests/OrleansRuntime/Streams/SubscriptionMarkerTests.cs @ v10.1.0 (MIT).
 import { describe, it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 describe("UnitTests.OrleansRuntime.Streams.SubscriptionMarkerTests", () => {
   orleansTest.excluded(

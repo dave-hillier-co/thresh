@@ -1,5 +1,5 @@
-import type { Logger } from "@tsva/core/logger";
-import type { IncomingGrainCallFilter } from "@tsva/core/grain-call-filter";
+import type { Logger } from "@thresh/core/logger";
+import type { IncomingGrainCallFilter } from "@thresh/core/grain-call-filter";
 
 /**
  * A grain call filter that logs each incoming call with structured fields

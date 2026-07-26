@@ -1,6 +1,6 @@
-import { drainCancellationCallbackErrors } from "@tsva/core/grain-cancellation-token";
-import type { GrainId } from "@tsva/core/grain-id";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
+import { drainCancellationCallbackErrors } from "@thresh/core/grain-cancellation-token";
+import type { GrainId } from "@thresh/core/grain-id";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
 
 /**
  * The cross-silo half of cooperative cancellation (Orleans' cancellation

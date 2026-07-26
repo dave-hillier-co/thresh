@@ -1,10 +1,10 @@
 import { createServer } from "node:net";
-import { SiloAddress } from "@tsva/core/silo-address";
-import { createSilo } from "@tsva/hosting/silo-builder";
-import type { SiloHost } from "@tsva/hosting/silo-host";
-import { StaticMembershipService } from "@tsva/runtime/static-membership";
-import { ILeaderboard } from "@tsva/example-cluster/interfaces";
-import { LeaderboardGrain } from "@tsva/example-cluster/leaderboard-grain";
+import { SiloAddress } from "@thresh/core/silo-address";
+import { createSilo } from "@thresh/hosting/silo-builder";
+import type { SiloHost } from "@thresh/hosting/silo-host";
+import { StaticMembershipService } from "@thresh/runtime/static-membership";
+import { ILeaderboard } from "@thresh/example-cluster/interfaces";
+import { LeaderboardGrain } from "@thresh/example-cluster/leaderboard-grain";
 
 const CLUSTER = "leaderboard";
 

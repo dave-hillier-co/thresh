@@ -1,4 +1,4 @@
-import type { HealthCheck } from "@tsva/hosting/health-check";
+import type { HealthCheck } from "@thresh/hosting/health-check";
 
 /** Something that can be drained and stopped (a silo / cluster node). */
 export interface Drainable {

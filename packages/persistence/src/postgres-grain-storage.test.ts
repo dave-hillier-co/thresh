@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { Pool } from "pg";
-import { InconsistentStateError } from "@tsva/core/errors";
-import { GrainId } from "@tsva/core/grain-id";
-import type { GrainStorage } from "@tsva/core/grain-storage";
-import { PersistentStateImpl } from "@tsva/persistence/persistent-state-impl";
-import { PostgresGrainStorage } from "@tsva/persistence/postgres-grain-storage";
+import { InconsistentStateError } from "@thresh/core/errors";
+import { GrainId } from "@thresh/core/grain-id";
+import type { GrainStorage } from "@thresh/core/grain-storage";
+import { PersistentStateImpl } from "@thresh/persistence/persistent-state-impl";
+import { PostgresGrainStorage } from "@thresh/persistence/postgres-grain-storage";
 
 const PG_URL = process.env.PG_URL ?? "postgres://localhost:5432/postgres";
 
@@ -24,7 +24,7 @@ async function reachable(connectionString: string): Promise<Pool | undefined> {
 
 const pool = await reachable(PG_URL);
 // A unique table isolates this run from anything else in the shared Postgres.
-const table = `tsva_test_${randomUUID().replace(/-/g, "")}`;
+const table = `thresh_test_${randomUUID().replace(/-/g, "")}`;
 
 interface Balance {
   cents: number;

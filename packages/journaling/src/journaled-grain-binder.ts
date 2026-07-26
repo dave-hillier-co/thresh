@@ -1,8 +1,8 @@
-import type { GrainId } from "@tsva/core/grain-id";
-import { JournaledGrain } from "@tsva/core/journaled-grain";
-import type { JournalStorageRegistry } from "@tsva/journaling/journal-storage-registry";
-import { StateMachineManagerImpl } from "@tsva/journaling/state-machine-manager-impl";
-import { LogViewAdaptorImpl } from "@tsva/journaling/log-view-adaptor-impl";
+import type { GrainId } from "@thresh/core/grain-id";
+import { JournaledGrain } from "@thresh/core/journaled-grain";
+import type { JournalStorageRegistry } from "@thresh/journaling/journal-storage-registry";
+import { StateMachineManagerImpl } from "@thresh/journaling/state-machine-manager-impl";
+import { LogViewAdaptorImpl } from "@thresh/journaling/log-view-adaptor-impl";
 
 /**
  * Installs a `LogViewAdaptor` on a `JournaledGrain` instance and replays its

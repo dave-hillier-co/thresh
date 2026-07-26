@@ -1,6 +1,6 @@
-import { defineGrain, useTransactionalState } from "@tsva/core/define-grain";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithStringKey } from "@tsva/core/key-kinds";
+import { defineGrain, useTransactionalState } from "@thresh/core/define-grain";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithStringKey } from "@thresh/core/key-kinds";
 
 /**
  * A bank account whose balance is **transactional** state. Unlike the

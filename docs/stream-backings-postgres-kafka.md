@@ -1,7 +1,7 @@
 # Stream backings: Postgres and Kafka
 
 Design and delivery plan for two additional stream backings behind the existing streaming
-interfaces ([#39](https://github.com/dave-hillier-co/ts-virtual-actors/issues/39)). The
+interfaces ([#39](https://github.com/dave-hillier-co/thresh/issues/39)). The
 programming model (`StreamProvider`, subscriptions, implicit subscriptions, producer handles)
 does not change; each backing is a new provider package slice behind seams that already exist.
 
@@ -44,7 +44,7 @@ refactor. `MemoryStreamProvider` (push-based, not a pulling provider) is untouch
 
 Exit criterion: all existing stream tests pass unchanged; no public API change.
 
-## Phase 1 — Postgres backing (`@tsva/streams` + `packages/persistence` conventions)
+## Phase 1 — Postgres backing (`@thresh/streams` + `packages/persistence` conventions)
 
 Rationale: Postgres grain-storage and reminder providers already ship, so a Postgres-only
 deployment currently needs Redis solely for streams. This closes that gap.
@@ -52,7 +52,7 @@ deployment currently needs Redis solely for streams. This closes that gap.
 ### Storage model
 
 Four tables, provisioned lazily the way `PostgresGrainStorage` bootstraps its schema, with a
-configurable prefix (default `tsva_stream`):
+configurable prefix (default `thresh_stream`):
 
 - **`<p>_events`** — `(id BIGSERIAL PRIMARY KEY, provider TEXT, queue_idx INT, stream_key TEXT,
   payload TEXT, created_at TIMESTAMPTZ DEFAULT now())`. `append` is
@@ -101,7 +101,7 @@ durable system for the transport.
 
 ### Mapping
 
-- **Topic ↔ provider**: one topic per provider, `<prefix>.<name>` (default `tsva.streams`).
+- **Topic ↔ provider**: one topic per provider, `<prefix>.<name>` (default `thresh.streams`).
   **Partition ↔ physical queue**: `queueCount` must equal the topic's partition count —
   validated at startup via the admin API, mismatch throws
   `StreamProviderConfigurationError`.
@@ -150,7 +150,7 @@ real broker; partition-count validation and the retention-gap path are covered.
 ## Phase 3 — polish (optional, after both land)
 
 - LISTEN/NOTIFY wake-up for the Postgres queue (cut poll latency without tightening the loop).
-- Consumer-lag gauge per backing under the existing `tsva.streams.*` meter namespace.
+- Consumer-lag gauge per backing under the existing `thresh.streams.*` meter namespace.
 - A worked example under `examples/` per backing; README provider matrix update.
 
 ## What every backing must keep working

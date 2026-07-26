@@ -1,9 +1,9 @@
 import {
   BROADCAST_CHANNEL_OBSERVER,
   type BroadcastChannelHandler,
-} from "@tsva/core/broadcast-channel";
-import { defineGrain } from "@tsva/core/define-grain";
-import { type Alert, type IAuditLog } from "@tsva/example-broadcast/interfaces";
+} from "@thresh/core/broadcast-channel";
+import { defineGrain } from "@thresh/core/define-grain";
+import { type Alert, type IAuditLog } from "@thresh/example-broadcast/interfaces";
 
 /**
  * A second grain type also implicitly subscribed to the `alerts` namespace. One

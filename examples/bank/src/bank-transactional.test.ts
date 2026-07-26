@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { SiloAddress } from "@tsva/core/silo-address";
-import { InProcessNetwork } from "@tsva/messaging/in-process-transport";
-import { createSilo } from "@tsva/hosting/silo-builder";
-import type { SiloHost } from "@tsva/hosting/silo-host";
+import { SiloAddress } from "@thresh/core/silo-address";
+import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
+import { createSilo } from "@thresh/hosting/silo-builder";
+import type { SiloHost } from "@thresh/hosting/silo-host";
 import {
   ITeller,
   ITxAccount,
   TellerGrain,
   TxAccountGrain,
-} from "@tsva/example-bank/account-transactional";
+} from "@thresh/example-bank/account-transactional";
 
 const local = new SiloAddress("silo-0", "uid-0", "silo-0:11111");
 

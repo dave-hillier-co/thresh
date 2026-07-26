@@ -8,7 +8,7 @@
 // issue. None of them ever runs against the real Orleans transaction system
 // either, so there is nothing behavioural to port.
 import { it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 const SKIP_REASON = "skipped upstream: SkippableTheory(Skip) pending dotnet/orleans#9553";
 

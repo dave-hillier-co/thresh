@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import { GrainId } from "@tsva/core/grain-id";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import { castGrainReference } from "@tsva/core/grain-reference";
-import type { GrainWithStringKey } from "@tsva/core/key-kinds";
-import { IGrainManagementExtension } from "@tsva/runtime/grain-management-extension";
-import { Silo } from "@tsva/runtime/silo";
-import { FakeTimeProvider } from "@tsva/runtime/test-support/fake-time-provider";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import { GrainId } from "@thresh/core/grain-id";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import { castGrainReference } from "@thresh/core/grain-reference";
+import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import { IGrainManagementExtension } from "@thresh/runtime/grain-management-extension";
+import { Silo } from "@thresh/runtime/silo";
+import { FakeTimeProvider } from "@thresh/runtime/test-support/fake-time-provider";
 
 interface ITagged extends GrainWithStringKey {
   tag(): Promise<string>;

@@ -1,17 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
-import { grain, transactionalState } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import { GrainId } from "@tsva/core/grain-id";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import { IManagementGrain } from "@tsva/core/management-grain";
-import type { GrainType } from "@tsva/core/grain-type";
-import type { GrainWithStringKey } from "@tsva/core/key-kinds";
-import { SiloAddress } from "@tsva/core/silo-address";
-import type { TransactionalState } from "@tsva/core/transactional-state";
-import { InProcessNetwork } from "@tsva/messaging/in-process-transport";
-import { MemoryTransactionalStorage } from "@tsva/transactions/memory-transactional-storage";
-import { FakeTimeProvider } from "@tsva/runtime/test-support/fake-time-provider";
-import { createSilo } from "@tsva/hosting/silo-builder";
+import { grain, transactionalState } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import { GrainId } from "@thresh/core/grain-id";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import { IManagementGrain } from "@thresh/core/management-grain";
+import type { GrainType } from "@thresh/core/grain-type";
+import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import { SiloAddress } from "@thresh/core/silo-address";
+import type { TransactionalState } from "@thresh/core/transactional-state";
+import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
+import { MemoryTransactionalStorage } from "@thresh/transactions/memory-transactional-storage";
+import { FakeTimeProvider } from "@thresh/runtime/test-support/fake-time-provider";
+import { createSilo } from "@thresh/hosting/silo-builder";
 
 interface Balance {
   cents: number;

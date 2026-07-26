@@ -1,5 +1,5 @@
-import { GrainId } from "@tsva/core/grain-id";
-import type { GrainType } from "@tsva/core/grain-type";
+import { GrainId } from "@thresh/core/grain-id";
+import type { GrainType } from "@thresh/core/grain-type";
 
 /**
  * Resolve a stream's implicit subscribers (Orleans' `[ImplicitStreamSubscription]`).

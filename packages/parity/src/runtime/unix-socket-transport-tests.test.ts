@@ -4,7 +4,7 @@
 // (test/Orleans.Runtime.Tests/TransportTests/TransportTestsBase.cs) and run
 // here under `ConnectionTransportType.UnixSocket`.
 import { describe, it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 describe("Tester.TransportTests.UnixSocketTransportTests", () => {
   // Both inherited cases exist purely to exercise Orleans' Unix-domain-socket

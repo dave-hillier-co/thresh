@@ -1,25 +1,25 @@
-import type { GrainId } from "@tsva/core/grain-id";
-import type { PerformReadOptions, TransactionalState } from "@tsva/core/transactional-state";
+import type { GrainId } from "@thresh/core/grain-id";
+import type { PerformReadOptions, TransactionalState } from "@thresh/core/transactional-state";
 import type {
   ParticipantId,
   TransactionInfo,
   TransactionParticipant,
-} from "@tsva/core/transaction-info";
+} from "@thresh/core/transaction-info";
 import type {
   PendingTransactionState,
   TransactionalStateMetadata,
   TransactionalStateStorage,
   TransactionalStorageLoadResponse,
-} from "@tsva/core/transactional-storage";
-import { requireTransaction } from "@tsva/runtime/invocation-context";
-import { systemTimeProvider, type TimeProvider, type TimerHandle } from "@tsva/core/time-provider";
-import { TransactionReadOnlyViolatedError } from "@tsva/core/errors";
-import { ReaderWriterLock } from "@tsva/transactions/reader-writer-lock";
-import { EMPTY_METADATA } from "@tsva/transactions/transactional-storage-apply";
+} from "@thresh/core/transactional-storage";
+import { requireTransaction } from "@thresh/runtime/invocation-context";
+import { systemTimeProvider, type TimeProvider, type TimerHandle } from "@thresh/core/time-provider";
+import { TransactionReadOnlyViolatedError } from "@thresh/core/errors";
+import { ReaderWriterLock } from "@thresh/transactions/reader-writer-lock";
+import { EMPTY_METADATA } from "@thresh/transactions/transactional-storage-apply";
 import {
   defaultTransactionsOptions,
   type TransactionsOptions,
-} from "@tsva/transactions/transactions-options";
+} from "@thresh/transactions/transactions-options";
 
 const clone = <T>(value: T): T =>
   typeof structuredClone === "function"

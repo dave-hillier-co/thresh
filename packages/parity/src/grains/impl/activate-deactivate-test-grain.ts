@@ -4,9 +4,9 @@
 // there is no equivalent in JS, so each of these grains mints a fresh Guid per
 // activation instead — serving the same purpose (a value unique per incarnation
 // a test can compare across reactivations).
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import { Guid } from "@tsva/core/guid";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import { Guid } from "@thresh/core/guid";
 import {
   IActivateDeactivateWatcherGrain,
   IBadActivateDeactivateTestGrain,
@@ -17,8 +17,8 @@ import {
   ISimpleActivateDeactivateTestGrain,
   ITailCallActivateDeactivateTestGrain,
   ITaskActionActivateDeactivateTestGrain,
-} from "@tsva/parity/grains/interfaces/activate-deactivate-test-grain-interfaces";
-import { ITestGrain } from "@tsva/parity/grains/interfaces/test-grain-interfaces";
+} from "@thresh/parity/grains/interfaces/activate-deactivate-test-grain-interfaces";
+import { ITestGrain } from "@thresh/parity/grains/interfaces/test-grain-interfaces";
 
 export {
   IActivateDeactivateWatcherGrain,

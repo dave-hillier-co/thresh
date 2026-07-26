@@ -8,13 +8,13 @@ import {
   SimpleSpanProcessor,
   type ReadableSpan,
 } from "@opentelemetry/sdk-trace-base";
-import { grain } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithStringKey } from "@tsva/core/key-kinds";
-import { SiloAddress } from "@tsva/core/silo-address";
-import { InProcessNetwork } from "@tsva/messaging/in-process-transport";
-import { createSilo } from "@tsva/hosting/silo-builder";
+import { grain } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import { SiloAddress } from "@thresh/core/silo-address";
+import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
+import { createSilo } from "@thresh/hosting/silo-builder";
 
 // Register a minimal OpenTelemetry SDK so spans are recorded and trace context
 // propagates (an in-memory exporter + an async-hooks context manager + W3C).
@@ -87,7 +87,7 @@ describe("OpenTelemetry tracing filter", () => {
       expect(downClient).toBeDefined();
       // The callee's SERVER span is a child of the caller's CLIENT span.
       expect(parentSpanId(downServer!)).toBe(downClient!.spanContext().spanId);
-      expect(downServer!.attributes["rpc.system"]).toBe("tsva");
+      expect(downServer!.attributes["rpc.system"]).toBe("thresh");
       expect(downServer!.attributes["rpc.method"]).toBe("ping");
     } finally {
       await silo.stop();

@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { createClient } from "redis";
-import type { DurableJob } from "@tsva/core/durable-job";
-import { GrainId } from "@tsva/core/grain-id";
-import { RedisJobShardStore } from "@tsva/durable-jobs/redis-job-shard-store";
+import type { DurableJob } from "@thresh/core/durable-job";
+import { GrainId } from "@thresh/core/grain-id";
+import { RedisJobShardStore } from "@thresh/durable-jobs/redis-job-shard-store";
 
 const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
 
@@ -28,7 +28,7 @@ async function reachable(url: string): Promise<Client | undefined> {
 }
 
 const client = await reachable(REDIS_URL);
-const prefix = `tsva-test:job:${randomUUID()}`;
+const prefix = `thresh-test:job:${randomUUID()}`;
 const makeStore = () => new RedisJobShardStore(client!, { keyPrefix: prefix });
 
 function jobAt(id: string, shardKey: number, dueMs: number): DurableJob {

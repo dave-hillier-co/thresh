@@ -1,6 +1,6 @@
 import type { Pool } from "pg";
-import { raceSignal } from "@tsva/core/abort";
-import type { StreamCursorStore } from "@tsva/streams/stream-cursor-store";
+import { raceSignal } from "@thresh/core/abort";
+import type { StreamCursorStore } from "@thresh/streams/stream-cursor-store";
 
 const IDENTIFIER = /^[a-z_][a-z0-9_]*$/;
 

@@ -1,9 +1,9 @@
 import { metrics, type Attributes, type Counter } from "@opentelemetry/api";
 
 /**
- * OpenTelemetry counters for reminder ticks (`@tsva/reminders`):
- * `tsva.reminders.fired` (delivery to the grain succeeded) and
- * `tsva.reminders.missed` (delivery threw and was swallowed, e.g. the grain
+ * OpenTelemetry counters for reminder ticks (`@thresh/reminders`):
+ * `thresh.reminders.fired` (delivery to the grain succeeded) and
+ * `thresh.reminders.missed` (delivery threw and was swallowed, e.g. the grain
  * activation failed). Emitted through the global OpenTelemetry meter — a
  * no-op until the host registers an SDK.
  *
@@ -19,13 +19,13 @@ let instruments: Instruments | undefined;
 
 function instrumentsOf(): Instruments {
   if (instruments === undefined) {
-    const meter = metrics.getMeter("@tsva/observability");
+    const meter = metrics.getMeter("@thresh/observability");
     instruments = {
-      fired: meter.createCounter("tsva.reminders.fired", {
+      fired: meter.createCounter("thresh.reminders.fired", {
         description: "Reminder ticks successfully delivered to their grain",
         unit: "{tick}",
       }),
-      missed: meter.createCounter("tsva.reminders.missed", {
+      missed: meter.createCounter("thresh.reminders.missed", {
         description: "Reminder ticks whose delivery failed",
         unit: "{tick}",
       }),

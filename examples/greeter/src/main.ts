@@ -1,6 +1,6 @@
-import { runGreeterDemo } from "@tsva/example-greeter/demo";
+import { runGreeterDemo } from "@thresh/example-greeter/demo";
 
-// Runnable entry point: `pnpm --filter @tsva/example-greeter start`.
+// Runnable entry point: `pnpm --filter @thresh/example-greeter start`.
 async function main(): Promise<void> {
   const result = await runGreeterDemo();
   console.log("Greeter demo");

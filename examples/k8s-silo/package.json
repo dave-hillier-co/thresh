@@ -1,5 +1,5 @@
 {
-  "name": "@tsva/example-k8s-silo",
+  "name": "@thresh/example-k8s-silo",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -10,9 +10,9 @@
     "start": "vite-node --config ../../vitest.config.ts src/main.ts"
   },
   "dependencies": {
-    "@tsva/clustering-k8s": "workspace:*",
-    "@tsva/core": "workspace:*",
-    "@tsva/hosting": "workspace:*",
-    "@tsva/messaging": "workspace:*"
+    "@thresh/clustering-k8s": "workspace:*",
+    "@thresh/core": "workspace:*",
+    "@thresh/hosting": "workspace:*",
+    "@thresh/messaging": "workspace:*"
   }
 }

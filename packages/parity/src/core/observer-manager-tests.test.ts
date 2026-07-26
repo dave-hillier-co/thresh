@@ -1,8 +1,8 @@
 // Ported from dotnet/orleans test/Orleans.Core.Tests/ObserverManagerTests.cs @ v10.1.0 (MIT).
 import { describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { ObserverManager } from "@tsva/core/observer-manager";
-import { FakeTimeProvider } from "@tsva/core/test-support/fake-time-provider";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { ObserverManager } from "@thresh/core/observer-manager";
+import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
 
 // Tests Orleans.Utilities.ObserverManager<TIdentity, TObserver>, a standalone reusable utility
 // for managing a snapshot-based, time-expiring collection of subscribers (used internally by

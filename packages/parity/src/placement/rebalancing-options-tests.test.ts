@@ -1,6 +1,6 @@
 // Ported from dotnet/orleans test/Orleans.Placement.Tests/ActivationRebalancingTests/RebalancingOptionsTests.cs @ v10.1.0 (MIT).
 import { describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 import {
   ActivationRebalancerOptionsValidator,
   DEFAULT_REBALANCER_DUE_TIME_MS,
@@ -8,7 +8,7 @@ import {
   defaultActivationRebalancerOptions,
   type ActivationRebalancerOptions,
   type DeploymentLoadPublisherOptions,
-} from "@tsva/runtime/placement/rebalancing/rebalancer-options";
+} from "@thresh/runtime/placement/rebalancing/rebalancer-options";
 import {
   DEFAULT_ACTIVATION_MIGRATION_COUNT_LIMIT,
   DEFAULT_ALLOWED_ENTROPY_DEVIATION,
@@ -19,7 +19,7 @@ import {
   DEFAULT_SCALED_ENTROPY_DEVIATION_ACTIVATION_THRESHOLD,
   DEFAULT_SILO_NUMBER_WEIGHT,
   MAX_SCALED_ENTROPY_DEVIATION,
-} from "@tsva/runtime/placement/rebalancing/rebalancer-model";
+} from "@thresh/runtime/placement/rebalancing/rebalancer-model";
 
 describe("UnitTests.ActivationRebalancingTests.RebalancingOptionsTests", () => {
   orleansTest("UnitTests.ActivationRebalancingTests.RebalancingOptionsTests.ConstantsShouldNotChange", () => {

@@ -1,10 +1,10 @@
-import { SiloAddress } from "@tsva/core/silo-address";
-import { InProcessNetwork } from "@tsva/messaging/in-process-transport";
-import { MemoryGrainStorage } from "@tsva/persistence/memory-grain-storage";
-import { createSilo } from "@tsva/hosting/silo-builder";
-import type { SiloHost } from "@tsva/hosting/silo-host";
-import { AccountGrain } from "@tsva/example-bank/account-grain-functional";
-import { IAccount, type AccountState } from "@tsva/example-bank/interfaces";
+import { SiloAddress } from "@thresh/core/silo-address";
+import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
+import { MemoryGrainStorage } from "@thresh/persistence/memory-grain-storage";
+import { createSilo } from "@thresh/hosting/silo-builder";
+import type { SiloHost } from "@thresh/hosting/silo-host";
+import { AccountGrain } from "@thresh/example-bank/account-grain-functional";
+import { IAccount, type AccountState } from "@thresh/example-bank/interfaces";
 
 export interface BankDemoResult {
   alice: AccountState;

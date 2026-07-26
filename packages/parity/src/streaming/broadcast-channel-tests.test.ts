@@ -16,7 +16,7 @@
 //    forget swallows a subscriber's throw; non-fire-and-forget awaits every
 //    subscriber and aggregates every failure into one thrown `AggregateError`
 //    once all have been tried.
-//  - `@tsva/core/broadcast-channel-diagnostics`, a delivery-event bus
+//  - `@thresh/core/broadcast-channel-diagnostics`, a delivery-event bus
 //    `publishToBroadcastChannel` emits on, and `BroadcastChannelDiagnosticObserver`
 //    (`packages/parity/src/support/broadcast-channel-diagnostic-observer.ts`),
 //    the test-side counter that lets these tests await "N deliveries" without
@@ -37,15 +37,15 @@ import {
   type BroadcastChannelHandler,
   type BroadcastChannelProvider,
   type ChannelId,
-} from "@tsva/core/broadcast-channel";
-import { grain, regexImplicitChannelSubscription } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import { Guid } from "@tsva/core/guid";
-import type { GrainWithStringKey } from "@tsva/core/key-kinds";
-import type { ClientNode } from "@tsva/client/client-node";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { TestCluster } from "@tsva/testing/test-cluster";
+} from "@thresh/core/broadcast-channel";
+import { grain, regexImplicitChannelSubscription } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import { Guid } from "@thresh/core/guid";
+import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { ClientNode } from "@thresh/client/client-node";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
 import { BroadcastChannelDiagnosticObserver } from "../support/broadcast-channel-diagnostic-observer";
 import { createClusterClient } from "../support/client";
 

@@ -1,5 +1,5 @@
-import { GrainId } from "@tsva/core/grain-id";
-import { SiloAddress } from "@tsva/core/silo-address";
+import { GrainId } from "@thresh/core/grain-id";
+import { SiloAddress } from "@thresh/core/silo-address";
 import { describe, expect, it } from "vitest";
 import { edge, edgeVertex } from "./edge";
 import { FrequentEdgeCounter } from "./frequent-edge-counter";

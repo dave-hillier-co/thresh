@@ -1,4 +1,4 @@
-import { SiloAddress } from "@tsva/core/silo-address";
+import { SiloAddress } from "@thresh/core/silo-address";
 
 /** The pod identity a silo reads from the Kubernetes downward API. */
 export interface PodEnvironment {

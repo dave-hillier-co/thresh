@@ -1,5 +1,5 @@
-import { stableHash32 } from "@tsva/core/hash";
-import { isHashInRanges, type HashRange } from "@tsva/core/hash-ring";
+import { stableHash32 } from "@thresh/core/hash";
+import { isHashInRanges, type HashRange } from "@thresh/core/hash-ring";
 
 export type { HashRange };
 

@@ -1,17 +1,17 @@
 import type { createClient } from "redis";
-import { InconsistentStateError } from "@tsva/core/errors";
-import type { GrainId } from "@tsva/core/grain-id";
-import type { JournalEntry, JournalSegment, JournalStorage } from "@tsva/core/journal-storage";
+import { InconsistentStateError } from "@thresh/core/errors";
+import type { GrainId } from "@thresh/core/grain-id";
+import type { JournalEntry, JournalSegment, JournalStorage } from "@thresh/core/journal-storage";
 
 /** A connected node-redis client (the subset this provider drives). */
 export type RedisClient = ReturnType<typeof createClient>;
 
 export interface RedisJournalStorageOptions {
-  /** Namespace for keys in the shared Redis (defaults to `"tsva"`). */
+  /** Namespace for keys in the shared Redis (defaults to `"thresh"`). */
   keyPrefix?: string;
 }
 
-const CONFLICT = "TSVA_ETAG_CONFLICT";
+const CONFLICT = "THRESH_ETAG_CONFLICT";
 
 // Optimistic-concurrency guard shared by APPEND and REPLACE: the caller's expected
 // version (ARGV[1], '' = "no log yet") must match the stored version, else conflict.
@@ -58,7 +58,7 @@ export class RedisJournalStorage implements JournalStorage {
     private readonly client: RedisClient,
     options: RedisJournalStorageOptions = {},
   ) {
-    this.keyPrefix = options.keyPrefix ?? "tsva";
+    this.keyPrefix = options.keyPrefix ?? "thresh";
   }
 
   async read(logName: string, grainId: GrainId, signal?: AbortSignal): Promise<JournalSegment> {

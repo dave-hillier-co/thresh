@@ -12,7 +12,7 @@
 // tests (grain calls, response timeouts, reference-equality marshaling,
 // observers, streams) are otherwise covered by other ported suites.
 import { describe, it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 describe("DefaultCluster.Tests.General.HostedClientTests", () => {
   orleansTest.excluded(

@@ -9,13 +9,13 @@
 // liveness-test-grain-interfaces.ts). The asserted behaviour
 // (`GetPrimaryKeyLong`, `GetLabel`) is preserved exactly.
 import { describe, expect } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
-import { IManagementGrain } from "@tsva/core/management-grain";
-import { TestCluster, type TestSiloHandle } from "@tsva/testing/test-cluster";
+import { orleansTest } from "@thresh/testing/orleans-test";
+import { IManagementGrain } from "@thresh/core/management-grain";
+import { TestCluster, type TestSiloHandle } from "@thresh/testing/test-cluster";
 import {
   ILivenessTestGrain,
   LivenessTestGrain,
-} from "@tsva/parity/grains/impl/liveness-test-grain";
+} from "@thresh/parity/grains/impl/liveness-test-grain";
 
 const numGrains = 20;
 

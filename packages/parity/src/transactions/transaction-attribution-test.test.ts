@@ -11,18 +11,18 @@
 // and report it back up, so the test can assert which tiers see no ambient
 // transaction, which see a fresh one, and which see the parent's.
 //
-// `GrainRuntime.getTransactionId()`/`isInTransaction()` (@tsva/core/grain-runtime)
+// `GrainRuntime.getTransactionId()`/`isInTransaction()` (@thresh/core/grain-runtime)
 // now expose that introspection, delegating to the runtime-internal
-// `currentTransaction()` (@tsva/runtime/invocation-context). The transaction
+// `currentTransaction()` (@thresh/runtime/invocation-context). The transaction
 // boundary itself (`InvokeMethodOptions.transaction` /
-// `GrainFactory.resolveTransaction`, @tsva/runtime/grain-factory) was already
+// `GrainFactory.resolveTransaction`, @thresh/runtime/grain-factory) was already
 // faithful — this file was gapped purely for lack of a way for grain code to
 // read the outcome. `packages/parity/src/grains/{interfaces,impl}/
 // transaction-attribution-grain*.ts` ports upstream's seven grain variants,
 // keyed by `TransactionOption` (plus `"none"`) rather than by C# attribute.
 import { expect } from "vitest";
-import { TestCluster } from "@tsva/testing/test-cluster";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { TestCluster } from "@thresh/testing/test-cluster";
+import { orleansTest } from "@thresh/testing/orleans-test";
 import {
   attributionGrainInterfaceFor,
   CreateAttributionGrainInterface,
@@ -34,7 +34,7 @@ import {
   SupportedAttributionGrainInterface,
   type AttributionOption,
   type AttributionTierEntry,
-} from "@tsva/parity/grains/interfaces/transaction-attribution-grain-interfaces";
+} from "@thresh/parity/grains/interfaces/transaction-attribution-grain-interfaces";
 import {
   CreateAttributionGrain,
   CreateOrJoinAttributionGrain,
@@ -43,7 +43,7 @@ import {
   NotAllowedAttributionGrain,
   SuppressAttributionGrain,
   SupportedAttributionGrain,
-} from "@tsva/parity/grains/impl/transaction-attribution-grain";
+} from "@thresh/parity/grains/impl/transaction-attribution-grain";
 
 let nextKey = 0;
 const newKey = (): string => `attribution-${(nextKey += 1)}`;

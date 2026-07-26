@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { GrainId } from "@tsva/core/grain-id";
-import { SiloAddress } from "@tsva/core/silo-address";
-import { ConsistentHashRing } from "@tsva/directory/consistent-hash-ring";
+import { GrainId } from "@thresh/core/grain-id";
+import { SiloAddress } from "@thresh/core/silo-address";
+import { ConsistentHashRing } from "@thresh/directory/consistent-hash-ring";
 
 const silo = (n: number) => new SiloAddress(`silo-${n}`, `uid-${n}`, `silo-${n}:11111`);
 const silos = (n: number) => Array.from({ length: n }, (_, i) => silo(i));

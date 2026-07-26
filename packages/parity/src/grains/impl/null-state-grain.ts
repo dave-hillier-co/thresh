@@ -1,11 +1,11 @@
 // Ported from dotnet/orleans test/Grains/TestGrains/NullStateGrain.cs @ v10.1.0 (MIT).
-import { grain, persistentState } from "@tsva/core/decorators";
-import { Grain } from "@tsva/core/grain";
-import type { PersistentState } from "@tsva/core/persistent-state";
+import { grain, persistentState } from "@thresh/core/decorators";
+import { Grain } from "@thresh/core/grain";
+import type { PersistentState } from "@thresh/core/persistent-state";
 import {
   INullStateGrain,
   type NullableState,
-} from "@tsva/parity/grains/interfaces/null-state-grain-interfaces";
+} from "@thresh/parity/grains/interfaces/null-state-grain-interfaces";
 
 export { INullStateGrain };
 

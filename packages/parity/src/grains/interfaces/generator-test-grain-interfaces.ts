@@ -1,8 +1,8 @@
 // Ported from dotnet/orleans test/Grains/TestGrainInterfaces/IGeneratorTestGrain.cs,
 // IGeneratorTestDerivedGrain1.cs, IGeneratorTestDerivedGrain2.cs,
 // IGeneratorTestDerivedDerivedGrain.cs @ v10.1.0 (MIT).
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithIntegerKey } from "@tsva/core/key-kinds";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithIntegerKey } from "@thresh/core/key-kinds";
 
 /** Upstream `UnitTests.GrainInterfaces.ReturnCode`. */
 export type ReturnCode = "OK" | "Fail";

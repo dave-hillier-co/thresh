@@ -10,8 +10,8 @@
 // carry — an extension interface is never itself the target of `cluster.getGrain`, it is
 // only reached by casting a reference to a grain that already has one; the extension rides
 // the grain's own id, so the declared key kind here is otherwise unused.
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import type { GrainWithIntegerKey } from "@tsva/core/key-kinds";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainWithIntegerKey } from "@thresh/core/key-kinds";
 
 export interface IExtensionTestGrain extends GrainWithIntegerKey {
   installExtension(name: string): Promise<void>;

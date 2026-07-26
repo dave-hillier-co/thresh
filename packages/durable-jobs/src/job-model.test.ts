@@ -5,7 +5,7 @@ import {
   InMemoryJobQueue,
   shardKeyFor,
   shardStartMs,
-} from "@tsva/durable-jobs/job-model";
+} from "@thresh/durable-jobs/job-model";
 
 const HOUR = 3_600_000;
 

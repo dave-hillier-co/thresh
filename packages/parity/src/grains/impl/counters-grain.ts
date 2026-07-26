@@ -6,10 +6,10 @@
 // framework has one journal-storage substrate (no separate "persist latest
 // state only" vs. "persist the full log" consistency providers), so all four
 // share the same `CountersGrain` behaviour and differ only in reentrancy.
-import { grain, reentrant } from "@tsva/core/decorators";
-import { JournaledGrain } from "@tsva/core/journaled-grain";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import { ICountersGrain } from "@tsva/parity/grains/interfaces/counters-grain-interfaces";
+import { grain, reentrant } from "@thresh/core/decorators";
+import { JournaledGrain } from "@thresh/core/journaled-grain";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import { ICountersGrain } from "@thresh/parity/grains/interfaces/counters-grain-interfaces";
 
 export { ICountersGrain };
 

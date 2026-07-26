@@ -53,7 +53,7 @@ export type OutgoingGrainCallFilter = (context: GrainCallContext) => Promise<voi
  * the innermost filter — after the silo-wide ones, just before the method. The
  * symbol key keeps it from colliding with the grain's own (string-named) methods.
  */
-export const INCOMING_CALL_FILTER = Symbol.for("tsva.incomingCallFilter");
+export const INCOMING_CALL_FILTER = Symbol.for("thresh.incomingCallFilter");
 
 /** A grain that filters its own incoming calls. */
 export interface SelfFilteringGrain {

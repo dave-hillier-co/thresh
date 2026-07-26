@@ -11,7 +11,7 @@
 // is a direct push-based fan-out with no pooled ring-buffer cache — so there
 // is no equivalent internal data structure to port these tests to.
 import { it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 const REASON =
   "white-box unit tests of Orleans' internal CachedMessageBlock ring buffer (Orleans.Providers.Streams.Common), part of the persistent-stream pulling-agent message cache; this framework's MemoryStreamProvider has no pulling agent or pooled message cache to test-access";

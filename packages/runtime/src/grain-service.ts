@@ -1,4 +1,4 @@
-import type { GrainInterface } from "@tsva/core/grain-interface";
+import type { GrainInterface } from "@thresh/core/grain-interface";
 
 /**
  * Lifecycle phase of a {@link GrainService} instance (Orleans

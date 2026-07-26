@@ -2,9 +2,9 @@
 // Upstream inserts a 1s `Task.Delay` before every async method resolves purely to
 // exercise the async/await path; shortened to a few ms so the ported test doesn't
 // sleep for seconds (no timing assertion depends on the exact delay).
-import { grain } from "@tsva/core/decorators";
-import { SimpleGrain } from "@tsva/parity/grains/impl/simple-grain";
-import { ISimpleGrainWithAsyncMethods } from "@tsva/parity/grains/interfaces/simple-grain-async-interfaces";
+import { grain } from "@thresh/core/decorators";
+import { SimpleGrain } from "@thresh/parity/grains/impl/simple-grain";
+import { ISimpleGrainWithAsyncMethods } from "@thresh/parity/grains/interfaces/simple-grain-async-interfaces";
 
 export { ISimpleGrainWithAsyncMethods };
 

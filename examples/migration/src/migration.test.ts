@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { GrainId } from "@tsva/core/grain-id";
-import { buildMigrationCluster, siloAddress } from "@tsva/example-migration/cluster";
-import { runMigrationDemo } from "@tsva/example-migration/demo";
-import { ICart } from "@tsva/example-migration/interfaces";
+import { GrainId } from "@thresh/core/grain-id";
+import { buildMigrationCluster, siloAddress } from "@thresh/example-migration/cluster";
+import { runMigrationDemo } from "@thresh/example-migration/demo";
+import { ICart } from "@thresh/example-migration/interfaces";
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 async function settleUntil(pred: () => boolean, max = 200): Promise<void> {

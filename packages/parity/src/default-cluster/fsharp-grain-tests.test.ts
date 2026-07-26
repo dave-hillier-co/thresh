@@ -7,7 +7,7 @@
 // is no F# type to construct, no `Microsoft.FSharp.Core` assembly to reference,
 // and nothing analogous to port any of these tests to.
 import { describe, it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 const reason =
   "Exercises Orleans' F#-interop serialization (F# records, discriminated unions, " +

@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { Pool } from "pg";
-import { GrainId } from "@tsva/core/grain-id";
-import { FakeTimeProvider } from "@tsva/core/test-support/fake-time-provider";
-import { LocalReminderService, type HashRange } from "@tsva/reminders/local-reminder-service";
-import { PostgresReminderTable } from "@tsva/reminders/postgres-reminder-table";
+import { GrainId } from "@thresh/core/grain-id";
+import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
+import { LocalReminderService, type HashRange } from "@thresh/reminders/local-reminder-service";
+import { PostgresReminderTable } from "@thresh/reminders/postgres-reminder-table";
 
 const PG_URL = process.env.PG_URL ?? "postgres://localhost:5432/postgres";
 
@@ -21,7 +21,7 @@ async function reachable(connectionString: string): Promise<Pool | undefined> {
 }
 
 const pool = await reachable(PG_URL);
-const table = `tsva_test_${randomUUID().replace(/-/g, "")}`;
+const table = `thresh_test_${randomUUID().replace(/-/g, "")}`;
 const makeTable = () => new PostgresReminderTable(pool!, { tableName: table });
 
 const WHOLE: HashRange = [0, 0x1_0000_0000];

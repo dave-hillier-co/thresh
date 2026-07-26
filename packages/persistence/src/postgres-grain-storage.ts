@@ -1,13 +1,13 @@
 import { randomUUID } from "node:crypto";
 import type { Pool } from "pg";
-import { raceSignal } from "@tsva/core/abort";
-import { InconsistentStateError } from "@tsva/core/errors";
-import type { GrainId } from "@tsva/core/grain-id";
-import type { GrainStorage, StateHolder } from "@tsva/core/grain-storage";
-import { deserializeValue, serializeValue } from "@tsva/core/value-codec";
+import { raceSignal } from "@thresh/core/abort";
+import { InconsistentStateError } from "@thresh/core/errors";
+import type { GrainId } from "@thresh/core/grain-id";
+import type { GrainStorage, StateHolder } from "@thresh/core/grain-storage";
+import { deserializeValue, serializeValue } from "@thresh/core/value-codec";
 
 export interface PostgresGrainStorageOptions {
-  /** Table holding the state rows (defaults to `"tsva_grain_state"`). */
+  /** Table holding the state rows (defaults to `"thresh_grain_state"`). */
   tableName?: string;
 }
 
@@ -37,7 +37,7 @@ export class PostgresGrainStorage implements GrainStorage {
     private readonly pool: Pool,
     options: PostgresGrainStorageOptions = {},
   ) {
-    this.table = options.tableName ?? "tsva_grain_state";
+    this.table = options.tableName ?? "thresh_grain_state";
     if (!IDENTIFIER.test(this.table)) throw new Error(`invalid table name: ${this.table}`);
   }
 
@@ -59,7 +59,7 @@ export class PostgresGrainStorage implements GrainStorage {
 
   /**
    * `signal`, when given, only abandons the WAIT for an in-flight query
-   * (`@tsva/core/abort`'s `raceSignal`) — node-postgres's `Pool.query` has no
+   * (`@thresh/core/abort`'s `raceSignal`) — node-postgres's `Pool.query` has no
    * abort hook in this major version, so the query itself keeps running
    * server-side; unlike `RedisGrainStorage`, which cancels for real via
    * node-redis's `withAbortSignal`.

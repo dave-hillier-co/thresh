@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { grain } from "@tsva/core/decorators";
-import { GrainId } from "@tsva/core/grain-id";
-import { defineGrainInterface } from "@tsva/core/grain-interface";
-import { Grain } from "@tsva/core/grain";
-import type { GrainWithStringKey } from "@tsva/core/key-kinds";
-import { Silo } from "@tsva/runtime/silo";
-import { FakeTimeProvider } from "@tsva/runtime/test-support/fake-time-provider";
+import { grain } from "@thresh/core/decorators";
+import { GrainId } from "@thresh/core/grain-id";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import { Grain } from "@thresh/core/grain";
+import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import { Silo } from "@thresh/runtime/silo";
+import { FakeTimeProvider } from "@thresh/runtime/test-support/fake-time-provider";
 
 interface ICounter extends GrainWithStringKey {
   increment(by: number): Promise<number>;

@@ -1,10 +1,10 @@
-import { defineGrain } from "@tsva/core/define-grain";
-import type { StreamHandler } from "@tsva/core/stream";
+import { defineGrain } from "@thresh/core/define-grain";
+import type { StreamHandler } from "@thresh/core/stream";
 import {
   TELEMETRY,
   type IFleetAggregator,
   type ThermostatStatus,
-} from "@tsva/example-thermostat/interfaces";
+} from "@thresh/example-thermostat/interfaces";
 
 /**
  * Subscribes to a device's telemetry stream and keeps a rolling average. The

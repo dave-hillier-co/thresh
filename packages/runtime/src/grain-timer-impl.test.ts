@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { Duration } from "@tsva/core/duration";
-import { FakeTimeProvider } from "@tsva/core/test-support/fake-time-provider";
-import { GrainTimerImpl } from "@tsva/runtime/grain-timer-impl";
+import type { Duration } from "@thresh/core/duration";
+import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
+import { GrainTimerImpl } from "@thresh/runtime/grain-timer-impl";
 
 // Mirrors Orleans' `TimerQueueTimer.ValidateArguments` (see
 // src/Orleans.Runtime/Timers/GrainTimer.cs @ v10.1.0): due time and period,

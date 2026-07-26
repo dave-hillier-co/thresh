@@ -1,6 +1,6 @@
 // Ported from dotnet/orleans test/Orleans.Core.Tests/Caching/ConcurrentLruSoakTests.cs @ v10.1.0 (MIT).
 import { describe, it } from "vitest";
-import { orleansTest } from "@tsva/testing/orleans-test";
+import { orleansTest } from "@thresh/testing/orleans-test";
 
 describe("NonSilo.Tests.Caching.ConcurrentLruCacheSoakTests", () => {
   orleansTest.excluded(
