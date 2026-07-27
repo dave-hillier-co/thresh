@@ -30,7 +30,10 @@ export interface Connection {
  * preamble and a duplex `Connection` it can hold to reach that peer later
  * (mirroring how Orleans' gateway learns a client connection on accept).
  */
-export type ConnectionAcceptHandler = (preamble: ConnectionPreamble, connection: Connection) => void;
+export type ConnectionAcceptHandler = (
+  preamble: ConnectionPreamble,
+  connection: Connection,
+) => void;
 
 /** Abstracts silo-to-silo and client-to-silo message transport. */
 export interface Transport {

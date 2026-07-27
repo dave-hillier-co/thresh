@@ -1,14 +1,24 @@
 import { describe, expect, it } from "vitest";
 import { activeSilos } from "@thresh/core/membership";
 import { SiloAddress } from "@thresh/core/silo-address";
-import { readySilosFromSlices, type EndpointSlice } from "@thresh/clustering-k8s/endpoint-slice";
+import {
+  metadataFromSlices,
+  readySilosFromSlices,
+  type EndpointSlice,
+} from "@thresh/clustering-k8s/endpoint-slice";
 import {
   KubernetesMembership,
   type EndpointWatch,
 } from "@thresh/clustering-k8s/kubernetes-membership";
 
 function slice(
-  endpoints: Array<{ ip: string; name: string; uid: string; ready: boolean }>,
+  endpoints: Array<{
+    ip: string;
+    name: string;
+    uid: string;
+    ready: boolean;
+    metadata?: Record<string, string>;
+  }>,
   port = 11111,
 ): EndpointSlice {
   return {
@@ -17,6 +27,7 @@ function slice(
       addresses: [e.ip],
       conditions: { ready: e.ready },
       targetRef: { name: e.name, uid: e.uid },
+      ...(e.metadata !== undefined ? { metadata: e.metadata } : {}),
     })),
   };
 }
@@ -61,6 +72,52 @@ describe("readySilosFromSlices", () => {
       ],
     };
     expect(readySilosFromSlices([s], "silo")[0]!.endpoint).toBe("10.0.0.1:11111");
+  });
+});
+
+describe("metadataFromSlices", () => {
+  it("returns nothing when no labelPrefix is given, even if endpoints carry labels", () => {
+    const s = slice([
+      {
+        ip: "10.0.0.1",
+        name: "silo-0",
+        uid: "uid-0",
+        ready: true,
+        metadata: { "thresh.io/role": "worker" },
+      },
+    ]);
+    expect(metadataFromSlices([s])).toEqual(new Map());
+  });
+
+  it("strips the prefix from matching label keys", () => {
+    const s = slice([
+      {
+        ip: "10.0.0.1",
+        name: "silo-0",
+        uid: "uid-0",
+        ready: true,
+        metadata: { "thresh.io/role": "worker", "other.io/ignored": "x" },
+      },
+    ]);
+    expect(metadataFromSlices([s], "thresh.io/")).toEqual(new Map([["uid-0", { role: "worker" }]]));
+  });
+
+  it("omits a pod with no matching labels rather than an empty object", () => {
+    const s = slice([
+      {
+        ip: "10.0.0.1",
+        name: "silo-0",
+        uid: "uid-0",
+        ready: true,
+        metadata: { "other.io/x": "y" },
+      },
+    ]);
+    expect(metadataFromSlices([s], "thresh.io/")).toEqual(new Map());
+  });
+
+  it("omits a pod with no metadata at all", () => {
+    const s = slice([{ ip: "10.0.0.1", name: "silo-0", uid: "uid-0", ready: true }]);
+    expect(metadataFromSlices([s], "thresh.io/")).toEqual(new Map());
   });
 });
 
@@ -122,5 +179,90 @@ describe("KubernetesMembership", () => {
     watch.emit([slice([{ ip: "10.0.0.6", name: "silo-2", uid: "uid-new", ready: true }])]);
     const silo2 = activeSilos(membership.current()).find((s) => s.ringKey === "silo-2");
     expect(silo2?.podUid).toBe("uid-new");
+  });
+
+  describe("metadata from pod labels", () => {
+    const member = (m: KubernetesMembership, ringKey: string) =>
+      m.current().silos.find((s) => s.address.ringKey === ringKey);
+
+    it("surfaces labels under metadataLabelPrefix as SiloMember.metadata", () => {
+      const watch = new FakeWatch();
+      const membership = new KubernetesMembership(local, watch, {
+        portName: "silo",
+        metadataLabelPrefix: "thresh.io/",
+      });
+      watch.emit([
+        slice([
+          {
+            ip: "10.0.0.2",
+            name: "silo-1",
+            uid: "uid-1",
+            ready: true,
+            metadata: { "thresh.io/role": "worker" },
+          },
+        ]),
+      ]);
+      expect(member(membership, "silo-1")?.metadata).toEqual({ role: "worker" });
+    });
+
+    it("propagates a label change on the next reconciliation", () => {
+      const watch = new FakeWatch();
+      const membership = new KubernetesMembership(local, watch, {
+        portName: "silo",
+        metadataLabelPrefix: "thresh.io/",
+      });
+      watch.emit([
+        slice([
+          {
+            ip: "10.0.0.2",
+            name: "silo-1",
+            uid: "uid-1",
+            ready: true,
+            metadata: { "thresh.io/role": "worker" },
+          },
+        ]),
+      ]);
+      expect(member(membership, "silo-1")?.metadata).toEqual({ role: "worker" });
+
+      watch.emit([
+        slice([
+          {
+            ip: "10.0.0.2",
+            name: "silo-1",
+            uid: "uid-1",
+            ready: true,
+            metadata: { "thresh.io/role": "gateway" },
+          },
+        ]),
+      ]);
+      expect(member(membership, "silo-1")?.metadata).toEqual({ role: "gateway" });
+    });
+
+    it("leaves metadata absent for a silo whose pod has no matching labels", () => {
+      const watch = new FakeWatch();
+      const membership = new KubernetesMembership(local, watch, {
+        portName: "silo",
+        metadataLabelPrefix: "thresh.io/",
+      });
+      watch.emit([slice([{ ip: "10.0.0.2", name: "silo-1", uid: "uid-1", ready: true }])]);
+      expect(member(membership, "silo-1")?.metadata).toBeUndefined();
+    });
+
+    it("leaves metadata absent everywhere when metadataLabelPrefix is not set", () => {
+      const watch = new FakeWatch();
+      const membership = new KubernetesMembership(local, watch, { portName: "silo" });
+      watch.emit([
+        slice([
+          {
+            ip: "10.0.0.2",
+            name: "silo-1",
+            uid: "uid-1",
+            ready: true,
+            metadata: { "thresh.io/role": "worker" },
+          },
+        ]),
+      ]);
+      expect(member(membership, "silo-1")?.metadata).toBeUndefined();
+    });
   });
 });

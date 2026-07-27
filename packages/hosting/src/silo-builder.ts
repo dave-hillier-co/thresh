@@ -31,7 +31,10 @@ import { bindPersistentStates } from "@thresh/persistence/state-activator";
 import { bindReducerStates } from "@thresh/persistence/reducer-state-activator";
 import { StorageRegistry } from "@thresh/persistence/storage-registry";
 import { bindGrainFacets } from "@thresh/persistence/grain-facet-activator";
-import { GrainFacetRegistry, type GrainFacetFactory } from "@thresh/persistence/grain-facet-registry";
+import {
+  GrainFacetRegistry,
+  type GrainFacetFactory,
+} from "@thresh/persistence/grain-facet-registry";
 import { PlacementFilterRegistry } from "@thresh/runtime/placement/placement-filter-registry";
 import type { PlacementFilter } from "@thresh/runtime/placement/placement-filter";
 import {
@@ -950,12 +953,11 @@ export class SiloBuilder {
    * Drive membership from Kubernetes EndpointSlices. Pass a `KubernetesEndpointWatch`
    * (built from `createKubernetesClientSource`); its `start`/`stop` lifecycle is run
    * with the silo so the watch is established before the node joins and torn down on
-   * drain.
+   * drain. For role/metadata-aware placement, pass `options.metadataLabelPrefix` and
+   * build the watch's client source with `fetchPodLabels: true` so pod labels reach
+   * `SiloMember.metadata`.
    */
   useKubernetesMembership(watch: EndpointWatch, options?: KubernetesMembershipOptions): this {
-    // TODO: populate SiloMember.metadata from pod labels so role/metadata-aware
-    // placement works under Kubernetes membership (deferred; static membership
-    // carries metadata today).
     this.membership = new KubernetesMembership(this.config.local, watch, options);
     const lifecycle = watch as Partial<{ start(): Promise<void>; stop(): void }>;
     if (typeof lifecycle.start === "function") {

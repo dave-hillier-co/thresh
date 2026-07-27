@@ -81,7 +81,11 @@ function makeLongRunningObserver(): ILongRunningObserver & {
   const started = new Set<string>();
   const cancelled = new Set<string>();
 
-  async function run(delayMs: number, callId: string, token: GrainCancellationToken): Promise<void> {
+  async function run(
+    delayMs: number,
+    callId: string,
+    token: GrainCancellationToken,
+  ): Promise<void> {
     started.add(callId);
     try {
       await cancellableDelay(token, delayMs);
@@ -122,26 +126,29 @@ describe("UnitTests.CancellationTests.ObserverCancellationTokenTests", () => {
     "UnitTests.CancellationTests.ObserverCancellationTokenTests_WaitForAcknowledgement",
     "UnitTests.CancellationTests.ObserverCancellationTokenTests_NoWaitForAcknowledgement",
   ]) {
-    orleansTest.each([true, false])(`${testClass}.ObserverTaskCancellation`, async (cancelImmediately) => {
-      const grain = cluster.getGrain(IObserverWithCancellationGrain, randomGuidKey());
-      const observer = makeLongRunningObserver();
-      const ref = client.createObjectReference(ILongRunningObserver, observer);
-      await grain.subscribe(ref);
+    orleansTest.each([true, false])(
+      `${testClass}.ObserverTaskCancellation`,
+      async (cancelImmediately) => {
+        const grain = cluster.getGrain(IObserverWithCancellationGrain, randomGuidKey());
+        const observer = makeLongRunningObserver();
+        const ref = client.createObjectReference(ILongRunningObserver, observer);
+        await grain.subscribe(ref);
 
-      const cts = cluster.newCancellationTokenSource();
-      const callId = Guid.newGuid().toString();
-      const grainTask = grain.notifyLongWait(10_000, callId, cts.token);
+        const cts = cluster.newCancellationTokenSource();
+        const callId = Guid.newGuid().toString();
+        const grainTask = grain.notifyLongWait(10_000, callId, cts.token);
 
-      if (!cancelImmediately) await waitFor(() => observer.hasStarted(callId));
-      await cancelUntilSettled([{ cts, task: grainTask }]);
+        if (!cancelImmediately) await waitFor(() => observer.hasStarted(callId));
+        await cancelUntilSettled([{ cts, task: grainTask }]);
 
-      await expectCancelled(grainTask);
-      if (!cancelImmediately) await waitFor(() => observer.wasCancelled(callId));
-      await waitFor(async () => (await grain.getProcessedCancellations()).includes(callId));
+        await expectCancelled(grainTask);
+        if (!cancelImmediately) await waitFor(() => observer.wasCancelled(callId));
+        await waitFor(async () => (await grain.getProcessedCancellations()).includes(callId));
 
-      await grain.unsubscribe(ref);
-      client.deleteObjectReference(ref);
-    });
+        await grain.unsubscribe(ref);
+        client.deleteObjectReference(ref);
+      },
+    );
 
     orleansTest(`${testClass}.PreCancelledTokenPassing`, async () => {
       const grain = cluster.getGrain(IObserverWithCancellationGrain, randomGuidKey());

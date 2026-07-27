@@ -64,7 +64,9 @@ export function observerId(client: GrainId, scope: string): GrainId {
 
 /** True if `grainId` is a client id carrying an observer scope suffix. */
 export function isObserverGrainId(grainId: GrainId): boolean {
-  return isClient(grainId) && typeof grainId.key === "string" && grainId.key.includes(SEGMENT_SEPARATOR);
+  return (
+    isClient(grainId) && typeof grainId.key === "string" && grainId.key.includes(SEGMENT_SEPARATOR)
+  );
 }
 
 /**

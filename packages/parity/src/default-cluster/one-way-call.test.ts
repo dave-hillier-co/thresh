@@ -31,7 +31,9 @@ describe("DefaultCluster.Tests.General.OneWayCallTests", () => {
       initialSilos: 1,
       grains: [{ ctor: OneWayGrain, interfaces: [IOneWayGrain] }],
     });
-    client = await createClusterClient(cluster, [{ ctor: OneWayGrain, interfaces: [IOneWayGrain] }]);
+    client = await createClusterClient(cluster, [
+      { ctor: OneWayGrain, interfaces: [IOneWayGrain] },
+    ]);
   });
 
   afterAll(async () => {

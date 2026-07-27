@@ -5,6 +5,14 @@ export interface EndpointSliceEndpoint {
   addresses: string[];
   conditions?: { ready?: boolean };
   targetRef?: { name?: string; uid?: string };
+  /**
+   * The endpoint's pod labels, when the watch source resolves them (EndpointSlice
+   * endpoints don't carry pod labels themselves; `createKubernetesClientSource`
+   * joins them in from the Pod object by `targetRef.uid`). Raw, unfiltered labels;
+   * `KubernetesMembershipOptions.metadataLabelPrefix` picks which ones become
+   * `SiloMember.metadata`.
+   */
+  metadata?: Readonly<Record<string, string>>;
 }
 
 export interface EndpointSlicePort {
@@ -50,4 +58,33 @@ export function readySilosFromSlices(
     }
   }
   return silos;
+}
+
+/**
+ * Derive `SiloMember.metadata` from EndpointSlice endpoints, keyed by pod uid.
+ * Only labels under `labelPrefix` are surfaced, with the prefix stripped from the
+ * key (e.g. label `thresh.io/role=worker` with prefix `"thresh.io/"` becomes
+ * metadata `{ role: "worker" }`). Omitting `labelPrefix` surfaces no metadata —
+ * Kubernetes membership is opt-in for metadata, unlike static membership, which
+ * always carries whatever its resolver returns. A pod with no matching labels is
+ * absent from the map rather than present with an empty object.
+ */
+export function metadataFromSlices(
+  slices: readonly EndpointSlice[],
+  labelPrefix?: string,
+): Map<string, Readonly<Record<string, string>>> {
+  const metadataByUid = new Map<string, Readonly<Record<string, string>>>();
+  if (labelPrefix === undefined) return metadataByUid;
+  for (const slice of slices) {
+    for (const endpoint of slice.endpoints ?? []) {
+      const uid = endpoint.targetRef?.uid;
+      if (uid === undefined || endpoint.metadata === undefined) continue;
+      const matched: Record<string, string> = {};
+      for (const [key, value] of Object.entries(endpoint.metadata)) {
+        if (key.startsWith(labelPrefix)) matched[key.slice(labelPrefix.length)] = value;
+      }
+      if (Object.keys(matched).length > 0) metadataByUid.set(uid, matched);
+    }
+  }
+  return metadataByUid;
 }

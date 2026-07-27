@@ -35,7 +35,10 @@ describe("DefaultCluster.Tests.ClientAddressableTests", () => {
   const grainRegistrations = [
     { ctor: ClientAddressableTestGrain, interfaces: [IClientAddressableTestGrain] },
     { ctor: ClientAddressableTestConsumerGrain, interfaces: [IClientAddressableTestConsumer] },
-    { ctor: ClientAddressableTestRendezvousGrain, interfaces: [IClientAddressableTestRendezvousGrain] },
+    {
+      ctor: ClientAddressableTestRendezvousGrain,
+      interfaces: [IClientAddressableTestRendezvousGrain],
+    },
   ];
 
   beforeAll(async () => {

@@ -41,7 +41,11 @@ describe("IGrainManagementExtension.deactivateOnIdle (auto-installed)", () => {
   it("forces a fresh activation on the very next call, race-free, and still runs onDeactivate", async () => {
     events = [];
     const time = new FakeTimeProvider();
-    const silo = new Silo({ time, defaultCollectionAgeSeconds: 900, collectionIntervalSeconds: 10 });
+    const silo = new Silo({
+      time,
+      defaultCollectionAgeSeconds: 900,
+      collectionIntervalSeconds: 10,
+    });
     silo.registerGrain(TaggedGrain, { interfaces: [ITagged] });
     silo.start();
 
@@ -61,7 +65,11 @@ describe("IGrainManagementExtension.deactivateOnIdle (auto-installed)", () => {
   it("does not affect an activation that never asked to deactivate", async () => {
     events = [];
     const time = new FakeTimeProvider();
-    const silo = new Silo({ time, defaultCollectionAgeSeconds: 900, collectionIntervalSeconds: 10 });
+    const silo = new Silo({
+      time,
+      defaultCollectionAgeSeconds: 900,
+      collectionIntervalSeconds: 10,
+    });
     silo.registerGrain(TaggedGrain, { interfaces: [ITagged] });
     silo.start();
 

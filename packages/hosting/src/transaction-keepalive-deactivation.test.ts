@@ -25,7 +25,10 @@ const Account = defineGrainInterface<Account>("KeepaliveAccount.iface");
 
 // A remote, never-registered "TM" grain type — every call routed to it fails,
 // standing in for a TM whose silo crashed and never comes back.
-const unreachableTm = { grainId: new GrainId("GhostLedger" as GrainType, "tm"), stateName: "ledger" };
+const unreachableTm = {
+  grainId: new GrainId("GhostLedger" as GrainType, "tm"),
+  stateName: "ledger",
+};
 
 @grain({ name: "KeepaliveAccount" })
 class AccountGrain extends Grain implements Account {
@@ -91,7 +94,9 @@ describe("transactional keepalive lifecycle on grain deactivation (#23 follow-up
       // heartbeat, ...), which use much longer intervals.
       await silo.getGrain(Account, "a").ping();
 
-      const confirmationCallIndex = setTimerSpy.mock.calls.findIndex(([, delay]) => delay === 1_000);
+      const confirmationCallIndex = setTimerSpy.mock.calls.findIndex(
+        ([, delay]) => delay === 1_000,
+      );
       expect(confirmationCallIndex).toBeGreaterThanOrEqual(0);
       const confirmationHandle = setTimerSpy.mock.results[confirmationCallIndex]!.value as unknown;
 

@@ -21,7 +21,9 @@ function guardIterator<T>(iter: IterableIterator<T>, stateName: string): Iterabl
     },
     next(): IteratorResult<T> {
       const result = iter.next();
-      return result.done === true ? result : { done: false, value: guardValue(result.value, stateName) };
+      return result.done === true
+        ? result
+        : { done: false, value: guardValue(result.value, stateName) };
     },
   };
 }
@@ -171,7 +173,10 @@ export function guardDurableQueueForReadOnly<T>(
 }
 
 /** Wrap a `DurableSet<T>` facet (`@durableSet`); see {@link guardDurableValueForReadOnly}. */
-export function guardDurableSetForReadOnly<T>(state: DurableSet<T>, stateName: string): DurableSet<T> {
+export function guardDurableSetForReadOnly<T>(
+  state: DurableSet<T>,
+  stateName: string,
+): DurableSet<T> {
   return {
     get size(): number {
       return state.size;
@@ -213,7 +218,10 @@ export function guardDurableFieldForReadOnly(
     case "value":
       return guardDurableValueForReadOnly(facet as DurableValue<unknown>, stateName);
     case "dictionary":
-      return guardDurableDictionaryForReadOnly(facet as DurableDictionary<unknown, unknown>, stateName);
+      return guardDurableDictionaryForReadOnly(
+        facet as DurableDictionary<unknown, unknown>,
+        stateName,
+      );
     case "list":
       return guardDurableListForReadOnly(facet as DurableList<unknown>, stateName);
     case "queue":

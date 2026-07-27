@@ -91,7 +91,10 @@ export class LogViewAdaptorImpl<TState, TEvent>
       const toConfirm = this.pending;
       this.pending = [];
       for (const event of toConfirm) {
-        await this.manager.append(this.name, { t: "event", e: event } satisfies Frame<TState, TEvent>);
+        await this.manager.append(this.name, { t: "event", e: event } satisfies Frame<
+          TState,
+          TEvent
+        >);
         this.unconfirmedCount -= 1;
       }
     }

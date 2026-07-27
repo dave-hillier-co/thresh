@@ -7,10 +7,7 @@
 // needed here.
 import { grain } from "@thresh/core/decorators";
 import { JournaledGrain } from "@thresh/core/journaled-grain";
-import {
-  ILogTestGrain,
-  type AB,
-} from "@thresh/parity/grains/interfaces/log-test-grain-interfaces";
+import { ILogTestGrain, type AB } from "@thresh/parity/grains/interfaces/log-test-grain-interfaces";
 
 export { ILogTestGrain };
 
@@ -25,7 +22,10 @@ type LogTestEvent =
   | { readonly kind: "incrementA" };
 
 @grain({ name: "TestGrains.LogTestGrain" })
-export class LogTestGrain extends JournaledGrain<LogTestState, LogTestEvent> implements ILogTestGrain {
+export class LogTestGrain
+  extends JournaledGrain<LogTestState, LogTestEvent>
+  implements ILogTestGrain
+{
   initialState(): LogTestState {
     return { a: 0, b: 0 };
   }

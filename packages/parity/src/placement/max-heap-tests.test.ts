@@ -28,52 +28,55 @@ function shuffle<T>(array: T[]): void {
 }
 
 describe("UnitTests.ActivationRepartitioningTests.MaxHeapTests", () => {
-  orleansTest("UnitTests.ActivationRepartitioningTests.MaxHeapTests.HeapPropertyIsMaintained", () => {
-    const edges: MyHeapElement[] = [];
-    for (let i = 0; i < 100; i++) {
-      edges.push(new MyHeapElement(i));
-    }
-
-    shuffle(edges);
-    const heap = new MaxHeap(edges);
-    expect(heap.count).toBe(100);
-    expect(heap.peek().value).toBe(99);
-    expect(heap.peek().value).toBe(99);
-    expect(heap.pop().value).toBe(99);
-    expect(heap.pop().value).toBe(98);
-    expect(heap.count).toBe(98);
-    expect(heap.unorderedElements.length).toBe(98);
-
-    const unorderedElements = heap.unorderedElements.slice();
-    const edge = unorderedElements[Math.floor(Math.random() * unorderedElements.length)]!;
-    edge.value = 2000;
-    heap.onIncreaseElementPriority(edge);
-    expect(heap.peek().value).toBe(2000);
-
-    // Randomly re-assign priorities to edges.
-    let newScore = 100;
-    const elements = heap.unorderedElements.slice();
-    shuffle(elements);
-    for (const element of elements) {
-      const originalValue = element.value;
-      element.value = newScore--;
-      if (element.value > originalValue) {
-        heap.onIncreaseElementPriority(element);
-      } else {
-        heap.onDecreaseElementPriority(element);
+  orleansTest(
+    "UnitTests.ActivationRepartitioningTests.MaxHeapTests.HeapPropertyIsMaintained",
+    () => {
+      const edges: MyHeapElement[] = [];
+      for (let i = 0; i < 100; i++) {
+        edges.push(new MyHeapElement(i));
       }
-    }
 
-    expect(heap.unorderedElements.length).toBe(98);
-    const allElements: MyHeapElement[] = [];
-    while (heap.count > 0) {
-      allElements.push(heap.pop());
-    }
+      shuffle(edges);
+      const heap = new MaxHeap(edges);
+      expect(heap.count).toBe(100);
+      expect(heap.peek().value).toBe(99);
+      expect(heap.peek().value).toBe(99);
+      expect(heap.pop().value).toBe(99);
+      expect(heap.pop().value).toBe(98);
+      expect(heap.count).toBe(98);
+      expect(heap.unorderedElements.length).toBe(98);
 
-    expect(allElements).toHaveLength(98);
+      const unorderedElements = heap.unorderedElements.slice();
+      const edge = unorderedElements[Math.floor(Math.random() * unorderedElements.length)]!;
+      edge.value = 2000;
+      heap.onIncreaseElementPriority(edge);
+      expect(heap.peek().value).toBe(2000);
 
-    const expected = Array.from({ length: 98 }, (_, i) => 100 - i).join(", ");
-    const actual = allElements.map((c) => c.value).join(", ");
-    expect(actual).toBe(expected);
-  });
+      // Randomly re-assign priorities to edges.
+      let newScore = 100;
+      const elements = heap.unorderedElements.slice();
+      shuffle(elements);
+      for (const element of elements) {
+        const originalValue = element.value;
+        element.value = newScore--;
+        if (element.value > originalValue) {
+          heap.onIncreaseElementPriority(element);
+        } else {
+          heap.onDecreaseElementPriority(element);
+        }
+      }
+
+      expect(heap.unorderedElements.length).toBe(98);
+      const allElements: MyHeapElement[] = [];
+      while (heap.count > 0) {
+        allElements.push(heap.pop());
+      }
+
+      expect(allElements).toHaveLength(98);
+
+      const expected = Array.from({ length: 98 }, (_, i) => 100 - i).join(", ");
+      const actual = allElements.map((c) => c.value).join(", ");
+      expect(actual).toBe(expected);
+    },
+  );
 });

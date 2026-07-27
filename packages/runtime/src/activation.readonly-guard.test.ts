@@ -53,7 +53,10 @@ class AccountGrain extends Grain {
 
 const id = new GrainId("AccountGrain", "a1");
 
-function makeActivation(readOnlyStateGuard: boolean): { activation: ActivationData; grain: AccountGrain } {
+function makeActivation(readOnlyStateGuard: boolean): {
+  activation: ActivationData;
+  grain: AccountGrain;
+} {
   const activation = new ActivationData(id, new FakeTimeProvider(), 30_000, false, "act-1");
   const grain = new AccountGrain();
   grain.setContext(activation);

@@ -73,10 +73,7 @@ export function validatePollIntervalMs(
   providerName: string,
   pollIntervalMs: number | undefined,
 ): number {
-  if (
-    pollIntervalMs !== undefined &&
-    (!Number.isFinite(pollIntervalMs) || pollIntervalMs < 0)
-  ) {
+  if (pollIntervalMs !== undefined && (!Number.isFinite(pollIntervalMs) || pollIntervalMs < 0)) {
     throw new StreamProviderConfigurationError(
       providerName,
       `pollIntervalMs must be a non-negative number, got ${pollIntervalMs}`,

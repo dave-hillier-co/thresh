@@ -54,10 +54,8 @@ describe("UnitTests.Management.ManagementGrainTests", () => {
   orleansTest(
     "UnitTests.Management.ManagementGrainTests.GetSimpleGrainStatistics_ActivationCounts",
     async () => {
-      await runGetStatisticsTest(
-        cluster,
-        "UnitTests.Grains.SimpleGrain",
-        (key) => cluster.getGrain(ISimpleGrain, key).getA(),
+      await runGetStatisticsTest(cluster, "UnitTests.Grains.SimpleGrain", (key) =>
+        cluster.getGrain(ISimpleGrain, key).getA(),
       );
     },
   );
@@ -65,10 +63,8 @@ describe("UnitTests.Management.ManagementGrainTests", () => {
   orleansTest(
     "UnitTests.Management.ManagementGrainTests.GetTestGrainStatistics_ActivationCounts",
     async () => {
-      await runGetStatisticsTest(
-        cluster,
-        "UnitTests.Grains.TestGrain",
-        (key) => cluster.getGrain(ITestGrain, key).getKey(),
+      await runGetStatisticsTest(cluster, "UnitTests.Grains.TestGrain", (key) =>
+        cluster.getGrain(ITestGrain, key).getKey(),
       );
     },
   );

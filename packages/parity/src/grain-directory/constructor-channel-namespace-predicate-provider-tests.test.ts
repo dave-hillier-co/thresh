@@ -32,15 +32,19 @@ registerChannelNamespacePredicateType("TestChannelPredicate", TestChannelPredica
 describe("UnitTests.ConstructorChannelNamespacePredicateProviderTests", () => {
   const createProvider = () => new ConstructorChannelNamespacePredicateProvider();
 
-  orleansTest("UnitTests.ConstructorChannelNamespacePredicateProviderTests.RegisteredPredicateType_Succeeds", () => {
-    const provider = createProvider();
-    const pattern = ConstructorChannelNamespacePredicateProvider.formatPattern("TestChannelPredicate");
+  orleansTest(
+    "UnitTests.ConstructorChannelNamespacePredicateProviderTests.RegisteredPredicateType_Succeeds",
+    () => {
+      const provider = createProvider();
+      const pattern =
+        ConstructorChannelNamespacePredicateProvider.formatPattern("TestChannelPredicate");
 
-    const result = provider.tryGetPredicate(pattern);
+      const result = provider.tryGetPredicate(pattern);
 
-    expect(result.matched).toBe(true);
-    expect(result.matched && result.predicate).toBeInstanceOf(TestChannelPredicate);
-  });
+      expect(result.matched).toBe(true);
+      expect(result.matched && result.predicate).toBeInstanceOf(TestChannelPredicate);
+    },
+  );
 
   orleansTest(
     "UnitTests.ConstructorChannelNamespacePredicateProviderTests.RegisteredPredicateTypeWithArg_Succeeds",
@@ -59,12 +63,15 @@ describe("UnitTests.ConstructorChannelNamespacePredicateProviderTests", () => {
     },
   );
 
-  orleansTest("UnitTests.ConstructorChannelNamespacePredicateProviderTests.ArbitraryType_Throws", () => {
-    const provider = createProvider();
-    const pattern = `ctor:UnregisteredArbitraryType`;
+  orleansTest(
+    "UnitTests.ConstructorChannelNamespacePredicateProviderTests.ArbitraryType_Throws",
+    () => {
+      const provider = createProvider();
+      const pattern = `ctor:UnregisteredArbitraryType`;
 
-    expect(() => provider.tryGetPredicate(pattern)).toThrow();
-  });
+      expect(() => provider.tryGetPredicate(pattern)).toThrow();
+    },
+  );
 
   orleansTest(
     "UnitTests.ConstructorChannelNamespacePredicateProviderTests.NonMatchingPrefix_ReturnsFalse",

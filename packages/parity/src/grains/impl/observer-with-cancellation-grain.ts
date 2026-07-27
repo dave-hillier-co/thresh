@@ -10,10 +10,7 @@ import {
 export { ILongRunningObserver, IObserverWithCancellationGrain };
 
 @grain({ name: "UnitTests.Grains.ObserverWithCancellationGrain" })
-export class ObserverWithCancellationGrain
-  extends Grain
-  implements IObserverWithCancellationGrain
-{
+export class ObserverWithCancellationGrain extends Grain implements IObserverWithCancellationGrain {
   private observer: ILongRunningObserver | undefined;
   private readonly processedCancellations: string[] = [];
 

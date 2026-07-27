@@ -78,47 +78,41 @@ describe("UnitTests.CancellationTests.CancellationTokenTests", () => {
       }
     });
 
-    orleansTest.each([0, 10, 300])(
-      `${testClass}.MultipleGrainsTaskCancellation`,
-      async (delay) => {
-        const cts = cluster.newCancellationTokenSource();
-        const callId = Guid.newGuid().toString();
-        const grains = Array.from({ length: 5 }, () =>
-          cluster.getGrain(ILongRunningTaskGrain, randomGuidKey()),
-        );
-        const grainTasks = grains.map((grain) =>
-          grain.longWaitInterleaving(cts.token, 10_000, callId),
-        );
-        await flushPerDelay(delay);
-        await cancelUntilSettled(grainTasks.map((task) => ({ cts, task })));
-        await Promise.all(grainTasks.map((task) => expectCancelled(task)));
-        if (delay > 0) {
-          for (const grain of grains) {
-            await waitFor(() => grain.wasCancelled(callId));
-          }
+    orleansTest.each([0, 10, 300])(`${testClass}.MultipleGrainsTaskCancellation`, async (delay) => {
+      const cts = cluster.newCancellationTokenSource();
+      const callId = Guid.newGuid().toString();
+      const grains = Array.from({ length: 5 }, () =>
+        cluster.getGrain(ILongRunningTaskGrain, randomGuidKey()),
+      );
+      const grainTasks = grains.map((grain) =>
+        grain.longWaitInterleaving(cts.token, 10_000, callId),
+      );
+      await flushPerDelay(delay);
+      await cancelUntilSettled(grainTasks.map((task) => ({ cts, task })));
+      await Promise.all(grainTasks.map((task) => expectCancelled(task)));
+      if (delay > 0) {
+        for (const grain of grains) {
+          await waitFor(() => grain.wasCancelled(callId));
         }
-      },
-    );
+      }
+    });
 
-    orleansTest.each([0, 10, 300])(
-      `${testClass}.GrainTaskMultipleCancellations`,
-      async (delay) => {
-        const grain = cluster.getGrain(ILongRunningTaskGrain, randomGuidKey());
-        const callIds = Array.from({ length: 5 }, () => Guid.newGuid().toString());
-        const sources = callIds.map(() => cluster.newCancellationTokenSource());
-        const tasks = callIds.map((callId, index) =>
-          grain.longWaitInterleaving(sources[index]!.token, 10_000, callId),
-        );
-        await flushPerDelay(delay);
-        await cancelUntilSettled(sources.map((cts, index) => ({ cts, task: tasks[index]! })));
-        await Promise.all(tasks.map((task) => expectCancelled(task)));
-        if (delay > 0) {
-          for (const callId of callIds) {
-            await waitFor(() => grain.wasCancelled(callId));
-          }
+    orleansTest.each([0, 10, 300])(`${testClass}.GrainTaskMultipleCancellations`, async (delay) => {
+      const grain = cluster.getGrain(ILongRunningTaskGrain, randomGuidKey());
+      const callIds = Array.from({ length: 5 }, () => Guid.newGuid().toString());
+      const sources = callIds.map(() => cluster.newCancellationTokenSource());
+      const tasks = callIds.map((callId, index) =>
+        grain.longWaitInterleaving(sources[index]!.token, 10_000, callId),
+      );
+      await flushPerDelay(delay);
+      await cancelUntilSettled(sources.map((cts, index) => ({ cts, task: tasks[index]! })));
+      await Promise.all(tasks.map((task) => expectCancelled(task)));
+      if (delay > 0) {
+        for (const callId of callIds) {
+          await waitFor(() => grain.wasCancelled(callId));
         }
-      },
-    );
+      }
+    });
 
     orleansTest(
       `${testClass}.TokenPassingWithoutCancellation_NoExceptionShouldBeThrown`,

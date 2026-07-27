@@ -6,7 +6,10 @@ import type {
 } from "@thresh/core/grain-migration-participant";
 import type { GrainStorage, StateHolder } from "@thresh/core/grain-storage";
 import type { PersistentState } from "@thresh/core/persistent-state";
-import { withStorageReadSpan, withStorageWriteSpan } from "@thresh/observability/activation-tracing";
+import {
+  withStorageReadSpan,
+  withStorageWriteSpan,
+} from "@thresh/observability/activation-tracing";
 import { withStorageOpMetrics } from "@thresh/observability/storage-metrics";
 
 /**

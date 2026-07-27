@@ -9,6 +9,8 @@ export interface RawEndpointSlice {
     addresses?: string[];
     conditions?: { ready?: boolean };
     targetRef?: { name?: string; uid?: string };
+    /** Pod labels, when the source resolves them (see `EndpointSliceEndpoint.metadata`). */
+    metadata?: Record<string, string>;
   }>;
   ports?: Array<{ name?: string; port?: number }>;
 }
@@ -41,6 +43,7 @@ export function toEndpointSlice(raw: RawEndpointSlice): EndpointSlice {
       const mapped: EndpointSliceEndpoint = { addresses: endpoint.addresses ?? [] };
       if (endpoint.conditions !== undefined) mapped.conditions = endpoint.conditions;
       if (endpoint.targetRef !== undefined) mapped.targetRef = endpoint.targetRef;
+      if (endpoint.metadata !== undefined) mapped.metadata = endpoint.metadata;
       return mapped;
     });
   }

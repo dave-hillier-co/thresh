@@ -18,7 +18,12 @@ enum TestStages {
   Run = 3,
 }
 
-const allTestStages = [TestStages.Down, TestStages.Initialize, TestStages.Configure, TestStages.Run];
+const allTestStages = [
+  TestStages.Down,
+  TestStages.Initialize,
+  TestStages.Configure,
+  TestStages.Run,
+];
 
 class Observer implements LifecycleObserver {
   started = false;

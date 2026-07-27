@@ -39,7 +39,12 @@ const TOTAL_QUEUE_COUNT = 4;
 const REPORTER_ID = "generated-stream-reporter";
 
 interface IGeneratedEventReporterGrain extends GrainWithStringKey {
-  reportResult(streamKey: string, streamProvider: string, streamNamespace: string, count: number): Promise<void>;
+  reportResult(
+    streamKey: string,
+    streamProvider: string,
+    streamNamespace: string,
+    count: number,
+  ): Promise<void>;
   getReport(streamProvider: string, streamNamespace: string): Promise<Map<string, number>>;
   reset(): Promise<void>;
 }

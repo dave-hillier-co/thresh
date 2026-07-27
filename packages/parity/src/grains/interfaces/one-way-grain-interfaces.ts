@@ -18,11 +18,14 @@ export interface IOneWayGrain extends GrainWithGuidKey {
   getCount(): Promise<number>;
 }
 
-export const IOneWayGrain = defineGrainInterface<IOneWayGrain>("UnitTests.GrainInterfaces.IOneWayGrain", {
-  options: {
-    notify: { oneWay: true },
-    notifyValueTask: { oneWay: true },
-    throwsOneWay: { oneWay: true },
-    throwsOneWayValueTask: { oneWay: true },
+export const IOneWayGrain = defineGrainInterface<IOneWayGrain>(
+  "UnitTests.GrainInterfaces.IOneWayGrain",
+  {
+    options: {
+      notify: { oneWay: true },
+      notifyValueTask: { oneWay: true },
+      throwsOneWay: { oneWay: true },
+      throwsOneWayValueTask: { oneWay: true },
+    },
   },
-});
+);

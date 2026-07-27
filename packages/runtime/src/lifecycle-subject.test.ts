@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { LifecycleSubject, type LifecycleObserver } from "@thresh/runtime/lifecycle-subject";
 
-function recordingObserver(log: string[], name: string, opts?: { failOnStart?: boolean; failOnStop?: boolean }): LifecycleObserver {
+function recordingObserver(
+  log: string[],
+  name: string,
+  opts?: { failOnStart?: boolean; failOnStop?: boolean },
+): LifecycleObserver {
   return {
     onStart: async () => {
       log.push(`start:${name}`);

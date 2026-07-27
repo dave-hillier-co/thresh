@@ -10,7 +10,10 @@ import {
 export { IClientAddressableTestConsumer };
 
 @grain({ name: "UnitTests.Grains.ClientAddressableTestConsumerGrain" })
-export class ClientAddressableTestConsumerGrain extends Grain implements IClientAddressableTestConsumer {
+export class ClientAddressableTestConsumerGrain
+  extends Grain
+  implements IClientAddressableTestConsumer
+{
   private producer: IClientAddressableTestProducer | undefined;
 
   async pollProducer(): Promise<number> {

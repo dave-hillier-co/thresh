@@ -1,5 +1,9 @@
 import { TransactionAbortedError, TransactionLockUpgradeError } from "@thresh/core/errors";
-import { systemTimeProvider, type TimeProvider, type TimerHandle } from "@thresh/core/time-provider";
+import {
+  systemTimeProvider,
+  type TimeProvider,
+  type TimerHandle,
+} from "@thresh/core/time-provider";
 
 type LockMode = "read" | "write";
 

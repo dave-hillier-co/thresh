@@ -151,7 +151,8 @@ export function createTracingHarness(): {
       await provider.shutdown();
       context.disable();
       trace.disable();
-      if (previousTracerProvider !== undefined) trace.setGlobalTracerProvider(previousTracerProvider);
+      if (previousTracerProvider !== undefined)
+        trace.setGlobalTracerProvider(previousTracerProvider);
       propagation.disable();
     },
   };

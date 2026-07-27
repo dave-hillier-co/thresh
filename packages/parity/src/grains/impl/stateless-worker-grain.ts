@@ -50,7 +50,11 @@ const scalingWaitingActivations = new Map<string, number>();
  * observed/answered while another call on the same activation is blocked in
  * `Wait()`.
  */
-@grain({ name: "UnitTests.Grains.StatelessWorkerScalingGrain", stateless: true, maxLocalWorkers: 4 })
+@grain({
+  name: "UnitTests.Grains.StatelessWorkerScalingGrain",
+  stateless: true,
+  maxLocalWorkers: 4,
+})
 @mayInterleave((methodName) => methodName !== "wait")
 export class StatelessWorkerScalingGrain extends Grain implements IStatelessWorkerScalingGrain {
   override async onActivate(_reason: ActivationReason): Promise<void> {

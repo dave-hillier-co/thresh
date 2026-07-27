@@ -40,12 +40,12 @@ orleansTest.excluded(
   `${NAMESPACE}.InMemoryJobShardManager_ReadFrozenShard`,
 );
 orleansTest.excluded(
-"this framework's durable-jobs subsystem deliberately uses implicit time-bucketing (shardKeyFor(dueTime, shardDuration)) rather than Orleans' explicit JobShardManager/shard-object model (CreateShardAsync/AssignJobShardsAsync returning a shard object with TryScheduleJobAsync/ConsumeDurableJobsAsync/RetryJobLaterAsync/MarkAsCompleteAsync); porting these 1:1 would test a different API, not this one",
- `${NAMESPACE}.InMemoryJobShardManager_LiveShard`,
+  "this framework's durable-jobs subsystem deliberately uses implicit time-bucketing (shardKeyFor(dueTime, shardDuration)) rather than Orleans' explicit JobShardManager/shard-object model (CreateShardAsync/AssignJobShardsAsync returning a shard object with TryScheduleJobAsync/ConsumeDurableJobsAsync/RetryJobLaterAsync/MarkAsCompleteAsync); porting these 1:1 would test a different API, not this one",
+  `${NAMESPACE}.InMemoryJobShardManager_LiveShard`,
 );
 orleansTest.excluded(
-"this framework's durable-jobs subsystem deliberately uses implicit time-bucketing (shardKeyFor(dueTime, shardDuration)) rather than Orleans' explicit JobShardManager/shard-object model (CreateShardAsync/AssignJobShardsAsync returning a shard object with TryScheduleJobAsync/ConsumeDurableJobsAsync/RetryJobLaterAsync/MarkAsCompleteAsync); porting these 1:1 would test a different API, not this one",
- `${NAMESPACE}.InMemoryJobShardManager_JobMetadata`,
+  "this framework's durable-jobs subsystem deliberately uses implicit time-bucketing (shardKeyFor(dueTime, shardDuration)) rather than Orleans' explicit JobShardManager/shard-object model (CreateShardAsync/AssignJobShardsAsync returning a shard object with TryScheduleJobAsync/ConsumeDurableJobsAsync/RetryJobLaterAsync/MarkAsCompleteAsync); porting these 1:1 would test a different API, not this one",
+  `${NAMESPACE}.InMemoryJobShardManager_JobMetadata`,
 );
 orleansTest.excluded(
   "this framework's durable-jobs subsystem deliberately uses implicit time-bucketing (shardKeyFor(dueTime, shardDuration)) rather than Orleans' explicit JobShardManager/shard-object model (CreateShardAsync/AssignJobShardsAsync returning a shard object with TryScheduleJobAsync/ConsumeDurableJobsAsync/RetryJobLaterAsync/MarkAsCompleteAsync); porting these 1:1 would test a different API, not this one",
@@ -60,8 +60,8 @@ orleansTest.excluded(
   `${NAMESPACE}.InMemoryJobShardManager_StopProcessingShard`,
 );
 orleansTest.excluded(
-"this framework's durable-jobs subsystem deliberately uses implicit time-bucketing (shardKeyFor(dueTime, shardDuration)) rather than Orleans' explicit JobShardManager/shard-object model (CreateShardAsync/AssignJobShardsAsync returning a shard object with TryScheduleJobAsync/ConsumeDurableJobsAsync/RetryJobLaterAsync/MarkAsCompleteAsync); porting these 1:1 would test a different API, not this one",
- `${NAMESPACE}.InMemoryJobShardManager_RetryJobLater`,
+  "this framework's durable-jobs subsystem deliberately uses implicit time-bucketing (shardKeyFor(dueTime, shardDuration)) rather than Orleans' explicit JobShardManager/shard-object model (CreateShardAsync/AssignJobShardsAsync returning a shard object with TryScheduleJobAsync/ConsumeDurableJobsAsync/RetryJobLaterAsync/MarkAsCompleteAsync); porting these 1:1 would test a different API, not this one",
+  `${NAMESPACE}.InMemoryJobShardManager_RetryJobLater`,
 );
 orleansTest.excluded(
   "this framework's durable-jobs subsystem deliberately uses implicit time-bucketing (shardKeyFor(dueTime, shardDuration)) rather than Orleans' explicit JobShardManager/shard-object model (CreateShardAsync/AssignJobShardsAsync returning a shard object with TryScheduleJobAsync/ConsumeDurableJobsAsync/RetryJobLaterAsync/MarkAsCompleteAsync); porting these 1:1 would test a different API, not this one",

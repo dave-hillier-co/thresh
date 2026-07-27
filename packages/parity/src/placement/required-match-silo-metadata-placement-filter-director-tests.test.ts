@@ -24,75 +24,93 @@ const contextOf = (
 });
 
 describe("UnitTests.PlacementFilterTests.RequiredMatchSiloMetadataPlacementFilterDirectorTests", () => {
-  orleansTest("UnitTests.PlacementFilterTests.RequiredMatchSiloMetadataPlacementFilterDirectorTests.RequiredMatchSiloMetadataPlacementFilterDirector_CanBeCreated", () => {
-    const director = new RequiredMatchSiloMetadataPlacementFilterDirector([]);
-    expect(director).toBeDefined();
-  });
+  orleansTest(
+    "UnitTests.PlacementFilterTests.RequiredMatchSiloMetadataPlacementFilterDirectorTests.RequiredMatchSiloMetadataPlacementFilterDirector_CanBeCreated",
+    () => {
+      const director = new RequiredMatchSiloMetadataPlacementFilterDirector([]);
+      expect(director).toBeDefined();
+    },
+  );
 
-  orleansTest("UnitTests.PlacementFilterTests.RequiredMatchSiloMetadataPlacementFilterDirectorTests.RequiredMatchSiloMetadataPlacementFilterDirector_CanBeCalled", () => {
-    const local = silo(1000);
-    const director = new RequiredMatchSiloMetadataPlacementFilterDirector([]);
-    const result = director.filter("Counter", [local], contextOf(local, { [local.ringKey]: {} }));
-    expect(result).toBeDefined();
-    expect(result.length).toBeGreaterThan(0);
-  });
+  orleansTest(
+    "UnitTests.PlacementFilterTests.RequiredMatchSiloMetadataPlacementFilterDirectorTests.RequiredMatchSiloMetadataPlacementFilterDirector_CanBeCalled",
+    () => {
+      const local = silo(1000);
+      const director = new RequiredMatchSiloMetadataPlacementFilterDirector([]);
+      const result = director.filter("Counter", [local], contextOf(local, { [local.ringKey]: {} }));
+      expect(result).toBeDefined();
+      expect(result.length).toBeGreaterThan(0);
+    },
+  );
 
-  orleansTest("UnitTests.PlacementFilterTests.RequiredMatchSiloMetadataPlacementFilterDirectorTests.RequiredMatchSiloMetadataPlacementFilterDirector_FiltersToNothingWhenNoEntry", () => {
-    const local = silo(1000);
-    const other = silo(1001);
-    const director = new RequiredMatchSiloMetadataPlacementFilterDirector(["metadata.key"]);
-    const result = director.filter(
-      "Counter",
-      [other],
-      contextOf(local, { [other.ringKey]: {}, [local.ringKey]: { "metadata.key": "something" } }),
-    );
-    expect(result).toEqual([]);
-  });
+  orleansTest(
+    "UnitTests.PlacementFilterTests.RequiredMatchSiloMetadataPlacementFilterDirectorTests.RequiredMatchSiloMetadataPlacementFilterDirector_FiltersToNothingWhenNoEntry",
+    () => {
+      const local = silo(1000);
+      const other = silo(1001);
+      const director = new RequiredMatchSiloMetadataPlacementFilterDirector(["metadata.key"]);
+      const result = director.filter(
+        "Counter",
+        [other],
+        contextOf(local, { [other.ringKey]: {}, [local.ringKey]: { "metadata.key": "something" } }),
+      );
+      expect(result).toEqual([]);
+    },
+  );
 
-  orleansTest("UnitTests.PlacementFilterTests.RequiredMatchSiloMetadataPlacementFilterDirectorTests.RequiredMatchSiloMetadataPlacementFilterDirector_FiltersToNothingWhenDifferentValue", () => {
-    const local = silo(1000);
-    const other = silo(1001);
-    const director = new RequiredMatchSiloMetadataPlacementFilterDirector(["metadata.key"]);
-    const result = director.filter(
-      "Counter",
-      [other],
-      contextOf(local, {
-        [other.ringKey]: { "metadata.key": "other" },
-        [local.ringKey]: { "metadata.key": "local" },
-      }),
-    );
-    expect(result).toEqual([]);
-  });
+  orleansTest(
+    "UnitTests.PlacementFilterTests.RequiredMatchSiloMetadataPlacementFilterDirectorTests.RequiredMatchSiloMetadataPlacementFilterDirector_FiltersToNothingWhenDifferentValue",
+    () => {
+      const local = silo(1000);
+      const other = silo(1001);
+      const director = new RequiredMatchSiloMetadataPlacementFilterDirector(["metadata.key"]);
+      const result = director.filter(
+        "Counter",
+        [other],
+        contextOf(local, {
+          [other.ringKey]: { "metadata.key": "other" },
+          [local.ringKey]: { "metadata.key": "local" },
+        }),
+      );
+      expect(result).toEqual([]);
+    },
+  );
 
-  orleansTest("UnitTests.PlacementFilterTests.RequiredMatchSiloMetadataPlacementFilterDirectorTests.RequiredMatchSiloMetadataPlacementFilterDirector_FiltersToSiloWhenMatching", () => {
-    const local = silo(1000);
-    const other = silo(1001);
-    const director = new RequiredMatchSiloMetadataPlacementFilterDirector(["metadata.key"]);
-    const result = director.filter(
-      "Counter",
-      [other],
-      contextOf(local, {
-        [other.ringKey]: { "metadata.key": "same" },
-        [local.ringKey]: { "metadata.key": "same" },
-      }),
-    );
-    expect(result.length).toBeGreaterThan(0);
-  });
+  orleansTest(
+    "UnitTests.PlacementFilterTests.RequiredMatchSiloMetadataPlacementFilterDirectorTests.RequiredMatchSiloMetadataPlacementFilterDirector_FiltersToSiloWhenMatching",
+    () => {
+      const local = silo(1000);
+      const other = silo(1001);
+      const director = new RequiredMatchSiloMetadataPlacementFilterDirector(["metadata.key"]);
+      const result = director.filter(
+        "Counter",
+        [other],
+        contextOf(local, {
+          [other.ringKey]: { "metadata.key": "same" },
+          [local.ringKey]: { "metadata.key": "same" },
+        }),
+      );
+      expect(result.length).toBeGreaterThan(0);
+    },
+  );
 
-  orleansTest("UnitTests.PlacementFilterTests.RequiredMatchSiloMetadataPlacementFilterDirectorTests.RequiredMatchSiloMetadataPlacementFilterDirector_FiltersToMultipleSilosWhenMatching", () => {
-    const local = silo(1000);
-    const other1 = silo(1001);
-    const other2 = silo(1002);
-    const director = new RequiredMatchSiloMetadataPlacementFilterDirector(["metadata.key"]);
-    const result = director.filter(
-      "Counter",
-      [other1, other2],
-      contextOf(local, {
-        [other1.ringKey]: { "metadata.key": "same" },
-        [other2.ringKey]: { "metadata.key": "same" },
-        [local.ringKey]: { "metadata.key": "same" },
-      }),
-    );
-    expect(result.length).toBe(2);
-  });
+  orleansTest(
+    "UnitTests.PlacementFilterTests.RequiredMatchSiloMetadataPlacementFilterDirectorTests.RequiredMatchSiloMetadataPlacementFilterDirector_FiltersToMultipleSilosWhenMatching",
+    () => {
+      const local = silo(1000);
+      const other1 = silo(1001);
+      const other2 = silo(1002);
+      const director = new RequiredMatchSiloMetadataPlacementFilterDirector(["metadata.key"]);
+      const result = director.filter(
+        "Counter",
+        [other1, other2],
+        contextOf(local, {
+          [other1.ringKey]: { "metadata.key": "same" },
+          [other2.ringKey]: { "metadata.key": "same" },
+          [local.ringKey]: { "metadata.key": "same" },
+        }),
+      );
+      expect(result.length).toBe(2);
+    },
+  );
 });

@@ -7,7 +7,11 @@ import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
 import { systemTimeProvider } from "@thresh/core/time-provider";
 import { defaultShouldRetry } from "@thresh/durable-jobs/job-model";
 import { MemoryJobShardStore } from "@thresh/durable-jobs/memory-job-shard-store";
-import { ConcurrencyLimiter, ShardExecutor, type RunJob } from "@thresh/durable-jobs/shard-executor";
+import {
+  ConcurrencyLimiter,
+  ShardExecutor,
+  type RunJob,
+} from "@thresh/durable-jobs/shard-executor";
 
 // Upstream's ShardExecutor is invoked via a single `RunShardAsync(shard, cancellationToken)`
 // call that processes the shard's *current* jobs and returns once they settle —

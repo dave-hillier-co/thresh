@@ -1,7 +1,4 @@
-import {
-  CancellationTokenPlaceholder,
-  GrainCancellationToken,
-} from "./grain-cancellation-token";
+import { CancellationTokenPlaceholder, GrainCancellationToken } from "./grain-cancellation-token";
 import { GrainId } from "./grain-id";
 import { keyToString, type GrainKeyKind } from "./grain-key";
 import { grainReferenceIdentity, type GrainReferenceIdentity } from "./grain-reference";
@@ -123,7 +120,10 @@ function encodeInner(value: unknown, seen: Set<unknown>, path: string): unknown 
   if (value instanceof Guid) return tagged("guid", { value: value.toString() });
   if (value instanceof GrainId) return tagged("grainId", grainIdFields(value));
   if (value instanceof GrainCancellationToken) {
-    return tagged("cancellationToken", { tokenId: value.tokenId, cancelled: value.isCancellationRequested });
+    return tagged("cancellationToken", {
+      tokenId: value.tokenId,
+      cancelled: value.isCancellationRequested,
+    });
   }
   // A placeholder re-entering `encodeValue` (e.g. a call re-forwarded to
   // another silo, over a stale directory cache, before this silo ever bound
@@ -136,7 +136,11 @@ function encodeInner(value: unknown, seen: Set<unknown>, path: string): unknown 
     return tagged("cancellationToken", { tokenId: value.tokenId, cancelled: value.cancelled });
   }
   if (value instanceof SiloAddress) {
-    return tagged("silo", { podName: value.podName, podUid: value.podUid, endpoint: value.endpoint });
+    return tagged("silo", {
+      podName: value.podName,
+      podUid: value.podUid,
+      endpoint: value.endpoint,
+    });
   }
   const ref = grainReferenceIdentity(value);
   if (ref !== undefined) {
@@ -161,9 +165,10 @@ function encodeInner(value: unknown, seen: Set<unknown>, path: string): unknown 
     if (seen.has(value)) throw new CircularReferenceError(path);
     seen.add(value);
     try {
-      const entries = [...value.entries()].map(
-        ([k, v], i) => [encodeInner(k, seen, `${path}[${i}].key`), encodeInner(v, seen, `${path}[${i}].value`)],
-      );
+      const entries = [...value.entries()].map(([k, v], i) => [
+        encodeInner(k, seen, `${path}[${i}].key`),
+        encodeInner(v, seen, `${path}[${i}].value`),
+      ]);
       return tagged("map", { entries });
     } finally {
       seen.delete(value);

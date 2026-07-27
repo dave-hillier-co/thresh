@@ -28,6 +28,10 @@ export interface ResolvedDurableJobsOptions {
   shouldRetry: ShouldRetry;
   maxAdoptedCount: number;
   claimRampUpBudget: number;
+  shardClaimInitialBudget: number;
+  shardClaimMaxBudget: number;
+  /** Zero disables the time-based ramp-up: falls back to the flat `claimRampUpBudget` per step. */
+  shardClaimRampUpDurationMs: number;
 }
 
 /** The membership facts the manager needs to claim and adopt shards. */
@@ -51,6 +55,10 @@ export class LocalDurableJobManager {
   private readonly limiter: ConcurrencyLimiter;
   private ownership: ShardOwnershipContext;
   private readonly unregisterQueueDepth: () => void;
+  /** When this silo joined (construction time), the origin of the ramp-up window. */
+  private readonly joinedAtMs: number;
+  /** Shards claimed since join, while the ramp-up window is still active (`computeClaimBudget`'s `totalClaimedShards`). */
+  private claimedSinceJoin = 0;
 
   constructor(
     private readonly store: JobShardStore,
@@ -69,6 +77,7 @@ export class LocalDurableJobManager {
   ) {
     this.limiter = new ConcurrencyLimiter(options.maxConcurrentJobsPerSilo);
     this.ownership = ownership;
+    this.joinedAtMs = time.now();
     this.unregisterQueueDepth = registerDurableJobQueueDepth(() =>
       [...this.executors.values()].reduce((sum, executor) => sum + executor.size, 0),
     );
@@ -166,11 +175,12 @@ export class LocalDurableJobManager {
         s.owner !== ownership.localRingKey &&
         (s.owner === undefined || !active.has(s.owner)),
     );
-    const toClaim = claimBudget(claimable.length, this.options.claimRampUpBudget);
+    const toClaim = this.claimBudgetForThisStep(claimable.length);
     for (const shard of claimable.slice(0, toClaim)) {
       // A dead-owner shard is adopted; an unclaimed one is just claimed.
       const deadOwner = shard.owner !== undefined && !active.has(shard.owner) ? [shard.owner] : [];
-      await this.claimAndStart(shard.shardKey, deadOwner);
+      const started = await this.claimAndStart(shard.shardKey, deadOwner);
+      if (started !== undefined) this.claimedSinceJoin += 1;
     }
 
     // Drop executors for shards the store no longer records as ours (claimed away).
@@ -192,6 +202,29 @@ export class LocalDurableJobManager {
       this.stopExecutor(shardKey);
     }
     this.unregisterQueueDepth();
+  }
+
+  /**
+   * How many of the `claimable` shards this silo may claim this reconciliation step.
+   * When a time-based ramp-up window is configured (`shardClaimRampUpDurationMs > 0`),
+   * this is `computeClaimBudget`'s interpolated budget (elapsed since this silo
+   * joined, less shards already claimed this window) — unlimited once the window
+   * elapses. Otherwise (the default) it is the flat per-step `claimRampUpBudget`,
+   * unchanged from before this ramp-up wiring existed.
+   */
+  private claimBudgetForThisStep(claimableCount: number): number {
+    if (this.options.shardClaimRampUpDurationMs <= 0) {
+      return claimBudget(claimableCount, this.options.claimRampUpBudget);
+    }
+    const elapsedMs = this.time.now() - this.joinedAtMs;
+    const budget = computeClaimBudget(
+      this.options.shardClaimRampUpDurationMs,
+      this.options.shardClaimInitialBudget,
+      this.options.shardClaimMaxBudget,
+      elapsedMs,
+      this.claimedSinceJoin,
+    );
+    return budget === UNLIMITED_CLAIM_BUDGET ? claimableCount : Math.min(claimableCount, budget);
   }
 
   /** Ensure this silo owns the shard (claiming it if free) and has a running executor. */
@@ -260,6 +293,9 @@ export function resolveOptions(options: {
   shouldRetry?: ShouldRetry;
   maxAdoptedCount?: number;
   claimRampUpBudget?: number;
+  shardClaimInitialBudget?: number;
+  shardClaimMaxBudget?: number;
+  shardClaimRampUpDuration?: Duration;
 }): ResolvedDurableJobsOptions {
   const shardDurationMs =
     options.shardDuration !== undefined ? durationToMs(options.shardDuration) : 3_600_000;
@@ -279,6 +315,15 @@ export function resolveOptions(options: {
     shouldRetry: options.shouldRetry ?? defaultShouldRetry,
     maxAdoptedCount: options.maxAdoptedCount ?? 3,
     claimRampUpBudget: options.claimRampUpBudget ?? 4,
+    shardClaimInitialBudget: options.shardClaimInitialBudget ?? 2,
+    shardClaimMaxBudget: options.shardClaimMaxBudget ?? 20,
+    // Disabled by default (falls back to the flat `claimRampUpBudget` above) rather
+    // than Orleans' own 5-minute default, so a caller that configures none of the
+    // shardClaim* options keeps this port's pre-existing default behaviour.
+    shardClaimRampUpDurationMs:
+      options.shardClaimRampUpDuration !== undefined
+        ? durationToMs(options.shardClaimRampUpDuration)
+        : 0,
   };
 }
 
@@ -298,11 +343,10 @@ export const UNLIMITED_CLAIM_BUDGET = Number.MAX_SAFE_INTEGER;
  * already claimed this ramp-up window is subtracted from the interpolated
  * budget, floored at 0.
  *
- * NOTE: this is a pure, standalone function alongside the flat
- * `claimBudget` (job-model.ts) that `refreshOwnership` above actually calls.
- * TODO(parity): wire `computeClaimBudget` into `refreshOwnership`'s claim
- * path (tracking elapsed-since-join and cumulative-claimed-shards) so the
- * time-based ramp-up governs live reconciliation, not just this pure API.
+ * A pure, standalone function; `refreshOwnership`'s `claimBudgetForThisStep`
+ * calls it (tracking elapsed-since-join and cumulative-claimed-shards) when a
+ * ramp-up window is configured, falling back to the flat `claimBudget`
+ * (job-model.ts) otherwise — see `ResolvedDurableJobsOptions.shardClaimRampUpDurationMs`.
  */
 export function computeClaimBudget(
   rampUpDurationMs: number,

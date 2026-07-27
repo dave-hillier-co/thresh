@@ -55,31 +55,31 @@ class ImplicitSubscriptionWithLongKeyGrain
   }
 }
 
-orleansTest(
-  "UnitTests.StreamingTests.ImplicitSubscriptionKeyTypeGrainTests.LongKey",
-  async () => {
-    const cluster = await TestCluster.start({
-      grains: [
-        { ctor: ImplicitSubscriptionWithLongKeyGrain, interfaces: [IImplicitSubscriptionLongKeyGrain] },
-      ],
-    });
-    try {
-      const grainKey = 13n;
-      const value = 87;
-      const streamProvider = cluster.getStreamProvider();
-      if (streamProvider === undefined) throw new Error("no default stream provider configured");
-      const stream = streamProvider.getStream<number>(STREAM_NAMESPACE, grainKey);
+orleansTest("UnitTests.StreamingTests.ImplicitSubscriptionKeyTypeGrainTests.LongKey", async () => {
+  const cluster = await TestCluster.start({
+    grains: [
+      {
+        ctor: ImplicitSubscriptionWithLongKeyGrain,
+        interfaces: [IImplicitSubscriptionLongKeyGrain],
+      },
+    ],
+  });
+  try {
+    const grainKey = 13n;
+    const value = 87;
+    const streamProvider = cluster.getStreamProvider();
+    if (streamProvider === undefined) throw new Error("no default stream provider configured");
+    const stream = streamProvider.getStream<number>(STREAM_NAMESPACE, grainKey);
 
-      // The memory provider's implicit-subscriber fan-out is awaited inside
-      // `publish` itself (see `MemoryStream.publishBatch`), so — unlike
-      // upstream's poll loop against a real cluster — the delivery has
-      // already happened by the time `publish` resolves.
-      await stream.publish(value);
+    // The memory provider's implicit-subscriber fan-out is awaited inside
+    // `publish` itself (see `MemoryStream.publishBatch`), so — unlike
+    // upstream's poll loop against a real cluster — the delivery has
+    // already happened by the time `publish` resolves.
+    await stream.publish(value);
 
-      const consumer = cluster.getGrain(IImplicitSubscriptionLongKeyGrain, grainKey);
-      expect(await consumer.getValue()).toBe(value);
-    } finally {
-      await cluster.dispose();
-    }
-  },
-);
+    const consumer = cluster.getGrain(IImplicitSubscriptionLongKeyGrain, grainKey);
+    expect(await consumer.getValue()).toBe(value);
+  } finally {
+    await cluster.dispose();
+  }
+});

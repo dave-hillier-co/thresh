@@ -1,7 +1,10 @@
 // Ported from dotnet/orleans test/Grains/TestGrains/MethodInterceptionGrain.cs @ v10.1.0 (MIT).
 import { grain } from "@thresh/core/decorators";
 import { Grain } from "@thresh/core/grain";
-import { INCOMING_CALL_FILTER, type IncomingGrainCallContext } from "@thresh/core/grain-call-filter";
+import {
+  INCOMING_CALL_FILTER,
+  type IncomingGrainCallContext,
+} from "@thresh/core/grain-call-filter";
 import { requestContext } from "@thresh/runtime/invocation-context";
 import {
   IGrainCallFilterTestGrain,

@@ -46,9 +46,7 @@ describe("Orleans.Journaling.Tests.DurableGrainTests", () => {
   const freshKey = () => `grain-${nextKey++}`;
 
   /** Force a fresh activation of `target` and assert the activation actually changed. */
-  async function deactivateOnIdleAndAssertFresh(
-    target: IDurableCollectionsGrain,
-  ): Promise<void> {
+  async function deactivateOnIdleAndAssertFresh(target: IDurableCollectionsGrain): Promise<void> {
     const tagBefore = await target.activationTag();
     const ext = castGrainReference(target, IGrainManagementExtension);
     await ext.deactivateOnIdle();

@@ -70,6 +70,18 @@ describe("toEndpointSlice", () => {
       },
     ]);
   });
+
+  it("passes an endpoint's pod labels through as metadata, when present", () => {
+    const raw = rawSlice("silo-0", "u0", "10.0.0.1");
+    raw.endpoints![0]!.metadata = { "thresh.io/role": "worker" };
+    const slice = toEndpointSlice(raw);
+    expect(slice.endpoints![0]!.metadata).toEqual({ "thresh.io/role": "worker" });
+  });
+
+  it("leaves metadata unset when the raw endpoint has none", () => {
+    const slice = toEndpointSlice(rawSlice("silo-0", "u0", "10.0.0.1"));
+    expect(slice.endpoints![0]!.metadata).toBeUndefined();
+  });
 });
 
 describe("KubernetesEndpointWatch", () => {

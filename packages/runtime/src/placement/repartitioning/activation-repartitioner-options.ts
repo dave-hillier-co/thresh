@@ -79,7 +79,9 @@ export class ActivationRepartitionerConfigurationError extends Error {
  * Throws `ActivationRepartitionerConfigurationError` if `options` is invalid (Orleans
  * `ActivationRepartitionerOptionsValidator.ValidateConfiguration`).
  */
-export function validateActivationRepartitionerOptions(options: ActivationRepartitionerOptions): void {
+export function validateActivationRepartitionerOptions(
+  options: ActivationRepartitionerOptions,
+): void {
   if (options.maxEdgeCount <= 0) {
     throwMustBeGreaterThanZero("maxEdgeCount");
   }
@@ -123,7 +125,9 @@ export function validateActivationRepartitionerOptions(options: ActivationRepart
 }
 
 function throwMustBeGreaterThanOrEqualToZero(propertyName: string): never {
-  throw new ActivationRepartitionerConfigurationError(`${propertyName} must be greater than or equal to 0.`);
+  throw new ActivationRepartitionerConfigurationError(
+    `${propertyName} must be greater than or equal to 0.`,
+  );
 }
 
 function throwMustBeGreaterThanZero(propertyName: string): never {
@@ -131,7 +135,9 @@ function throwMustBeGreaterThanZero(propertyName: string): never {
 }
 
 function throwMustBeGreaterThanOrEqualTo(name1: string, name2: string): never {
-  throw new ActivationRepartitionerConfigurationError(`${name1} must be greater than or equal to ${name2}.`);
+  throw new ActivationRepartitionerConfigurationError(
+    `${name1} must be greater than or equal to ${name2}.`,
+  );
 }
 
 /** Object form of `validateActivationRepartitionerOptions`, mirroring Orleans' `IConfigurationValidator`. */

@@ -211,32 +211,35 @@ describe("NonSilo.Tests.ObserverManagerTests", () => {
     },
   );
 
-  orleansTest("NonSilo.Tests.ObserverManagerTests.ExpiredObservers_AreRemovedDuringNotify", async () => {
-    const clock = new FakeTimeProvider();
-    const observerManager = new ObserverManager<number, number>({ minutes: 30 }, clock);
-    const notifiedObservers: number[] = [];
+  orleansTest(
+    "NonSilo.Tests.ObserverManagerTests.ExpiredObservers_AreRemovedDuringNotify",
+    async () => {
+      const clock = new FakeTimeProvider();
+      const observerManager = new ObserverManager<number, number>({ minutes: 30 }, clock);
+      const notifiedObservers: number[] = [];
 
-    // Subscribe some observers.
-    for (let i = 0; i < 5; i++) {
-      observerManager.subscribe(i, i);
-    }
+      // Subscribe some observers.
+      for (let i = 0; i < 5; i++) {
+        observerManager.subscribe(i, i);
+      }
 
-    // Move some observers into the past to make them expire.
-    // Advance time by 1 hour.
-    clock.advance(60 * 60 * 1000);
+      // Move some observers into the past to make them expire.
+      // Advance time by 1 hour.
+      clock.advance(60 * 60 * 1000);
 
-    async function notification(observer: number): Promise<void> {
-      notifiedObservers.push(observer);
-      await Promise.resolve();
-    }
+      async function notification(observer: number): Promise<void> {
+        notifiedObservers.push(observer);
+        await Promise.resolve();
+      }
 
-    await observerManager.notify(notification);
+      await observerManager.notify(notification);
 
-    // No observers should be notified as all are expired.
-    expect(notifiedObservers).toHaveLength(0);
-    // All observers should be removed due to expiration.
-    expect(observerManager.count).toBe(0);
-  });
+      // No observers should be notified as all are expired.
+      expect(notifiedObservers).toHaveLength(0);
+      // All observers should be removed due to expiration.
+      expect(observerManager.count).toBe(0);
+    },
+  );
 
   orleansTest("NonSilo.Tests.ObserverManagerTests.ClearExpired_RemovesOnlyExpiredObservers", () => {
     const clock = new FakeTimeProvider();
@@ -324,34 +327,37 @@ describe("NonSilo.Tests.ObserverManagerTests", () => {
     }
   });
 
-  orleansTest("NonSilo.Tests.ObserverManagerTests.AsyncPredicateFiltersObserversToNotify", async () => {
-    const clock = new FakeTimeProvider();
-    const observerManager = new ObserverManager<number, number>({ hours: 1 }, clock);
-    const notifiedObservers: number[] = [];
+  orleansTest(
+    "NonSilo.Tests.ObserverManagerTests.AsyncPredicateFiltersObserversToNotify",
+    async () => {
+      const clock = new FakeTimeProvider();
+      const observerManager = new ObserverManager<number, number>({ hours: 1 }, clock);
+      const notifiedObservers: number[] = [];
 
-    // Subscribe some observers.
-    for (let i = 0; i < 10; i++) {
-      observerManager.subscribe(i, i);
-    }
+      // Subscribe some observers.
+      for (let i = 0; i < 10; i++) {
+        observerManager.subscribe(i, i);
+      }
 
-    function oddNumberPredicate(observer: number): boolean {
-      return observer % 2 === 1;
-    }
+      function oddNumberPredicate(observer: number): boolean {
+        return observer % 2 === 1;
+      }
 
-    async function notification(observer: number): Promise<void> {
-      notifiedObservers.push(observer);
-      await Promise.resolve();
-    }
+      async function notification(observer: number): Promise<void> {
+        notifiedObservers.push(observer);
+        await Promise.resolve();
+      }
 
-    await observerManager.notify(notification, oddNumberPredicate);
+      await observerManager.notify(notification, oddNumberPredicate);
 
-    // Only odd observers should be notified.
-    expect(notifiedObservers).toHaveLength(5);
-    // All notified observers should be odd.
-    for (const observer of notifiedObservers) {
-      expect(observer % 2).toBe(1);
-    }
-  });
+      // Only odd observers should be notified.
+      expect(notifiedObservers).toHaveLength(5);
+      // All notified observers should be odd.
+      for (const observer of notifiedObservers) {
+        expect(observer % 2).toBe(1);
+      }
+    },
+  );
 
   orleansTest("NonSilo.Tests.ObserverManagerTests.EnumeratorWorksCorrectly", () => {
     const clock = new FakeTimeProvider();
@@ -371,50 +377,56 @@ describe("NonSilo.Tests.ObserverManagerTests", () => {
     expect([...enumeratedObservers].sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4]);
   });
 
-  orleansTest("NonSilo.Tests.ObserverManagerTests.SubscribingExistingObserver_UpdatesLastSeenTime", () => {
-    const clock = new FakeTimeProvider();
-    const observerManager = new ObserverManager<number, number>({ minutes: 30 }, clock);
+  orleansTest(
+    "NonSilo.Tests.ObserverManagerTests.SubscribingExistingObserver_UpdatesLastSeenTime",
+    () => {
+      const clock = new FakeTimeProvider();
+      const observerManager = new ObserverManager<number, number>({ minutes: 30 }, clock);
 
-    // Subscribe initial observer.
-    observerManager.subscribe(1, 42);
+      // Subscribe initial observer.
+      observerManager.subscribe(1, 42);
 
-    // Advance time to near expiration but not quite.
-    clock.advance(25 * 60 * 1000);
+      // Advance time to near expiration but not quite.
+      clock.advance(25 * 60 * 1000);
 
-    // Update the subscription (same ID, same observer value).
-    observerManager.subscribe(1, 42);
+      // Update the subscription (same ID, same observer value).
+      observerManager.subscribe(1, 42);
 
-    // Advance time to past the original subscription time + expiration (35 min from start).
-    clock.advance(10 * 60 * 1000);
+      // Advance time to past the original subscription time + expiration (35 min from start).
+      clock.advance(10 * 60 * 1000);
 
-    let notified = false;
-    observerManager.notifySync(() => {
-      notified = true;
-    });
+      let notified = false;
+      observerManager.notifySync(() => {
+        notified = true;
+      });
 
-    // Observer should still be active due to the refresh.
-    expect(notified).toBe(true);
-    expect(observerManager.count).toBe(1);
-  });
+      // Observer should still be active due to the refresh.
+      expect(notified).toBe(true);
+      expect(observerManager.count).toBe(1);
+    },
+  );
 
-  orleansTest("NonSilo.Tests.ObserverManagerTests.SubscribingExistingObserver_UpdatesObserverValue", () => {
-    const clock = new FakeTimeProvider();
-    const observerManager = new ObserverManager<number, number>({ hours: 1 }, clock);
+  orleansTest(
+    "NonSilo.Tests.ObserverManagerTests.SubscribingExistingObserver_UpdatesObserverValue",
+    () => {
+      const clock = new FakeTimeProvider();
+      const observerManager = new ObserverManager<number, number>({ hours: 1 }, clock);
 
-    // Subscribe initial observer.
-    observerManager.subscribe(1, 100);
+      // Subscribe initial observer.
+      observerManager.subscribe(1, 100);
 
-    // Update the subscription (same ID, different observer value).
-    observerManager.subscribe(1, 200);
+      // Update the subscription (same ID, different observer value).
+      observerManager.subscribe(1, 200);
 
-    let observedValue = 0;
-    observerManager.notifySync((observer) => {
-      observedValue = observer;
-    });
+      let observedValue = 0;
+      observerManager.notifySync((observer) => {
+        observedValue = observer;
+      });
 
-    // Should get the updated value.
-    expect(observedValue).toBe(200);
-  });
+      // Should get the updated value.
+      expect(observedValue).toBe(200);
+    },
+  );
 
   orleansTest("NonSilo.Tests.ObserverManagerTests.SetExpirationDuration_AffectsExpiration", () => {
     const clock = new FakeTimeProvider();
@@ -472,54 +484,57 @@ describe("NonSilo.Tests.ObserverManagerTests", () => {
     expect(observerManager.observers.size).toBe(0);
   });
 
-  orleansTest("NonSilo.Tests.ObserverManagerTests.ModifyDuringEnumeration_WorksWithoutExceptions", () => {
-    const clock = new FakeTimeProvider();
-    const observerManager = new ObserverManager<number, number>({ hours: 1 }, clock);
+  orleansTest(
+    "NonSilo.Tests.ObserverManagerTests.ModifyDuringEnumeration_WorksWithoutExceptions",
+    () => {
+      const clock = new FakeTimeProvider();
+      const observerManager = new ObserverManager<number, number>({ hours: 1 }, clock);
 
-    // Subscribe some initial observers.
-    for (let i = 0; i < 5; i++) {
-      observerManager.subscribe(i, i);
-    }
+      // Subscribe some initial observers.
+      for (let i = 0; i < 5; i++) {
+        observerManager.subscribe(i, i);
+      }
 
-    const enumeratedObservers: number[] = [];
-    const newObserversAdded: number[] = [];
-    let removedObserver = -1;
+      const enumeratedObservers: number[] = [];
+      const newObserversAdded: number[] = [];
+      let removedObserver = -1;
 
-    // Enumerate using for-of, which uses [Symbol.iterator] under the hood.
-    for (const observer of observerManager) {
-      enumeratedObservers.push(observer);
+      // Enumerate using for-of, which uses [Symbol.iterator] under the hood.
+      for (const observer of observerManager) {
+        enumeratedObservers.push(observer);
 
-      // Add and remove observers during enumeration.
-      if (observer === 2) {
-        // Add new observers.
-        for (let i = 10; i < 15; i++) {
-          observerManager.subscribe(i, i);
-          newObserversAdded.push(i);
-        }
+        // Add and remove observers during enumeration.
+        if (observer === 2) {
+          // Add new observers.
+          for (let i = 10; i < 15; i++) {
+            observerManager.subscribe(i, i);
+            newObserversAdded.push(i);
+          }
 
-        // Remove an observer.
-        observerManager.unsubscribe(4);
-        removedObserver = 4;
+          // Remove an observer.
+          observerManager.unsubscribe(4);
+          removedObserver = 4;
 
-        // Verify immediate visibility in the collection (but not in the enumeration).
-        expect([...observerManager.observers.values()]).not.toContain(4);
-        for (const newObserver of newObserversAdded) {
-          expect([...observerManager.observers.values()]).toContain(newObserver);
+          // Verify immediate visibility in the collection (but not in the enumeration).
+          expect([...observerManager.observers.values()]).not.toContain(4);
+          for (const newObserver of newObserversAdded) {
+            expect([...observerManager.observers.values()]).toContain(newObserver);
+          }
         }
       }
-    }
 
-    // Original enumeration should complete with all original observers.
-    expect(enumeratedObservers).toHaveLength(5);
-    // Even though we removed it during enumeration.
-    expect(enumeratedObservers).toContain(removedObserver);
+      // Original enumeration should complete with all original observers.
+      expect(enumeratedObservers).toHaveLength(5);
+      // Even though we removed it during enumeration.
+      expect(enumeratedObservers).toContain(removedObserver);
 
-    // Verify final collection state.
-    // 5 original - 1 removed + 5 added = 9 total.
-    expect(observerManager.count).toBe(9);
-    expect([...observerManager]).not.toContain(removedObserver);
-    for (const newObserver of newObserversAdded) {
-      expect([...observerManager]).toContain(newObserver);
-    }
-  });
+      // Verify final collection state.
+      // 5 original - 1 removed + 5 added = 9 total.
+      expect(observerManager.count).toBe(9);
+      expect([...observerManager]).not.toContain(removedObserver);
+      for (const newObserver of newObserversAdded) {
+        expect([...observerManager]).toContain(newObserver);
+      }
+    },
+  );
 });

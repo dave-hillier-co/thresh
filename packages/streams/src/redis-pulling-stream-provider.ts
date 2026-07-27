@@ -67,12 +67,8 @@ export class RedisPullingStreamProvider implements ActivationBoundStreamProvider
       (_unused, i) => new RedisStreamQueue(client, `${keyPrefix}:streamq:${name}:${i}`),
     );
     this.core = new PullingStreamProviderCore(name, queues, registry, {
-      ...(options.pollIntervalMs !== undefined
-        ? { pollIntervalMs: options.pollIntervalMs }
-        : {}),
-      ...(options.failureHandler !== undefined
-        ? { failureHandler: options.failureHandler }
-        : {}),
+      ...(options.pollIntervalMs !== undefined ? { pollIntervalMs: options.pollIntervalMs } : {}),
+      ...(options.failureHandler !== undefined ? { failureHandler: options.failureHandler } : {}),
     });
   }
 

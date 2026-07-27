@@ -77,9 +77,9 @@ describe("reminders end-to-end", () => {
       .build();
     await silo.start();
     try {
-      await expect(
-        silo.getGrain(IBilling, "acct").scheduleWithPeriodSeconds(1),
-      ).rejects.toThrow(/below the minimum allowed/);
+      await expect(silo.getGrain(IBilling, "acct").scheduleWithPeriodSeconds(1)).rejects.toThrow(
+        /below the minimum allowed/,
+      );
     } finally {
       await silo.stop();
     }

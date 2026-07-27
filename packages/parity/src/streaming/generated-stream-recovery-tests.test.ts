@@ -129,7 +129,10 @@ function isDuplicateOfCheckpoint(cp: RecoverableCheckpoint, token: number): bool
  * whatever this activation counted past the last write, and a fresh
  * activation resumes counting from there.
  */
-abstract class RecoverableCollectorGrainBase extends Grain implements IGeneratedEventCollectorGrain {
+abstract class RecoverableCollectorGrainBase
+  extends Grain
+  implements IGeneratedEventCollectorGrain
+{
   protected abstract readonly streamNamespace: string;
   protected abstract readonly reporterId: string;
 
@@ -148,10 +151,7 @@ abstract class RecoverableCollectorGrainBase extends Grain implements IGenerated
     return "collector";
   }
 
-  [STREAM_SUBSCRIPTION_OBSERVER](
-    _namespace: string,
-    key: string,
-  ): StreamHandler<GeneratedEvent> {
+  [STREAM_SUBSCRIPTION_OBSERVER](_namespace: string, key: string): StreamHandler<GeneratedEvent> {
     return {
       onNext: async (evt, token) => this.handleEvent(evt, token.value, key),
     };
@@ -252,7 +252,11 @@ class TransientErrorRecoverableCollectorGrain extends RecoverableCollectorGrainB
   protected readonly streamNamespace = TRANSIENT_NAMESPACE;
   protected readonly reporterId = TRANSIENT_REPORTER_ID;
 
-  protected override maybeInjectFault(candidateAccumulator: number, _token: number, key: string): void {
+  protected override maybeInjectFault(
+    candidateAccumulator: number,
+    _token: number,
+    key: string,
+  ): void {
     if (candidateAccumulator !== FAULT_AT_EVENT || transientFaultsFired.has(key)) return;
     transientFaultsFired.add(key);
     // Deactivate first (Orleans `DeactivateOnIdle` before throwing): the next
@@ -260,7 +264,8 @@ class TransientErrorRecoverableCollectorGrain extends RecoverableCollectorGrainB
     // its own persisted checkpoint.
     this.runtime.deactivateOnIdle();
     const cp = this.checkpoint.value;
-    const resumeToken = cp.lastProcessedToken ?? (cp.startToken !== undefined ? cp.startToken - 1 : 0);
+    const resumeToken =
+      cp.lastProcessedToken ?? (cp.startToken !== undefined ? cp.startToken - 1 : 0);
     throw new RecoverableStreamDeliveryError(
       `injected transient fault for stream ${key} at event ${FAULT_AT_EVENT}`,
       resumeToken,
@@ -285,7 +290,11 @@ class NonTransientErrorRecoverableCollectorGrain extends RecoverableCollectorGra
     return nonTransientSkippedTokens.get(key) === token;
   }
 
-  protected override maybeInjectFault(candidateAccumulator: number, token: number, key: string): void {
+  protected override maybeInjectFault(
+    candidateAccumulator: number,
+    token: number,
+    key: string,
+  ): void {
     if (candidateAccumulator !== FAULT_AT_EVENT || nonTransientSkippedTokens.has(key)) return;
     nonTransientSkippedTokens.set(key, token);
     // No deactivation: this activation stays alive. The pulling agent
@@ -297,10 +306,7 @@ class NonTransientErrorRecoverableCollectorGrain extends RecoverableCollectorGra
   }
 }
 
-async function generateEvents(
-  cluster: TestCluster,
-  streamNamespace: string,
-): Promise<void> {
+async function generateEvents(cluster: TestCluster, streamNamespace: string): Promise<void> {
   const mgmt = cluster.getGrain(IManagementGrain, 0n);
   const results = await mgmt.sendControlCommandToProvider(
     "PersistentStreamProvider",
@@ -386,10 +392,9 @@ orleansTest(
     try {
       await generateEvents(cluster, NON_TRANSIENT_NAMESPACE);
       // One event permanently skipped: eventsInStream - 1.
-      await waitFor(
-        () => checkCounters(reporter, NON_TRANSIENT_NAMESPACE, EVENTS_IN_STREAM - 1),
-        { timeoutMs: 90_000 },
-      );
+      await waitFor(() => checkCounters(reporter, NON_TRANSIENT_NAMESPACE, EVENTS_IN_STREAM - 1), {
+        timeoutMs: 90_000,
+      });
 
       const report = await reporter.getReport(STREAM_PROVIDER_NAME, NON_TRANSIENT_NAMESPACE);
       expect(report.size).toBe(TOTAL_QUEUE_COUNT);

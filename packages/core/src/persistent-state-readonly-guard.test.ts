@@ -8,7 +8,9 @@ interface Balance {
   history: number[];
 }
 
-function fakeState(initial: Balance): PersistentState<Balance> & { writes: number; clears: number } {
+function fakeState(
+  initial: Balance,
+): PersistentState<Balance> & { writes: number; clears: number } {
   let value = initial;
   let etag: string | undefined;
   let exists = false;

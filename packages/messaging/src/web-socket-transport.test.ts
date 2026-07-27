@@ -96,9 +96,9 @@ describe("WebSocketTransport", () => {
     const clientId = new GrainId("Client", "1");
     const msgpack = new MessagePackSerializer();
     let acceptedPreamble: ConnectionPreamble | undefined;
-    let heldConnection: Parameters<
-      NonNullable<Parameters<WebSocketTransport["listen"]>[2]>
-    >[1] | undefined;
+    let heldConnection:
+      | Parameters<NonNullable<Parameters<WebSocketTransport["listen"]>[2]>>[1]
+      | undefined;
 
     const listenerB = await transportB.listen(
       loopback("B"),

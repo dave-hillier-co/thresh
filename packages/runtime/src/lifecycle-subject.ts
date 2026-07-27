@@ -60,12 +60,8 @@ export class LifecycleSubject implements LifecycleObservable {
       const observersAtStage = this.subscribers.filter(
         (o) => o.stage === stage && o.observer !== undefined,
       );
-      const results = await Promise.allSettled(
-        observersAtStage.map((o) => o.observer!.onStart()),
-      );
-      const failure = results.find(
-        (r): r is PromiseRejectedResult => r.status === "rejected",
-      );
+      const results = await Promise.allSettled(observersAtStage.map((o) => o.observer!.onStart()));
+      const failure = results.find((r): r is PromiseRejectedResult => r.status === "rejected");
       if (failure) {
         throw failure.reason;
       }

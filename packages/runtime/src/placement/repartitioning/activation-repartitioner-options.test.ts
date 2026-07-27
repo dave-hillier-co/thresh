@@ -23,7 +23,9 @@ describe("defaultActivationRepartitionerOptions", () => {
 
   it("passes its own validator", () => {
     expect(() =>
-      new ActivationRepartitionerOptionsValidator(defaultActivationRepartitionerOptions()).validateConfiguration(),
+      new ActivationRepartitionerOptionsValidator(
+        defaultActivationRepartitionerOptions(),
+      ).validateConfiguration(),
     ).not.toThrow();
   });
 });
@@ -31,9 +33,9 @@ describe("defaultActivationRepartitionerOptions", () => {
 describe("ActivationRepartitionerOptionsValidator", () => {
   it("rejects a non-positive maxEdgeCount", () => {
     const options = { ...defaultActivationRepartitionerOptions(), maxEdgeCount: 0 };
-    expect(() => new ActivationRepartitionerOptionsValidator(options).validateConfiguration()).toThrow(
-      ActivationRepartitionerConfigurationError,
-    );
+    expect(() =>
+      new ActivationRepartitionerOptionsValidator(options).validateConfiguration(),
+    ).toThrow(ActivationRepartitionerConfigurationError);
   });
 
   it("rejects maxRoundPeriodMs < minRoundPeriodMs", () => {
@@ -42,15 +44,18 @@ describe("ActivationRepartitionerOptionsValidator", () => {
       minRoundPeriodMs: 120_000,
       maxRoundPeriodMs: 60_000,
     };
-    expect(() => new ActivationRepartitionerOptionsValidator(options).validateConfiguration()).toThrow(
-      ActivationRepartitionerConfigurationError,
-    );
+    expect(() =>
+      new ActivationRepartitionerOptionsValidator(options).validateConfiguration(),
+    ).toThrow(ActivationRepartitionerConfigurationError);
   });
 
   it("rejects an out-of-range error rate", () => {
-    const options = { ...defaultActivationRepartitionerOptions(), probabilisticFilteringMaxAllowedErrorRate: 0.5 };
-    expect(() => new ActivationRepartitionerOptionsValidator(options).validateConfiguration()).toThrow(
-      ActivationRepartitionerConfigurationError,
-    );
+    const options = {
+      ...defaultActivationRepartitionerOptions(),
+      probabilisticFilteringMaxAllowedErrorRate: 0.5,
+    };
+    expect(() =>
+      new ActivationRepartitionerOptionsValidator(options).validateConfiguration(),
+    ).toThrow(ActivationRepartitionerConfigurationError);
   });
 });

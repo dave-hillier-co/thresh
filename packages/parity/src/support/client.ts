@@ -1,5 +1,8 @@
 import type { Grain } from "@thresh/core/grain";
-import type { IncomingGrainCallFilter, OutgoingGrainCallFilter } from "@thresh/core/grain-call-filter";
+import type {
+  IncomingGrainCallFilter,
+  OutgoingGrainCallFilter,
+} from "@thresh/core/grain-call-filter";
 import type { GrainInterface } from "@thresh/core/grain-interface";
 import { SiloAddress } from "@thresh/core/silo-address";
 import { InProcessTransport } from "@thresh/messaging/in-process-transport";

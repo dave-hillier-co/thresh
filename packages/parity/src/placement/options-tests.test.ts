@@ -29,14 +29,17 @@ import { describe, expect } from "vitest";
 import { orleansTest } from "@thresh/testing/orleans-test";
 
 describe("UnitTests.ActivationRepartitioningTests.OptionsTests", () => {
-  orleansTest("UnitTests.ActivationRepartitioningTests.OptionsTests.ConstantsShouldNotChange", () => {
-    expect(DEFAULT_ANCHORING_FILTER_ENABLED).toBe(true);
-    expect(DEFAULT_PROBABILISTIC_FILTERING_MAX_ALLOWED_ERROR).toBe(0.01);
-    expect(DEFAULT_MAX_EDGE_COUNT).toBe(10_000);
-    expect(DEFAULT_MINUMUM_ROUND_PERIOD_MS).toBe(60_000); // TimeSpan.FromMinutes(1)
-    expect(DEFAULT_MAXIMUM_ROUND_PERIOD_MS).toBe(120_000); // TimeSpan.FromMinutes(2)
-    expect(DEFAULT_RECOVERY_PERIOD_MS).toBe(60_000); // TimeSpan.FromMinutes(1)
-  });
+  orleansTest(
+    "UnitTests.ActivationRepartitioningTests.OptionsTests.ConstantsShouldNotChange",
+    () => {
+      expect(DEFAULT_ANCHORING_FILTER_ENABLED).toBe(true);
+      expect(DEFAULT_PROBABILISTIC_FILTERING_MAX_ALLOWED_ERROR).toBe(0.01);
+      expect(DEFAULT_MAX_EDGE_COUNT).toBe(10_000);
+      expect(DEFAULT_MINUMUM_ROUND_PERIOD_MS).toBe(60_000); // TimeSpan.FromMinutes(1)
+      expect(DEFAULT_MAXIMUM_ROUND_PERIOD_MS).toBe(120_000); // TimeSpan.FromMinutes(2)
+      expect(DEFAULT_RECOVERY_PERIOD_MS).toBe(60_000); // TimeSpan.FromMinutes(1)
+    },
+  );
 
   const invalidCases: ReadonlyArray<
     readonly [
@@ -58,27 +61,32 @@ describe("UnitTests.ActivationRepartitioningTests.OptionsTests", () => {
     [1, 1, 2, 1, 2, 0.1],
   ];
 
-  orleansTest("UnitTests.ActivationRepartitioningTests.OptionsTests.InvalidOptionsShouldThrow", () => {
-    for (const [
-      maxEdgeCount,
-      maxUnprocessedEdges,
-      minRoundPeriodMinutes,
-      maxRoundPeriodMinutes,
-      recoveryPeriodMinutes,
-      probabilisticFilteringMaxAllowedErrorRate,
-    ] of invalidCases) {
-      const options = {
-        ...defaultActivationRepartitionerOptions(),
+  orleansTest(
+    "UnitTests.ActivationRepartitioningTests.OptionsTests.InvalidOptionsShouldThrow",
+    () => {
+      for (const [
         maxEdgeCount,
-        minRoundPeriodMs: minRoundPeriodMinutes * 60_000,
-        maxRoundPeriodMs: maxRoundPeriodMinutes * 60_000,
-        recoveryPeriodMs: recoveryPeriodMinutes * 60_000,
         maxUnprocessedEdges,
+        minRoundPeriodMinutes,
+        maxRoundPeriodMinutes,
+        recoveryPeriodMinutes,
         probabilisticFilteringMaxAllowedErrorRate,
-      };
+      ] of invalidCases) {
+        const options = {
+          ...defaultActivationRepartitionerOptions(),
+          maxEdgeCount,
+          minRoundPeriodMs: minRoundPeriodMinutes * 60_000,
+          maxRoundPeriodMs: maxRoundPeriodMinutes * 60_000,
+          recoveryPeriodMs: recoveryPeriodMinutes * 60_000,
+          maxUnprocessedEdges,
+          probabilisticFilteringMaxAllowedErrorRate,
+        };
 
-      const validator = new ActivationRepartitionerOptionsValidator(options);
-      expect(() => validator.validateConfiguration()).toThrow(ActivationRepartitionerConfigurationError);
-    }
-  });
+        const validator = new ActivationRepartitionerOptionsValidator(options);
+        expect(() => validator.validateConfiguration()).toThrow(
+          ActivationRepartitionerConfigurationError,
+        );
+      }
+    },
+  );
 });

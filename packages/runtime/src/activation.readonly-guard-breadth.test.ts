@@ -59,7 +59,7 @@ function fakeDurableValue(initial: Balance): DurableValue<Balance> {
 }
 
 function fakeTransactionalState(initial: Balance): TransactionalState<Balance> {
-  let value = initial;
+  const value = initial;
   return {
     async performRead(read) {
       return read(value);
@@ -82,7 +82,7 @@ class MultiFacetGrain extends Grain {
       fieldName: "ledger",
       stateName: "ledger",
       initial: () => ({ cents: 0 }),
-      reduce: (s, e) => s,
+      reduce: (s) => s,
     });
     registerDurableField(this, { fieldName: "cache", stateName: "cache", kind: "value" });
     registerTransactionalField(this, {

@@ -11,7 +11,6 @@ import {
   type SurrogateDescriptor,
 } from "@thresh/core/value-codec";
 import { GrainId } from "@thresh/core/grain-id";
-import { Guid } from "@thresh/core/guid";
 
 describe("value-codec", () => {
   afterEach(() => {

@@ -33,9 +33,7 @@ export class UniqueRequiredMatchFilteredGrain
 
 @grain({
   name: "UnitTests.PlacementFilterTests.PreferredMatchFilteredGrain",
-  placementFilters: [
-    { kind: "preferredMatchSiloMetadata", keys: ["unique"], minCandidates: 1 },
-  ],
+  placementFilters: [{ kind: "preferredMatchSiloMetadata", keys: ["unique"], minCandidates: 1 }],
 })
 export class PreferredMatchFilteredGrain extends Grain implements IPreferredMatchFilteredGrain {
   async getHostingSilo(): Promise<SiloAddress> {

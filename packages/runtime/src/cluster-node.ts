@@ -49,7 +49,11 @@ import {
   ConstructorChannelNamespacePredicateProvider,
   matchesChannelNamespace,
 } from "@thresh/core/channel-namespace-predicate";
-import { StreamConsumerInterface, type Controllable, type StreamProvider } from "@thresh/core/stream";
+import {
+  StreamConsumerInterface,
+  type Controllable,
+  type StreamProvider,
+} from "@thresh/core/stream";
 import type { InvocationRequest } from "@thresh/core/request";
 import {
   IManagementGrain,

@@ -24,7 +24,7 @@ const MAX_FP_RATE = 0.01; // 1%
 // Regression coefficients (derived via polynomial regression) to match 'fpRate' as the actual deviates
 // significantly with lower and lower 'fpRate'. Ported verbatim from upstream.
 const COEFFICIENTS: readonly number[] = [
-  4.0102253166524500e-3, -1.6272682781603145e1, 2.7169897602930665e4, -2.4527698904812500e7,
+  4.01022531665245e-3, -1.6272682781603145e1, 2.7169897602930665e4, -2.45276989048125e7,
   1.3273846004698063e10, -4.4943809759769805e12, 9.5588839677303638e14, -1.2081452101930328e17,
   6.8958853188430172e18, 2.6889929911921561e20, -7.1061179529975569e22, 4.4109449793357217e24,
   -9.8041203512310751e25,
@@ -146,7 +146,10 @@ export class AnchoredGrainsFilter {
       throw new RangeError("generations: Must have at least 1 generation.");
     }
 
-    this.filters = Array.from({ length: generations }, () => new BlockedBloomFilter(capacity, fpRate));
+    this.filters = Array.from(
+      { length: generations },
+      () => new BlockedBloomFilter(capacity, fpRate),
+    );
   }
 
   add(id: GrainId): void {

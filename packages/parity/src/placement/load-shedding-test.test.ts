@@ -31,7 +31,9 @@ describe("UnitTests.General.LoadSheddingTest", () => {
       grains: [{ ctor: SimpleGrain, interfaces: [ISimpleGrain] }],
       loadShedding: { loadSheddingEnabled: true, cpuThreshold: CPU_THRESHOLD },
     });
-    client = await createClusterClient(cluster, [{ ctor: SimpleGrain, interfaces: [ISimpleGrain] }]);
+    client = await createClusterClient(cluster, [
+      { ctor: SimpleGrain, interfaces: [ISimpleGrain] },
+    ]);
   });
 
   afterAll(async () => {
@@ -40,7 +42,9 @@ describe("UnitTests.General.LoadSheddingTest", () => {
   });
 
   function latchIsOverloaded(isOverloaded: boolean): void {
-    cluster.primary.host.loadShedding.latchCpuUsage(isOverloaded ? CPU_THRESHOLD + 1 : CPU_THRESHOLD - 1);
+    cluster.primary.host.loadShedding.latchCpuUsage(
+      isOverloaded ? CPU_THRESHOLD + 1 : CPU_THRESHOLD - 1,
+    );
   }
 
   function unlatchIsOverloaded(): void {

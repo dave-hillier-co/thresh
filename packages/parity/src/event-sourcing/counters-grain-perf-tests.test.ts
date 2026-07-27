@@ -35,9 +35,15 @@ describe("Tester.EventSourcingTests.CountersGrainTests.Perf", () => {
     cluster = await TestCluster.start({
       initialSilos: 2,
       grains: [
-        { ctor: CountersGrainStateStoreNonReentrant, interfaces: [ICountersGrainStateStoreNonReentrant] },
+        {
+          ctor: CountersGrainStateStoreNonReentrant,
+          interfaces: [ICountersGrainStateStoreNonReentrant],
+        },
         { ctor: CountersGrainStateStoreReentrant, interfaces: [ICountersGrainStateStoreReentrant] },
-        { ctor: CountersGrainLogStoreNonReentrant, interfaces: [ICountersGrainLogStoreNonReentrant] },
+        {
+          ctor: CountersGrainLogStoreNonReentrant,
+          interfaces: [ICountersGrainLogStoreNonReentrant],
+        },
         { ctor: CountersGrainLogStoreReentrant, interfaces: [ICountersGrainLogStoreReentrant] },
       ],
     });

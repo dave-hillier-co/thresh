@@ -30,7 +30,10 @@ export class TraceContextPropagationGrain extends Grain implements ITraceContext
   }> {
     const local = await this.getTraceContextInfo();
     const nestedKey = (this.id.key as bigint) + 1n;
-    const nested = await this.getGrain(ITraceContextPropagationGrain, nestedKey).getTraceContextInfo();
+    const nested = await this.getGrain(
+      ITraceContextPropagationGrain,
+      nestedKey,
+    ).getTraceContextInfo();
     return { local, nested };
   }
 }

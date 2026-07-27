@@ -115,8 +115,7 @@ class SimpleSubscriberGrain extends SubscriberGrainBase implements ISimpleSubscr
 @regexImplicitChannelSubscription("multiple-namespaces-(.)+")
 class RegexNamespaceSubscriberGrain
   extends SubscriberGrainBase
-  implements IRegexNamespaceSubscriberGrain
-{}
+  implements IRegexNamespaceSubscriberGrain {}
 
 const grainRegistrations = [
   { ctor: SimpleSubscriberGrain, interfaces: [ISimpleSubscriberGrain] },
@@ -351,77 +350,101 @@ async function multipleSubscribersOneBadActorChannelTestImpl(
   }
 }
 
-orleansTest("Tester.StreamingTests.BroadcastChannel.BroadcastChannelTests.ClientPublishSingleChannelTest", async () => {
-  await withFixture((fixture) =>
-    clientPublishSingleChannelTestImpl(
-      fixture,
-      fixture.client.getBroadcastChannelProvider(PROVIDER_NAME),
-    ),
-  );
-});
+orleansTest(
+  "Tester.StreamingTests.BroadcastChannel.BroadcastChannelTests.ClientPublishSingleChannelTest",
+  async () => {
+    await withFixture((fixture) =>
+      clientPublishSingleChannelTestImpl(
+        fixture,
+        fixture.client.getBroadcastChannelProvider(PROVIDER_NAME),
+      ),
+    );
+  },
+);
 
-orleansTest("Tester.StreamingTests.BroadcastChannel.BroadcastChannelTests.ClientPublishSingleChannelMultipleConsumersTest", async () => {
-  await withFixture((fixture) =>
-    multipleSubscribersChannelTestImpl(
-      fixture,
-      fixture.client.getBroadcastChannelProvider(PROVIDER_NAME),
-    ),
-  );
-});
+orleansTest(
+  "Tester.StreamingTests.BroadcastChannel.BroadcastChannelTests.ClientPublishSingleChannelMultipleConsumersTest",
+  async () => {
+    await withFixture((fixture) =>
+      multipleSubscribersChannelTestImpl(
+        fixture,
+        fixture.client.getBroadcastChannelProvider(PROVIDER_NAME),
+      ),
+    );
+  },
+);
 
-orleansTest("Tester.StreamingTests.BroadcastChannel.BroadcastChannelTests.ClientPublishMultipleChannelTest", async () => {
-  await withFixture((fixture) =>
-    clientPublishMultipleChannelTestImpl(
-      fixture,
-      fixture.client.getBroadcastChannelProvider(PROVIDER_NAME),
-    ),
-  );
-});
+orleansTest(
+  "Tester.StreamingTests.BroadcastChannel.BroadcastChannelTests.ClientPublishMultipleChannelTest",
+  async () => {
+    await withFixture((fixture) =>
+      clientPublishMultipleChannelTestImpl(
+        fixture,
+        fixture.client.getBroadcastChannelProvider(PROVIDER_NAME),
+      ),
+    );
+  },
+);
 
-orleansTest("Tester.StreamingTests.BroadcastChannel.BroadcastChannelTests.MultipleSubscribersOneBadActorChannelTest", async () => {
-  await withFixture((fixture) =>
-    multipleSubscribersOneBadActorChannelTestImpl(
-      fixture,
-      fixture.client.getBroadcastChannelProvider(PROVIDER_NAME),
-    ),
-  );
-});
+orleansTest(
+  "Tester.StreamingTests.BroadcastChannel.BroadcastChannelTests.MultipleSubscribersOneBadActorChannelTest",
+  async () => {
+    await withFixture((fixture) =>
+      multipleSubscribersOneBadActorChannelTestImpl(
+        fixture,
+        fixture.client.getBroadcastChannelProvider(PROVIDER_NAME),
+      ),
+    );
+  },
+);
 
-orleansTest("Tester.StreamingTests.BroadcastChannel.BroadcastChannelTests.NonFireAndForgetClientPublishSingleChannelTest", async () => {
-  await withFixture((fixture) =>
-    clientPublishSingleChannelTestImpl(
-      fixture,
-      fixture.client.getBroadcastChannelProvider(PROVIDER_NAME_NON_FIRE_AND_FORGET),
-      false,
-    ),
-  );
-});
+orleansTest(
+  "Tester.StreamingTests.BroadcastChannel.BroadcastChannelTests.NonFireAndForgetClientPublishSingleChannelTest",
+  async () => {
+    await withFixture((fixture) =>
+      clientPublishSingleChannelTestImpl(
+        fixture,
+        fixture.client.getBroadcastChannelProvider(PROVIDER_NAME_NON_FIRE_AND_FORGET),
+        false,
+      ),
+    );
+  },
+);
 
-orleansTest("Tester.StreamingTests.BroadcastChannel.BroadcastChannelTests.NonFireAndForgetClientPublishMultipleChannelTest", async () => {
-  await withFixture((fixture) =>
-    clientPublishMultipleChannelTestImpl(
-      fixture,
-      fixture.client.getBroadcastChannelProvider(PROVIDER_NAME_NON_FIRE_AND_FORGET),
-    ),
-  );
-});
+orleansTest(
+  "Tester.StreamingTests.BroadcastChannel.BroadcastChannelTests.NonFireAndForgetClientPublishMultipleChannelTest",
+  async () => {
+    await withFixture((fixture) =>
+      clientPublishMultipleChannelTestImpl(
+        fixture,
+        fixture.client.getBroadcastChannelProvider(PROVIDER_NAME_NON_FIRE_AND_FORGET),
+      ),
+    );
+  },
+);
 
-orleansTest("Tester.StreamingTests.BroadcastChannel.BroadcastChannelTests.NonFireAndForgetClientPublishSingleChannelMultipleConsumersTest", async () => {
-  await withFixture((fixture) =>
-    multipleSubscribersChannelTestImpl(
-      fixture,
-      fixture.client.getBroadcastChannelProvider(PROVIDER_NAME_NON_FIRE_AND_FORGET),
-      false,
-    ),
-  );
-});
+orleansTest(
+  "Tester.StreamingTests.BroadcastChannel.BroadcastChannelTests.NonFireAndForgetClientPublishSingleChannelMultipleConsumersTest",
+  async () => {
+    await withFixture((fixture) =>
+      multipleSubscribersChannelTestImpl(
+        fixture,
+        fixture.client.getBroadcastChannelProvider(PROVIDER_NAME_NON_FIRE_AND_FORGET),
+        false,
+      ),
+    );
+  },
+);
 
-orleansTest("Tester.StreamingTests.BroadcastChannel.BroadcastChannelTests.NonFireAndForgetMultipleSubscribersOneBadActorChannelTest", async () => {
-  await withFixture((fixture) =>
-    multipleSubscribersOneBadActorChannelTestImpl(
-      fixture,
-      fixture.client.getBroadcastChannelProvider(PROVIDER_NAME_NON_FIRE_AND_FORGET),
-      false,
-    ),
-  );
-});
+orleansTest(
+  "Tester.StreamingTests.BroadcastChannel.BroadcastChannelTests.NonFireAndForgetMultipleSubscribersOneBadActorChannelTest",
+  async () => {
+    await withFixture((fixture) =>
+      multipleSubscribersOneBadActorChannelTestImpl(
+        fixture,
+        fixture.client.getBroadcastChannelProvider(PROVIDER_NAME_NON_FIRE_AND_FORGET),
+        false,
+      ),
+    );
+  },
+);

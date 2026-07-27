@@ -38,7 +38,11 @@ function fakeValue<T>(initial: T | undefined): DurableValue<T> & { sets: number;
   };
 }
 
-function fakeDictionary<K, V>(): DurableDictionary<K, V> & { sets: number; deletes: number; clears: number } {
+function fakeDictionary<K, V>(): DurableDictionary<K, V> & {
+  sets: number;
+  deletes: number;
+  clears: number;
+} {
   const map = new Map<K, V>();
   return {
     get size() {
@@ -270,10 +274,11 @@ describe("guardDurableSetForReadOnly", () => {
 describe("guardDurableFieldForReadOnly", () => {
   it("dispatches to the matching guard for each DurableKind", async () => {
     expect(guardDurableFieldForReadOnly("value", fakeValue(1), "v")).toHaveProperty("get");
-    const dict = guardDurableFieldForReadOnly("dictionary", fakeDictionary(), "d") as DurableDictionary<
-      string,
-      number
-    >;
+    const dict = guardDurableFieldForReadOnly(
+      "dictionary",
+      fakeDictionary(),
+      "d",
+    ) as DurableDictionary<string, number>;
     await expect(dict.set("a", 1)).rejects.toBeInstanceOf(ReadOnlyStateViolationError);
     const list = guardDurableFieldForReadOnly("list", fakeList([]), "l") as DurableList<number>;
     await expect(list.add(1)).rejects.toBeInstanceOf(ReadOnlyStateViolationError);

@@ -19,9 +19,10 @@ export interface IClientAddressableTestClientObject extends GrainWithStringKey {
   onParallelStress(n: number): Promise<number>;
 }
 
-export const IClientAddressableTestClientObject = defineGrainInterface<IClientAddressableTestClientObject>(
-  "UnitTests.GrainInterfaces.IClientAddressableTestClientObject",
-);
+export const IClientAddressableTestClientObject =
+  defineGrainInterface<IClientAddressableTestClientObject>(
+    "UnitTests.GrainInterfaces.IClientAddressableTestClientObject",
+  );
 
 /** Client-hosted producer a grain polls for data. */
 export interface IClientAddressableTestProducer extends GrainWithStringKey {

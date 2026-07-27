@@ -12,7 +12,11 @@ import type {
   TransactionalStorageLoadResponse,
 } from "@thresh/core/transactional-storage";
 import { requireTransaction } from "@thresh/runtime/invocation-context";
-import { systemTimeProvider, type TimeProvider, type TimerHandle } from "@thresh/core/time-provider";
+import {
+  systemTimeProvider,
+  type TimeProvider,
+  type TimerHandle,
+} from "@thresh/core/time-provider";
 import { TransactionReadOnlyViolatedError } from "@thresh/core/errors";
 import { ReaderWriterLock } from "@thresh/transactions/reader-writer-lock";
 import { EMPTY_METADATA } from "@thresh/transactions/transactional-storage-apply";

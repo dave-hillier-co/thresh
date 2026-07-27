@@ -27,7 +27,11 @@ import { Grain } from "@thresh/core/grain";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
 import type { GrainWithGuidKey } from "@thresh/core/key-kinds";
 import type { PersistentState } from "@thresh/core/persistent-state";
-import { STREAM_SUBSCRIPTION_OBSERVER, type StreamHandler, type StreamId } from "@thresh/core/stream";
+import {
+  STREAM_SUBSCRIPTION_OBSERVER,
+  type StreamHandler,
+  type StreamId,
+} from "@thresh/core/stream";
 import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
 import { orleansTest } from "@thresh/testing/orleans-test";
 import { TestCluster } from "@thresh/testing/test-cluster";

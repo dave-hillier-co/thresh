@@ -31,22 +31,28 @@ describe("UnitTests.ActivationRepartitioningTests.BlockedBloomFilterTests", () =
     expect(filter.contains(grainId)).toBe(true);
   });
 
-  orleansTest("UnitTests.ActivationRepartitioningTests.BlockedBloomFilterTests.DoesNotContainSome", () => {
-    const filter = new BlockedBloomFilter(100, 0.01);
-    expect(filter.contains(grainId)).toBe(false);
-  });
+  orleansTest(
+    "UnitTests.ActivationRepartitioningTests.BlockedBloomFilterTests.DoesNotContainSome",
+    () => {
+      const filter = new BlockedBloomFilter(100, 0.01);
+      expect(filter.contains(grainId)).toBe(false);
+    },
+  );
 });
 
 describe("UnitTests.ActivationRepartitioningTests.AnchoredGrainsFilterTests", () => {
   const createFilter = (generations = 2) => new AnchoredGrainsFilter(100, 0.01, generations);
 
-  orleansTest("UnitTests.ActivationRepartitioningTests.AnchoredGrainsFilterTests.AddAndCheck", () => {
-    const filter = createFilter();
+  orleansTest(
+    "UnitTests.ActivationRepartitioningTests.AnchoredGrainsFilterTests.AddAndCheck",
+    () => {
+      const filter = createFilter();
 
-    filter.add(grainId);
+      filter.add(grainId);
 
-    expect(filter.contains(grainId)).toBe(true);
-  });
+      expect(filter.contains(grainId)).toBe(true);
+    },
+  );
 
   orleansTest(
     "UnitTests.ActivationRepartitioningTests.AnchoredGrainsFilterTests.Rotate_RetainsGrains_AfterFirstCycle",
@@ -104,14 +110,17 @@ describe("UnitTests.ActivationRepartitioningTests.AnchoredGrainsFilterTests", ()
     },
   );
 
-  orleansTest("UnitTests.ActivationRepartitioningTests.AnchoredGrainsFilterTests.Reset_ClearsAllFilters", () => {
-    const filter = createFilter(3);
+  orleansTest(
+    "UnitTests.ActivationRepartitioningTests.AnchoredGrainsFilterTests.Reset_ClearsAllFilters",
+    () => {
+      const filter = createFilter(3);
 
-    filter.add(grainId);
-    filter.reset();
+      filter.add(grainId);
+      filter.reset();
 
-    expect(filter.contains(grainId)).toBe(false); // None of the filters should contain it.
-  });
+      expect(filter.contains(grainId)).toBe(false); // None of the filters should contain it.
+    },
+  );
 
   orleansTest(
     "UnitTests.ActivationRepartitioningTests.AnchoredGrainsFilterTests.Rotate_CalledManyTimes_DoesNotThrowOutOfBounds",

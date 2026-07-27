@@ -19,7 +19,11 @@ import type { GrainWithGuidKey, GrainWithStringKey } from "@thresh/core/key-kind
 export interface ILongRunningObserver extends GrainWithStringKey {
   longWait(delayMs: number, callId: string, token: GrainCancellationToken): Promise<void>;
   /** Same body as `longWait`, but `[AlwaysInterleave]` upstream so concurrent calls interleave. */
-  interleavingLongWait(delayMs: number, callId: string, token: GrainCancellationToken): Promise<void>;
+  interleavingLongWait(
+    delayMs: number,
+    callId: string,
+    token: GrainCancellationToken,
+  ): Promise<void>;
 }
 
 export const ILongRunningObserver = defineGrainInterface<ILongRunningObserver>(

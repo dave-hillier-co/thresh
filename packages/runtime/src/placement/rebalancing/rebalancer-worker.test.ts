@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import { SiloAddress } from "@thresh/core/silo-address";
 import type { MembershipService, MembershipSnapshot } from "@thresh/core/membership";
 import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
-import type { CycleState, StopReason } from "@thresh/runtime/placement/rebalancing/rebalancer-model";
+import type {
+  CycleState,
+  StopReason,
+} from "@thresh/runtime/placement/rebalancing/rebalancer-model";
 import { DEFAULT_REBALANCER_OPTIONS } from "@thresh/runtime/placement/rebalancing/rebalancer-model";
 import {
   ActivationRebalancerWorker,

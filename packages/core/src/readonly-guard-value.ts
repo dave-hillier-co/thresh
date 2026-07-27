@@ -32,7 +32,10 @@ export function guardValue<T>(value: T, stateName: string): T {
 }
 
 /** Build a `ReadOnlyStateViolationError` for a rejected mutation attempt, naming the state and the attempted operation. */
-export function readOnlyViolation(stateName: string, attempted: string): ReadOnlyStateViolationError {
+export function readOnlyViolation(
+  stateName: string,
+  attempted: string,
+): ReadOnlyStateViolationError {
   return new ReadOnlyStateViolationError(
     `attempted to ${attempted} state "${stateName}" during a read-only call`,
   );

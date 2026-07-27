@@ -26,7 +26,10 @@ export class OneWayGrain extends Grain implements IOneWayGrain {
     throw new Error("GET OUT (ValueTask)!");
   }
 
-  async notifyOtherGrain(otherGrain: IOneWayGrain, observer: ISimpleGrainObserver): Promise<boolean> {
+  async notifyOtherGrain(
+    otherGrain: IOneWayGrain,
+    observer: ISimpleGrainObserver,
+  ): Promise<boolean> {
     // Upstream returns whether the one-way call's Task had already reached
     // `RanToCompletion` by the time it was observed. JS has no synchronous
     // Task-completion state: a one-way proxy call always resolves to

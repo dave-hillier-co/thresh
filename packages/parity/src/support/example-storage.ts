@@ -63,7 +63,9 @@ export function exampleStorage(providerName?: string, stateName?: string) {
  * `BlobExampleStorageFactory`) — a no-op store; only proves the facet was
  * bound with the right name.
  */
-export const blobExampleStorageFactory: GrainFacetFactory = (config: unknown): ExampleStorage<unknown> => {
+export const blobExampleStorageFactory: GrainFacetFactory = (
+  config: unknown,
+): ExampleStorage<unknown> => {
   const name = (config as ExampleStorageConfig).stateName;
   return {
     state: undefined,
@@ -113,6 +115,9 @@ export function useTableExampleStorage(builder: SiloBuilder, name: string): Silo
  * Nominates `factory` as the process-wide default for an unnamed
  * `@exampleStorage()` field (Orleans `UseAsDefaultExampleStorage<TFactoryType>`).
  */
-export function useAsDefaultExampleStorage(builder: SiloBuilder, factory: GrainFacetFactory): SiloBuilder {
+export function useAsDefaultExampleStorage(
+  builder: SiloBuilder,
+  factory: GrainFacetFactory,
+): SiloBuilder {
   return builder.addGrainFacetFactory(EXAMPLE_STORAGE_KIND, "default", factory);
 }

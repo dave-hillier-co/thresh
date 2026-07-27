@@ -1,6 +1,10 @@
 import type { MembershipService, MembershipSnapshot, SiloMember } from "@thresh/core/membership";
 import type { SiloAddress } from "@thresh/core/silo-address";
-import { readySilosFromSlices, type EndpointSlice } from "@thresh/clustering-k8s/endpoint-slice";
+import {
+  metadataFromSlices,
+  readySilosFromSlices,
+  type EndpointSlice,
+} from "@thresh/clustering-k8s/endpoint-slice";
 
 /**
  * Source of EndpointSlice updates. The production implementation wraps the
@@ -14,6 +18,16 @@ export interface EndpointWatch {
 export interface KubernetesMembershipOptions {
   /** Named service port to use for the silo endpoint (defaults to the first). */
   portName?: string;
+  /**
+   * Pod labels under this prefix populate `SiloMember.metadata`, with the prefix
+   * stripped from the key — e.g. `thresh.io/role=worker` with prefix
+   * `"thresh.io/"` surfaces as `{ role: "worker" }`, the same shape
+   * `useStaticMembership`'s metadata resolver produces. Requires a watch source
+   * that resolves pod labels onto `EndpointSliceEndpoint.metadata` (see
+   * `createKubernetesClientSource`'s `fetchPodLabels` option); omit to leave
+   * `SiloMember.metadata` unset.
+   */
+  metadataLabelPrefix?: string;
 }
 
 /**
@@ -59,7 +73,13 @@ export class KubernetesMembership implements MembershipService {
     // self breaks that bootstrap cycle), and a transient empty watch must not
     // make a silo believe the whole cluster vanished.
     const ready = dedupe([this.local, ...readySilosFromSlices(slices, this.options.portName)]);
-    const silos: SiloMember[] = ready.map((address) => ({ address, status: "active" }));
+    const metadataByUid = metadataFromSlices(slices, this.options.metadataLabelPrefix);
+    const silos: SiloMember[] = ready.map((address) => {
+      const metadata = metadataByUid.get(address.podUid);
+      return metadata !== undefined
+        ? { address, status: "active", metadata }
+        : { address, status: "active" };
+    });
     this.snapshot = { version: this.snapshot.version + 1, silos };
     const waiters = this.waiters;
     this.waiters = [];

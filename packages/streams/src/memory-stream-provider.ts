@@ -15,7 +15,11 @@ import {
   type SubscribeOptions,
 } from "@thresh/core/stream";
 import { emitStreamingEvent } from "@thresh/core/streaming-diagnostics";
-import { systemTimeProvider, type TimeProvider, type TimerHandle } from "@thresh/core/time-provider";
+import {
+  systemTimeProvider,
+  type TimeProvider,
+  type TimerHandle,
+} from "@thresh/core/time-provider";
 import { implicitSubscriberIds } from "@thresh/streams/implicit-subscriptions";
 import { MemorySubscriptionManager } from "@thresh/streams/memory-subscription-manager";
 import { StreamProducerRegistry } from "@thresh/streams/stream-producer-registry";

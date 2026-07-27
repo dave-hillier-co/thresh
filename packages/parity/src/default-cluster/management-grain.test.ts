@@ -28,26 +28,29 @@ describe("UnitTests.OrleansRuntime.ManagementGrainTests", () => {
     await cluster.dispose();
   });
 
-  orleansTest("UnitTests.OrleansRuntime.ManagementGrainTests.GetActivationAddressTest", async () => {
-    const managementGrain = cluster.getGrain(IManagementGrain, 0n);
-    const grain1 = cluster.getGrain(IDumbGrain, Guid.newGuid());
-    const grain2 = cluster.getGrain(IDumbGrain, Guid.newGuid());
+  orleansTest(
+    "UnitTests.OrleansRuntime.ManagementGrainTests.GetActivationAddressTest",
+    async () => {
+      const managementGrain = cluster.getGrain(IManagementGrain, 0n);
+      const grain1 = cluster.getGrain(IDumbGrain, Guid.newGuid());
+      const grain2 = cluster.getGrain(IDumbGrain, Guid.newGuid());
 
-    let grain1Address = await managementGrain.getActivationAddress(grain1);
-    expect(grain1Address).toBeNull();
+      let grain1Address = await managementGrain.getActivationAddress(grain1);
+      expect(grain1Address).toBeNull();
 
-    await grain1.doNothing();
-    grain1Address = await managementGrain.getActivationAddress(grain1);
-    expect(grain1Address).not.toBeNull();
-    const grain2Address = await managementGrain.getActivationAddress(grain2);
-    expect(grain2Address).toBeNull();
+      await grain1.doNothing();
+      grain1Address = await managementGrain.getActivationAddress(grain1);
+      expect(grain1Address).not.toBeNull();
+      const grain2Address = await managementGrain.getActivationAddress(grain2);
+      expect(grain2Address).toBeNull();
 
-    await grain2.doNothing();
-    const grain1Address2 = await managementGrain.getActivationAddress(grain1);
-    expect(grain1Address2).not.toBeNull();
-    expect(grainAddressEquals(grain1Address2!, grain1Address!)).toBe(true);
+      await grain2.doNothing();
+      const grain1Address2 = await managementGrain.getActivationAddress(grain1);
+      expect(grain1Address2).not.toBeNull();
+      expect(grainAddressEquals(grain1Address2!, grain1Address!)).toBe(true);
 
-    const worker = cluster.getGrain(IDumbWorker, 0n);
-    await expect(managementGrain.getActivationAddress(worker)).rejects.toThrow();
-  });
+      const worker = cluster.getGrain(IDumbWorker, 0n);
+      await expect(managementGrain.getActivationAddress(worker)).rejects.toThrow();
+    },
+  );
 });

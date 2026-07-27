@@ -60,26 +60,29 @@ class ZipfRejectionSampler {
 }
 
 describe("UnitTests.ActivationRepartitioningTests.FrequencyFilterTests", () => {
-  orleansTest("UnitTests.ActivationRepartitioningTests.FrequencyFilterTests.GetExpectedTopK", () => {
-    const numSamples = 10_000;
-    const sink = new UlongFrequentItemCollection(100);
-    const distribution = new ZipfRejectionSampler(Math.random, 1000, 0.5);
+  orleansTest(
+    "UnitTests.ActivationRepartitioningTests.FrequencyFilterTests.GetExpectedTopK",
+    () => {
+      const numSamples = 10_000;
+      const sink = new UlongFrequentItemCollection(100);
+      const distribution = new ZipfRejectionSampler(Math.random, 1000, 0.5);
 
-    for (let i = 0; i < numSamples; i++) {
-      const sample = BigInt(distribution.sample());
-      sink.add(sample);
+      for (let i = 0; i < numSamples; i++) {
+        const sample = BigInt(distribution.sample());
+        sink.add(sample);
 
-      if (i === Math.trunc((4 * numSamples) / 5)) {
-        sink.remove(3n);
+        if (i === Math.trunc((4 * numSamples) / 5)) {
+          sink.remove(3n);
+        }
       }
-    }
 
-    const allCounters = sink.elements.slice().sort((left, right) => right.count - left.count);
-    const lines = allCounters.map(({ element, count, error }) =>
-      error === 0 ? `${element}: ${count}` : `${element}: ${count} ε${error}`,
-    );
-    const result = lines.join("\n");
+      const allCounters = sink.elements.slice().sort((left, right) => right.count - left.count);
+      const lines = allCounters.map(({ element, count, error }) =>
+        error === 0 ? `${element}: ${count}` : `${element}: ${count} ε${error}`,
+      );
+      const result = lines.join("\n");
 
-    expect(result).not.toBe("");
-  });
+      expect(result).not.toBe("");
+    },
+  );
 });

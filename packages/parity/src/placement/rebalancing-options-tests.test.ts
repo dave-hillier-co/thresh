@@ -22,19 +22,22 @@ import {
 } from "@thresh/runtime/placement/rebalancing/rebalancer-model";
 
 describe("UnitTests.ActivationRebalancingTests.RebalancingOptionsTests", () => {
-  orleansTest("UnitTests.ActivationRebalancingTests.RebalancingOptionsTests.ConstantsShouldNotChange", () => {
-    expect(DEFAULT_REBALANCER_DUE_TIME_MS).toBe(60_000);
-    expect(DEFAULT_SESSION_CYCLE_PERIOD_MS).toBe(15_000);
-    expect(DEFAULT_MAX_STAGNANT_CYCLES).toBe(3);
-    expect(DEFAULT_ENTROPY_QUANTUM).toBe(0.0001);
-    expect(DEFAULT_ALLOWED_ENTROPY_DEVIATION).toBe(0.0001);
-    expect(DEFAULT_CYCLE_NUMBER_WEIGHT).toBe(0.1);
-    expect(DEFAULT_SILO_NUMBER_WEIGHT).toBe(0.1);
-    expect(MAX_SCALED_ENTROPY_DEVIATION).toBe(0.1);
-    expect(DEFAULT_SCALED_ENTROPY_DEVIATION_ACTIVATION_THRESHOLD).toBe(10_000);
-    expect(DEFAULT_ACTIVATION_MIGRATION_COUNT_LIMIT).toBe(Number.MAX_SAFE_INTEGER);
-    expect(DEFAULT_SCALE_ALLOWED_ENTROPY_DEVIATION).toBe(true);
-  });
+  orleansTest(
+    "UnitTests.ActivationRebalancingTests.RebalancingOptionsTests.ConstantsShouldNotChange",
+    () => {
+      expect(DEFAULT_REBALANCER_DUE_TIME_MS).toBe(60_000);
+      expect(DEFAULT_SESSION_CYCLE_PERIOD_MS).toBe(15_000);
+      expect(DEFAULT_MAX_STAGNANT_CYCLES).toBe(3);
+      expect(DEFAULT_ENTROPY_QUANTUM).toBe(0.0001);
+      expect(DEFAULT_ALLOWED_ENTROPY_DEVIATION).toBe(0.0001);
+      expect(DEFAULT_CYCLE_NUMBER_WEIGHT).toBe(0.1);
+      expect(DEFAULT_SILO_NUMBER_WEIGHT).toBe(0.1);
+      expect(MAX_SCALED_ENTROPY_DEVIATION).toBe(0.1);
+      expect(DEFAULT_SCALED_ENTROPY_DEVIATION_ACTIVATION_THRESHOLD).toBe(10_000);
+      expect(DEFAULT_ACTIVATION_MIGRATION_COUNT_LIMIT).toBe(Number.MAX_SAFE_INTEGER);
+      expect(DEFAULT_SCALE_ALLOWED_ENTROPY_DEVIATION).toBe(true);
+    },
+  );
 
   orleansTest.each([
     // [sessionCyclePeriodMs, publisherRefreshTimeMs, maxStagnantCycles, entropyQuantum,
