@@ -16,6 +16,14 @@ deadline API, keepalive unbind on deactivation, and full-facet `@readOnly` guard
 
 ## Deferred
 
+- [ ] Runtime key-kind assertion in `GrainFactory.getGrain` (assert the supplied key's kind matches
+      `GrainInterface.key` where declared). Blocked on implicit stream subscriptions, which synthesise
+      string keys for possibly integer-keyed grains
+      (`packages/streams/src/implicit-subscriptions.ts`); fix that first or the check breaks implicit
+      delivery. Type-level key kinds are already enforced, so this is defence in depth.
+- [ ] Delete the residual no-op `extends GrainWithStringKey` from non-parity test fixtures. Pure
+      deletion, no type change — the markers stay exported and deprecated either way, and
+      `packages/parity` keeps them permanently for upstream traceability.
 - [ ] [#39](https://github.com/dave-hillier-co/thresh/issues/39) Additional stream
       backings behind the existing interfaces —
       [`docs/stream-backings-postgres-kafka.md`](docs/stream-backings-postgres-kafka.md). Phase 0

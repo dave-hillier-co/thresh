@@ -5,11 +5,16 @@ import { GrainCallError, RejectionError } from "@thresh/core/errors";
 import type { Grain } from "@thresh/core/grain";
 import { grainAddressEquals, type GrainAddress } from "@thresh/core/grain-address";
 import { GrainId } from "@thresh/core/grain-id";
-import type { AnyGrainInterface, GrainInterface } from "@thresh/core/grain-interface";
+import type { GrainInterface } from "@thresh/core/grain-interface";
 import { getGrainInterface } from "@thresh/core/grain-interface";
 import type { GrainKeyKind } from "@thresh/core/grain-key";
 import type { InterfaceVersionEntry, SiloManifest } from "@thresh/core/grain-manifest";
 import { getGrainMetadata } from "@thresh/core/grain-metadata";
+import {
+  type GrainRegistration,
+  normalizeRegistration,
+  type Registrable,
+} from "@thresh/core/grain-registration";
 import type { GrainType } from "@thresh/core/grain-type";
 import {
   compatibilityDirector,
@@ -649,14 +654,27 @@ export class ClusterNode {
     );
   }
 
-  registerGrain<G extends Grain>(
-    ctor: new () => G,
-    registration: { interfaces: AnyGrainInterface[] },
+  /**
+   * Register a `defineGrain`/`defineReducerGrain` definition. It carries its own
+   * interface, so `extra` is only needed to name the interfaces it answers to
+   * instead — an explicit list wins outright and the fused interface is not
+   * added to it.
+   */
+  registerGrain(definition: Registrable, extra?: GrainRegistration): this;
+  /** Register a class grain under the interfaces it serves. */
+  registerGrain<G extends Grain>(ctor: new () => G, registration: GrainRegistration): this;
+  registerGrain(
+    definition: Registrable | (new () => Grain),
+    registration?: GrainRegistration,
   ): this {
+    const { ctor, interfaces } = normalizeRegistration(definition, registration);
     const metadata = getGrainMetadata(ctor);
     if (metadata === undefined) throw new Error(`${ctor.name} is not decorated with @grain()`);
     this.grainTypes.set(metadata.grainType, { ctor, metadata });
-    for (const iface of registration.interfaces) {
+    // The version manifest is driven off the RESOLVED list, so per-silo version
+    // registration (`registerGrain(ctor, { interfaces: [ICounterAt(v)] })`) keeps
+    // declaring exactly the versions the caller named.
+    for (const iface of interfaces) {
       this.interfaceToGrainType.set(iface.id, metadata.grainType);
       const existing = this.localVersions.get(iface.id);
       if (existing === undefined || iface.version > existing.version) {

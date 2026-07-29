@@ -1,8 +1,13 @@
 import type { Grain } from "@thresh/core/grain";
 import type { GrainId } from "@thresh/core/grain-id";
-import type { AnyGrainInterface, GrainInterface } from "@thresh/core/grain-interface";
+import type { GrainInterface } from "@thresh/core/grain-interface";
 import type { GrainKeyKind } from "@thresh/core/grain-key";
 import { getGrainMetadata } from "@thresh/core/grain-metadata";
+import {
+  type GrainRegistration,
+  normalizeRegistration,
+  type Registrable,
+} from "@thresh/core/grain-registration";
 import type { GrainType } from "@thresh/core/grain-type";
 import type { KeyTypeOf } from "@thresh/core/key-kinds";
 import { ActivationCollector } from "@thresh/runtime/activation-collector";
@@ -18,10 +23,8 @@ export interface SiloOptions {
   collectionIntervalSeconds?: number;
 }
 
-export interface GrainRegistration {
-  /** The grain interfaces this implementation serves, used to route `getGrain`. */
-  interfaces: AnyGrainInterface[];
-}
+/** Re-exported so hosts that register against a `Silo` need only one import. */
+export type { GrainRegistration };
 
 /** A single-process silo (Phase 1): catalog, scheduler, factory, collector. */
 export class Silo {
@@ -52,11 +55,24 @@ export class Silo {
     );
   }
 
-  registerGrain<G extends Grain>(ctor: new () => G, registration: GrainRegistration): this {
+  /**
+   * Register a `defineGrain`/`defineReducerGrain` definition. It carries its own
+   * interface, so `extra` is only needed to name the interfaces it answers to
+   * instead — an explicit list wins outright and the fused interface is not
+   * added to it.
+   */
+  registerGrain(definition: Registrable, extra?: GrainRegistration): this;
+  /** Register a class grain under the interfaces it serves. */
+  registerGrain<G extends Grain>(ctor: new () => G, registration: GrainRegistration): this;
+  registerGrain(
+    definition: Registrable | (new () => Grain),
+    registration?: GrainRegistration,
+  ): this {
+    const { ctor, interfaces } = normalizeRegistration(definition, registration);
     const metadata = getGrainMetadata(ctor);
     if (metadata === undefined) throw new Error(`${ctor.name} is not decorated with @grain()`);
     this.grainTypes.set(metadata.grainType, { ctor, metadata });
-    for (const iface of registration.interfaces) {
+    for (const iface of interfaces) {
       this.interfaceToGrainType.set(iface.id, metadata.grainType);
     }
     return this;

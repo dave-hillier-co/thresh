@@ -285,6 +285,42 @@ describe("defineGrain — failure modes", () => {
     expect(() => new Async().setContext(context("a"))).toThrow();
     expect(setupDepth()).toBe(0);
   });
+
+  // The synchronous guard rejects the activation, but the async factory's body
+  // keeps running detached and hits the hook's scope error after its first
+  // await. Nobody holds that promise, so its failure surfaces as a process-level
+  // unhandled rejection — fatal under `--unhandled-rejections=throw`, which is
+  // how a silo process runs. The activation failure is the synchronous throw;
+  // the detached echo of it must not escalate.
+  it("does not leak an unhandled rejection from an async factory's detached body", async () => {
+    const Async = defineGrain("AsyncFactoryDetached", async () => {
+      await Promise.resolve();
+      usePersistentState<number>("late");
+      return {};
+    }).grain;
+
+    // Own the process handler for the duration: with vitest's listeners left in
+    // place a leaked rejection fails the whole file instead of this assertion.
+    const existing = process.listeners("unhandledRejection");
+    process.removeAllListeners("unhandledRejection");
+    const unhandled: unknown[] = [];
+    const capture = (reason: unknown): void => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", capture);
+    try {
+      expect(() => new Async().setContext(context("a"))).toThrow("factories must be synchronous");
+      // Unhandled rejections are detected after the microtask queue drains.
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    } finally {
+      process.off("unhandledRejection", capture);
+      for (const listener of existing) {
+        process.on("unhandledRejection", listener as (reason: unknown) => void);
+      }
+    }
+
+    expect(unhandled).toEqual([]);
+  });
 });
 
 describe("defineGrain — implicit setup scope", () => {
@@ -473,6 +509,32 @@ describe("defineGrain — the fused interface", () => {
     expect(getGrainInterface(declared.id)?.options.greet?.alwaysInterleave).toBe(true);
     expect(fused.extension).toBe(true);
     expect(fused.options.greet?.alwaysInterleave).toBe(true);
+  });
+
+  /**
+   * The other side of that merge: two *implementations* fused under one name are
+   * not a pairing, they are a collision. The merge would fold them onto a single
+   * interface id, and `getGrain(A, key)` would route to whichever grain type
+   * registered last — silently, since both definitions type-check and the id is
+   * the wire identity.
+   */
+  it("rejects two fused definitions of one name with different constructors", () => {
+    defineGrain<IGreeter>("FusedDuplicate", () => ({ greet: async () => "A" }));
+
+    expect(() =>
+      defineGrain<IGreeter>("FusedDuplicate", () => ({ greet: async () => "B" })),
+    ).toThrow(/FusedDuplicate[\s\S]*distinct name[\s\S]*interfaceName/);
+  });
+
+  it("lets a colliding pair coexist once one pins a distinct interfaceName", () => {
+    const a = defineGrain<IGreeter>("FusedDistinct", () => ({ greet: async () => "A" }));
+    const b = defineGrain<IGreeter>("FusedDistinct", () => ({ greet: async () => "B" }), {
+      interfaceName: "FusedDistinct.b",
+    });
+
+    expect(a.id).not.toBe(b.id);
+    expect(getGrainInterface(a.id)?.name).toBe("FusedDistinct");
+    expect(getGrainInterface(b.id)?.name).toBe("FusedDistinct.b");
   });
 });
 

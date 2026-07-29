@@ -1,6 +1,6 @@
 import { createServer, type Server } from "node:http";
 import type { SiloHost } from "@thresh/hosting/silo-host";
-import { ICounter } from "@thresh/example-k8s-silo/interfaces";
+import { CounterGrain } from "@thresh/example-k8s-silo/counter-grain";
 
 const hostName = (): string => process.env.POD_NAME ?? "local";
 
@@ -34,7 +34,7 @@ async function handle(method: string, url: string, host: SiloHost): Promise<unkn
   const match = /^\/counters\/([^/]+)(\/increment)?$/.exec(path);
   if (match !== null) {
     const key = decodeURIComponent(match[1]!);
-    const counter = host.getGrain(ICounter, key);
+    const counter = host.getGrain(CounterGrain, key);
     if (method === "POST" && match[2] === "/increment") return counter.increment();
     if (method === "GET" && match[2] === undefined) return counter.current();
   }

@@ -4,6 +4,7 @@ import type { Grain } from "@thresh/core/grain";
 import type { GrainId } from "@thresh/core/grain-id";
 import type { AnyGrainInterface, GrainInterface } from "@thresh/core/grain-interface";
 import type { GrainKeyKind } from "@thresh/core/grain-key";
+import type { Registrable } from "@thresh/core/grain-registration";
 import type { KeyTypeOf } from "@thresh/core/key-kinds";
 import type { MembershipService, MembershipSnapshot } from "@thresh/core/membership";
 import { SiloAddress } from "@thresh/core/silo-address";
@@ -22,10 +23,18 @@ import { MemoryTransactionalStorage } from "@thresh/transactions/memory-transact
 import { createSilo, type SiloBuilder } from "@thresh/hosting/silo-builder";
 import type { SiloHost } from "@thresh/hosting/silo-host";
 
+/** A grain type registered by constructor, naming the interfaces it answers to. */
 export interface GrainRegistrationSpec {
   ctor: new () => Grain;
   interfaces: AnyGrainInterface[];
 }
+
+/**
+ * What `TestClusterOptions.grains` accepts: either the constructor form above,
+ * or a `defineGrain`/`defineReducerGrain` definition, which carries its own
+ * interface and so needs nothing alongside it.
+ */
+export type TestGrainSpec = GrainRegistrationSpec | Registrable;
 
 export interface TestClusterOptions {
   /** Number of silos to start with (Orleans TestClusterBuilder defaults to 2). */
@@ -39,7 +48,7 @@ export interface TestClusterOptions {
    */
   serviceId?: string;
   /** Grains registered on every silo. */
-  grains?: ReadonlyArray<GrainRegistrationSpec>;
+  grains?: ReadonlyArray<TestGrainSpec>;
   /** Clock injected into every silo; pass a `FakeTimeProvider` for determinism. */
   time?: TimeProvider;
   /**
@@ -325,7 +334,8 @@ export class TestCluster {
       builder.disableTransactions();
     }
     for (const spec of this.options.grains ?? []) {
-      builder.registerGrain(spec.ctor, { interfaces: spec.interfaces });
+      if ("ctor" in spec) builder.registerGrain(spec.ctor, { interfaces: spec.interfaces });
+      else builder.registerGrain(spec);
     }
     this.options.configureSilo?.(builder, { index, address }, this);
     const silo: InternalSilo = { index, address, membership, host: builder.build() };

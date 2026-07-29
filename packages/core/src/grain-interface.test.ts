@@ -5,6 +5,7 @@ import {
   registerInterface,
   type GrainInterface,
 } from "@thresh/core/grain-interface";
+import { stableHash32 } from "@thresh/core/hash";
 import type { GrainWithIntegerKey, KeyTypeOf } from "@thresh/core/key-kinds";
 
 interface ICounter {
@@ -172,7 +173,93 @@ describe("registerInterface", () => {
     const iface = defineGrainInterface<IThing>("IRegister.fresh");
     expect(getGrainInterface(iface.id)).toBe(iface);
   });
+
+  /**
+   * The id is `stableHash32(name)`, a 32-bit value, so two different names can
+   * land on one id — and every `defineGrain` now publishes an interface under
+   * its grain-type name too, which widens the surface. Left undetected the
+   * second registration takes over the first's id and inbound calls dispatch to
+   * the wrong contract. The colliding pair is found by search, not hard-coded:
+   * the point is to exercise the real hash.
+   */
+  it("rejects two different names that hash to the same id", () => {
+    const [first, second] = collidingNames();
+
+    defineGrainInterface<IThing>(first);
+    expect(() => defineGrainInterface<IThing>(second)).toThrow(
+      new RegExp(`${first}[\\s\\S]*${second}|${second}[\\s\\S]*${first}`),
+    );
+  });
 });
+
+/**
+ * A fused definition (one carrying its implementation constructor under `grain`)
+ * is merged like any other same-named definition — that is how a hand-written
+ * `defineGrainInterface` module pairs with a same-named `defineGrain`. Two *fused*
+ * definitions of one name are a different thing: two grain types competing for one
+ * wire id, where the merge would silently route one's calls to the other.
+ */
+describe("registerInterface — fused definitions", () => {
+  interface IThing {
+    ping(): Promise<void>;
+  }
+
+  class GrainA {}
+  class GrainB {}
+
+  function fused(name: string, grain: new () => object): GrainInterface<IThing> {
+    return { ...defineGrainInterface<IThing>(name), grain };
+  }
+
+  it("rejects two fused definitions of one name with different constructors", () => {
+    registerInterface(fused("IFused.collide", GrainA), { merge: true });
+
+    expect(() => registerInterface(fused("IFused.collide", GrainB), { merge: true })).toThrow(
+      /IFused\.collide[\s\S]*distinct name[\s\S]*interfaceName/,
+    );
+  });
+
+  it("accepts the same fused definition registered again (module re-evaluation)", () => {
+    const first = fused("IFused.repeat", GrainA);
+    registerInterface(first, { merge: true });
+
+    expect(() => registerInterface(fused("IFused.repeat", GrainA), { merge: true })).not.toThrow();
+  });
+
+  it("still pairs a declared interface with a same-named fused definition", () => {
+    const declared = defineGrainInterface<IThing>("IFused.paired", {
+      extension: true,
+      options: { ping: { readOnly: true } },
+    });
+    const merged = registerInterface(fused("IFused.paired", GrainA), { merge: true });
+
+    expect(merged.id).toBe(declared.id);
+    expect(merged.extension).toBe(true);
+    expect(merged.options.ping?.readOnly).toBe(true);
+    // The merged entry keeps the implementation, so a later declaration of the
+    // same name is still checked against it.
+    expect(getGrainInterface(declared.id)?.grain).toBe(GrainA);
+  });
+
+  it("keeps the implementation when a later declaration omits it", () => {
+    const first = registerInterface(fused("IFused.inherit", GrainA), { merge: true });
+    defineGrainInterface<IThing>("IFused.inherit");
+
+    expect(getGrainInterface(first.id)?.grain).toBe(GrainA);
+  });
+});
+
+/** Two distinct strings with the same `stableHash32`, by birthday search. */
+function collidingNames(): [string, string] {
+  const seen = new Map<number, string>();
+  for (let i = 0; ; i++) {
+    const name = `IRegister.collide.${i}`;
+    const id = stableHash32(name);
+    const previous = seen.get(id);
+    if (previous !== undefined) return [previous, name];
+    seen.set(id, name);
+  }
+}
 
 /**
  * Declaring the key kind exactly once. TypeScript has no partial type-argument

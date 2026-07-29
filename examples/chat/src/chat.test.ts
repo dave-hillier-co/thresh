@@ -8,7 +8,6 @@ import type { SiloHost } from "@thresh/hosting/silo-host";
 import { ChatRoomGrain } from "@thresh/example-chat/chat-room-grain";
 import { ChatUserGrain } from "@thresh/example-chat/chat-user-grain";
 import { runChatDemo } from "@thresh/example-chat/demo";
-import { IChatRoom, IChatUser } from "@thresh/example-chat/interfaces";
 
 const local = new SiloAddress("silo-0", "uid-0", "silo-0:11111");
 const flush = () => new Promise((r) => setTimeout(r, 0));
@@ -25,8 +24,8 @@ function buildChatSilo(time?: FakeTimeProvider): SiloHost {
     .useStaticMembership([local])
     .useInProcessTransport(new InProcessNetwork())
     .useMemoryStreams()
-    .registerGrain(ChatRoomGrain.grain, { interfaces: [IChatRoom] })
-    .registerGrain(ChatUserGrain.grain, { interfaces: [IChatUser] })
+    .registerGrain(ChatRoomGrain)
+    .registerGrain(ChatUserGrain)
     .build();
 }
 
@@ -36,14 +35,17 @@ describe("chat room (stream fan-out acceptance)", () => {
     await silo.start();
     try {
       for (const name of ["alice", "bob", "carol"]) {
-        await silo.getGrain(IChatUser, name).join("general");
+        await silo.getGrain(ChatUserGrain, name).join("general");
       }
-      await silo.getGrain(IChatRoom, "general").say("alice", "hi all");
-      await silo.getGrain(IChatRoom, "general").say("bob", "hey");
+      await silo.getGrain(ChatRoomGrain, "general").say("alice", "hi all");
+      await silo.getGrain(ChatRoomGrain, "general").say("bob", "hey");
       await flush();
 
       for (const name of ["alice", "bob", "carol"]) {
-        expect(texts(await silo.getGrain(IChatUser, name).history())).toEqual(["hi all", "hey"]);
+        expect(texts(await silo.getGrain(ChatUserGrain, name).history())).toEqual([
+          "hi all",
+          "hey",
+        ]);
       }
     } finally {
       await silo.stop();
@@ -54,13 +56,13 @@ describe("chat room (stream fan-out acceptance)", () => {
     const silo = buildChatSilo();
     await silo.start();
     try {
-      await silo.getGrain(IChatUser, "amy").join("red");
-      await silo.getGrain(IChatUser, "ben").join("blue");
-      await silo.getGrain(IChatRoom, "red").say("amy", "red-only");
+      await silo.getGrain(ChatUserGrain, "amy").join("red");
+      await silo.getGrain(ChatUserGrain, "ben").join("blue");
+      await silo.getGrain(ChatRoomGrain, "red").say("amy", "red-only");
       await flush();
 
-      expect(texts(await silo.getGrain(IChatUser, "amy").history())).toEqual(["red-only"]);
-      expect(await silo.getGrain(IChatUser, "ben").history()).toEqual([]);
+      expect(texts(await silo.getGrain(ChatUserGrain, "amy").history())).toEqual(["red-only"]);
+      expect(await silo.getGrain(ChatUserGrain, "ben").history()).toEqual([]);
     } finally {
       await silo.stop();
     }
@@ -71,31 +73,35 @@ describe("chat room (stream fan-out acceptance)", () => {
     const silo = buildChatSilo(time);
     await silo.start();
     try {
-      await silo.getGrain(IChatUser, "alice").join("general");
-      await silo.getGrain(IChatUser, "bob").join("general");
-      await silo.getGrain(IChatRoom, "general").say("alice", "m1");
+      await silo.getGrain(ChatUserGrain, "alice").join("general");
+      await silo.getGrain(ChatUserGrain, "bob").join("general");
+      await silo.getGrain(ChatRoomGrain, "general").say("alice", "m1");
       await flush();
 
       // Keep alice active past one sweep; let bob fall idle and be collected.
       time.advance(25_000);
-      await silo.getGrain(IChatUser, "alice").history();
+      await silo.getGrain(ChatUserGrain, "alice").history();
       time.advance(20_000);
       await flush();
       expect(silo.isActive(new GrainId("ChatUser", "bob"))).toBe(false);
 
       // Messages bob misses while away; alice (still active) receives them live,
       // advancing alice's cursor past bob's.
-      await silo.getGrain(IChatRoom, "general").say("alice", "m2");
-      await silo.getGrain(IChatRoom, "general").say("alice", "m3");
+      await silo.getGrain(ChatRoomGrain, "general").say("alice", "m2");
+      await silo.getGrain(ChatRoomGrain, "general").say("alice", "m3");
       await flush();
-      expect(texts(await silo.getGrain(IChatUser, "alice").history())).toEqual(["m1", "m2", "m3"]);
+      expect(texts(await silo.getGrain(ChatUserGrain, "alice").history())).toEqual([
+        "m1",
+        "m2",
+        "m3",
+      ]);
 
       // Bob rejoins: it must resume ITS OWN subscription (cursor at m1), receiving
       // only the two it missed — not alice's already-consumed position (which would
       // yield nothing).
-      await silo.getGrain(IChatUser, "bob").join("general");
+      await silo.getGrain(ChatUserGrain, "bob").join("general");
       await flush();
-      expect(texts(await silo.getGrain(IChatUser, "bob").history())).toEqual(["m2", "m3"]);
+      expect(texts(await silo.getGrain(ChatUserGrain, "bob").history())).toEqual(["m2", "m3"]);
     } finally {
       await silo.stop();
     }

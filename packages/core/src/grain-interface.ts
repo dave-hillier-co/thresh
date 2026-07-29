@@ -37,6 +37,16 @@ export interface GrainInterface<T, K extends GrainKeyKind = GrainKeyKind> {
    * always authoritative for callers; this is evidence for the runtime.
    */
   readonly key?: GrainKeyKind;
+  /**
+   * The implementation constructor, when this definition is a *fused* one — a
+   * `defineGrain` that is its own interface. Absent on a hand-written
+   * `defineGrainInterface`, which declares a contract and nothing else. The
+   * registry uses it to tell a legitimate pairing (a declared interface and the
+   * `defineGrain` implementing it) from two grain types fused under one name,
+   * which would otherwise silently share one wire id. See `GrainDefinition`,
+   * which narrows it to a `Grain` subclass.
+   */
+  readonly grain?: new () => object;
   /** Phantom marker so a `GrainInterface<T>` carries its interface type. */
   readonly __t?: T;
   /** Phantom marker for the key kind: `key` is absent on the marker path. */
@@ -83,8 +93,9 @@ export interface RegisterInterfaceOptions {
    * remote call dispatching down the wrong path, not as a local type error.
    *
    * Merged: per-method `options` (union, later definition wins per method),
-   * `extension` and `key` (inherited when the later definition omits them; a
-   * disagreeing `key` throws). Not merged: `version`, which is per-definition —
+   * `extension`, `key` and `grain` (inherited when the later definition omits
+   * them; a disagreeing `key`, or a second *different* implementation, throws).
+   * Not merged: `version`, which is per-definition —
    * one name at two versions is the rolling-upgrade path, and each caller sends
    * its own object's version on the wire.
    */
@@ -101,6 +112,24 @@ export function registerInterface<T, K extends GrainKeyKind>(
   options: RegisterInterfaceOptions = {},
 ): GrainInterface<T, K> {
   const existing = registry.get(iface.id);
+  if (existing !== undefined && existing.name !== iface.name) {
+    throw new Error(
+      `grain interface id collision: "${existing.name}" and "${iface.name}" both hash to ` +
+        `${iface.id}. The id is the wire identity, so the later definition would take over ` +
+        `the earlier one's calls. Rename one of them.`,
+    );
+  }
+  if (
+    existing?.grain !== undefined &&
+    iface.grain !== undefined &&
+    existing.grain !== iface.grain
+  ) {
+    throw new Error(
+      `grain "${iface.name}" is defined twice: two implementations are fused to the interface ` +
+        `id ${iface.id}, so calls addressed to one would dispatch to the other. Give one of them ` +
+        `a distinct name, or pin its \`interfaceName\` option to a distinct wire name.`,
+    );
+  }
   if (existing === undefined || options.merge !== true) {
     registry.set(iface.id, iface as AnyGrainInterface);
     return iface;
@@ -114,6 +143,7 @@ export function registerInterface<T, K extends GrainKeyKind>(
   }
   const key = iface.key ?? existing.key;
   const extension = iface.extension ?? existing.extension;
+  const grain = iface.grain ?? existing.grain;
   const merged: GrainInterface<T, K> = {
     id: iface.id,
     name: iface.name,
@@ -121,14 +151,23 @@ export function registerInterface<T, K extends GrainKeyKind>(
     options: { ...existing.options, ...iface.options },
     ...(extension !== undefined ? { extension } : {}),
     ...(key !== undefined ? { key } : {}),
+    ...(grain !== undefined ? { grain } : {}),
   };
   registry.set(merged.id, merged as AnyGrainInterface);
   return merged;
 }
 
+/**
+ * Declare (and publish) an interface under `name`.
+ *
+ * `grain` is for the fused path only: `defineGrain` passes the implementation it
+ * just built so the registry can reject a second, different implementation of the
+ * same name. Hand-written interface modules leave it off.
+ */
 export function defineGrainInterface<T, K extends GrainKeyKind = KeyKindFromMarker<T>>(
   name: string,
   def: GrainInterfaceDefinition<T, K> = {},
+  grain?: new () => object,
 ): GrainInterface<T, K> {
   const declared: GrainInterface<T, K> = {
     id: stableHash32(name),
@@ -137,6 +176,7 @@ export function defineGrainInterface<T, K extends GrainKeyKind = KeyKindFromMark
     options: { ...(def.options ?? {}) } as Record<string, InvokeMethodOptions>,
     ...(def.extension !== undefined ? { extension: def.extension } : {}),
     ...(def.key !== undefined ? { key: def.key } : {}),
+    ...(grain !== undefined ? { grain } : {}),
   };
   return registerInterface(declared, { merge: true });
 }

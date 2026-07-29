@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { grain } from "@thresh/core/decorators";
+import { defineGrain } from "@thresh/core/define-grain";
 import { Grain } from "@thresh/core/grain";
 import { GrainId } from "@thresh/core/grain-id";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
@@ -66,6 +67,22 @@ class NotifierGrain extends Grain implements INotifierGrain {
     await watcher.notify(String(this.id.key));
   }
 }
+
+/** A fused definition: it carries its own interface, so `grains` takes it as-is. */
+const Tally = defineGrain("TestClusterTally", () => {
+  let total = 0;
+  return {
+    add: async (n: number) => {
+      total += n;
+      return total;
+    },
+  };
+});
+
+interface ITally {
+  add(n: number): Promise<number>;
+}
+const ISeparateTally = defineGrainInterface<ITally>("TestClusterSeparateTally");
 
 const notifierId = (key: string) => new GrainId("TeardownRaceNotifier" as GrainType, key);
 const watcherId = (key: string) => new GrainId("TeardownRaceWatcher" as GrainType, key);
@@ -212,6 +229,43 @@ describe("TestCluster", () => {
 
     for (const key of crossSiloKeys) {
       expect(notifications).toContain(key);
+    }
+  });
+});
+
+describe("TestCluster grain registration", () => {
+  it("accepts a bare definition, registering it under its own interface", async () => {
+    const cluster = await TestCluster.start({ initialSilos: 2, grains: [Tally] });
+    try {
+      expect(await cluster.getGrain(Tally, "t1").add(2)).toBe(2);
+      expect(await cluster.silos[1]!.host.getGrain(Tally, "t1").add(3)).toBe(5);
+    } finally {
+      await cluster.dispose();
+    }
+  });
+
+  it("registers a definition under exactly the interfaces it is given", async () => {
+    const cluster = await TestCluster.start({
+      initialSilos: 1,
+      grains: [{ ctor: Tally.grain, interfaces: [ISeparateTally] }],
+    });
+    try {
+      expect(await cluster.getGrain(ISeparateTally, "t2").add(4)).toBe(4);
+    } finally {
+      await cluster.dispose();
+    }
+  });
+
+  it("mixes bare definitions with constructor specs", async () => {
+    const cluster = await TestCluster.start({
+      initialSilos: 1,
+      grains: [Tally, { ctor: CounterGrain, interfaces: [ICounter] }],
+    });
+    try {
+      expect(await cluster.getGrain(Tally, "t3").add(1)).toBe(1);
+      expect(await cluster.getGrain(ICounter, "t3").increment()).toBe(1);
+    } finally {
+      await cluster.dispose();
     }
   });
 });

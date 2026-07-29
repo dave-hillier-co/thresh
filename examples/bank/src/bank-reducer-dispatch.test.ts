@@ -13,7 +13,7 @@ function buildSilo(storage: MemoryGrainStorage): SiloHost {
     .useStaticMembership([local])
     .useInProcessTransport(new InProcessNetwork())
     .useMemoryStorage(storage)
-    .registerGrain(Account.grain, { interfaces: [Account] }) // one ctor, one fixed interface
+    .registerGrain(Account) // the definition carries its own fixed interface
     .build();
 }
 

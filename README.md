@@ -20,37 +20,106 @@ reactivates elsewhere on its next call. This is "distributed objects that just w
 ## Quick example
 
 A grain is written as a **factory closure** — the React-inspired functional style is the default.
-Per-activation state lives in closure variables; durable state and other facets come from hooks on
-the setup context; the returned object is the grain's message surface.
+The factory runs once per activation: per-activation state lives in closure variables, durable state
+and other facets come from **hooks**, and the object it returns is the grain's message surface. The
+definition *is* the grain's interface — there is nothing else to declare.
 
 ```ts
-// Interface — the contract callers see. A compile-time view; no method table.
-interface IThermostat extends GrainWithStringKey {
-  onUpdate(status: ThermostatStatus): Promise<Command[]>;
+import { defineGrain, usePersistentState } from "@thresh/core/define-grain";
+
+interface Reading {
+  tempC: number;
+  targetC: number;
 }
-const IThermostat = defineGrainInterface<IThermostat>("IThermostat");
+type Command = { kind: "heat" } | { kind: "cool" };
 
-// Implementation — a factory closure that runs once per activation.
-const ThermostatGrain = defineGrain<IThermostat>("Thermostat", (ctx) => {
-  const status = usePersistentState<ThermostatStatus>(ctx, "status");
+const Thermostat = defineGrain(
+  "Thermostat",
+  () => {
+    const state = usePersistentState<Reading>("thermostat", {
+      defaultValue: (): Reading => ({ tempC: 20, targetC: 21 }),
+    });
 
-  const onUpdate = async (next: ThermostatStatus): Promise<Command[]> => {
-    status.value = next;
-    await status.write();
-    return [];
-  };
+    return {
+      onUpdate: async (tempC: number): Promise<Command[]> => {
+        state.value.tempC = tempC;
+        await state.write();
+        if (tempC < state.value.targetC) return [{ kind: "heat" }];
+        if (tempC > state.value.targetC) return [{ kind: "cool" }];
+        return [];
+      },
 
-  return { onUpdate };
-});
+      getStatus: async (): Promise<Reading> => ({ ...state.value }),
+    };
+  },
+  { interfaceOptions: { getStatus: { readOnly: true } } },
+);
 
-// Caller — from a web frontend or another grain.
-const thermostat = client.getGrain<IThermostat>(IThermostat, deviceId);
-const commands = await thermostat.onUpdate(update);
+// Host it, then call it — the definition is both the registration and the contract.
+const silo = createSilo({ clusterId: "demo", local })
+  .useStaticMembership([local])
+  .useInProcessTransport(new InProcessNetwork())
+  .useMemoryStorage()
+  .registerGrain(Thermostat)
+  .build();
+
+await silo.start();
+const commands = await silo.getGrain(Thermostat, "kitchen").onUpdate(18); // [{ kind: "heat" }]
 ```
 
-`client.getGrain` returns a lightweight proxy; the grain is activated on first call, wherever the
-cluster decides to place it. The caller does not know — or need to know — which pod that is. The
-class + decorator form this functional API is built on is still supported as an interop surface.
+`getGrain` returns a lightweight proxy; the grain is activated on first call, wherever the cluster
+decides to place it. The caller does not know — or need to know — which pod that is. Callers see
+exactly the surface the factory returned, promise-lifted; `onActivate`/`onDeactivate` and symbol-keyed
+system hooks are not part of it.
+
+**Hooks follow the rules of hooks.** `usePersistentState`, `useReducerState`, `useTransactionalState`,
+`useDurable*` and `useDurableJobHandler` resolve the activation being set up from an ambient slot that
+is live only during the *synchronous* body of the factory. Call them at the top level of the factory,
+never after an `await`, from a method body, or from `onActivate` — those throw. To reach the runtime
+*after* setup, capture the factory's `ctx` parameter in the closure and use `ctx.runtime` / `ctx.id` /
+`ctx.getGrain` inside method bodies; that is not a hook call and stays valid for the activation's life.
+
+**Fused definitions couple callers to the implementation.** `getGrain(Thermostat, key)` means the
+caller imports the implementation module — and transitively its storage, stream and job dependencies.
+That is the right trade for grains called from inside the same silo or package. For a contract that
+crosses a package or process boundary — an external `@thresh/client` app, an interface with several
+implementations, a grain with no implementation at all — declare it separately instead, and register
+the two together:
+
+```ts
+// contract module — the only thing a remote caller imports
+interface Ledger {
+  post(amount: bigint): Promise<bigint>;
+}
+const Ledger = defineGrainInterface<Ledger, "integer">("example.Ledger");
+
+// implementation module — never imported by callers
+const LedgerGrain = defineGrain<Ledger, "integer">("Ledger", () => {
+  /* … */
+});
+
+// hosting: createSilo(…).registerGrain(LedgerGrain, { interfaces: [Ledger] })
+const balance = await client.getGrain(Ledger, 42n).post(5n);
+```
+
+An explicit `interfaces` list is exactly the set of interfaces the grain answers to; the definition's
+own interface is *not* added to it. The key kind is stated once, as a type argument
+(`"string"` — the default — `"integer"`, `"guid"`, `"integer-compound"`, `"guid-compound"`), and
+determines the type of the `key` argument to `getGrain`.
+
+Every `defineGrain` also publishes an interface under its grain-type name, so `LedgerGrain` above puts
+a `"Ledger"` entry in the process-wide interface registry alongside `"example.Ledger"`. Defining a
+name more than once **merges** into the existing entry rather than replacing it — per-method options
+union, and `extension` and `key` are inherited when omitted — which is what lets a hand-written
+interface module and a same-named fused definition coexist.
+
+> **Interface names are wire identity.** An interface id is `stableHash32(name)`, so renaming an
+> interface — including letting a grain's fused interface take the grain-type name where a separately
+> declared name was in use — silently repoints every deployed caller. There is no compile-time signal.
+> Any grain that has been deployed must pin its old name with
+> `defineGrain(name, factory, { interfaceName: "example.IThermostat" })`.
+
+The class + decorator form this functional API is built on is still supported as an interop surface.
 
 ## Documentation
 

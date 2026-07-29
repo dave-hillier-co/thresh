@@ -6,6 +6,11 @@ import type {
 } from "@thresh/core/grain-call-filter";
 import type { AnyGrainInterface, GrainInterface } from "@thresh/core/grain-interface";
 import type { GrainKeyKind } from "@thresh/core/grain-key";
+import {
+  normalizeRegistration,
+  type GrainRegistration,
+  type Registrable,
+} from "@thresh/core/grain-registration";
 import type { KeyTypeOf } from "@thresh/core/key-kinds";
 import type { MembershipService } from "@thresh/core/membership";
 import { SiloAddress } from "@thresh/core/silo-address";
@@ -991,16 +996,32 @@ export class SiloBuilder {
     return this;
   }
 
-  registerGrain<G extends Grain>(
-    ctor: new () => G,
-    registration: { interfaces: AnyGrainInterface[] },
+  /**
+   * Register a grain type. A `defineGrain`/`defineReducerGrain` definition
+   * carries its own interface, so it needs nothing else; a bare constructor
+   * (the `@grain()` class form) must name the interfaces it answers to. An
+   * explicit `interfaces` list is used verbatim — see `normalizeRegistration`.
+   */
+  registerGrain(definition: Registrable, registration?: GrainRegistration): this;
+  registerGrain<G extends Grain>(ctor: new () => G, registration: GrainRegistration): this;
+  registerGrain(
+    definition: Registrable | (new () => Grain),
+    registration?: GrainRegistration,
   ): this {
-    this.registrations.push({ ctor, interfaces: registration.interfaces });
+    // Normalize once, here, so both replays in `build()` (the `ClusterNode`
+    // and the embedded `ClientNode`) read the same resolved records.
+    this.registrations.push(normalizeRegistration(definition, registration));
     return this;
   }
 
-  registerGrains(registrations: Registration[]): this {
-    this.registrations.push(...registrations);
+  registerGrains(registrations: Array<Registrable | Registration>): this {
+    for (const entry of registrations) {
+      this.registrations.push(
+        "ctor" in entry
+          ? normalizeRegistration(entry.ctor, { interfaces: entry.interfaces })
+          : normalizeRegistration(entry),
+      );
+    }
     return this;
   }
 

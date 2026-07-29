@@ -16,20 +16,27 @@ const IWorker = defineGrainInterface<IWorker>("IWorker.jobdelivery");
 
 const local = new SiloAddress("silo-0", "uid-0", "silo-0:11111");
 
-function buildNode(onRun: () => Promise<void>): ClusterNode {
+// One grain type per name: a `defineGrain` per test would fuse two
+// implementations onto the "Worker" interface id, which the registry rejects.
+// The per-test handler is reached through this slot instead.
+let onRun: () => Promise<void> = async () => {};
+
+const WorkerGrain = defineGrain<IWorker>("Worker", () => {
+  useDurableJobHandler(async () => {
+    await onRun();
+    return completed;
+  });
+  return { ping: async () => "pong" };
+});
+
+function buildNode(handler: () => Promise<void>): ClusterNode {
+  onRun = handler;
   const network = new InProcessNetwork();
   const node = new ClusterNode({
     local,
     clusterId: "c1",
     membership: new StaticMembershipService(local, [local]),
     transport: new InProcessTransport(network, "c1"),
-  });
-  const WorkerGrain = defineGrain<IWorker>("Worker", () => {
-    useDurableJobHandler(async () => {
-      await onRun();
-      return completed;
-    });
-    return { ping: async () => "pong" };
   });
   node.registerGrain(WorkerGrain.grain, { interfaces: [IWorker] });
   return node;

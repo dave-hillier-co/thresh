@@ -7,7 +7,6 @@ import { createSilo } from "@thresh/hosting/silo-builder";
 import type { SiloHost } from "@thresh/hosting/silo-host";
 import { GreeterGrain } from "@thresh/example-greeter/greeter-grain";
 import { runGreeterDemo } from "@thresh/example-greeter/demo";
-import { IGreeter } from "@thresh/example-greeter/interfaces";
 
 const local = new SiloAddress("silo-0", "uid-0", "silo-0:11111");
 const tick = () => new Promise((r) => setTimeout(r, 0));
@@ -22,7 +21,7 @@ function buildGreeterSilo(time: FakeTimeProvider): SiloHost {
   })
     .useStaticMembership([local])
     .useInProcessTransport(new InProcessNetwork())
-    .registerGrain(GreeterGrain.grain, { interfaces: [IGreeter] })
+    .registerGrain(GreeterGrain)
     .build();
 }
 
@@ -32,7 +31,7 @@ describe("greeter (core actor model acceptance)", () => {
     await silo.start();
     try {
       // The prefix is only set in onActivate; seeing it proves activation ran first.
-      expect(await silo.getGrain(IGreeter, "en").greet("Ada")).toBe(
+      expect(await silo.getGrain(GreeterGrain, "en").greet("Ada")).toBe(
         "[en] Hello, Ada! (greeting #1)",
       );
     } finally {
@@ -44,7 +43,7 @@ describe("greeter (core actor model acceptance)", () => {
     const silo = buildGreeterSilo(new FakeTimeProvider());
     await silo.start();
     try {
-      const greeter = silo.getGrain(IGreeter, "en");
+      const greeter = silo.getGrain(GreeterGrain, "en");
       await Promise.all([greeter.greet("a"), greeter.greet("b"), greeter.greet("c")]);
       expect(await greeter.greetings()).toBe(3);
     } finally {
@@ -57,7 +56,7 @@ describe("greeter (core actor model acceptance)", () => {
     const silo = buildGreeterSilo(time);
     await silo.start();
     try {
-      const greeter = silo.getGrain(IGreeter, "en");
+      const greeter = silo.getGrain(GreeterGrain, "en");
       await greeter.greet("Ada");
       expect(await greeter.greetings()).toBe(1);
 

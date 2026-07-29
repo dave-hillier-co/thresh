@@ -248,7 +248,20 @@ export function defineGrain<T extends object>(
       } finally {
         setupStack.pop();
       }
-      if (typeof (behaviour as { then?: unknown } | undefined)?.then === "function") {
+      const thenable = behaviour as { then?: unknown; catch?: unknown } | undefined;
+      if (typeof thenable?.then === "function") {
+        // The activation fails on the synchronous error below, but the async
+        // body keeps running detached: its first hook call after an await throws
+        // the scope error into a promise nobody holds, which Node reports as an
+        // unhandled rejection — fatal under `--unhandled-rejections=throw`, how a
+        // silo process runs. Swallow it. It is not dropped information: it is the
+        // same misuse the synchronous error names, phrased as a symptom, and core
+        // has no ambient logger to route it to (`Logger` is injected per host, and
+        // no context is bound at this point), so logging it would mean either a
+        // module-level singleton or console I/O that this package does without.
+        if (typeof thenable.catch === "function") {
+          (thenable as Promise<unknown>).catch(() => {});
+        }
         throw new Error(
           `defineGrain factory for "${name}" returned a Promise; factories must be synchronous.`,
         );
@@ -293,14 +306,20 @@ export function defineGrain<T extends object>(
   // entry already registered under this name, so pairing a fused definition with
   // a hand-written interface module of the same name keeps that module's
   // `extension` / per-method options in the registry a receiving silo reads.
-  const iface = defineGrainInterface<T, GrainKeyKind>(interfaceName ?? name, {
-    ...(interfaceOptions !== undefined
-      ? { options: interfaceOptions as Partial<Record<keyof T & string, InvokeMethodOptions>> }
-      : {}),
-    ...(version !== undefined ? { version } : {}),
-    ...(extension !== undefined ? { extension } : {}),
-    ...(key !== undefined ? { key } : {}),
-  });
+  // Passing the constructor is what separates that pairing from a second grain
+  // fused under the same name, which the registry rejects rather than merging.
+  const iface = defineGrainInterface<T, GrainKeyKind>(
+    interfaceName ?? name,
+    {
+      ...(interfaceOptions !== undefined
+        ? { options: interfaceOptions as Partial<Record<keyof T & string, InvokeMethodOptions>> }
+        : {}),
+      ...(version !== undefined ? { version } : {}),
+      ...(extension !== undefined ? { extension } : {}),
+      ...(key !== undefined ? { key } : {}),
+    },
+    FunctionalGrain,
+  );
   return Object.assign(iface, { grain: FunctionalGrain });
 }
 
