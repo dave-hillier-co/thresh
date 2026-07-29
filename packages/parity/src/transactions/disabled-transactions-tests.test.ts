@@ -56,8 +56,8 @@ const TransactionCoordinatorGrainInterface = defineGrainInterface<TransactionCoo
   { options: { multiGrainSet: { transaction: "create" } } },
 );
 
-const TransactionTestGrainImpl = defineGrain<TransactionTestGrain>("DisabledTxTestGrain", (ctx) => {
-  const counter = useTransactionalState<Counter>(ctx, "counter", {
+const TransactionTestGrainImpl = defineGrain<TransactionTestGrain>("DisabledTxTestGrain", () => {
+  const counter = useTransactionalState<Counter>("counter", {
     initial: () => ({ value: 0 }),
   });
   return {
@@ -89,8 +89,11 @@ async function buildDisabledTransactionsCluster(): Promise<TestCluster> {
     initialSilos: 1,
     transactions: false,
     grains: [
-      { ctor: TransactionTestGrainImpl, interfaces: [TransactionTestGrainInterface] },
-      { ctor: TransactionCoordinatorGrainImpl, interfaces: [TransactionCoordinatorGrainInterface] },
+      { ctor: TransactionTestGrainImpl.grain, interfaces: [TransactionTestGrainInterface] },
+      {
+        ctor: TransactionCoordinatorGrainImpl.grain,
+        interfaces: [TransactionCoordinatorGrainInterface],
+      },
     ],
   });
 }

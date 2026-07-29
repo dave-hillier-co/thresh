@@ -13,7 +13,7 @@ interface CartState {
  * never loses unflushed state. Functional-first (`defineGrain` + hooks).
  */
 export const CartGrain = defineGrain<ICart>("Cart", (ctx) => {
-  const cart = usePersistentState<CartState>(ctx, "cart", {
+  const cart = usePersistentState<CartState>("cart", {
     defaultValue: (): CartState => ({ items: [] }),
   });
   return {

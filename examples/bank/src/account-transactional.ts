@@ -39,8 +39,8 @@ export const ITeller = defineGrainInterface<ITeller>("example.bank.ITeller", {
   },
 });
 
-export const TxAccountGrain = defineGrain<ITxAccount>("TxAccount", (ctx) => {
-  const balance = useTransactionalState<Balance>(ctx, "balance", {
+export const TxAccountGrain = defineGrain<ITxAccount>("TxAccount", () => {
+  const balance = useTransactionalState<Balance>("balance", {
     initial: () => ({ cents: 0 }),
   });
   return {

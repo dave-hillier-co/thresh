@@ -24,14 +24,14 @@ function buildNode(onRun: () => Promise<void>): ClusterNode {
     membership: new StaticMembershipService(local, [local]),
     transport: new InProcessTransport(network, "c1"),
   });
-  const WorkerGrain = defineGrain<IWorker>("Worker", (ctx) => {
-    useDurableJobHandler(ctx, async () => {
+  const WorkerGrain = defineGrain<IWorker>("Worker", () => {
+    useDurableJobHandler(async () => {
       await onRun();
       return completed;
     });
     return { ping: async () => "pong" };
   });
-  node.registerGrain(WorkerGrain, { interfaces: [IWorker] });
+  node.registerGrain(WorkerGrain.grain, { interfaces: [IWorker] });
   return node;
 }
 

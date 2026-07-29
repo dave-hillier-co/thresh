@@ -4,8 +4,9 @@ import type {
   IncomingGrainCallFilter,
   OutgoingGrainCallFilter,
 } from "@thresh/core/grain-call-filter";
-import type { GrainInterface } from "@thresh/core/grain-interface";
-import type { GrainKeyFor } from "@thresh/core/key-kinds";
+import type { AnyGrainInterface, GrainInterface } from "@thresh/core/grain-interface";
+import type { GrainKeyKind } from "@thresh/core/grain-key";
+import type { KeyTypeOf } from "@thresh/core/key-kinds";
 import type { MembershipService } from "@thresh/core/membership";
 import { SiloAddress } from "@thresh/core/silo-address";
 import type { CompatibilityKind } from "@thresh/core/version-compatibility";
@@ -209,7 +210,7 @@ const DEFAULT_DEACTIVATION_TIMEOUT_MS = 30_000;
 
 interface Registration {
   ctor: new () => Grain;
-  interfaces: GrainInterface<unknown>[];
+  interfaces: AnyGrainInterface[];
 }
 
 /**
@@ -219,7 +220,7 @@ interface Registration {
  * `CreateObjectReference` from exactly this hook).
  */
 export interface GrainFactoryAccess {
-  getGrain<T>(def: GrainInterface<T>, key: GrainKeyFor<T>): T;
+  getGrain<T, K extends GrainKeyKind>(def: GrainInterface<T, K>, key: KeyTypeOf<K>): T;
   /**
    * Host a client-style observer reachable from any grain call made during
    * this (or a later) startup task. Backed by an embedded `ClientNode`
@@ -992,7 +993,7 @@ export class SiloBuilder {
 
   registerGrain<G extends Grain>(
     ctor: new () => G,
-    registration: { interfaces: GrainInterface<unknown>[] },
+    registration: { interfaces: AnyGrainInterface[] },
   ): this {
     this.registrations.push({ ctor, interfaces: registration.interfaces });
     return this;

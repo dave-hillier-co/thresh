@@ -13,8 +13,8 @@ const hostName = (): string => process.env.POD_NAME ?? "local";
  * host pod dies the activation reactivates on a survivor and resumes from the
  * stored value rather than starting over.
  */
-export const CounterGrain = defineGrain<ICounter>("Counter", (ctx) => {
-  const state = usePersistentState<CounterState>(ctx, "counter", {
+export const CounterGrain = defineGrain<ICounter>("Counter", () => {
+  const state = usePersistentState<CounterState>("counter", {
     defaultValue: (): CounterState => ({ value: 0 }),
   });
 

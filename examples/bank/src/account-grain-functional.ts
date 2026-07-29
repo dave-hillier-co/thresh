@@ -16,7 +16,7 @@ import {
  * a single `dispatch`/`query` surface with no per-method interface.
  */
 export const AccountGrain = defineGrain<IAccount>("Account", (ctx) => {
-  const state = useReducerState<AccountState, AccountEvent>(ctx, "account", {
+  const state = useReducerState<AccountState, AccountEvent>("account", {
     initial: initialAccount,
     reduce: reduceAccount,
   });

@@ -1,6 +1,7 @@
 import type { GrainId } from "@thresh/core/grain-id";
 import type { GrainInterface } from "@thresh/core/grain-interface";
-import type { GrainKeyFor } from "@thresh/core/key-kinds";
+import type { GrainKeyKind } from "@thresh/core/grain-key";
+import type { KeyTypeOf } from "@thresh/core/key-kinds";
 import type { MembershipService } from "@thresh/core/membership";
 import type { StreamProvider } from "@thresh/core/stream";
 import type { GrainDirectory } from "@thresh/directory/grain-directory";
@@ -74,7 +75,7 @@ export class SiloHost {
     return this.parts.serviceId;
   }
 
-  getGrain<T>(def: GrainInterface<T>, key: GrainKeyFor<T>): T {
+  getGrain<T, K extends GrainKeyKind>(def: GrainInterface<T, K>, key: KeyTypeOf<K>): T {
     return this.parts.node.getGrain(def, key);
   }
 

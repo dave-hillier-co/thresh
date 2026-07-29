@@ -77,7 +77,7 @@ export async function buildWebSocketCluster(count: number): Promise<Cluster> {
     createSilo({ clusterId: CLUSTER, local, random: () => 0 })
       .useMembership(membership)
       .useWebSocketTransport()
-      .registerGrain(LeaderboardGrain, { interfaces: [ILeaderboard] })
+      .registerGrain(LeaderboardGrain.grain, { interfaces: [ILeaderboard] })
       .build(),
   );
 

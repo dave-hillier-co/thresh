@@ -9,7 +9,11 @@ import {
   recordCancellationTarget,
 } from "@thresh/core/grain-cancellation-token";
 import { GrainId } from "@thresh/core/grain-id";
-import { getGrainInterface, type GrainInterface } from "@thresh/core/grain-interface";
+import {
+  getGrainInterface,
+  type AnyGrainInterface,
+  type GrainInterface,
+} from "@thresh/core/grain-interface";
 import type { GrainKey } from "@thresh/core/grain-key";
 import { GRAIN_REF, GRAIN_REF_CAST } from "@thresh/core/grain-reference";
 import type { GrainType } from "@thresh/core/grain-type";
@@ -258,10 +262,10 @@ export class GrainFactory {
    * validated optimistically, calls are validated for real).
    */
   private castTo(
-    sourceDef: GrainInterface<unknown>,
+    sourceDef: AnyGrainInterface,
     target: GrainId,
     sourceRef: unknown,
-  ): (newDef: GrainInterface<unknown>) => unknown {
+  ): (newDef: AnyGrainInterface) => unknown {
     return (newDef) => {
       if (
         typeof newDef !== "object" ||

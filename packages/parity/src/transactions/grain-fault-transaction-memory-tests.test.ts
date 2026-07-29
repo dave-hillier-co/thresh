@@ -101,8 +101,8 @@ const FaultCoordinatorGrainInterface = defineGrainInterface<FaultCoordinatorGrai
   },
 );
 
-const FaultTestGrainImpl = defineGrain<FaultTestGrain>("FaultTestGrain", (ctx) => {
-  const data = useTransactionalState<Counter>(ctx, "data", { initial: () => ({ value: 0 }) });
+const FaultTestGrainImpl = defineGrain<FaultTestGrain>("FaultTestGrain", () => {
+  const data = useTransactionalState<Counter>("data", { initial: () => ({ value: 0 }) });
   return {
     set: (newValue) =>
       data.performUpdate((s) => {
@@ -154,8 +154,8 @@ async function buildCluster(): Promise<TestCluster> {
   return TestCluster.start({
     initialSilos: 1,
     grains: [
-      { ctor: FaultTestGrainImpl, interfaces: [FaultTestGrainInterface] },
-      { ctor: FaultCoordinatorGrainImpl, interfaces: [FaultCoordinatorGrainInterface] },
+      { ctor: FaultTestGrainImpl.grain, interfaces: [FaultTestGrainInterface] },
+      { ctor: FaultCoordinatorGrainImpl.grain, interfaces: [FaultCoordinatorGrainInterface] },
     ],
   });
 }

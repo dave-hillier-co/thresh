@@ -28,7 +28,7 @@ const IWorker = defineGrainInterface<IWorker>("IWorker.jobs");
 //  - "boom"    → record a run and throw (Failed → retry policy)
 //  - "poll"    → poll a few times then complete (supervised re-poll)
 const WorkerGrain = defineGrain<IWorker>("Worker", (ctx) => {
-  useDurableJobHandler(ctx, async (job) => {
+  useDurableJobHandler(async (job) => {
     const key = `${String(ctx.id.key)}:${job.name}`;
     if (job.name === "boom") {
       record(key);
@@ -96,8 +96,8 @@ function buildSilo(store: MemoryJobShardStore, time: FakeTimeProvider) {
     .useStaticMembership([local])
     .useInProcessTransport(new InProcessNetwork())
     .useMemoryDurableJobs(store)
-    .registerGrain(WorkerGrain, { interfaces: [IWorker] })
-    .registerGrain(SchedulerGrain, { interfaces: [IScheduler] })
+    .registerGrain(WorkerGrain.grain, { interfaces: [IWorker] })
+    .registerGrain(SchedulerGrain.grain, { interfaces: [IScheduler] })
     .build();
 }
 
@@ -219,8 +219,8 @@ describe("durable jobs end-to-end", () => {
     const silo = createSilo({ clusterId: "c1", local })
       .useStaticMembership([local])
       .useInProcessTransport(new InProcessNetwork())
-      .registerGrain(WorkerGrain, { interfaces: [IWorker] })
-      .registerGrain(SchedulerGrain, { interfaces: [IScheduler] })
+      .registerGrain(WorkerGrain.grain, { interfaces: [IWorker] })
+      .registerGrain(SchedulerGrain.grain, { interfaces: [IScheduler] })
       .build();
     await silo.start();
     try {
@@ -252,8 +252,8 @@ describe("durable jobs multi-silo failover", () => {
         .useMembership(ms)
         .useInProcessTransport(net)
         .useMemoryDurableJobs(store)
-        .registerGrain(WorkerGrain, { interfaces: [IWorker] })
-        .registerGrain(SchedulerGrain, { interfaces: [IScheduler] })
+        .registerGrain(WorkerGrain.grain, { interfaces: [IWorker] })
+        .registerGrain(SchedulerGrain.grain, { interfaces: [IScheduler] })
         .build();
 
     const siloA = buildAt(a, membership);
@@ -295,8 +295,8 @@ describe("durable jobs multi-silo failover", () => {
         .useMembership(ms)
         .useInProcessTransport(net)
         .useMemoryDurableJobs(store)
-        .registerGrain(WorkerGrain, { interfaces: [IWorker] })
-        .registerGrain(SchedulerGrain, { interfaces: [IScheduler] })
+        .registerGrain(WorkerGrain.grain, { interfaces: [IWorker] })
+        .registerGrain(SchedulerGrain.grain, { interfaces: [IScheduler] })
         .build();
 
     const siloA = buildAt(a, membership);

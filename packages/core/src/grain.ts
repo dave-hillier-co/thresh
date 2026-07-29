@@ -1,7 +1,8 @@
 import type { GrainContext } from "./grain-context";
 import type { GrainId } from "./grain-id";
 import type { GrainInterface } from "./grain-interface";
-import type { GrainKeyFor } from "./key-kinds";
+import type { GrainKeyKind } from "./grain-key";
+import type { KeyTypeOf } from "./key-kinds";
 import type { ActivationReason, DeactivationReason } from "./reasons";
 import type { GrainRuntime } from "./grain-runtime";
 
@@ -30,7 +31,7 @@ export abstract class Grain {
     return this.context.runtime;
   }
 
-  protected getGrain<T>(def: GrainInterface<T>, key: GrainKeyFor<T>): T {
+  protected getGrain<T, K extends GrainKeyKind>(def: GrainInterface<T, K>, key: KeyTypeOf<K>): T {
     return this.context.runtime.getGrain(def, key);
   }
 

@@ -2,8 +2,9 @@ import type { Duration } from "@thresh/core/duration";
 import { GrainCancellationTokenSource } from "@thresh/core/grain-cancellation-token";
 import type { Grain } from "@thresh/core/grain";
 import type { GrainId } from "@thresh/core/grain-id";
-import type { GrainInterface } from "@thresh/core/grain-interface";
-import type { GrainKeyFor } from "@thresh/core/key-kinds";
+import type { AnyGrainInterface, GrainInterface } from "@thresh/core/grain-interface";
+import type { GrainKeyKind } from "@thresh/core/grain-key";
+import type { KeyTypeOf } from "@thresh/core/key-kinds";
 import type { MembershipService, MembershipSnapshot } from "@thresh/core/membership";
 import { SiloAddress } from "@thresh/core/silo-address";
 import type { StreamProvider } from "@thresh/core/stream";
@@ -23,7 +24,7 @@ import type { SiloHost } from "@thresh/hosting/silo-host";
 
 export interface GrainRegistrationSpec {
   ctor: new () => Grain;
-  interfaces: GrainInterface<unknown>[];
+  interfaces: AnyGrainInterface[];
 }
 
 export interface TestClusterOptions {
@@ -165,7 +166,7 @@ export class TestCluster {
     return handle.host.serviceId;
   }
 
-  getGrain<T>(def: GrainInterface<T>, key: GrainKeyFor<T>): T {
+  getGrain<T, K extends GrainKeyKind>(def: GrainInterface<T, K>, key: KeyTypeOf<K>): T {
     return this.primary.host.getGrain(def, key);
   }
 

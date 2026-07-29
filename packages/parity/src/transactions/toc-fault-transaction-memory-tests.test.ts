@@ -92,8 +92,8 @@ const CommitCoordinatorGrainInterface = defineGrainInterface<CommitCoordinatorGr
   { options: { multiGrainAdd: { transaction: "create" } } },
 );
 
-const CommitTestGrainImpl = defineGrain<CommitTestGrain>("CommitTestGrain", (ctx) => {
-  const data = useTransactionalState<Counter>(ctx, "data", { initial: () => ({ value: 0 }) });
+const CommitTestGrainImpl = defineGrain<CommitTestGrain>("CommitTestGrain", () => {
+  const data = useTransactionalState<Counter>("data", { initial: () => ({ value: 0 }) });
   return {
     add: (delta) =>
       data.performUpdate((s) => {
@@ -134,9 +134,9 @@ async function buildCluster(): Promise<TestCluster> {
   return TestCluster.start({
     initialSilos: 1,
     grains: [
-      { ctor: CommitTestGrainImpl, interfaces: [CommitTestGrainInterface] },
-      { ctor: CommitterTestGrainImpl, interfaces: [CommitterTestGrainInterface] },
-      { ctor: CommitCoordinatorGrainImpl, interfaces: [CommitCoordinatorGrainInterface] },
+      { ctor: CommitTestGrainImpl.grain, interfaces: [CommitTestGrainInterface] },
+      { ctor: CommitterTestGrainImpl.grain, interfaces: [CommitterTestGrainInterface] },
+      { ctor: CommitCoordinatorGrainImpl.grain, interfaces: [CommitCoordinatorGrainInterface] },
     ],
   });
 }

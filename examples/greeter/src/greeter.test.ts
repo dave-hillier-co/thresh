@@ -22,7 +22,7 @@ function buildGreeterSilo(time: FakeTimeProvider): SiloHost {
   })
     .useStaticMembership([local])
     .useInProcessTransport(new InProcessNetwork())
-    .registerGrain(GreeterGrain, { interfaces: [IGreeter] })
+    .registerGrain(GreeterGrain.grain, { interfaces: [IGreeter] })
     .build();
 }
 

@@ -24,12 +24,13 @@ import {
   type OutgoingGrainCallFilter,
 } from "@thresh/core/grain-call-filter";
 import type { GrainId } from "@thresh/core/grain-id";
-import type { GrainInterface } from "@thresh/core/grain-interface";
+import type { AnyGrainInterface, GrainInterface } from "@thresh/core/grain-interface";
 import { getGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainKeyKind } from "@thresh/core/grain-key";
 import { getGrainMetadata } from "@thresh/core/grain-metadata";
 import { grainReferenceIdentity, type GrainReferenceIdentity } from "@thresh/core/grain-reference";
 import type { GrainType } from "@thresh/core/grain-type";
-import type { GrainKeyFor } from "@thresh/core/key-kinds";
+import type { KeyTypeOf } from "@thresh/core/key-kinds";
 import type { InvocationRequest } from "@thresh/core/request";
 import { requestContextStore, runWithRequestContext } from "@thresh/core/request-context";
 import type { SiloAddress } from "@thresh/core/silo-address";
@@ -120,7 +121,7 @@ interface RejectionPayload {
 }
 
 interface GrainRegistration {
-  interfaces: GrainInterface<unknown>[];
+  interfaces: AnyGrainInterface[];
 }
 
 /** A client-hosted callback object registered under an observer `GrainId`. */
@@ -201,9 +202,7 @@ export class ClientNode implements Dispatcher {
     return this;
   }
 
-  registerGrains(
-    registrations: { ctor: new () => Grain; interfaces: GrainInterface<unknown>[] }[],
-  ) {
+  registerGrains(registrations: { ctor: new () => Grain; interfaces: AnyGrainInterface[] }[]) {
     for (const r of registrations) this.registerGrain(r.ctor, r);
     return this;
   }
@@ -221,7 +220,7 @@ export class ClientNode implements Dispatcher {
     return this;
   }
 
-  getGrain<T>(def: GrainInterface<T>, key: GrainKeyFor<T>): T {
+  getGrain<T, K extends GrainKeyKind>(def: GrainInterface<T, K>, key: KeyTypeOf<K>): T {
     return this.factory.getGrain(def, key);
   }
 

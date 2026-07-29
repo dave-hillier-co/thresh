@@ -34,7 +34,7 @@ async function main(): Promise<void> {
     .useWebSocketTransport()
     .addRedisStorage("default", { url: REDIS_URL })
     .useHealthEndpoints({ port: HEALTH_PORT })
-    .registerGrain(CounterGrain, { interfaces: [ICounter] })
+    .registerGrain(CounterGrain.grain, { interfaces: [ICounter] })
     .build();
 
   await host.start();

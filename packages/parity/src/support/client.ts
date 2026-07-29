@@ -3,7 +3,7 @@ import type {
   IncomingGrainCallFilter,
   OutgoingGrainCallFilter,
 } from "@thresh/core/grain-call-filter";
-import type { GrainInterface } from "@thresh/core/grain-interface";
+import type { AnyGrainInterface } from "@thresh/core/grain-interface";
 import { SiloAddress } from "@thresh/core/silo-address";
 import { InProcessTransport } from "@thresh/messaging/in-process-transport";
 import { createClient, type ClientNode } from "@thresh/client/client-node";
@@ -24,7 +24,7 @@ import type { TestCluster } from "@thresh/testing/test-cluster";
  */
 export async function createClusterClient(
   cluster: TestCluster,
-  grains: ReadonlyArray<{ ctor: new () => Grain; interfaces: GrainInterface<unknown>[] }>,
+  grains: ReadonlyArray<{ ctor: new () => Grain; interfaces: AnyGrainInterface[] }>,
   incomingCallFilters?: readonly IncomingGrainCallFilter[],
   outgoingCallFilters?: readonly OutgoingGrainCallFilter[],
 ): Promise<ClientNode> {

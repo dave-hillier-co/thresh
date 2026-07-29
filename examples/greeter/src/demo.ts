@@ -37,7 +37,7 @@ export async function runGreeterDemo(): Promise<GreeterDemoResult> {
   })
     .useStaticMembership([local])
     .useInProcessTransport(new InProcessNetwork())
-    .registerGrain(GreeterGrain, { interfaces: [IGreeter] })
+    .registerGrain(GreeterGrain.grain, { interfaces: [IGreeter] })
     .build();
 
   await silo.start();

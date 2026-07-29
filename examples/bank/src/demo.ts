@@ -20,7 +20,7 @@ export function buildBankSilo(storage: MemoryGrainStorage): SiloHost {
     .useStaticMembership([local])
     .useInProcessTransport(new InProcessNetwork())
     .useMemoryStorage(storage)
-    .registerGrain(AccountGrain, { interfaces: [IAccount] })
+    .registerGrain(AccountGrain.grain, { interfaces: [IAccount] })
     .build();
 }
 

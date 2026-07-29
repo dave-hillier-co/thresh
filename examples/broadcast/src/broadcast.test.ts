@@ -16,9 +16,9 @@ function buildSilo(): SiloHost {
     .useStaticMembership([local])
     .useInProcessTransport(new InProcessNetwork())
     .useBroadcastChannels()
-    .registerGrain(AlertPublisherGrain, { interfaces: [IAlertPublisher] })
-    .registerGrain(RegionMonitorGrain, { interfaces: [IRegionMonitor] })
-    .registerGrain(AuditLogGrain, { interfaces: [IAuditLog] })
+    .registerGrain(AlertPublisherGrain.grain, { interfaces: [IAlertPublisher] })
+    .registerGrain(RegionMonitorGrain.grain, { interfaces: [IRegionMonitor] })
+    .registerGrain(AuditLogGrain.grain, { interfaces: [IAuditLog] })
     .build();
 }
 

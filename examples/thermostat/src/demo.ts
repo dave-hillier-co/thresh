@@ -38,7 +38,7 @@ export async function runThermostatDemo(): Promise<DemoResult> {
     .useReminders()
     .useMemoryStreams()
     .registerGrain(ThermostatGrain, { interfaces: [IThermostat, IThermostatControl] })
-    .registerGrain(FleetAggregatorGrain, { interfaces: [IFleetAggregator] })
+    .registerGrain(FleetAggregatorGrain.grain, { interfaces: [IFleetAggregator] })
     .build();
 
   await silo.start();

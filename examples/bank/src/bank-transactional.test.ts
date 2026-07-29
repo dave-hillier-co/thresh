@@ -16,8 +16,8 @@ function buildSilo(): SiloHost {
   return createSilo({ clusterId: "bank-tx", local })
     .useStaticMembership([local])
     .useInProcessTransport(new InProcessNetwork())
-    .registerGrain(TxAccountGrain, { interfaces: [ITxAccount] })
-    .registerGrain(TellerGrain, { interfaces: [ITeller] })
+    .registerGrain(TxAccountGrain.grain, { interfaces: [ITxAccount] })
+    .registerGrain(TellerGrain.grain, { interfaces: [ITeller] })
     .build();
 }
 

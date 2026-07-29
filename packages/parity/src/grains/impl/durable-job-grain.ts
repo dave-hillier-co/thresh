@@ -59,7 +59,7 @@ export const DurableJobGrain = defineGrain<IDurableJobGrain>(
       return waiter;
     }
 
-    useDurableJobHandler(ctx, async (job) => {
+    useDurableJobHandler(async (job) => {
       executionTimes.set(job.id, monotonicNow());
       runContexts.set(job.id, job);
       hasRun.add(job.id);
@@ -141,7 +141,7 @@ export const RetryTestGrain = defineGrain<IRetryTestGrain>(
       return waiter;
     }
 
-    useDurableJobHandler(ctx, async (job) => {
+    useDurableJobHandler(async (job) => {
       const attempt = (attempts.get(job.id) ?? 0) + 1;
       attempts.set(job.id, attempt);
       const history = dequeueCountHistory.get(job.id) ?? [];

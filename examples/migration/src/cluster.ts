@@ -46,7 +46,7 @@ export function buildMigrationCluster(): MigrationCluster {
       .useStaticMembership(addresses)
       .useInProcessTransport(network)
       .useMemoryStorage(storage)
-      .registerGrain(CartGrain, { interfaces: [ICart] })
+      .registerGrain(CartGrain.grain, { interfaces: [ICart] })
       .build(),
   );
 

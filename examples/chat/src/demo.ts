@@ -37,8 +37,8 @@ export async function runChatDemo(): Promise<ChatDemoResult> {
     .useStaticMembership([local])
     .useInProcessTransport(new InProcessNetwork())
     .useMemoryStreams()
-    .registerGrain(ChatRoomGrain, { interfaces: [IChatRoom] })
-    .registerGrain(ChatUserGrain, { interfaces: [IChatUser] })
+    .registerGrain(ChatRoomGrain.grain, { interfaces: [IChatRoom] })
+    .registerGrain(ChatUserGrain.grain, { interfaces: [IChatUser] })
     .build();
 
   await silo.start();

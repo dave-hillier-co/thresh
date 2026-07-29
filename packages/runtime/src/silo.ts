@@ -1,9 +1,10 @@
 import type { Grain } from "@thresh/core/grain";
 import type { GrainId } from "@thresh/core/grain-id";
-import type { GrainInterface } from "@thresh/core/grain-interface";
+import type { AnyGrainInterface, GrainInterface } from "@thresh/core/grain-interface";
+import type { GrainKeyKind } from "@thresh/core/grain-key";
 import { getGrainMetadata } from "@thresh/core/grain-metadata";
 import type { GrainType } from "@thresh/core/grain-type";
-import type { GrainKeyFor } from "@thresh/core/key-kinds";
+import type { KeyTypeOf } from "@thresh/core/key-kinds";
 import { ActivationCollector } from "@thresh/runtime/activation-collector";
 import { Catalog, type RegisteredGrain } from "@thresh/runtime/catalog";
 import { GrainFactory } from "@thresh/runtime/grain-factory";
@@ -19,7 +20,7 @@ export interface SiloOptions {
 
 export interface GrainRegistration {
   /** The grain interfaces this implementation serves, used to route `getGrain`. */
-  interfaces: GrainInterface<unknown>[];
+  interfaces: AnyGrainInterface[];
 }
 
 /** A single-process silo (Phase 1): catalog, scheduler, factory, collector. */
@@ -61,7 +62,7 @@ export class Silo {
     return this;
   }
 
-  getGrain<T>(def: GrainInterface<T>, key: GrainKeyFor<T>): T {
+  getGrain<T, K extends GrainKeyKind>(def: GrainInterface<T, K>, key: KeyTypeOf<K>): T {
     return this.factory.getGrain(def, key);
   }
 

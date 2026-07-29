@@ -5,8 +5,9 @@ import { GrainCallError, RejectionError } from "@thresh/core/errors";
 import type { Grain } from "@thresh/core/grain";
 import { grainAddressEquals, type GrainAddress } from "@thresh/core/grain-address";
 import { GrainId } from "@thresh/core/grain-id";
-import type { GrainInterface } from "@thresh/core/grain-interface";
+import type { AnyGrainInterface, GrainInterface } from "@thresh/core/grain-interface";
 import { getGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainKeyKind } from "@thresh/core/grain-key";
 import type { InterfaceVersionEntry, SiloManifest } from "@thresh/core/grain-manifest";
 import { getGrainMetadata } from "@thresh/core/grain-metadata";
 import type { GrainType } from "@thresh/core/grain-type";
@@ -20,7 +21,7 @@ import {
   type VersionSelectorKind,
   type VersionSelectorStrategy,
 } from "@thresh/core/version-selector";
-import type { GrainKeyFor } from "@thresh/core/key-kinds";
+import type { KeyTypeOf } from "@thresh/core/key-kinds";
 import { activeSilos, type MembershipService } from "@thresh/core/membership";
 import type {
   IncomingGrainCallFilter,
@@ -650,7 +651,7 @@ export class ClusterNode {
 
   registerGrain<G extends Grain>(
     ctor: new () => G,
-    registration: { interfaces: GrainInterface<unknown>[] },
+    registration: { interfaces: AnyGrainInterface[] },
   ): this {
     const metadata = getGrainMetadata(ctor);
     if (metadata === undefined) throw new Error(`${ctor.name} is not decorated with @grain()`);
@@ -833,7 +834,7 @@ export class ClusterNode {
     }
   }
 
-  getGrain<T>(def: GrainInterface<T>, key: GrainKeyFor<T>): T {
+  getGrain<T, K extends GrainKeyKind>(def: GrainInterface<T, K>, key: KeyTypeOf<K>): T {
     return this.factory.getGrain(def, key);
   }
 
