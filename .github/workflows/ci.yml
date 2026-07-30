@@ -1,0 +1,128 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  # Self-hosted macOS runners inherit a bare launchd PATH, so Homebrew-installed
+  # node/pnpm/docker are not on it unless we say so.
+  PATH: /opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  # Superseded PR runs are safe to cancel. `main` runs are not cancelled: there
+  # is one runner, and a half-finished run on main leaves an ambiguous record of
+  # whether that commit was ever green.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # Fast fail. Types and lint catch most of what breaks, in well under a minute,
+  # so there is no point paying for the service containers to find out.
+  check:
+    runs-on: self-hosted
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Preflight
+        run: |
+          command -v node >/dev/null || { echo "node is not on PATH for the runner"; exit 1; }
+          corepack enable >/dev/null 2>&1 || true
+          command -v pnpm >/dev/null || { echo "pnpm is not on PATH (corepack enable failed?)"; exit 1; }
+          echo "node $(node --version), pnpm $(pnpm --version)"
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
+
+  # The suites that need Redis, Postgres or Kafka probe the service at load time
+  # and skip themselves when it is unreachable. That makes a serviceless run look
+  # green while silently covering far less, which is the specific gap this job
+  # exists to close -- so it asserts the services are up rather than letting the
+  # skips pass unnoticed.
+  test:
+    needs: check
+    runs-on: self-hosted
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Preflight
+        run: corepack enable >/dev/null 2>&1 || true
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # Publishes the service URLs into the job env. The services listen on
+      # non-default ports so they cannot collide with, or silently borrow, any
+      # other project's Redis/Postgres/Kafka on the same runner.
+      - name: Ensure backing services
+        run: |
+          ./scripts/ensure-services.sh
+          ./scripts/ensure-services.sh --env | sed 's/^export //; s/'"'"'//g' >> "$GITHUB_ENV"
+
+      - name: Unit tests
+        run: set -o pipefail; pnpm test 2>&1 | tee unit.log
+
+      # Parity does not touch the backing services: its skips are deliberate
+      # `orleansTest.excluded` backlog entries, and that count IS the parity
+      # metric. It should move when the backlog moves, never because of CI.
+      - name: Parity tests
+        run: set -o pipefail; pnpm test:parity 2>&1 | tee parity.log
+
+      - name: Parity scorecard
+        run: set -o pipefail; pnpm parity:scorecard 2>&1 | tee scorecard.log
+
+      # A rising skip count is how coverage silently rots here: a service that
+      # stops coming up turns into skipped suites, not a red build. Surface the
+      # counts on every run so the trend is visible in the run summary.
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## Unit"
+            echo '```'
+            tail -n 12 unit.log 2>/dev/null || echo "(no output)"
+            echo '```'
+            echo "## Parity"
+            echo '```'
+            tail -n 12 parity.log 2>/dev/null || echo "(no output)"
+            echo '```'
+            echo "## Parity scorecard"
+            echo '```'
+            tail -n 25 scorecard.log 2>/dev/null || echo "(no output)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # A provider suite skips itself when its service is unreachable, so a
+      # service that quietly stops coming up shows as a green run with less
+      # coverage rather than a red one. With all three services up exactly one
+      # unit file skips; more than that means something did not start, and the
+      # build should fail rather than report a hollow pass.
+      - name: Assert the provider suites actually ran
+        run: |
+          skipped=$(grep -oE '[0-9]+ skipped \(' unit.log | grep -oE '^[0-9]+' | head -1)
+          echo "Unit test files skipped: ${skipped:-unknown}"
+          if [ -z "$skipped" ]; then
+            echo "could not parse the skip count from unit.log" >&2
+            exit 1
+          fi
+          if [ "$skipped" -gt 1 ]; then
+            echo "::error::${skipped} unit test files skipped, expected at most 1." \
+                 "A backing service probably failed to start, so the Redis/Postgres/Kafka" \
+                 "suites silently did not run."
+            exit 1
+          fi
