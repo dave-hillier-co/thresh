@@ -2,7 +2,7 @@ import type { Duration } from "./duration";
 import type { GrainAddress } from "./grain-address";
 import { defineGrainInterface } from "./grain-interface";
 import type { GrainId } from "./grain-id";
-import type { GrainWithIntegerKey } from "./key-kinds";
+import type { GrainKey } from "./key-kinds";
 import type { SiloMember, SiloStatus } from "./membership";
 import type { SiloAddress } from "./silo-address";
 
@@ -40,7 +40,7 @@ export interface DetailedGrainStatistic {
  * SendControlCommandToProvider); the rest of upstream's surface
  * (ForceGarbageCollection, GetRuntimeStatistics, ...) has no equivalent yet.
  */
-export interface IManagementGrain extends GrainWithIntegerKey {
+export interface IManagementGrain extends GrainKey<bigint> {
   /**
    * The silo hosts and statuses currently known in this cluster (Orleans
    * `GetHosts`). `onlyActive` (default `false`) restricts the result to

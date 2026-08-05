@@ -3,12 +3,12 @@ import { grain } from "@thresh/core/decorators";
 import { Grain } from "@thresh/core/grain";
 import { GrainId } from "@thresh/core/grain-id";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import { SiloAddress } from "@thresh/core/silo-address";
 import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
 import { createSilo } from "@thresh/hosting/silo-builder";
 
-interface ICounter extends GrainWithStringKey {
+interface ICounter extends GrainKey<string> {
   increment(by: number): Promise<number>;
 }
 const ICounter = defineGrainInterface<ICounter>("ICounter.hosting");
@@ -22,7 +22,7 @@ class CounterGrain extends Grain implements ICounter {
   }
 }
 
-interface IBlocker extends GrainWithStringKey {
+interface IBlocker extends GrainKey<string> {
   block(): Promise<string>;
 }
 const IBlocker = defineGrainInterface<IBlocker>("IBlocker.hosting");

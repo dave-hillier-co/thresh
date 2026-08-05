@@ -1,9 +1,10 @@
 // Ported from dotnet/orleans test/Grains/TestGrainInterfaces/IEchoTaskGrain.cs @ v10.1.0 (MIT).
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithGuidKey, GrainWithIntegerKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import type { SiloAddress } from "@thresh/core/silo-address";
+import type { Guid } from "@thresh/core/guid";
 
-export interface IEchoGrain extends GrainWithGuidKey {
+export interface IEchoGrain extends GrainKey<Guid> {
   getLastEcho(): Promise<string>;
   echo(data: string): Promise<string>;
   echoError(data: string): Promise<string>;
@@ -12,7 +13,7 @@ export interface IEchoGrain extends GrainWithGuidKey {
 
 export const IEchoGrain = defineGrainInterface<IEchoGrain>("UnitTests.GrainInterfaces.IEchoGrain");
 
-export interface IEchoTaskGrain extends GrainWithGuidKey {
+export interface IEchoTaskGrain extends GrainKey<Guid> {
   getMyIdAsync(): Promise<number>;
   getLastEchoAsync(): Promise<string>;
   echoAsync(data: string): Promise<string>;
@@ -38,7 +39,7 @@ export const IEchoTaskGrain = defineGrainInterface<IEchoTaskGrain>(
   { options: { blockingCallTimeoutAsync: { responseTimeout: { seconds: 5 } } } },
 );
 
-export interface IBlockingEchoTaskGrain extends GrainWithIntegerKey {
+export interface IBlockingEchoTaskGrain extends GrainKey<bigint> {
   getMyId(): Promise<number>;
   getLastEcho(): Promise<string>;
   echo(data: string): Promise<string>;
@@ -50,7 +51,7 @@ export const IBlockingEchoTaskGrain = defineGrainInterface<IBlockingEchoTaskGrai
   "UnitTests.GrainInterfaces.IBlockingEchoTaskGrain",
 );
 
-export interface IReentrantBlockingEchoTaskGrain extends GrainWithIntegerKey {
+export interface IReentrantBlockingEchoTaskGrain extends GrainKey<bigint> {
   getMyId(): Promise<number>;
   getLastEcho(): Promise<string>;
   echo(data: string): Promise<string>;

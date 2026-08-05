@@ -3,7 +3,7 @@ import { durableList, grain } from "@thresh/core/decorators";
 import { defineGrain, useDurableDictionary } from "@thresh/core/define-grain";
 import { Grain } from "@thresh/core/grain";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import type { DurableList } from "@thresh/core/durable-state";
 import { SiloAddress } from "@thresh/core/silo-address";
 import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
@@ -11,7 +11,7 @@ import { MemoryJournalStorage } from "@thresh/journaling/memory-journal-storage"
 import { createSilo, type SiloConfig } from "@thresh/hosting/silo-builder";
 
 // A class grain journalling an ordered list.
-interface ICart extends GrainWithStringKey {
+interface ICart extends GrainKey<string> {
   add(item: string): Promise<number>;
   list(): Promise<readonly string[]>;
 }
@@ -33,7 +33,7 @@ class CartGrain extends Grain implements ICart {
 }
 
 // A functional grain journalling a dictionary via the hook.
-interface IInventory extends GrainWithStringKey {
+interface IInventory extends GrainKey<string> {
   stock(sku: string, qty: number): Promise<void>;
   qty(sku: string): Promise<number | undefined>;
   skus(): Promise<number>;

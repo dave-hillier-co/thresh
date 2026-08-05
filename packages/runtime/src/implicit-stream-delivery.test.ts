@@ -4,7 +4,7 @@ import { defineGrain } from "@thresh/core/define-grain";
 import { Grain } from "@thresh/core/grain";
 import { GrainId } from "@thresh/core/grain-id";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import { SiloAddress } from "@thresh/core/silo-address";
 import { STREAM_SUBSCRIPTION_OBSERVER, type StreamHandler } from "@thresh/core/stream";
 import { InProcessNetwork, InProcessTransport } from "@thresh/messaging/in-process-transport";
@@ -14,7 +14,7 @@ import { StaticMembershipService } from "@thresh/runtime/static-membership";
 // Module sink so observed events survive across activations (keyed by grain key).
 let observed: Array<{ key: string; namespace: string; event: unknown }> = [];
 
-interface IWatcher extends GrainWithStringKey {
+interface IWatcher extends GrainKey<string> {
   marker(): Promise<string>;
 }
 const IWatcher = defineGrainInterface<IWatcher>("IWatcher.implicit");
@@ -34,7 +34,7 @@ class WatcherGrain extends Grain implements IWatcher {
   }
 }
 
-interface IPlain extends GrainWithStringKey {
+interface IPlain extends GrainKey<string> {
   marker(): Promise<string>;
 }
 const IPlain = defineGrainInterface<IPlain>("IPlain.implicit");

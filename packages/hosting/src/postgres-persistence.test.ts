@@ -4,7 +4,7 @@ import { Pool } from "pg";
 import { grain, persistentState } from "@thresh/core/decorators";
 import { Grain } from "@thresh/core/grain";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import type { PersistentState } from "@thresh/core/persistent-state";
 import { SiloAddress } from "@thresh/core/silo-address";
 import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
@@ -37,7 +37,7 @@ interface BalanceState {
   cents: number;
 }
 
-interface IAccount extends GrainWithStringKey {
+interface IAccount extends GrainKey<string> {
   deposit(cents: number): Promise<number>;
   getBalance(): Promise<number>;
 }

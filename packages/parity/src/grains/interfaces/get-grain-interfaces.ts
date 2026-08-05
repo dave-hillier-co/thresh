@@ -5,9 +5,10 @@
 // registration time, so that mechanism has no analogue here (see
 // grain-factory-tests.test.ts). Only the two key-kind probes are ported.
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithGuidKey, GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
+import type { Guid } from "@thresh/core/guid";
 
-export interface IStringGrain extends GrainWithStringKey {
+export interface IStringGrain extends GrainKey<string> {
   foo(): Promise<boolean>;
 }
 
@@ -15,7 +16,7 @@ export const IStringGrain = defineGrainInterface<IStringGrain>(
   "UnitTests.GrainInterfaces.IStringGrain",
 );
 
-export interface IGuidGrain extends GrainWithGuidKey {
+export interface IGuidGrain extends GrainKey<Guid> {
   foo(): Promise<boolean>;
 }
 

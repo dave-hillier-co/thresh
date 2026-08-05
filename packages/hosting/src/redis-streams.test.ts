@@ -4,7 +4,7 @@ import { createClient } from "redis";
 import { grain } from "@thresh/core/decorators";
 import { Grain } from "@thresh/core/grain";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import { SiloAddress } from "@thresh/core/silo-address";
 import type { StreamHandler } from "@thresh/core/stream";
 import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
@@ -41,12 +41,12 @@ afterAll(async () => {
   await admin.destroy();
 });
 
-interface IDevice extends GrainWithStringKey {
+interface IDevice extends GrainKey<string> {
   report(reading: number): Promise<void>;
 }
 const IDevice = defineGrainInterface<IDevice>("IDevice.redis");
 
-interface IAggregator extends GrainWithStringKey {
+interface IAggregator extends GrainKey<string> {
   readings(): Promise<number[]>;
 }
 const IAggregator = defineGrainInterface<IAggregator>("IAggregator.redis");

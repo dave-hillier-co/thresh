@@ -1,6 +1,6 @@
 // Ported from dotnet/orleans test/Grains/TestGrainInterfaces/IMethodInterceptionGrain.cs @ v10.1.0 (MIT).
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithIntegerKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 
 /**
  * Upstream `SayHello` lives on a separate `IMethodFromAnotherInterface` that
@@ -12,7 +12,7 @@ import type { GrainWithIntegerKey } from "@thresh/core/key-kinds";
  * values, so the test that exercises it is excluded rather than the method
  * being ported unused.
  */
-export interface IMethodInterceptionGrain extends GrainWithIntegerKey {
+export interface IMethodInterceptionGrain extends GrainKey<bigint> {
   one(): Promise<string>;
   echo(someArg: string): Promise<string>;
   notIntercepted(): Promise<string>;
@@ -31,7 +31,7 @@ export const IMethodInterceptionGrain = defineGrainInterface<IMethodInterception
  * `IMethodInterceptionGrain`, hosted via `ClientNode.createObjectReference`
  * rather than a grain activation (`Observer_GrainCallFilter_Incoming_*`).
  */
-export interface IMethodInterceptionGrainObserver extends GrainWithIntegerKey {
+export interface IMethodInterceptionGrainObserver extends GrainKey<bigint> {
   one(): Promise<string>;
   echo(someArg: string): Promise<string>;
   notIntercepted(): Promise<string>;
@@ -53,7 +53,7 @@ export const IMethodInterceptionGrainObserver =
  * not `TestCluster.getGrain` (which shares the silo's single `GrainFactory`
  * with every grain-to-grain call).
  */
-export interface IOutgoingMethodInterceptionGrain extends GrainWithIntegerKey {
+export interface IOutgoingMethodInterceptionGrain extends GrainKey<bigint> {
   throwIfGreaterThanZero(value: number): Promise<string>;
   /** Upstream `EchoViaOtherGrain`: calls `otherGrain.Echo(message)`, wraps the result. */
   echoViaOtherGrain(
@@ -73,7 +73,7 @@ export const IOutgoingMethodInterceptionGrain =
  * progressively build up (via the now-exposed `GrainRuntime.getRequestContext`/
  * `setRequestContext`), proving a filter's header write reaches the method body.
  */
-export interface IGrainCallFilterTestGrain extends GrainWithIntegerKey {
+export interface IGrainCallFilterTestGrain extends GrainKey<bigint> {
   throwIfGreaterThanZero(value: number): Promise<string>;
   // Upstream: `HashSet<int>`. A JS `Set` does not round-trip across a real
   // (cross-silo) call boundary here (it is not structurally cloneable the way
@@ -95,7 +95,7 @@ export const IGrainCallFilterTestGrain = defineGrainInterface<IGrainCallFilterTe
  * `IGrainCallFilterTestGrain`, hosted via `ClientNode.createObjectReference`
  * rather than a grain activation.
  */
-export interface IGrainCallFilterTestGrainObserver extends GrainWithIntegerKey {
+export interface IGrainCallFilterTestGrainObserver extends GrainKey<bigint> {
   throwIfGreaterThanZero(value: number): Promise<string>;
   sumSet(numbers: readonly number[]): Promise<number>;
   systemWideCallFilterMarker(): Promise<void>;
@@ -120,7 +120,7 @@ export const IGrainCallFilterTestGrainObserver =
  * test behaviour (the silo-wide filter negating `setExtensionValue`'s
  * argument) actually needs.
  */
-export interface IMyGrainExtension extends GrainWithIntegerKey {
+export interface IMyGrainExtension extends GrainKey<bigint> {
   setExtensionValue(value: number): Promise<void>;
   getExtensionValue(): Promise<number>;
 }

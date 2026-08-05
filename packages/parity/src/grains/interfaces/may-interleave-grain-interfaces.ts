@@ -8,9 +8,9 @@
 // exist — see `client.createObjectReference` — but routing start/release
 // through it would add wire round-trips without changing what is tested.)
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithIntegerKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 
-export interface IMayInterleaveGrain extends GrainWithIntegerKey {
+export interface IMayInterleaveGrain extends GrainKey<bigint> {
   goFast(tag: string): Promise<void>;
   goSlow(tag: string): Promise<void>;
 }

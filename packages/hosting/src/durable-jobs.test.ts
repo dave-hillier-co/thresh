@@ -3,7 +3,7 @@ import { defineGrain, useDurableJobHandler } from "@thresh/core/define-grain";
 import { completed, pollAfter, type DurableJob } from "@thresh/core/durable-job";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
 import { GrainId } from "@thresh/core/grain-id";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import { PLACEMENT_HINT_KEY, RequestContext } from "@thresh/core/request-context";
 import { SiloAddress } from "@thresh/core/silo-address";
 import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
@@ -18,7 +18,7 @@ const runs = new Map<string, number>();
 const pollAttempts = new Map<string, number>();
 const record = (key: string, map = runs) => map.set(key, (map.get(key) ?? 0) + 1);
 
-interface IWorker extends GrainWithStringKey {
+interface IWorker extends GrainKey<string> {
   ping(): Promise<string>;
 }
 const IWorker = defineGrainInterface<IWorker>("IWorker.jobs");
@@ -48,7 +48,7 @@ const WorkerGrain = defineGrain<IWorker>("Worker", (ctx) => {
 });
 
 // A scheduler grain that schedules/cancels jobs on a worker via the runtime.
-interface IScheduler extends GrainWithStringKey {
+interface IScheduler extends GrainKey<string> {
   schedule(workerKey: string, name: string, dueMs: number): Promise<DurableJob>;
   cancel(job: DurableJob): Promise<void>;
 }

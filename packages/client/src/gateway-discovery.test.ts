@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { grain } from "@thresh/core/decorators";
 import { Grain } from "@thresh/core/grain";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import { SiloAddress } from "@thresh/core/silo-address";
 import { InProcessNetwork, InProcessTransport } from "@thresh/messaging/in-process-transport";
 import { WebSocketTransport } from "@thresh/messaging/web-socket-transport";
@@ -25,7 +25,7 @@ function freePort(): Promise<number> {
   });
 }
 
-interface IEcho extends GrainWithStringKey {
+interface IEcho extends GrainKey<string> {
   echo(message: string): Promise<string>;
 }
 const IEcho = defineGrainInterface<IEcho>("IEcho.gateway");

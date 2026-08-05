@@ -4,7 +4,7 @@ import { createClient } from "redis";
 import { grain, implicitStreamSubscription } from "@thresh/core/decorators";
 import { Grain } from "@thresh/core/grain";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import { SiloAddress } from "@thresh/core/silo-address";
 import { STREAM_SUBSCRIPTION_OBSERVER, type StreamHandler } from "@thresh/core/stream";
 import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
@@ -54,12 +54,12 @@ afterAll(async () => {
   await admin.destroy();
 });
 
-interface IPoisonRoom extends GrainWithStringKey {
+interface IPoisonRoom extends GrainKey<string> {
   say(text: string): Promise<void>;
 }
 const IPoisonRoom = defineGrainInterface<IPoisonRoom>("IPoisonRoom.failureHandler");
 
-type IAlwaysFailingConsumerGrain = GrainWithStringKey;
+type IAlwaysFailingConsumerGrain = GrainKey<string>;
 const IAlwaysFailingConsumerGrain = defineGrainInterface<IAlwaysFailingConsumerGrain>(
   "IAlwaysFailingConsumerGrain.failureHandler",
 );

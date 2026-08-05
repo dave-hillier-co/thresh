@@ -6,14 +6,14 @@
 // (GAP-GENERIC-GRAINS), tracked separately from the non-generic extension mechanism.
 //
 // The three extension interfaces (`ITestExtension`, `ISimpleExtension`, `IAutoExtension`)
-// extend `GrainWithIntegerKey` purely so `castGrainReference` has a concrete key kind to
+// extend `GrainKey<bigint>` purely so `castGrainReference` has a concrete key kind to
 // carry — an extension interface is never itself the target of `cluster.getGrain`, it is
 // only reached by casting a reference to a grain that already has one; the extension rides
 // the grain's own id, so the declared key kind here is otherwise unused.
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithIntegerKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 
-export interface IExtensionTestGrain extends GrainWithIntegerKey {
+export interface IExtensionTestGrain extends GrainKey<bigint> {
   installExtension(name: string): Promise<void>;
 }
 
@@ -21,13 +21,13 @@ export const IExtensionTestGrain = defineGrainInterface<IExtensionTestGrain>(
   "UnitTests.GrainInterfaces.IExtensionTestGrain",
 );
 
-export type INoOpTestGrain = GrainWithIntegerKey;
+export type INoOpTestGrain = GrainKey<bigint>;
 
 export const INoOpTestGrain = defineGrainInterface<INoOpTestGrain>(
   "UnitTests.GrainInterfaces.INoOpTestGrain",
 );
 
-export interface ITestExtension extends GrainWithIntegerKey {
+export interface ITestExtension extends GrainKey<bigint> {
   checkExtension_1(): Promise<string>;
   checkExtension_2(): Promise<string>;
 }
@@ -37,7 +37,7 @@ export const ITestExtension = defineGrainInterface<ITestExtension>(
   { extension: true },
 );
 
-export interface ISimpleExtension extends GrainWithIntegerKey {
+export interface ISimpleExtension extends GrainKey<bigint> {
   checkExtension_1(): Promise<string>;
 }
 
@@ -46,7 +46,7 @@ export const ISimpleExtension = defineGrainInterface<ISimpleExtension>(
   { extension: true },
 );
 
-export interface IAutoExtension extends GrainWithIntegerKey {
+export interface IAutoExtension extends GrainKey<bigint> {
   checkExtension(): Promise<string>;
 }
 

@@ -42,7 +42,7 @@ import { grain, regexImplicitChannelSubscription } from "@thresh/core/decorators
 import { Grain } from "@thresh/core/grain";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
 import { Guid } from "@thresh/core/guid";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import type { ClientNode } from "@thresh/client/client-node";
 import { orleansTest } from "@thresh/testing/orleans-test";
 import { TestCluster } from "@thresh/testing/test-cluster";
@@ -55,7 +55,7 @@ const PROVIDER_NAME = "BroadcastChannel";
 const PROVIDER_NAME_NON_FIRE_AND_FORGET = "BroadcastChannelNonFireAndForget";
 const CALL_TIMEOUT_MS = 500;
 
-interface ISubscriberGrain extends GrainWithStringKey {
+interface ISubscriberGrain extends GrainKey<string> {
   getValues(channelId: ChannelId): Promise<number[]>;
   getOnPublishedCounter(): Promise<number>;
   throwsOnReceive(throwsOnReceive: boolean): Promise<void>;

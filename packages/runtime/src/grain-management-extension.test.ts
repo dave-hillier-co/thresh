@@ -4,12 +4,12 @@ import { Grain } from "@thresh/core/grain";
 import { GrainId } from "@thresh/core/grain-id";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
 import { castGrainReference } from "@thresh/core/grain-reference";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import { IGrainManagementExtension } from "@thresh/runtime/grain-management-extension";
 import { Silo } from "@thresh/runtime/silo";
 import { FakeTimeProvider } from "@thresh/runtime/test-support/fake-time-provider";
 
-interface ITagged extends GrainWithStringKey {
+interface ITagged extends GrainKey<string> {
   tag(): Promise<string>;
 }
 

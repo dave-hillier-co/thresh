@@ -12,9 +12,9 @@
 // no declared-type tagging, so there is no base/derived distinction to get
 // wrong — `unknown` is the faithful equivalent of "any JSON-shaped value".
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithIntegerKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 
-export interface IJsonNodeTestGrain extends GrainWithIntegerKey {
+export interface IJsonNodeTestGrain extends GrainKey<bigint> {
   processJsonNode(node: unknown): Promise<unknown>;
   getJsonString(node: unknown): Promise<string>;
 }

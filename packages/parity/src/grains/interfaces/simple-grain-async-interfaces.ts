@@ -2,9 +2,9 @@
 // Trimmed to the members the ported SimpleGrain_AsyncMethods test exercises;
 // upstream's GetX/SetX/IncrementA_Async/GetAxB_Async(a,b) aren't reached.
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithIntegerKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 
-export interface ISimpleGrainWithAsyncMethods extends GrainWithIntegerKey {
+export interface ISimpleGrainWithAsyncMethods extends GrainKey<bigint> {
   setA_Async(a: number): Promise<void>;
   setB_Async(b: number): Promise<void>;
   getAxB_Async(): Promise<number>;

@@ -13,7 +13,7 @@
 // (populated by an `ActivityListener`) captures for its own linking
 // assertions (`ClientAndServerSpansAreProperlyLinked`, etc).
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithIntegerKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 
 export interface TraceContextInfo {
   readonly hasActivity: boolean;
@@ -22,7 +22,7 @@ export interface TraceContextInfo {
   readonly traceParentFromRequestContext: string | undefined;
 }
 
-export interface ITraceContextPropagationGrain extends GrainWithIntegerKey {
+export interface ITraceContextPropagationGrain extends GrainKey<bigint> {
   /** Reports the server-side trace context visible from inside this activation. */
   getTraceContextInfo(): Promise<TraceContextInfo>;
   /**

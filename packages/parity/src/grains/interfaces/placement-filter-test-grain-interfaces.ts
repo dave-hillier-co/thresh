@@ -1,8 +1,8 @@
 // Ported from dotnet/orleans test/Orleans.Placement.Tests/PlacementFilterTests/GrainPlacementFilterTests.cs @ v10.1.0 (MIT).
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithIntegerKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 
-export interface IPingableGrain extends GrainWithIntegerKey {
+export interface IPingableGrain extends GrainKey<bigint> {
   ping(): Promise<void>;
 }
 

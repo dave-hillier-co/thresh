@@ -3,9 +3,9 @@
 // only the subset the ported BasicActivationTests case exercises is declared here.
 import { defineGrainInterface } from "@thresh/core/grain-interface";
 import type { Guid } from "@thresh/core/guid";
-import type { GrainWithGuidKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 
-export interface IGuidTestGrain extends GrainWithGuidKey {
+export interface IGuidTestGrain extends GrainKey<Guid> {
   getKey(): Promise<Guid>;
   getLabel(): Promise<string>;
   setLabel(label: string): Promise<void>;

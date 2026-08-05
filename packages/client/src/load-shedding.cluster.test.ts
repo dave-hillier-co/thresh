@@ -3,14 +3,14 @@ import { grain } from "@thresh/core/decorators";
 import { GatewayTooBusyException } from "@thresh/core/errors";
 import { Grain } from "@thresh/core/grain";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import { SiloAddress } from "@thresh/core/silo-address";
 import { InProcessNetwork, InProcessTransport } from "@thresh/messaging/in-process-transport";
 import { ClusterNode } from "@thresh/runtime/cluster-node";
 import { StaticMembershipService } from "@thresh/runtime/static-membership";
 import { createClient } from "@thresh/client/client-node";
 
-interface IPing extends GrainWithStringKey {
+interface IPing extends GrainKey<string> {
   ping(): Promise<string>;
   /** Exercises `GrainRuntime`'s load-shedding test hooks from inside a turn (Orleans `IPlacementTestGrain`). */
   latchCpuUsageViaRuntime(value: number): Promise<void>;

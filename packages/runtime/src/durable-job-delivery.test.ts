@@ -3,13 +3,13 @@ import { defineGrain, useDurableJobHandler } from "@thresh/core/define-grain";
 import { completed, type JobRunContext } from "@thresh/core/durable-job";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
 import { GrainId } from "@thresh/core/grain-id";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import { SiloAddress } from "@thresh/core/silo-address";
 import { InProcessNetwork, InProcessTransport } from "@thresh/messaging/in-process-transport";
 import { ClusterNode } from "@thresh/runtime/cluster-node";
 import { StaticMembershipService } from "@thresh/runtime/static-membership";
 
-interface IWorker extends GrainWithStringKey {
+interface IWorker extends GrainKey<string> {
   ping(): Promise<string>;
 }
 const IWorker = defineGrainInterface<IWorker>("IWorker.jobdelivery");

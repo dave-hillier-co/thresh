@@ -2,19 +2,19 @@ import { describe, expect, it } from "vitest";
 import { grain } from "@thresh/core/decorators";
 import { Grain } from "@thresh/core/grain";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import { SiloAddress } from "@thresh/core/silo-address";
 import { InProcessNetwork, InProcessTransport } from "@thresh/messaging/in-process-transport";
 import { ClusterNode } from "@thresh/runtime/cluster-node";
 import { StaticMembershipService } from "@thresh/runtime/static-membership";
 import { createClient } from "@thresh/client/client-node";
 
-interface IEventObserver extends GrainWithStringKey {
+interface IEventObserver extends GrainKey<string> {
   onEvent(text: string): Promise<string>;
 }
 const IEventObserver = defineGrainInterface<IEventObserver>("test.IEventObserver");
 
-interface ISubscriberGrain extends GrainWithStringKey {
+interface ISubscriberGrain extends GrainKey<string> {
   subscribe(observer: IEventObserver): Promise<void>;
   poke(text: string): Promise<string>;
 }

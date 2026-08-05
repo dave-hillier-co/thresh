@@ -38,7 +38,7 @@
 import { expect } from "vitest";
 import { defineGrain, useTransactionalState } from "@thresh/core/define-grain";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import {
   TransactionAbortedError,
   TransactionCascadingAbortError,
@@ -64,14 +64,14 @@ interface Counter {
   value: number;
 }
 
-interface FaultTestGrain extends GrainWithStringKey {
+interface FaultTestGrain extends GrainKey<string> {
   set(newValue: number): Promise<void>;
   add(delta: number): Promise<number[]>;
   get(): Promise<number[]>;
   addAndThrow(delta: number): Promise<void>;
 }
 
-interface FaultCoordinatorGrain extends GrainWithStringKey {
+interface FaultCoordinatorGrain extends GrainKey<string> {
   multiGrainSet(keys: string[], newValue: number): Promise<void>;
   addAndThrow(key: string, delta: number): Promise<void>;
   multiGrainAddAndThrow(throwKeys: string[], keys: string[], delta: number): Promise<void>;

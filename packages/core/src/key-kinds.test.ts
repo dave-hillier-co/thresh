@@ -12,8 +12,8 @@ import type {
 describe("GrainKey", () => {
   it("maps idiomatic GrainKey markers to getGrain key types", () => {
     type StringGrain = GrainKey<string> & { ping(): Promise<void> };
-    type IntegerGrain = GrainKey<bigint> & { ping(): Promise<void> };
-    type GuidCompoundGrain = GrainKey<CompoundKey<Guid>> & { ping(): Promise<void> };
+    type IntegerGrain = GrainWithIntegerKey & { ping(): Promise<void> };
+    type GuidCompoundGrain = GrainWithGuidCompoundKey & { ping(): Promise<void> };
 
     expectTypeOf<GrainKeyFor<StringGrain>>().toEqualTypeOf<string>();
     expectTypeOf<GrainKeyFor<IntegerGrain>>().toEqualTypeOf<bigint>();

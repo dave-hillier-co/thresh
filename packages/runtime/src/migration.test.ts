@@ -8,13 +8,13 @@ import type {
   IGrainMigrationParticipant,
   RehydrationContext,
 } from "@thresh/core/grain-migration-participant";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import type { SiloAddress } from "@thresh/core/silo-address";
 import { Silo } from "@thresh/runtime/silo";
 import { FakeTimeProvider } from "@thresh/runtime/test-support/fake-time-provider";
 import { TestCluster } from "@thresh/testing/test-cluster";
 
-interface IMigratingCounter extends GrainWithStringKey {
+interface IMigratingCounter extends GrainKey<string> {
   increment(by: number): Promise<number>;
   get(): Promise<number>;
   scheduleMigration(target?: SiloAddress): Promise<void>;

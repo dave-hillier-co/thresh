@@ -1,13 +1,13 @@
 // Ported from dotnet/orleans test/Grains/TestGrainInterfaces/IChainedGrain.cs @ v10.1.0 (MIT).
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithIntegerKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 
 /** Upstream `ChainGrainHolder`: wraps a grain reference so it round-trips inside a nested object. */
 export interface ChainGrainHolder {
   next: IChainedGrain | null;
 }
 
-export interface IChainedGrain extends GrainWithIntegerKey {
+export interface IChainedGrain extends GrainKey<bigint> {
   getId(): Promise<number>;
   getX(): Promise<number>;
   getNext(): Promise<IChainedGrain | null>;

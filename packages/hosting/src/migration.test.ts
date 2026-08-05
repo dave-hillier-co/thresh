@@ -3,7 +3,7 @@ import { grain, persistentState } from "@thresh/core/decorators";
 import { Grain } from "@thresh/core/grain";
 import { GrainId } from "@thresh/core/grain-id";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import type { PersistentState } from "@thresh/core/persistent-state";
 import { SiloAddress } from "@thresh/core/silo-address";
 import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
@@ -15,7 +15,7 @@ interface BalanceState {
   cents: number;
 }
 
-interface IAccount extends GrainWithStringKey {
+interface IAccount extends GrainKey<string> {
   deposit(cents: number): Promise<number>;
   pendingDeposit(cents: number): Promise<number>;
   getBalance(): Promise<number>;

@@ -5,7 +5,7 @@ import { GrainCancellationToken } from "@thresh/core/grain-cancellation-token";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
 import { GrainId } from "@thresh/core/grain-id";
 import { grainReferenceIdentity } from "@thresh/core/grain-reference";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import { SiloAddress } from "@thresh/core/silo-address";
 import { InProcessNetwork, InProcessTransport } from "@thresh/messaging/in-process-transport";
 import { nextCorrelationId, type Message } from "@thresh/messaging/message";
@@ -14,7 +14,7 @@ import { ICancellationSourcesExtension } from "@thresh/runtime/cancellation-exte
 import { waitFor } from "@thresh/testing/wait";
 import { createClient } from "@thresh/client/client-node";
 
-interface IObserver extends GrainWithStringKey {
+interface IObserver extends GrainKey<string> {
   onEvent(payload: string): Promise<string>;
 }
 const IObserver = defineGrainInterface<IObserver>("IObserver.client");

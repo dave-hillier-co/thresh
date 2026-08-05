@@ -14,9 +14,10 @@
 // recorded cancelled, not to observe a live stream of cancellations.
 import type { GrainCancellationToken } from "@thresh/core/grain-cancellation-token";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithGuidKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
+import type { Guid } from "@thresh/core/guid";
 
-export interface ILongRunningTaskGrain extends GrainWithGuidKey {
+export interface ILongRunningTaskGrain extends GrainKey<Guid> {
   /** Awaits a cancellable delay; on cancellation records `callId` and throws `GrainTaskCanceledError`. */
   longWaitGrainCancellation(
     token: GrainCancellationToken,

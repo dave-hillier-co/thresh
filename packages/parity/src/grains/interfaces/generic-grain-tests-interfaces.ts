@@ -3,9 +3,9 @@
 // generic interface in the upstream file is unrepresentable here
 // (GAP-GENERIC-GRAINS — see generic-grain-tests.test.ts).
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithIntegerKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 
-export interface IGrainWithNoProperties extends GrainWithIntegerKey {
+export interface IGrainWithNoProperties extends GrainKey<bigint> {
   getAxB(a: number, b: number): Promise<string>;
 }
 
@@ -13,7 +13,7 @@ export const IGrainWithNoProperties = defineGrainInterface<IGrainWithNoPropertie
   "UnitTests.GrainInterfaces.IGrainWithNoProperties",
 );
 
-export interface IGrainWithListFields extends GrainWithIntegerKey {
+export interface IGrainWithListFields extends GrainKey<bigint> {
   addItem(item: string): Promise<void>;
   getItems(): Promise<readonly string[]>;
 }

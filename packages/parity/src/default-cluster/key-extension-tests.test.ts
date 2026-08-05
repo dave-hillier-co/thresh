@@ -2,7 +2,7 @@
 // Every scenario but one turns on Orleans' compound key (`IGrainWithGuidCompoundKey`:
 // a primary Guid plus a string "key extension"), represented here by
 // `CompoundKey<Guid>` (packages/core/src/grain-key.ts) via the
-// `GrainWithGuidCompoundKey` marker interface (packages/core/src/key-kinds.ts).
+// `GrainKey<CompoundKey<Guid>>` marker interface (packages/core/src/key-kinds.ts).
 import { afterAll, beforeAll, describe, expect } from "vitest";
 import { orleansTest } from "@thresh/testing/orleans-test";
 import { TestCluster } from "@thresh/testing/test-cluster";

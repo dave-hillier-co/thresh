@@ -1,8 +1,8 @@
 // Ported from dotnet/orleans test/Grains/TestGrainInterfaces/ISimpleGrain.cs @ v10.1.0 (MIT).
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithIntegerKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 
-export interface ISimpleGrain extends GrainWithIntegerKey {
+export interface ISimpleGrain extends GrainKey<bigint> {
   setA(a: number): Promise<void>;
   setB(b: number): Promise<void>;
   incrementA(): Promise<void>;

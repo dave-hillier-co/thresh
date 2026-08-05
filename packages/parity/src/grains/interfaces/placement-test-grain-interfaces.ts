@@ -13,9 +13,9 @@
 // through `IActivationCountBasedPlacementTestGrain`.
 import { defineGrainInterface } from "@thresh/core/grain-interface";
 import type { Guid } from "@thresh/core/guid";
-import type { GrainWithGuidKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 
-export interface IPlacementTestGrain extends GrainWithGuidKey {
+export interface IPlacementTestGrain extends GrainKey<Guid> {
   nop(): Promise<void>;
   startPreferLocalGrain(key: Guid): Promise<Guid>;
   /** Upstream `GetRuntimeInstanceId()`: this activation's hosting silo identity. */

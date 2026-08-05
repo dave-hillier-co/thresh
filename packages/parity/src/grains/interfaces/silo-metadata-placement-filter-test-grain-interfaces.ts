@@ -1,9 +1,9 @@
 // Ported from dotnet/orleans test/Orleans.Placement.Tests/PlacementFilterTests/SiloMetadataPlacementFilterTests.cs @ v10.1.0 (MIT).
 import { defineGrainInterface } from "@thresh/core/grain-interface";
 import type { SiloAddress } from "@thresh/core/silo-address";
-import type { GrainWithIntegerKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 
-export interface IHostReportingGrain extends GrainWithIntegerKey {
+export interface IHostReportingGrain extends GrainKey<bigint> {
   getHostingSilo(): Promise<SiloAddress>;
 }
 

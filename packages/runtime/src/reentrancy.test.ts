@@ -2,17 +2,17 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { grain } from "@thresh/core/decorators";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
 import { Grain } from "@thresh/core/grain";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import { Silo } from "@thresh/runtime/silo";
 
-interface IGate extends GrainWithStringKey {
+interface IGate extends GrainKey<string> {
   enter(tag: string): Promise<void>;
 }
-interface IReentrantA extends GrainWithStringKey {
+interface IReentrantA extends GrainKey<string> {
   run(): Promise<string>;
   ping(): Promise<string>;
 }
-interface IReentrantB extends GrainWithStringKey {
+interface IReentrantB extends GrainKey<string> {
   callViaA(aKey: string): Promise<string>;
 }
 

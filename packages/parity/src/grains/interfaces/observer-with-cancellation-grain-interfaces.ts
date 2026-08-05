@@ -8,7 +8,8 @@
 // than ported as dead surface — GAP-OBSERVERS if a later test needs them.
 import type { GrainCancellationToken } from "@thresh/core/grain-cancellation-token";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithGuidKey, GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
+import type { Guid } from "@thresh/core/guid";
 
 /**
  * A client-hosted observer supporting long-running, cancellable operations
@@ -16,7 +17,7 @@ import type { GrainWithGuidKey, GrainWithStringKey } from "@thresh/core/key-kind
  * observer notification, these methods are two-way: the grain awaits the
  * client's completion (or cancellation) rather than firing-and-forgetting.
  */
-export interface ILongRunningObserver extends GrainWithStringKey {
+export interface ILongRunningObserver extends GrainKey<string> {
   longWait(delayMs: number, callId: string, token: GrainCancellationToken): Promise<void>;
   /** Same body as `longWait`, but `[AlwaysInterleave]` upstream so concurrent calls interleave. */
   interleavingLongWait(
@@ -36,7 +37,7 @@ export const ILongRunningObserver = defineGrainInterface<ILongRunningObserver>(
  * subscribed client-hosted `ILongRunningObserver` (Orleans
  * `IObserverWithCancellationGrain`).
  */
-export interface IObserverWithCancellationGrain extends GrainWithGuidKey {
+export interface IObserverWithCancellationGrain extends GrainKey<Guid> {
   subscribe(observer: ILongRunningObserver): Promise<void>;
   unsubscribe(observer: ILongRunningObserver): Promise<void>;
   notifyLongWait(delayMs: number, callId: string, token: GrainCancellationToken): Promise<void>;

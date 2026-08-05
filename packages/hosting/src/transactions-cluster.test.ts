@@ -3,20 +3,20 @@ import { defineGrain, useTransactionalState } from "@thresh/core/define-grain";
 import { GrainId } from "@thresh/core/grain-id";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
 import type { GrainType } from "@thresh/core/grain-type";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import { TestCluster } from "@thresh/testing/test-cluster";
 
 interface Balance {
   cents: number;
 }
 
-interface Account extends GrainWithStringKey {
+interface Account extends GrainKey<string> {
   deposit(cents: number): Promise<void>;
   withdraw(cents: number): Promise<void>;
   balance(): Promise<number>;
 }
 
-interface Teller extends GrainWithStringKey {
+interface Teller extends GrainKey<string> {
   fund(account: string, cents: number): Promise<void>;
   transfer(from: string, to: string, cents: number): Promise<void>;
 }

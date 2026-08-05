@@ -1,9 +1,10 @@
 // Ported from dotnet/orleans test/Grains/TestGrainInterfaces/ITestGrain.cs @ v10.1.0 (MIT).
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithGuidKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import type { ISimpleGrainObserver } from "@thresh/parity/grains/interfaces/simple-observerable-grain-interfaces";
+import type { Guid } from "@thresh/core/guid";
 
-export interface IOneWayGrain extends GrainWithGuidKey {
+export interface IOneWayGrain extends GrainKey<Guid> {
   notify(observer: ISimpleGrainObserver): Promise<void>;
   // Upstream declares this as ValueTask; JS has no synchronous-Task
   // distinction, so it has the same async shape but is still one-way.

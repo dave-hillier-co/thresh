@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import type { InvocationRequest } from "@thresh/core/request";
 import type { Dispatcher, InvokeCallOptions } from "@thresh/runtime/dispatcher";
 import { GrainFactory } from "@thresh/runtime/grain-factory";
@@ -12,7 +12,7 @@ import { invocationContext, withCallOptions } from "@thresh/runtime/invocation-c
 // `InvokeCallOptions.deadlineMs`/`signal` alone only reaches internal
 // `Dispatcher.invoke` callers, never `GrainFactory`'s public proxy surface.
 
-interface IPingable extends GrainWithStringKey {
+interface IPingable extends GrainKey<string> {
   ping(): Promise<string>;
 }
 

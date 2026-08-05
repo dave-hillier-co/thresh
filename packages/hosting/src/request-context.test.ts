@@ -2,17 +2,17 @@ import { describe, expect, it } from "vitest";
 import { grain } from "@thresh/core/decorators";
 import { Grain } from "@thresh/core/grain";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import { SiloAddress } from "@thresh/core/silo-address";
 import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
 import { requestContext } from "@thresh/runtime/invocation-context";
 import { StaticMembershipService } from "@thresh/runtime/static-membership";
 import { createSilo } from "@thresh/hosting/silo-builder";
 
-interface Downstream extends GrainWithStringKey {
+interface Downstream extends GrainKey<string> {
   readTenant(): Promise<string | undefined>;
 }
-interface Caller extends GrainWithStringKey {
+interface Caller extends GrainKey<string> {
   propagate(tenant: string, downstream: string): Promise<string | undefined>;
 }
 

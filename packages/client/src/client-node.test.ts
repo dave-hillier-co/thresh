@@ -4,7 +4,7 @@ import { Grain } from "@thresh/core/grain";
 import type { GrainCancellationToken } from "@thresh/core/grain-cancellation-token";
 import { GrainId } from "@thresh/core/grain-id";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import { SiloAddress } from "@thresh/core/silo-address";
 import { InProcessNetwork, InProcessTransport } from "@thresh/messaging/in-process-transport";
 import { ClusterNode } from "@thresh/runtime/cluster-node";
@@ -12,18 +12,18 @@ import { StaticMembershipService } from "@thresh/runtime/static-membership";
 import { staticGatewayProvider } from "@thresh/client/gateway-provider";
 import { createClient } from "@thresh/client/client-node";
 
-interface ICounter extends GrainWithStringKey {
+interface ICounter extends GrainKey<string> {
   increment(by: number): Promise<number>;
   fail(): Promise<void>;
 }
 const ICounter = defineGrainInterface<ICounter>("ICounter.client");
 
-interface IUnregistered extends GrainWithStringKey {
+interface IUnregistered extends GrainKey<string> {
   ping(): Promise<void>;
 }
 const IUnregistered = defineGrainInterface<IUnregistered>("IUnregistered.client");
 
-interface IWaiter extends GrainWithStringKey {
+interface IWaiter extends GrainKey<string> {
   wait(token: GrainCancellationToken): Promise<void>;
 }
 const IWaiter = defineGrainInterface<IWaiter>("IWaiter.client");

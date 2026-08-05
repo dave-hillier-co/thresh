@@ -9,9 +9,10 @@
 // `IPlacementDirector.PlacementHintKey` `RequestContext` hint, not via a
 // dedicated placement strategy.
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithGuidKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
+import type { Guid } from "@thresh/core/guid";
 
-export interface IRebalancingTestGrain extends GrainWithGuidKey {
+export interface IRebalancingTestGrain extends GrainKey<Guid> {
   ping(): Promise<void>;
 }
 

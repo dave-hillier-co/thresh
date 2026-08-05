@@ -35,7 +35,7 @@ import { expect } from "vitest";
 import { grain, implicitStreamSubscription, persistentState } from "@thresh/core/decorators";
 import { Grain } from "@thresh/core/grain";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import { IManagementGrain } from "@thresh/core/management-grain";
 import type { PersistentState } from "@thresh/core/persistent-state";
 import {
@@ -60,7 +60,7 @@ const CHECKPOINT_INTERVAL = 10;
 // exercises a rewind rather than "resume from nothing" or "resume at the end".
 const FAULT_AT_EVENT = 33;
 
-interface IGeneratedEventReporterGrain extends GrainWithStringKey {
+interface IGeneratedEventReporterGrain extends GrainKey<string> {
   reportResult(
     streamKey: string,
     streamProvider: string,
@@ -232,7 +232,7 @@ abstract class RecoverableCollectorGrainBase
   }
 }
 
-interface IGeneratedEventCollectorGrain extends GrainWithStringKey {
+interface IGeneratedEventCollectorGrain extends GrainKey<string> {
   marker(): Promise<string>;
 }
 const IGeneratedEventCollectorGrain = defineGrainInterface<IGeneratedEventCollectorGrain>(

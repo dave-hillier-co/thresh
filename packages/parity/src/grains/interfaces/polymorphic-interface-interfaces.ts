@@ -11,9 +11,9 @@
 // is therefore omitted from every interface below; the one upstream test that
 // exercises it (`Polymorphic_InheritedMethodAmbiguity`) is excluded.
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithIntegerKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 
-export interface IA extends GrainWithIntegerKey {
+export interface IA extends GrainKey<bigint> {
   a1Method(): Promise<string>;
   a2Method(): Promise<string>;
   a3Method(): Promise<string>;
@@ -21,7 +21,7 @@ export interface IA extends GrainWithIntegerKey {
 
 export const IA = defineGrainInterface<IA>("UnitTests.GrainInterfaces.IA");
 
-export interface IB extends GrainWithIntegerKey {
+export interface IB extends GrainKey<bigint> {
   b1Method(): Promise<string>;
   b2Method(): Promise<string>;
   b3Method(): Promise<string>;
@@ -45,7 +45,7 @@ export interface ID extends IC {
 
 export const ID = defineGrainInterface<ID>("UnitTests.GrainInterfaces.ID");
 
-export interface IE extends GrainWithIntegerKey {
+export interface IE extends GrainKey<bigint> {
   e1Method(): Promise<string>;
   e2Method(): Promise<string>;
   e3Method(): Promise<string>;
@@ -61,7 +61,7 @@ export interface IF extends ID, IE {
 
 export const IF = defineGrainInterface<IF>("UnitTests.GrainInterfaces.IF");
 
-export interface IH extends GrainWithIntegerKey {
+export interface IH extends GrainKey<bigint> {
   h1Method(): Promise<string>;
   h2Method(): Promise<string>;
   h3Method(): Promise<string>;
