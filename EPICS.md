@@ -60,7 +60,7 @@ for how the design differs from Orleans.
 - **Ambient cancellation & per-call deadlines** — `@thresh/core/abort`, `AbortSignal` + deadline
   threaded through invocation context, dispatchers, turn scheduler (admission-time preemption),
   `onDeactivate(reason, signal?)` and grain storage; composes with the explicit
-  `GrainCancellationToken` mechanism. Remainders in `todo.md`.
+  `GrainCancellationToken` mechanism.
 - **Scheduler back-pressure & deactivation timeout** — bounded per-activation queues
   (soft-warn/hard-reject with `LimitExceededException`), stuck-turn watchdog, and an enforced
   `deactivationTimeout` that force-invalidates a hung activation.
