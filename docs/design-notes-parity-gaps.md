@@ -1,5 +1,13 @@
 # Design notes — parity gaps requiring a design pass
 
+> **Historical design archive.** These notes were written while the 2026 parity backlog was still
+> open. The recommendations remain useful design provenance, but many sections now describe shipped
+> work rather than current gaps. For current status, use [`EPICS.md`](../EPICS.md) and [`todo.md`](../todo.md):
+> the 2026-07-24 burn-down delivered cancellation/deadlines, scheduler back-pressure, observability
+> breadth, serializer versioning, stream failure handling, directory hardening, transaction
+> deadlines/keepalive, durable-job `RunId` dedup/claim ramp-up, and full-facet `@readOnly` guard
+> coverage.
+
 The parity-gap items in [`todo.md`](../todo.md) split into two groups:
 
 1. **Targeted follow-ups** — small, single-package, mechanical. Tracked under "Parity follow-ups" in `todo.md` and not covered here.

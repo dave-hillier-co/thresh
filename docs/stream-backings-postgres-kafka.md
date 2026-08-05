@@ -1,32 +1,36 @@
 # Stream backings: Postgres and Kafka
 
-Design and delivery plan for two additional stream backings behind the existing streaming
-interfaces ([#39](https://github.com/dave-hillier-co/thresh/issues/39)). The
-programming model (`StreamProvider`, subscriptions, implicit subscriptions, producer handles)
-does not change; each backing is a new provider package slice behind seams that already exist.
+Current implementation notes for the additional Postgres and Kafka stream backings delivered
+behind the existing streaming interfaces ([#39](https://github.com/dave-hillier-co/thresh/issues/39)).
+The programming model (`StreamProvider`, subscriptions, implicit subscriptions, producer handles)
+did not change; each backing is a provider slice behind the shared pulling-provider seams.
+
+> **Status (updated 2026-08-04):** Phase 0 (shared provider core), Phase 1 (Postgres),
+> and Phase 2 (Kafka) are implemented. Phase 3 remains optional polish: LISTEN/NOTIFY
+> wake-up for Postgres, consumer-lag gauges, and worked examples.
 
 ## Where the seams are today
 
 The pulling-stream architecture is already split so that almost everything is backend-neutral:
 
-| Concern | Contract | Redis implementation |
+| Concern | Contract | Implementations |
 | --- | --- | --- |
-| Physical queue | `PullableQueue` (`getCursor`/`readAfter`/`commit`) + `append` — `packages/streams/src/queue-pulling-agent.ts`, `redis-stream-queue.ts` | `RedisStreamQueue` (Redis Stream + Lua-allocated monotonic token + cursor key) |
-| Pulling agent | `QueuePullingAgent` — poll, deliver, retry/backoff, poison skip, `StreamFailureHandler`, `RecoverableStreamDeliveryError` rewind | backend-agnostic already |
-| Queue ownership | hash ring — `ownedQueueIndices` (`queue-ownership.ts`), driven by `PullingStreamProviderHost.refreshOwnership` on membership change | backend-agnostic already |
-| Subscription registry | durable explicit subscriptions per stream | `RedisSubscriptionRegistry` |
-| Failure store | `DurableStreamFailureStore` / `DurableStreamFailureHandler` (`stream-failure-store.ts`) | `MemoryStreamFailureStore` (Redis store not yet needed) |
-| Provider orchestration | `ActivationBoundStreamProvider`: agent lifecycle per owned queue, fan-out to explicit + implicit subscribers, `StreamProducerRegistry`, config validation (`StreamProviderConfigurationError`) | `RedisPullingStreamProvider` — mostly backend-neutral code |
-| Host wiring | `SiloBuilder.addRedisStreams(name, options)`; `refreshOwnership` on membership change; delivery through the incoming-call-filter pipeline | — |
+| Physical queue | `PullableQueue` (`getCursor`/`readAfter`/`commit`) + `append` — `packages/streams/src/queue-pulling-agent.ts` | `RedisStreamQueue`, `PostgresStreamQueue`, `KafkaStreamQueue` |
+| Pulling agent | `QueuePullingAgent` — poll, deliver, retry/backoff, poison skip, `StreamFailureHandler`, `RecoverableStreamDeliveryError` rewind | Backend-agnostic |
+| Queue ownership | Hash ring — `ownedQueueIndices` (`queue-ownership.ts`), driven by `PullingStreamProviderHost.refreshOwnership` on membership change | Backend-agnostic |
+| Subscription registry | Durable explicit subscriptions per stream | `RedisSubscriptionRegistry`, `PostgresSubscriptionRegistry` |
+| Failure store | `DurableStreamFailureStore` / `DurableStreamFailureHandler` (`stream-failure-store.ts`) | `MemoryStreamFailureStore`, `PostgresStreamFailureStore` |
+| Provider orchestration | `PullingStreamProviderCore`: agent lifecycle per owned queue, fan-out to explicit + implicit subscribers, `StreamProducerRegistry`, config validation (`StreamProviderConfigurationError`) | Shared by `RedisPullingStreamProvider`, `PostgresPullingStreamProvider`, and `KafkaPullingStreamProvider` |
+| Host wiring | Silo builder methods plus `refreshOwnership` on membership change; delivery through the incoming-call-filter pipeline | `addRedisStreams`, `addPostgresStreams`, `addKafkaStreams` |
 
 Delivery is at-least-once with per-queue ordering: many logical streams multiplex over a fixed
 set of physical queues; an agent per owned queue pulls strictly after the durably committed
 cursor and commits after delivery, so a successor resumes losslessly on handoff.
 
-## Phase 0 — extract the shared provider core (behavior-preserving)
+## Phase 0 — shared provider core (shipped)
 
 `RedisPullingStreamProvider` couples the neutral orchestration to Redis only through its
-constructor. Before adding a second durable backing, extract:
+constructor. The implementation extracted:
 
 - **`AppendableQueue`** — `PullableQueue` + `append(streamKey, event): Promise<number>` (the
   shape `RedisStreamQueue` already has).
@@ -37,17 +41,15 @@ constructor. Before adding a second durable backing, extract:
   publish→queue selection (`stableHash32(streamKey) % queueCount`), fan-out to registry +
   implicit subscribers, producer registry, failure-handler forwarding, config validation.
 
-A backing then supplies `{ queues, registry, name, options }` and re-exports its own builder
+Each backing supplies `{ queues, registry, name, options }` and re-exports its own builder
 method — two files per backing instead of a copy of the provider. `RedisPullingStreamProvider`
-becomes a thin composition; its existing test suite is the non-regression proof for the
+is now a thin composition; its existing test suite remains the non-regression proof for the
 refactor. `MemoryStreamProvider` (push-based, not a pulling provider) is untouched.
 
-Exit criterion: all existing stream tests pass unchanged; no public API change.
+## Phase 1 — Postgres backing (shipped)
 
-## Phase 1 — Postgres backing (`@thresh/streams` + `packages/persistence` conventions)
-
-Rationale: Postgres grain-storage and reminder providers already ship, so a Postgres-only
-deployment currently needs Redis solely for streams. This closes that gap.
+Rationale: Postgres grain-storage and reminder providers already ship, so the Postgres stream
+backing closes the former Redis-only streams gap for Postgres deployments.
 
 ### Storage model
 
@@ -72,7 +74,7 @@ LIMIT $`. Index `(provider, queue_idx, id)`.
 ### Behavioral notes
 
 - **Polling** matches the Redis provider (default 50 ms via `QueuePullingAgent`); a
-  LISTEN/NOTIFY wake-up is a later optimization, not part of this slice.
+  LISTEN/NOTIFY wake-up remains Phase 3 optional polish.
 - **Retention**: delivered events are dead rows. Opportunistic trim on `commit`
   (`DELETE WHERE queue_idx=$ AND id<=$cursor`), with an optional `retainFor` duration to keep a
   replay window. Configurable off.
@@ -84,17 +86,13 @@ LIMIT $`. Index `(provider, queue_idx, id)`.
 - `SiloBuilder.addPostgresStreams(name, { connectionString, queueCount?, pollIntervalMs?,
   tablePrefix?, failureHandler?, retainFor? })`, validating options through
   `StreamProviderConfigurationError` like `addRedisStreams`.
-- Unit/integration tests against real Postgres, `describe.skipIf(pool === undefined)` with
-  `POSTGRES_URL` (existing convention in `postgres-grain-storage.test.ts`); the suite mirrors
-  `redis-pulling-stream-provider.test.ts` (publish/deliver, cursor handoff, implicit
-  subscribers, poison skip + failure store, producer registration).
-- A hosting-level multi-silo cluster test mirroring the Redis streams cluster test: ownership
-  rebalances on silo stop, delivery resumes from the committed cursor.
+- Unit/integration tests live in `postgres-pulling-stream-provider.test.ts` and
+  `postgres-stream-failure-store.test.ts`; they use `POSTGRES_URL` and skip cleanly when no
+  database is available.
+- The hosting-level `postgres-streams-cluster.test.ts` covers multi-silo ownership rebalance and
+  cursor-resumed delivery after silo stop.
 
-Exit criterion: the Redis streams test suite ported to Postgres passes against a real database;
-a multi-silo cluster delivers across silo failure with no gaps.
-
-## Phase 2 — Kafka backing
+## Phase 2 — Kafka backing (shipped)
 
 Rationale: teams with Kafka as their event backbone publish/consume streams without a second
 durable system for the transport.
@@ -144,8 +142,10 @@ against a real broker (`KAFKA_BROKERS` env, `describe.skipIf` when unreachable),
   deliver (at-least-once, consistent with the existing contract) and the cursor upsert is
   last-writer-wins, same as the Redis backing today.
 
-Exit criterion: the same ported provider suite plus the multi-silo cluster test pass against a
-real broker; partition-count validation and the retention-gap path are covered.
+The Kafka provider suite lives in `kafka-pulling-stream-provider.test.ts`; it runs against a real
+broker when `KAFKA_BROKERS` is configured and skips cleanly otherwise. The suite covers publish/
+deliver, ownership handoff, durable metadata, poison handling, producer registration,
+partition-count validation, and the retention-gap path.
 
 ## Phase 3 — polish (optional, after both land)
 
@@ -155,13 +155,12 @@ real broker; partition-count validation and the retention-gap path are covered.
 
 ## What every backing must keep working
 
-The shared core owns these, so they hold by construction once Phase 0 lands — the per-backing
-suites assert them anyway: implicit subscriptions, delivery through the incoming
+The shared core owns these, and the per-backing suites assert them: implicit subscriptions, delivery through the incoming
 call-filter pipeline, `StreamFilter` support, `RecoverableStreamDeliveryError` checkpoint
 rewind, producer registration, the durable failure handler, and `TestCluster` sharing.
 
-## Order and dependencies
+## Remaining work
 
-Phase 0 → Phase 1 → Phase 2 (Kafka reuses Phase 1's metadata store); Phase 3 anytime after its
-target backing. Each phase is a vertical slice with its own exit criterion, matching the
-repo's TDD/slice workflow.
+Only Phase 3 remains: LISTEN/NOTIFY wake-up for the Postgres queue, consumer-lag gauges, and
+worked examples. Those items are optional polish tracked from `todo.md`; the core Postgres and
+Kafka backings are already in place.
