@@ -52,6 +52,77 @@ const commands = await thermostat.onUpdate(update);
 cluster decides to place it. The caller does not know — or need to know — which pod that is. The
 class + decorator form this functional API is built on is still supported as an interop surface.
 
+## Application architecture
+
+At a high level, Thresh splits the Orleans-style virtual actor runtime into a small set of
+workspace packages that can run in-process for tests and examples, or as a set of Kubernetes-hosted
+silos in production. Callers use typed grain references; the runtime resolves and activates grains
+on demand; optional providers add persistence, streams, reminders, transactions, durable jobs and
+observability.
+
+```mermaid
+flowchart TB
+  subgraph App[Applications and examples]
+    Caller[Web APIs, services, tests and other grains]
+    GrainCode[Grain interfaces and implementations]
+  end
+
+  subgraph API[Programming model]
+    Client["@thresh/client\nTyped grain proxies"]
+    Core["@thresh/core\nGrain IDs, references, hooks, facets and contracts"]
+  end
+
+  subgraph Silo["Silo process (@thresh/hosting)"]
+    Builder[SiloBuilder configuration]
+    Runtime["@thresh/runtime\nActivation lifecycle, placement and single-turn execution"]
+    Directory["@thresh/directory\nActivation ownership and location cache"]
+    Messaging["@thresh/messaging\nIn-process or WebSocket transport"]
+    Obs["@thresh/observability\nLogs, metrics and traces"]
+  end
+
+  subgraph Providers[Optional runtime providers]
+    Persistence["@thresh/persistence\nMemory, Redis or Postgres grain state"]
+    Streams["@thresh/streams\nMemory, Redis, Postgres or Kafka streams"]
+    Reminders["@thresh/reminders\nMemory, Redis or Postgres reminder tables"]
+    Transactions["@thresh/transactions\nTransactional state and commit protocol"]
+    Jobs["@thresh/durable-jobs\nShard stores and executors"]
+    Journaling["@thresh/journaling\nDurable grain state machines"]
+  end
+
+  subgraph Cluster[Kubernetes cluster]
+    K8s["@thresh/clustering-k8s\nEndpointSlice-backed membership"]
+    Pods[Peer silo pods]
+    Stores[(Redis, Postgres and Kafka)]
+  end
+
+  Caller --> Client --> Core --> Messaging --> Runtime
+  GrainCode --> Core
+  Builder --> Runtime
+  Runtime <--> Directory
+  Runtime <--> Messaging
+  Runtime --> Obs
+  Runtime --> Persistence
+  Runtime --> Streams
+  Runtime --> Reminders
+  Runtime --> Transactions
+  Runtime --> Jobs
+  Runtime --> Journaling
+  Directory <--> K8s
+  Messaging <--> Pods
+  Persistence --> Stores
+  Streams --> Stores
+  Reminders --> Stores
+  Transactions --> Stores
+  Jobs --> Stores
+  Journaling --> Stores
+```
+
+The core call path is intentionally location-transparent: application code asks the client for a
+grain reference, messaging carries the request to the silo that owns or creates the activation, the
+runtime executes the grain one turn at a time, and provider packages handle any durable state or
+background work. In Kubernetes, membership and peer discovery come from EndpointSlices while Redis,
+Postgres and Kafka back the durable provider implementations.
+
 ## Documentation
 
 The target is **feature parity with Orleans 10**, so the model, persistence, reminders, streams and
