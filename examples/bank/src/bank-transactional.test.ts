@@ -4,8 +4,8 @@ import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
 import { createSilo } from "@thresh/hosting/silo-builder";
 import type { SiloHost } from "@thresh/hosting/silo-host";
 import {
-  ITeller,
-  ITxAccount,
+  teller,
+  txAccount,
   TellerGrain,
   TxAccountGrain,
 } from "@thresh/example-bank/account-transactional";
@@ -16,8 +16,8 @@ function buildSilo(): SiloHost {
   return createSilo({ clusterId: "bank-tx", local })
     .useStaticMembership([local])
     .useInProcessTransport(new InProcessNetwork())
-    .registerGrain(TxAccountGrain, { interfaces: [ITxAccount] })
-    .registerGrain(TellerGrain, { interfaces: [ITeller] })
+    .registerGrain(TxAccountGrain, { interfaces: [txAccount] })
+    .registerGrain(TellerGrain, { interfaces: [teller] })
     .build();
 }
 
@@ -26,12 +26,12 @@ describe("transactional bank account (Phase 7)", () => {
     const silo = buildSilo();
     await silo.start();
     try {
-      const teller = silo.getGrain(ITeller, "main");
-      await teller.open("alice", 10_000);
-      await teller.transfer("alice", "bob", 3_000);
+      const tellerRef = silo.getGrain(teller, "main");
+      await tellerRef.open("alice", 10_000);
+      await tellerRef.transfer("alice", "bob", 3_000);
 
-      expect(await silo.getGrain(ITxAccount, "alice").balance()).toBe(7_000);
-      expect(await silo.getGrain(ITxAccount, "bob").balance()).toBe(3_000);
+      expect(await silo.getGrain(txAccount, "alice").balance()).toBe(7_000);
+      expect(await silo.getGrain(txAccount, "bob").balance()).toBe(3_000);
     } finally {
       await silo.stop();
     }
@@ -41,14 +41,14 @@ describe("transactional bank account (Phase 7)", () => {
     const silo = buildSilo();
     await silo.start();
     try {
-      const teller = silo.getGrain(ITeller, "main");
-      await teller.open("alice", 1_000);
+      const tellerRef = silo.getGrain(teller, "main");
+      await tellerRef.open("alice", 1_000);
 
-      await expect(teller.transfer("alice", "bob", 5_000)).rejects.toThrow(/insufficient/);
+      await expect(tellerRef.transfer("alice", "bob", 5_000)).rejects.toThrow(/insufficient/);
 
       // The credit to bob was rolled back along with the failed debit.
-      expect(await silo.getGrain(ITxAccount, "alice").balance()).toBe(1_000);
-      expect(await silo.getGrain(ITxAccount, "bob").balance()).toBe(0);
+      expect(await silo.getGrain(txAccount, "alice").balance()).toBe(1_000);
+      expect(await silo.getGrain(txAccount, "bob").balance()).toBe(0);
     } finally {
       await silo.stop();
     }

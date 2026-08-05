@@ -4,7 +4,7 @@ import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
 import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
 import { createSilo } from "@thresh/hosting/silo-builder";
 import { GreeterGrain } from "@thresh/example-greeter/greeter-grain";
-import { IGreeter } from "@thresh/example-greeter/interfaces";
+import { greeter } from "@thresh/example-greeter/interfaces";
 
 export interface GreeterDemoResult {
   /** The first greeting — proves onActivate ran before it (carries the prefix). */
@@ -37,18 +37,22 @@ export async function runGreeterDemo(): Promise<GreeterDemoResult> {
   })
     .useStaticMembership([local])
     .useInProcessTransport(new InProcessNetwork())
-    .registerGrain(GreeterGrain, { interfaces: [IGreeter] })
+    .registerGrain(GreeterGrain, { interfaces: [greeter] })
     .build();
 
   await silo.start();
   try {
-    const greeter = silo.getGrain(IGreeter, "en");
+    const greeterRef = silo.getGrain(greeter, "en");
 
-    const firstGreeting = await greeter.greet("Ada");
+    const firstGreeting = await greeterRef.greet("Ada");
 
     // Fire several calls at once; serialized turns mean every ++ is counted.
-    await Promise.all([greeter.greet("Grace"), greeter.greet("Linus"), greeter.greet("Edsger")]);
-    const countAfterConcurrent = await greeter.greetings();
+    await Promise.all([
+      greeterRef.greet("Grace"),
+      greeterRef.greet("Linus"),
+      greeterRef.greet("Edsger"),
+    ]);
+    const countAfterConcurrent = await greeterRef.greetings();
 
     // Idle past the collection age; the sweep deactivates the grain.
     time.advance(60_000);
@@ -56,8 +60,8 @@ export async function runGreeterDemo(): Promise<GreeterDemoResult> {
     const deactivatedWhenIdle = !silo.isActive(new GrainId("Greeter", "en"));
 
     // Next call reactivates fresh — the volatile count restarts at 1.
-    await greeter.greet("Alan");
-    const countAfterReactivation = await greeter.greetings();
+    await greeterRef.greet("Alan");
+    const countAfterReactivation = await greeterRef.greetings();
 
     return {
       firstGreeting,

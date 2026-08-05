@@ -1,12 +1,12 @@
 import { defineGrain } from "@thresh/core/define-grain";
-import type { ILeaderboard, ScoreEntry } from "@thresh/example-cluster/interfaces";
+import type { Leaderboard, ScoreEntry } from "@thresh/example-cluster/interfaces";
 
 /**
  * Keeps each player's best score. Holds no locks: calls arriving from every silo
  * in the cluster are routed to this one activation and run as serialized turns,
  * so the `Map` is only ever touched by one turn at a time.
  */
-export const LeaderboardGrain = defineGrain<ILeaderboard>("Leaderboard", () => {
+export const LeaderboardGrain = defineGrain<Leaderboard>("Leaderboard", () => {
   const best = new Map<string, number>();
 
   return {

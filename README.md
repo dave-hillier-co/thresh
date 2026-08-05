@@ -25,13 +25,13 @@ the setup context; the returned object is the grain's message surface.
 
 ```ts
 // Interface — the contract callers see. A compile-time view; no method table.
-interface IThermostat extends GrainWithStringKey {
+type Thermostat = GrainKey<string> & {
   onUpdate(status: ThermostatStatus): Promise<Command[]>;
-}
-const IThermostat = defineGrainInterface<IThermostat>("IThermostat");
+};
+const thermostat = defineGrainInterface<Thermostat>("Thermostat");
 
 // Implementation — a factory closure that runs once per activation.
-const ThermostatGrain = defineGrain<IThermostat>("Thermostat", (ctx) => {
+const ThermostatGrain = defineGrain<Thermostat>("Thermostat", (ctx) => {
   const status = usePersistentState<ThermostatStatus>(ctx, "status");
 
   const onUpdate = async (next: ThermostatStatus): Promise<Command[]> => {
@@ -44,8 +44,8 @@ const ThermostatGrain = defineGrain<IThermostat>("Thermostat", (ctx) => {
 });
 
 // Caller — from a web frontend or another grain.
-const thermostat = client.getGrain<IThermostat>(IThermostat, deviceId);
-const commands = await thermostat.onUpdate(update);
+const ref = client.getGrain(thermostat, deviceId);
+const commands = await ref.onUpdate(update);
 ```
 
 `client.getGrain` returns a lightweight proxy; the grain is activated on first call, wherever the
@@ -60,6 +60,8 @@ docs cover only what is worth writing down here:
 
 - [How this differs from Orleans](docs/deviations.md) — the deviations only (TypeScript idioms,
   Kubernetes hosting, functional authoring), each linked to its decision record.
+- [TypeScript grain API idioms](docs/typescript-grain-api.md) — naming and typing guidance for
+  writing grain surfaces without C#-style `I*` interfaces or key marker names.
 - [`EPICS.md`](EPICS.md) — the live status board (shipped vs. remaining).
 
 ## Developing

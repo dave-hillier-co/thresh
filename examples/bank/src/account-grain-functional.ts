@@ -1,6 +1,7 @@
 import { defineGrain, useReducerState } from "@thresh/core/define-grain";
 import {
-  IAccount,
+  account,
+  type Account,
   initialAccount,
   reduceAccount,
   type AccountEvent,
@@ -15,7 +16,7 @@ import {
  * state. Compare with `account-reducer-grain.ts`, which reduces the same model to
  * a single `dispatch`/`query` surface with no per-method interface.
  */
-export const AccountGrain = defineGrain<IAccount>("Account", (ctx) => {
+export const AccountGrain = defineGrain<Account>("Account", (ctx) => {
   const state = useReducerState<AccountState, AccountEvent>(ctx, "account", {
     initial: initialAccount,
     reduce: reduceAccount,
@@ -38,7 +39,7 @@ export const AccountGrain = defineGrain<IAccount>("Account", (ctx) => {
 
   const transferTo = async (other: string, cents: number): Promise<number> => {
     const remaining = await withdraw(cents);
-    await ctx.getGrain(IAccount, other).deposit(cents);
+    await ctx.getGrain(account, other).deposit(cents);
     return remaining;
   };
 

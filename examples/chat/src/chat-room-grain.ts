@@ -1,12 +1,12 @@
 import { defineGrain } from "@thresh/core/define-grain";
-import { CHAT, type ChatMessage, type IChatRoom } from "@thresh/example-chat/interfaces";
+import { CHAT, type ChatMessage, type ChatRoom } from "@thresh/example-chat/interfaces";
 
 /**
  * A chat room is a pure fan-out point: `say` publishes to the room's telemetry
  * stream and every member that subscribed receives it. The room holds no member
  * list — the stream is the membership.
  */
-export const ChatRoomGrain = defineGrain<IChatRoom>("ChatRoom", (ctx) => ({
+export const ChatRoomGrain = defineGrain<ChatRoom>("ChatRoom", (ctx) => ({
   say: async (from: string, text: string): Promise<void> => {
     await ctx.runtime
       .getStreamProvider()

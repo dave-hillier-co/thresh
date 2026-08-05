@@ -4,7 +4,7 @@ import { createKubernetesClientSource } from "@thresh/clustering-k8s/kubernetes-
 import { readPodEnvironment, siloAddressFromPodEnv } from "@thresh/clustering-k8s/pod-environment";
 import { createSilo } from "@thresh/hosting/silo-builder";
 import { CounterGrain } from "@thresh/example-k8s-silo/counter-grain";
-import { ICounter } from "@thresh/example-k8s-silo/interfaces";
+import { counter } from "@thresh/example-k8s-silo/interfaces";
 import { createCounterApi } from "@thresh/example-k8s-silo/http-api";
 
 const SILO_PORT = Number(process.env.SILO_PORT ?? 11111);
@@ -34,7 +34,7 @@ async function main(): Promise<void> {
     .useWebSocketTransport()
     .addRedisStorage("default", { url: REDIS_URL })
     .useHealthEndpoints({ port: HEALTH_PORT })
-    .registerGrain(CounterGrain, { interfaces: [ICounter] })
+    .registerGrain(CounterGrain, { interfaces: [counter] })
     .build();
 
   await host.start();

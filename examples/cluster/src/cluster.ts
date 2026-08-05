@@ -3,7 +3,7 @@ import { SiloAddress } from "@thresh/core/silo-address";
 import { createSilo } from "@thresh/hosting/silo-builder";
 import type { SiloHost } from "@thresh/hosting/silo-host";
 import { StaticMembershipService } from "@thresh/runtime/static-membership";
-import { ILeaderboard } from "@thresh/example-cluster/interfaces";
+import { leaderboard } from "@thresh/example-cluster/interfaces";
 import { LeaderboardGrain } from "@thresh/example-cluster/leaderboard-grain";
 
 const CLUSTER = "leaderboard";
@@ -77,7 +77,7 @@ export async function buildWebSocketCluster(count: number): Promise<Cluster> {
     createSilo({ clusterId: CLUSTER, local, random: () => 0 })
       .useMembership(membership)
       .useWebSocketTransport()
-      .registerGrain(LeaderboardGrain, { interfaces: [ILeaderboard] })
+      .registerGrain(LeaderboardGrain, { interfaces: [leaderboard] })
       .build(),
   );
 

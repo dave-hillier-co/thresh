@@ -2,7 +2,7 @@ import { defineGrain } from "@thresh/core/define-grain";
 import type { StreamHandler } from "@thresh/core/stream";
 import {
   TELEMETRY,
-  type IFleetAggregator,
+  type FleetAggregator,
   type ThermostatStatus,
 } from "@thresh/example-thermostat/interfaces";
 
@@ -11,7 +11,7 @@ import {
  * functional counterpart to the class-based `ThermostatGrain` it consumes from —
  * the two styles interoperate over the same stream (see `thermostat-grain.ts`).
  */
-export const FleetAggregatorGrain = defineGrain<IFleetAggregator>("FleetAggregator", (ctx) => {
+export const FleetAggregatorGrain = defineGrain<FleetAggregator>("FleetAggregator", (ctx) => {
   let sum = 0;
   let count = 0;
 
