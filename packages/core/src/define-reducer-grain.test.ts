@@ -229,3 +229,28 @@ describe("defineReducerGrain — the activation", () => {
     expect(dispatched).toEqual([{ key: "b", action: { type: "add", by: 7 } }]);
   });
 });
+
+describe("the query read-only default", () => {
+  it("survives a caller setting another option on query", () => {
+    // Regression: the default was spread as `{ query: { readOnly: true }, ...interfaceOptions }`,
+    // a shallow merge — so any caller entry for `query` replaced the default wholesale and
+    // silently dropped `readOnly`, costing the read-only turn and its dev-mode mutation guard.
+    const R = defineReducerGrain<{ n: number }, { type: "inc" }>("QueryDefaultKept", {
+      initial: () => ({ n: 0 }),
+      reduce: (s) => ({ state: s }),
+      interfaceOptions: { query: { responseTimeout: { seconds: 5 } } },
+    });
+
+    expect(R.options?.query).toEqual({ readOnly: true, responseTimeout: { seconds: 5 } });
+  });
+
+  it("still lets a caller override it explicitly", () => {
+    const R = defineReducerGrain<{ n: number }, { type: "inc" }>("QueryDefaultOverridden", {
+      initial: () => ({ n: 0 }),
+      reduce: (s) => ({ state: s }),
+      interfaceOptions: { query: { readOnly: false } },
+    });
+
+    expect(R.options?.query).toEqual({ readOnly: false });
+  });
+});

@@ -117,8 +117,14 @@ export function defineReducerGrain<S, A>(
     },
     {
       ...grainOptions,
-      // `query` never mutates the snapshot, so it takes a read-only turn.
-      interfaceOptions: { query: { readOnly: true }, ...interfaceOptions },
+      // `query` never mutates the snapshot, so it takes a read-only turn. Merge
+      // per-entry, not per-record: a shallow spread lets a caller who sets any
+      // other option on `query` silently drop the default, costing the read-only
+      // turn and its dev-mode mutation guard. Explicit `readOnly` still wins.
+      interfaceOptions: {
+        ...interfaceOptions,
+        query: { readOnly: true, ...interfaceOptions?.query },
+      },
     },
   );
 }
