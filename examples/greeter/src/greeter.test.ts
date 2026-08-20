@@ -26,11 +26,11 @@ function buildGreeterSilo(time: FakeTimeProvider): SiloHost {
 }
 
 describe("greeter (core actor model acceptance)", () => {
-  it("runs onActivate before the first message", async () => {
+  it("runs the activate hook before the first message", async () => {
     const silo = buildGreeterSilo(new FakeTimeProvider());
     await silo.start();
     try {
-      // The prefix is only set in onActivate; seeing it proves activation ran first.
+      // The prefix is only set in the activate hook; seeing it proves activation ran first.
       expect(await silo.getGrain(GreeterGrain, "en").greet("Ada")).toBe(
         "[en] Hello, Ada! (greeting #1)",
       );

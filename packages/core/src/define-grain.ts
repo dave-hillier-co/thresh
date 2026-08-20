@@ -24,6 +24,7 @@ import type {
   DurableValue,
 } from "./durable-state";
 import { registerDurableField, type DurableKind } from "./durable-state-metadata";
+import { createFieldRegistry } from "./field-registry";
 import type { Reducer, ReducerState } from "./reducer-state";
 import { registerReducerField } from "./reducer-state-metadata";
 import type { TransactionalState } from "./transactional-state";
@@ -40,18 +41,30 @@ export interface GrainSetup extends GrainContext {
   getGrain<T, K extends GrainKeyKind>(def: GrainInterface<T, K>, key: KeyTypeOf<K>): T;
 }
 
-/** Lifecycle hooks a behaviour may return; both are optional and awaited by the runtime. */
-export interface GrainLifecycle {
-  onActivate(reason: ActivationReason): void | Promise<void>;
-  onDeactivate(reason: DeactivationReason, signal?: AbortSignal): void | Promise<void>;
-}
+/**
+ * A hook run when the activation comes up, before the first message. Registered
+ * with {@link useOnActivate}; the runtime awaits it.
+ */
+export type ActivateHandler = (reason: ActivationReason) => void | Promise<void>;
 
 /**
- * What a grain factory returns: the interface implementation plus optional
- * lifecycle hooks and an optional self incoming-call filter (under
- * `INCOMING_CALL_FILTER`).
+ * A hook run when the activation is torn down. Registered with
+ * {@link useOnDeactivate}; the runtime awaits it and may pass an advisory
+ * `signal` (see `Grain.onDeactivate`).
  */
-export type GrainBehaviour<T> = T & Partial<GrainLifecycle> & Partial<SelfFilteringGrain>;
+export type DeactivateHandler = (
+  reason: DeactivationReason,
+  signal?: AbortSignal,
+) => void | Promise<void>;
+
+/**
+ * What a grain factory returns: the grain's behaviour towards messages — the
+ * interface implementation, plus an optional self incoming-call filter (under
+ * `INCOMING_CALL_FILTER`), which is itself part of how messages are handled.
+ * Lifecycle is *not* returned: register it with {@link useOnActivate} /
+ * {@link useOnDeactivate}, like any other facet hook.
+ */
+export type GrainBehaviour<T> = T & Partial<SelfFilteringGrain>;
 
 /**
  * A grain definition that *is* its own interface — the shape `defineGrain`
@@ -92,11 +105,9 @@ type Remote<F> = F extends (...args: infer A) => infer R
  * explicitly for a contract that has to stay stable.
  */
 export type InferredSurface<R> = {
-  [K in Extract<keyof R, string> as K extends keyof GrainLifecycle
-    ? never
-    : R[K] extends (...args: never[]) => unknown
-      ? K
-      : never]: Remote<R[K]>;
+  [K in Extract<keyof R, string> as R[K] extends (...args: never[]) => unknown ? K : never]: Remote<
+    R[K]
+  >;
 };
 
 export interface DefineGrainOptions<
@@ -196,14 +207,48 @@ function createSetup(context: GrainContext): GrainSetup {
   };
 }
 
+// Lifecycle handlers are registered per activation instance, the same way the
+// state facets register their fields — the factory may call the hooks any
+// number of times, including from helpers it composes.
+const activateHandlers = createFieldRegistry<ActivateHandler>();
+const deactivateHandlers = createFieldRegistry<DeactivateHandler>();
+
+/**
+ * Register a hook to run when the activation comes up, before the first
+ * message — the functional counterpart of overriding `Grain.onActivate`.
+ *
+ * Hooks compose: each call adds one, and they run in registration order, so a
+ * helper that sets something up runs after the setup it depends on. Every hook
+ * is awaited in turn, and a hook that throws fails the activation (the
+ * remaining ones do not run), exactly as a throwing `onActivate` does.
+ */
+export function useOnActivate(handler: ActivateHandler): void {
+  activateHandlers.register(activeSetup("useOnActivate").instance, handler);
+}
+
+/**
+ * Register a hook to run when the activation is torn down — the functional
+ * counterpart of overriding `Grain.onDeactivate`.
+ *
+ * Hooks compose LIFO: the last registered runs first, unwinding the activation
+ * in the reverse of the order it was built up, so a hook always tears down
+ * before whatever it was set up on top of. Every hook is awaited in turn, and
+ * one that throws does not strand the hooks under it — the unwind runs to the
+ * bottom and the first failure is then surfaced.
+ */
+export function useOnDeactivate(handler: DeactivateHandler): void {
+  deactivateHandlers.register(activeSetup("useOnDeactivate").instance, handler);
+}
+
 /**
  * Register a grain implementation written as a factory closure rather than a
  * class — the functional counterpart of the `@grain()` decorator on a `Grain`
  * subclass. The factory runs once per activation, after the context is bound and
  * before any facet read or `onActivate`; it captures per-activation state in
  * closure variables (safe without locks under the single-turn model, exactly as
- * class fields are) and returns the interface methods plus optional lifecycle
- * hooks.
+ * class fields are) and returns the grain's message surface — nothing else.
+ * Lifecycle belongs to the hooks (`useOnActivate` / `useOnDeactivate`), not to
+ * the returned object.
  *
  * The returned definition registers and activates through the same catalog,
  * scheduler and facet-binding machinery as a class grain, so the two styles
@@ -216,19 +261,17 @@ function createSetup(context: GrainContext): GrainSetup {
  * storage, stream and job dependencies), which is worse coupling than the
  * duplication it removes.
  */
-export function defineGrain<
-  R extends Partial<GrainLifecycle> & Partial<SelfFilteringGrain>,
-  K extends GrainKeyKind = "string",
->(
-  name: string,
-  factory: (ctx: GrainSetup) => R,
-  options?: DefineGrainOptions<K, InferredSurface<R>>,
-): GrainDefinition<InferredSurface<R>, K>;
+// One overload, not two. A pair split on a `Partial<...>` constraint cannot work:
+// every `Partial<T>` is a weak type, so a factory returning only plain methods has
+// no property in common with it and silently falls through to the second overload,
+// publishing its *raw* return type with sync methods left unlifted. Inferring `T`
+// from the return type and mapping it once covers both call styles — implicit
+// (`T` = what the factory returns) and explicit (`defineGrain<IFoo>(...)`).
 export function defineGrain<T extends object, K extends GrainKeyKind = KeyKindFromMarker<T>>(
   name: string,
   factory: (ctx: GrainSetup) => GrainBehaviour<T>,
-  options?: DefineGrainOptions<K, T>,
-): GrainDefinition<T, K>;
+  options?: DefineGrainOptions<K, InferredSurface<T>>,
+): GrainDefinition<InferredSurface<T>, K>;
 export function defineGrain<T extends object>(
   name: string,
   factory: (ctx: GrainSetup) => GrainBehaviour<T>,
@@ -236,8 +279,8 @@ export function defineGrain<T extends object>(
 ): GrainDefinition<T, GrainKeyKind> {
   class FunctionalGrain extends Grain {
     // Run the factory once the runtime binds the context (before `preActivate`
-    // reads facets), then install the returned methods/hooks as own members so
-    // the catalog's method dispatch and lifecycle calls find them.
+    // reads facets), then install the returned methods as own members so the
+    // catalog's method dispatch finds them.
     override setContext(context: GrainContext): void {
       super.setContext(context);
       const setup = createSetup(context);
@@ -272,6 +315,15 @@ export function defineGrain<T extends object>(
       for (const key of keys) {
         const value = (behaviour as Record<PropertyKey, unknown>)[key];
         if (typeof value !== "function") continue;
+        // A returned lifecycle hook would install as an own property and
+        // silently shadow the composed runners below, dropping every hook the
+        // factory registered. The surface is messages only — say so loudly.
+        if (key === "onActivate" || key === "onDeactivate") {
+          throw new Error(
+            `grain "${name}" returned ${key} from its factory; lifecycle is registered with ` +
+              "useOnActivate / useOnDeactivate, not returned in the message surface",
+          );
+        }
         Object.defineProperty(this, key, {
           value,
           writable: true,
@@ -279,6 +331,33 @@ export function defineGrain<T extends object>(
           configurable: true,
         });
       }
+    }
+
+    // Registration order coming up: a hook that throws fails the activation
+    // and the ones after it never run, exactly as a throwing `onActivate` does.
+    override async onActivate(reason: ActivationReason): Promise<void> {
+      for (const handler of activateHandlers.getFields(this)) await handler(reason);
+    }
+
+    // The reverse of registration order going down, and — unlike activation —
+    // a hook that throws does not strand the ones registered under it: the
+    // stack unwinds to the bottom, then the first failure is surfaced to the
+    // runtime's usual `onDeactivate` error handling.
+    override async onDeactivate(reason: DeactivationReason, signal?: AbortSignal): Promise<void> {
+      const handlers = deactivateHandlers.getFields(this);
+      let failure: unknown;
+      let failed = false;
+      for (let i = handlers.length - 1; i >= 0; i--) {
+        try {
+          await handlers[i]!(reason, signal);
+        } catch (err) {
+          if (!failed) {
+            failure = err;
+            failed = true;
+          }
+        }
+      }
+      if (failed) throw failure;
     }
   }
 

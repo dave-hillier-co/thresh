@@ -155,8 +155,8 @@ pnpm --filter @thresh/example-bank start         # reducer grains: events fold t
 pnpm --filter @thresh/example-thermostat start   # durable state + a reminder + a telemetry stream
 ```
 
-- [`examples/greeter`](examples/greeter) — the smallest grain: `onActivate` runs before the first
-  call, concurrent calls are serialized turns, and volatile state resets when the grain reactivates
+- [`examples/greeter`](examples/greeter) — the smallest grain: a `useOnActivate` hook runs before the
+  first call, concurrent calls are serialized turns, and volatile state resets when the grain reactivates
   after going idle.
 - [`examples/chat`](examples/chat) — a room fans each message out to every member; a member that
   deactivated while idle resumes *its own* durable subscription and recovers exactly what it missed.

@@ -3,6 +3,7 @@ import {
   defineGrain,
   setupDepth,
   useContext,
+  useOnActivate,
   usePersistentState,
   type GrainSetup,
   type InferredSurface,
@@ -63,12 +64,10 @@ describe("defineGrain — the factory", () => {
     const events: string[] = [];
     const Counter = defineGrain("FactoryOnce", () => {
       events.push("factory");
-      return {
-        onActivate: () => {
-          events.push("onActivate");
-        },
-        ping: async () => "pong",
-      };
+      useOnActivate(() => {
+        events.push("onActivate");
+      });
+      return { ping: async () => "pong" };
     }).grain;
 
     const instance = new Counter();
@@ -552,8 +551,6 @@ describe("InferredSurface", () => {
   const OBSERVER = Symbol("observer");
 
   interface Returned {
-    onActivate(): Promise<void>;
-    onDeactivate(): void;
     greet(who: string): Promise<string>;
     count(): number;
     label: string;
@@ -563,12 +560,6 @@ describe("InferredSurface", () => {
 
   it("keeps only the string-keyed function members", () => {
     expectTypeOf<keyof InferredSurface<Returned>>().toEqualTypeOf<"greet" | "count">();
-    expect(true).toBe(true);
-  });
-
-  it("excludes the lifecycle hooks by name", () => {
-    expectTypeOf<InferredSurface<Returned>>().not.toHaveProperty("onActivate");
-    expectTypeOf<InferredSurface<Returned>>().not.toHaveProperty("onDeactivate");
     expect(true).toBe(true);
   });
 
@@ -595,13 +586,33 @@ describe("InferredSurface", () => {
     expect(true).toBe(true);
   });
 
+  it("publishes a lifted surface for a factory that registers no lifecycle", () => {
+    // Regression: the inference path used to be one of two overloads split on a
+    // `Partial<...>` constraint. Every `Partial<T>` is a weak type, so a factory
+    // returning only plain methods had no property in common with it, fell through
+    // to the explicit-interface overload, and published its raw return type — a
+    // sync method reached callers as `() => number` rather than the promise-lifted
+    // `() => Promise<number>` a remote call actually returns. It only looked
+    // correct while factories still returned an `onActivate` to satisfy the
+    // constraint, which they no longer can.
+    const Plain = defineGrain("PlainCounter", () => {
+      let count = 0;
+      return { increment: () => (count += 1), get: async () => count };
+    });
+
+    type Surface = NonNullable<(typeof Plain)["__t"]>;
+    expectTypeOf<Surface["increment"]>().toEqualTypeOf<() => Promise<number>>();
+    expectTypeOf<Surface["get"]>().toEqualTypeOf<() => Promise<number>>();
+    expect(Plain.name).toBe("PlainCounter");
+  });
+
   it("is what an inferred defineGrain publishes as its interface type", () => {
     const Counter = defineGrain("InferredCounter", () => {
       let count = 0;
+      useOnActivate(() => {
+        count = 0;
+      });
       return {
-        onActivate: () => {
-          count = 0;
-        },
         increment: () => (count += 1),
         get: async () => count,
       };

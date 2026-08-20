@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { defineGrain, setupDepth } from "@thresh/core/define-grain";
+import { defineGrain, setupDepth, useOnActivate, useOnDeactivate } from "@thresh/core/define-grain";
 import { INCOMING_CALL_FILTER } from "@thresh/core/grain-call-filter";
 import { GrainId } from "@thresh/core/grain-id";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
@@ -20,16 +20,18 @@ let events: string[] = [];
 const FnCounterGrain = defineGrain<IFnCounter>("FnCounter", (ctx) => {
   events.push(`factory:${String(ctx.id.key)}`);
   let count = 0;
+
+  useOnActivate(() => {
+    events.push(`activate:${String(ctx.id.key)}`);
+  });
+  useOnDeactivate(() => {
+    events.push(`deactivate:${String(ctx.id.key)}`);
+  });
+
   return {
     [INCOMING_CALL_FILTER]: async (call) => {
       events.push(`filter:${call.methodName}`);
       await call.invoke();
-    },
-    onActivate: () => {
-      events.push(`activate:${String(ctx.id.key)}`);
-    },
-    onDeactivate: () => {
-      events.push(`deactivate:${String(ctx.id.key)}`);
     },
     increment: async (by: number) => (count += by),
     get: async () => count,

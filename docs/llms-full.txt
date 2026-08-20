@@ -125,8 +125,13 @@ returned proxy implements the contract.
 
 ## Functional lifecycle
 
-`defineGrain(name, setup)` runs `setup` once per activation. Its returned behavior may implement
-`onActivate`, `onDeactivate`, and `onSetupState`. Do not leak closure state outside the grain.
+`defineGrain(name, setup)` runs `setup` once per activation. What `setup` returns is the grain's
+message surface and nothing else — the interface methods, plus an optional self incoming-call filter
+under `INCOMING_CALL_FILTER`. Lifecycle is registered with hooks, like the state facets:
+`useOnActivate(handler)` and `useOnDeactivate(handler)`. Both compose — call them as often as you
+like, from `setup` or from helpers it calls. Activate hooks run in registration order; deactivate
+hooks unwind LIFO, so a hook always tears down before whatever it was set up on top of. Do not leak
+closure state outside the grain.
 
 The definition it returns **is** the grain's interface: the message surface is inferred from what the
 factory returns, so `registerGrain(definition)` and `getGrain(definition, key)` both take it and

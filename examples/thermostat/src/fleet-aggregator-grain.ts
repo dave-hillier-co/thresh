@@ -1,4 +1,4 @@
-import { defineGrain } from "@thresh/core/define-grain";
+import { defineGrain, useOnActivate } from "@thresh/core/define-grain";
 import type { StreamHandler } from "@thresh/core/stream";
 import { TELEMETRY, type ThermostatStatus } from "@thresh/example-thermostat/interfaces";
 
@@ -24,16 +24,16 @@ export const FleetAggregatorGrain = defineGrain(
       },
     });
 
-    return {
-      onActivate: async () => {
-        const stream = ctx.runtime
-          .getStreamProvider()
-          .getStream<ThermostatStatus>(TELEMETRY, ctx.id.key);
-        const existing = await stream.getSubscriptions();
-        if (existing.length > 0) await existing[0]!.resume(handler());
-        else await stream.subscribe(handler());
-      },
+    useOnActivate(async () => {
+      const stream = ctx.runtime
+        .getStreamProvider()
+        .getStream<ThermostatStatus>(TELEMETRY, ctx.id.key);
+      const existing = await stream.getSubscriptions();
+      if (existing.length > 0) await existing[0]!.resume(handler());
+      else await stream.subscribe(handler());
+    });
 
+    return {
       averageTemp: async (): Promise<number> => (count === 0 ? 0 : sum / count),
 
       sampleCount: async (): Promise<number> => count,
