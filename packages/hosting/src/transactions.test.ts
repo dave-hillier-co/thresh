@@ -72,8 +72,8 @@ class AccountGrain extends Grain implements Account {
 }
 
 // Functional counterpart exercising the `useTransactionalState` hook.
-const FnAccountGrain = defineGrain<FnAccount>("TxFacetFnAccount", (ctx) => {
-  const bal = useTransactionalState<Balance>(ctx, "balance", { initial: () => ({ cents: 0 }) });
+const FnAccountGrain = defineGrain<FnAccount>("TxFacetFnAccount", () => {
+  const bal = useTransactionalState<Balance>("balance", { initial: () => ({ cents: 0 }) });
   return {
     deposit: (cents: number) =>
       bal.performUpdate((s) => {
@@ -106,7 +106,7 @@ function buildSilo() {
     .useStaticMembership([local])
     .useInProcessTransport(new InProcessNetwork())
     .registerGrain(AccountGrain, { interfaces: [Account] })
-    .registerGrain(FnAccountGrain, { interfaces: [FnAccount] })
+    .registerGrain(FnAccountGrain.grain, { interfaces: [FnAccount] })
     .registerGrain(AtmGrain, { interfaces: [Atm] })
     .build();
 }

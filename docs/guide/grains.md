@@ -2,16 +2,28 @@
 
 ## Identity and keys
 
-Intersect the contract with `GrainKey<string>`, `GrainKey<bigint>`, `GrainKey<Guid>`, or a supported
-compound key. Define the wire contract once with `defineGrainInterface<T>(name, config?)`. The
-returned definition is passed to `getGrain`; the returned proxy implements `T`.
+Declare the key kind on the definition — `{ key: "integer" }` on `defineGrain` or
+`defineGrainInterface`, one of `"string"` (the default), `"integer"`, `"guid"`, `"guid-compound"`,
+or `"integer-compound"`. A separately declared contract can instead intersect `GrainKey<string>`,
+`GrainKey<bigint>`, `GrainKey<Guid>`, or a compound marker; both paths resolve to the same key type,
+so existing marked interfaces keep working unchanged. The definition is passed to `getGrain`; the
+returned proxy implements the contract.
 
 ## Functional lifecycle
 
 `defineGrain(name, setup)` runs `setup` once per activation. Its returned behavior may implement
-`onActivate`, `onDeactivate`, and `onSetupState`. The setup context exposes the grain identity,
-runtime access, timers, reminders, streams, and other activation services. Do not leak closure state
-outside the grain.
+`onActivate`, `onDeactivate`, and `onSetupState`. Do not leak closure state outside the grain.
+
+The definition it returns **is** the grain's interface: the message surface is inferred from what the
+factory returns, so `registerGrain(definition)` and `getGrain(definition, key)` both take it and
+there is no separate interface to declare. This couples callers to the implementation module, which
+is the right trade-off in-process and the wrong one across a process boundary — declare those
+contracts separately with `defineGrainInterface` and register with
+`registerGrain(ctor, { interfaces })`, which also stays the form for one grain under several
+interfaces or per-silo interface versions.
+
+Interface ids are derived from the interface *name*, so renaming one is a wire break. Any grain that
+has ever been deployed must pin `{ interfaceName: "..." }`.
 
 Each normal method call is one serialized turn. `readOnly` interface options declare calls that do
 not mutate state and enable runtime optimizations; violating read-only state guards throws. Other

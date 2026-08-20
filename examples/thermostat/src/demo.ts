@@ -3,12 +3,7 @@ import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
 import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
 import { createSilo } from "@thresh/hosting/silo-builder";
 import { FleetAggregatorGrain } from "@thresh/example-thermostat/fleet-aggregator-grain";
-import {
-  fleetAggregator,
-  thermostat,
-  thermostatControl,
-  type Command,
-} from "@thresh/example-thermostat/interfaces";
+import { thermostat, thermostatControl, type Command } from "@thresh/example-thermostat/interfaces";
 import { ThermostatGrain } from "@thresh/example-thermostat/thermostat-grain";
 
 export interface DemoResult {
@@ -38,14 +33,14 @@ export async function runThermostatDemo(): Promise<DemoResult> {
     .useReminders()
     .useMemoryStreams()
     .registerGrain(ThermostatGrain, { interfaces: [thermostat, thermostatControl] })
-    .registerGrain(FleetAggregatorGrain, { interfaces: [fleetAggregator] })
+    .registerGrain(FleetAggregatorGrain)
     .build();
 
   await silo.start();
   try {
     const device = "kitchen";
     // Start the aggregator so it subscribes to the telemetry stream first.
-    await silo.getGrain(fleetAggregator, device).sampleCount();
+    await silo.getGrain(FleetAggregatorGrain, device).sampleCount();
 
     const thermostatRef = silo.getGrain(thermostat, device);
     const commands: Command[][] = [];
@@ -54,7 +49,7 @@ export async function runThermostatDemo(): Promise<DemoResult> {
     await tick(); // let stream delivery turns run
 
     // Telemetry rolled up from the two updates so far.
-    const aggregator = silo.getGrain(fleetAggregator, device);
+    const aggregator = silo.getGrain(FleetAggregatorGrain, device);
     const telemetrySamples = await aggregator.sampleCount();
     const telemetryAverage = await aggregator.averageTemp();
 

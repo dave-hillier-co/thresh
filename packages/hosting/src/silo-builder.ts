@@ -4,8 +4,14 @@ import type {
   IncomingGrainCallFilter,
   OutgoingGrainCallFilter,
 } from "@thresh/core/grain-call-filter";
-import type { GrainInterface } from "@thresh/core/grain-interface";
-import type { GrainKeyFor } from "@thresh/core/key-kinds";
+import type { AnyGrainInterface, GrainInterface } from "@thresh/core/grain-interface";
+import type { GrainKeyKind } from "@thresh/core/grain-key";
+import {
+  normalizeRegistration,
+  type GrainRegistration,
+  type Registrable,
+} from "@thresh/core/grain-registration";
+import type { KeyTypeOf } from "@thresh/core/key-kinds";
 import type { MembershipService } from "@thresh/core/membership";
 import { SiloAddress } from "@thresh/core/silo-address";
 import type { CompatibilityKind } from "@thresh/core/version-compatibility";
@@ -209,7 +215,7 @@ const DEFAULT_DEACTIVATION_TIMEOUT_MS = 30_000;
 
 interface Registration {
   ctor: new () => Grain;
-  interfaces: GrainInterface<unknown>[];
+  interfaces: AnyGrainInterface[];
 }
 
 /**
@@ -219,7 +225,7 @@ interface Registration {
  * `CreateObjectReference` from exactly this hook).
  */
 export interface GrainFactoryAccess {
-  getGrain<T>(def: GrainInterface<T>, key: GrainKeyFor<T>): T;
+  getGrain<T, K extends GrainKeyKind>(def: GrainInterface<T, K>, key: KeyTypeOf<K>): T;
   /**
    * Host a client-style observer reachable from any grain call made during
    * this (or a later) startup task. Backed by an embedded `ClientNode`
@@ -990,16 +996,32 @@ export class SiloBuilder {
     return this;
   }
 
-  registerGrain<G extends Grain>(
-    ctor: new () => G,
-    registration: { interfaces: GrainInterface<unknown>[] },
+  /**
+   * Register a grain type. A `defineGrain`/`defineReducerGrain` definition
+   * carries its own interface, so it needs nothing else; a bare constructor
+   * (the `@grain()` class form) must name the interfaces it answers to. An
+   * explicit `interfaces` list is used verbatim — see `normalizeRegistration`.
+   */
+  registerGrain(definition: Registrable, registration?: GrainRegistration): this;
+  registerGrain<G extends Grain>(ctor: new () => G, registration: GrainRegistration): this;
+  registerGrain(
+    definition: Registrable | (new () => Grain),
+    registration?: GrainRegistration,
   ): this {
-    this.registrations.push({ ctor, interfaces: registration.interfaces });
+    // Normalize once, here, so both replays in `build()` (the `ClusterNode`
+    // and the embedded `ClientNode`) read the same resolved records.
+    this.registrations.push(normalizeRegistration(definition, registration));
     return this;
   }
 
-  registerGrains(registrations: Registration[]): this {
-    this.registrations.push(...registrations);
+  registerGrains(registrations: Array<Registrable | Registration>): this {
+    for (const entry of registrations) {
+      this.registrations.push(
+        "ctor" in entry
+          ? normalizeRegistration(entry.ctor, { interfaces: entry.interfaces })
+          : normalizeRegistration(entry),
+      );
+    }
     return this;
   }
 

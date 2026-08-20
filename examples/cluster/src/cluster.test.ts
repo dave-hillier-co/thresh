@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { GrainId } from "@thresh/core/grain-id";
-import { leaderboard } from "@thresh/example-cluster/interfaces";
+import { Leaderboard } from "@thresh/example-cluster/leaderboard-grain";
 import { buildWebSocketCluster, untilConverged } from "@thresh/example-cluster/cluster";
 import { runClusterDemo } from "@thresh/example-cluster/demo";
 
@@ -12,12 +12,12 @@ describe("WebSocket cluster (cross-silo routing acceptance)", () => {
     await cluster.start();
     try {
       // Each record originates on a different silo; all must reach one activation.
-      await cluster.silos[0]!.getGrain(leaderboard, "global").record("ada", 10);
-      await cluster.silos[1]!.getGrain(leaderboard, "global").record("grace", 30);
-      await cluster.silos[2]!.getGrain(leaderboard, "global").record("ada", 25);
+      await cluster.silos[0]!.getGrain(Leaderboard, "global").record("ada", 10);
+      await cluster.silos[1]!.getGrain(Leaderboard, "global").record("grace", 30);
+      await cluster.silos[2]!.getGrain(Leaderboard, "global").record("ada", 25);
 
       // A read from yet another silo sees every write — proof of one tally.
-      expect(await cluster.silos[1]!.getGrain(leaderboard, "global").top()).toEqual([
+      expect(await cluster.silos[1]!.getGrain(Leaderboard, "global").top()).toEqual([
         { player: "grace", score: 30 },
         { player: "ada", score: 25 },
       ]);
@@ -35,7 +35,7 @@ describe("WebSocket cluster (cross-silo routing acceptance)", () => {
     const cluster = await buildWebSocketCluster(3);
     await cluster.start();
     try {
-      await cluster.silos[0]!.getGrain(leaderboard, "global").record("ada", 10);
+      await cluster.silos[0]!.getGrain(Leaderboard, "global").record("ada", 10);
       const hostIndex = cluster.silos.findIndex((s) => s.isActive(LEADERBOARD));
       expect(hostIndex).toBeGreaterThanOrEqual(0);
 
@@ -46,13 +46,13 @@ describe("WebSocket cluster (cross-silo routing acceptance)", () => {
       // A surviving silo's next call reactivates the grain elsewhere (fresh, since
       // state was in-memory on the dead silo); it retries while routing re-resolves.
       const survivor = cluster.silos.find((_, i) => i !== hostIndex)!;
-      await untilConverged(() => survivor.getGrain(leaderboard, "global").record("grace", 5));
+      await untilConverged(() => survivor.getGrain(Leaderboard, "global").record("grace", 5));
 
       const survivingHosts = cluster.silos.filter(
         (s, i) => i !== hostIndex && s.isActive(LEADERBOARD),
       );
       expect(survivingHosts).toHaveLength(1);
-      expect(await survivor.getGrain(leaderboard, "global").top()).toEqual([
+      expect(await survivor.getGrain(Leaderboard, "global").top()).toEqual([
         { player: "grace", score: 5 },
       ]);
     } finally {

@@ -222,7 +222,7 @@ describe("per-grain incoming filters", () => {
     const silo = createSilo({ clusterId: "self-filter-fn", local })
       .useStaticMembership([local])
       .useInProcessTransport(new InProcessNetwork())
-      .registerGrain(FnEchoerGrain, { interfaces: [FnEchoer] })
+      .registerGrain(FnEchoerGrain.grain, { interfaces: [FnEchoer] })
       .build();
     await silo.start();
     try {

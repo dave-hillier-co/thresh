@@ -130,7 +130,7 @@ describe("implicit stream subscriptions — functional grain", () => {
       membership: new StaticMembershipService(local, [local]),
       transport: new InProcessTransport(network, "c1"),
     });
-    node.registerGrain(FnWatcher, { interfaces: [IFnWatcher] });
+    node.registerGrain(FnWatcher.grain, { interfaces: [IFnWatcher] });
     expect(node.implicitGrainTypes("room")).toEqual(["FnWatcher"]);
     await node.start();
     try {

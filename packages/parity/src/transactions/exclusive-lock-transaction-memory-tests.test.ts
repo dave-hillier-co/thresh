@@ -43,8 +43,8 @@ const LockCoordinatorGrainInterface = defineGrainInterface<LockCoordinatorGrain>
   { options: { readThenWrite: { transaction: "create" } } },
 );
 
-const LockTestGrainImpl = defineGrain<LockTestGrain>("LockTestGrain", (ctx) => {
-  const data = useTransactionalState<Counter>(ctx, "data", { initial: () => ({ value: 0 }) });
+const LockTestGrainImpl = defineGrain<LockTestGrain>("LockTestGrain", () => {
+  const data = useTransactionalState<Counter>("data", { initial: () => ({ value: 0 }) });
   return {
     add: (delta) =>
       data.performUpdate((s) => {
@@ -75,8 +75,8 @@ async function buildCluster(): Promise<TestCluster> {
   return TestCluster.start({
     initialSilos: 1,
     grains: [
-      { ctor: LockTestGrainImpl, interfaces: [LockTestGrainInterface] },
-      { ctor: LockCoordinatorGrainImpl, interfaces: [LockCoordinatorGrainInterface] },
+      { ctor: LockTestGrainImpl.grain, interfaces: [LockTestGrainInterface] },
+      { ctor: LockCoordinatorGrainImpl.grain, interfaces: [LockCoordinatorGrainInterface] },
     ],
   });
 }

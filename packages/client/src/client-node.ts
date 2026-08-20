@@ -24,12 +24,18 @@ import {
   type OutgoingGrainCallFilter,
 } from "@thresh/core/grain-call-filter";
 import type { GrainId } from "@thresh/core/grain-id";
-import type { GrainInterface } from "@thresh/core/grain-interface";
+import type { AnyGrainInterface, GrainInterface } from "@thresh/core/grain-interface";
 import { getGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainKeyKind } from "@thresh/core/grain-key";
 import { getGrainMetadata } from "@thresh/core/grain-metadata";
+import {
+  normalizeRegistration,
+  type GrainRegistration,
+  type Registrable,
+} from "@thresh/core/grain-registration";
 import { grainReferenceIdentity, type GrainReferenceIdentity } from "@thresh/core/grain-reference";
 import type { GrainType } from "@thresh/core/grain-type";
-import type { GrainKeyFor } from "@thresh/core/key-kinds";
+import type { KeyTypeOf } from "@thresh/core/key-kinds";
 import type { InvocationRequest } from "@thresh/core/request";
 import { requestContextStore, runWithRequestContext } from "@thresh/core/request-context";
 import type { SiloAddress } from "@thresh/core/silo-address";
@@ -119,10 +125,6 @@ interface RejectionPayload {
   kind: RejectionError["kind"];
 }
 
-interface GrainRegistration {
-  interfaces: GrainInterface<unknown>[];
-}
-
 /** A client-hosted callback object registered under an observer `GrainId`. */
 interface LocalObjectEntry {
   object: Record<string, (...args: unknown[]) => unknown>;
@@ -192,19 +194,31 @@ export class ClientNode implements Dispatcher {
    * silo-side caller would, since TypeScript interfaces are erased). Only the
    * grain's metadata is read; no instance is created.
    */
-  registerGrain(ctor: new () => Grain, registration: GrainRegistration): this {
+  registerGrain(definition: Registrable, registration?: GrainRegistration): this;
+  registerGrain<G extends Grain>(ctor: new () => G, registration: GrainRegistration): this;
+  registerGrain(
+    definition: Registrable | (new () => Grain),
+    registration?: GrainRegistration,
+  ): this {
+    const { ctor, interfaces } = normalizeRegistration(definition, registration);
     const metadata = getGrainMetadata(ctor);
     if (metadata === undefined) throw new Error(`${ctor.name} is not decorated with @grain()`);
-    for (const iface of registration.interfaces) {
+    for (const iface of interfaces) {
       this.interfaceToGrainType.set(iface.id, metadata.grainType);
     }
     return this;
   }
 
   registerGrains(
-    registrations: { ctor: new () => Grain; interfaces: GrainInterface<unknown>[] }[],
-  ) {
-    for (const r of registrations) this.registerGrain(r.ctor, r);
+    registrations: readonly (
+      | Registrable
+      | { ctor: new () => Grain; interfaces: AnyGrainInterface[] }
+    )[],
+  ): this {
+    for (const r of registrations) {
+      if ("ctor" in r) this.registerGrain(r.ctor, r);
+      else this.registerGrain(r);
+    }
     return this;
   }
 
@@ -221,7 +235,7 @@ export class ClientNode implements Dispatcher {
     return this;
   }
 
-  getGrain<T>(def: GrainInterface<T>, key: GrainKeyFor<T>): T {
+  getGrain<T, K extends GrainKeyKind>(def: GrainInterface<T, K>, key: KeyTypeOf<K>): T {
     return this.factory.getGrain(def, key);
   }
 

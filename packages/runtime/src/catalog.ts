@@ -1,4 +1,5 @@
 import * as os from "node:os";
+import { setupDepth } from "@thresh/core/define-grain";
 import { GrainCallError } from "@thresh/core/errors";
 import type { Grain } from "@thresh/core/grain";
 import type { IncomingGrainCallFilter } from "@thresh/core/grain-call-filter";
@@ -432,6 +433,15 @@ export class Catalog {
     rehydrationBag?: Record<string, unknown>,
     sourceAddr?: GrainAddress,
   ): ActivationData {
+    // No grain factory may be running when a new activation starts: the
+    // functional-grain hooks resolve against a stack that `setContext` pushes and
+    // pops synchronously, so a non-empty stack here means a setup leaked and the
+    // next grain's facets would be registered against the wrong instance.
+    if (setupDepth() !== 0) {
+      throw new Error(
+        `grain factory setup leaked: ${setupDepth()} active setup(s) when creating ${id.toString()}`,
+      );
+    }
     const reg = this.options.grainTypes.get(id.type);
     if (reg === undefined) throw new GrainCallError(`no grain type registered: ${id.type}`);
     const ageSeconds =
@@ -467,6 +477,10 @@ export class Catalog {
         : {}),
       isStatelessWorker: () => reg.metadata.options.stateless === true,
     });
+    // Load-bearing: nothing may `await` between creating the instance and binding
+    // its context. `setContext` runs a functional grain's factory, and the hooks
+    // it calls resolve against a module-level setup stack in `@thresh/core`; an
+    // await here would let another activation interleave and steal that setup.
     const instance =
       this.options.grainActivator !== undefined
         ? this.options.grainActivator.createInstance(reg.ctor, id)

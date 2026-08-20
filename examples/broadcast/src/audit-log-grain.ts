@@ -3,7 +3,7 @@ import {
   type BroadcastChannelHandler,
 } from "@thresh/core/broadcast-channel";
 import { defineGrain } from "@thresh/core/define-grain";
-import { type Alert, type AuditLog } from "@thresh/example-broadcast/interfaces";
+import { type Alert } from "@thresh/example-broadcast/types";
 
 /**
  * A second grain type also implicitly subscribed to the `alerts` namespace. One
@@ -11,7 +11,7 @@ import { type Alert, type AuditLog } from "@thresh/example-broadcast/interfaces"
  * the region `R` audit log records the same alert the region `R` monitor sees,
  * demonstrating multi-type fan-out on a single channel.
  */
-export const AuditLogGrain = defineGrain<AuditLog>(
+export const AuditLogGrain = defineGrain(
   "AuditLog",
   () => {
     const log: string[] = [];

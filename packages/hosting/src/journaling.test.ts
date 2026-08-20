@@ -42,8 +42,8 @@ const IInventory = defineGrainInterface<IInventory>("IInventory", {
   options: { qty: { readOnly: true }, skus: { readOnly: true } },
 });
 
-const InventoryGrain = defineGrain<IInventory>("Inventory", (ctx) => {
-  const stock = useDurableDictionary<string, number>(ctx, "stock");
+const InventoryGrain = defineGrain<IInventory>("Inventory", () => {
+  const stock = useDurableDictionary<string, number>("stock");
   return {
     stock: async (sku, qty) => {
       await stock.set(sku, qty);
@@ -61,7 +61,7 @@ function buildSilo(storage: MemoryJournalStorage, config: Partial<SiloConfig> = 
     .useInProcessTransport(new InProcessNetwork())
     .useMemoryJournaling(storage)
     .registerGrain(CartGrain, { interfaces: [ICart] })
-    .registerGrain(InventoryGrain, { interfaces: [IInventory] })
+    .registerGrain(InventoryGrain.grain, { interfaces: [IInventory] })
     .build();
 }
 

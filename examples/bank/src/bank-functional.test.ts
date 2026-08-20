@@ -5,7 +5,6 @@ import { MemoryGrainStorage } from "@thresh/persistence/memory-grain-storage";
 import { createSilo } from "@thresh/hosting/silo-builder";
 import type { SiloHost } from "@thresh/hosting/silo-host";
 import { AccountGrain } from "@thresh/example-bank/account-grain-functional";
-import { account } from "@thresh/example-bank/interfaces";
 
 const local = new SiloAddress("silo-0", "uid-0", "silo-0:11111");
 
@@ -14,7 +13,7 @@ function buildSilo(storage: MemoryGrainStorage): SiloHost {
     .useStaticMembership([local])
     .useInProcessTransport(new InProcessNetwork())
     .useMemoryStorage(storage)
-    .registerGrain(AccountGrain, { interfaces: [account] })
+    .registerGrain(AccountGrain)
     .build();
 }
 
@@ -26,12 +25,12 @@ describe("functional reducer grain (defineGrain)", () => {
     let alice: unknown;
     let bob: unknown;
     try {
-      await silo.getGrain(account, "alice").deposit(10_000);
-      await silo.getGrain(account, "alice").deposit(5_000);
-      await silo.getGrain(account, "bob").deposit(2_000);
-      await silo.getGrain(account, "alice").transferTo("bob", 3_000);
-      alice = await silo.getGrain(account, "alice").statement();
-      bob = await silo.getGrain(account, "bob").statement();
+      await silo.getGrain(AccountGrain, "alice").deposit(10_000);
+      await silo.getGrain(AccountGrain, "alice").deposit(5_000);
+      await silo.getGrain(AccountGrain, "bob").deposit(2_000);
+      await silo.getGrain(AccountGrain, "alice").transferTo("bob", 3_000);
+      alice = await silo.getGrain(AccountGrain, "alice").statement();
+      bob = await silo.getGrain(AccountGrain, "bob").statement();
     } finally {
       await silo.stop();
     }
@@ -42,7 +41,7 @@ describe("functional reducer grain (defineGrain)", () => {
     const restarted = buildSilo(storage); // new pod, same durable store
     await restarted.start();
     try {
-      expect(await restarted.getGrain(account, "alice").statement()).toEqual(alice);
+      expect(await restarted.getGrain(AccountGrain, "alice").statement()).toEqual(alice);
     } finally {
       await restarted.stop();
     }
@@ -52,7 +51,7 @@ describe("functional reducer grain (defineGrain)", () => {
     const silo = buildSilo(new MemoryGrainStorage());
     await silo.start();
     try {
-      const acct = silo.getGrain(account, "x");
+      const acct = silo.getGrain(AccountGrain, "x");
       await acct.deposit(1_000);
       await expect(acct.withdraw(5_000)).rejects.toThrow(/insufficient/);
       expect(await acct.statement()).toEqual({ balanceCents: 1_000, deposits: 1, withdrawals: 0 });

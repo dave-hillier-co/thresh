@@ -169,7 +169,7 @@ describe("broadcast channels — functional grain", () => {
       transport: new InProcessTransport(network, "c1"),
       broadcastProviders: ["default"],
     });
-    node.registerGrain(FnWatcher, { interfaces: [IFnWatcher] });
+    node.registerGrain(FnWatcher.grain, { interfaces: [IFnWatcher] });
     expect(node.broadcastGrainTypes("room")).toEqual(["FnWatcher"]);
     await node.start();
     try {

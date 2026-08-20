@@ -1,6 +1,3 @@
-import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainKey } from "@thresh/core/key-kinds";
-
 /** Past-tense facts a reducer folds into account state. Never persisted in snapshot mode. */
 export type AccountEvent =
   | { kind: "deposited"; cents: number }
@@ -28,16 +25,3 @@ export const reduceAccount = (state: AccountState, event: AccountEvent): Account
         balanceCents: state.balanceCents - event.cents,
         withdrawals: state.withdrawals + 1,
       };
-
-/** An account aggregate keyed by account number. */
-export type Account = GrainKey<string> & {
-  deposit(cents: number): Promise<number>;
-  withdraw(cents: number): Promise<number>;
-  /** Move money to another account (two-step, not an atomic distributed transaction). */
-  transferTo(other: string, cents: number): Promise<number>;
-  statement(): Promise<AccountState>;
-};
-
-export const account = defineGrainInterface<Account>("example.bank.account", {
-  options: { statement: { readOnly: true } },
-});

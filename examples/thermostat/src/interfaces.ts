@@ -24,21 +24,11 @@ export type ThermostatControl = GrainKey<string> & {
   updateConfiguration(config: ThermostatConfiguration): Promise<void>;
 };
 
-/** Rolls up telemetry across the fleet. */
-export type FleetAggregator = GrainKey<string> & {
-  averageTemp(): Promise<number>;
-  sampleCount(): Promise<number>;
-};
-
 export const thermostat = defineGrainInterface<Thermostat>("example.thermostat");
 
 export const thermostatControl = defineGrainInterface<ThermostatControl>(
   "example.thermostatControl",
   { options: { getStatus: { readOnly: true } } },
 );
-
-export const fleetAggregator = defineGrainInterface<FleetAggregator>("example.fleetAggregator", {
-  options: { averageTemp: { readOnly: true }, sampleCount: { readOnly: true } },
-});
 
 export const TELEMETRY = "telemetry";

@@ -2,9 +2,15 @@
 
 State in ordinary closure variables exists only for one activation. Choose durability deliberately.
 
+Every facet below is a **hook**: it resolves the activation being set up from an ambient slot that is
+live only during the *synchronous* body of the factory. Call hooks at the top level of the factory,
+never after an `await`, from a method body, or from `onActivate` — those throw an error naming the
+hook and the rule. To reach the runtime after setup, capture the factory's `ctx` parameter in the
+closure and use `ctx.runtime` / `ctx.id` / `ctx.getGrain` from method bodies.
+
 ## Persistent and reducer state
 
-`usePersistentState<T>(ctx, name, options)` exposes `value` plus explicit `read`, `write`, and
+`usePersistentState<T>(name, options)` exposes `value` plus explicit `read`, `write`, and
 `clear` operations. Configure its named provider with `useMemoryStorage`, `addRedisStorage`, or
 `addPostgresStorage`. Memory providers are only for examples and tests. Storage uses optimistic
 versioning; do not silently overwrite inconsistent-state failures.
