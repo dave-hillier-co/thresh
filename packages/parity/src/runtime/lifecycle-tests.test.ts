@@ -6,7 +6,7 @@
 // LifecycleSubject (packages/runtime/src/lifecycle-subject.ts), a standalone
 // primitive driven directly here, exactly as upstream — it is not wired into
 // grain/silo lifecycle, which stays a flat before/after hook pair (see
-// GrainLifecycle in packages/core/src/define-grain.ts).
+// useOnActivate / useOnDeactivate in packages/core/src/define-grain.ts).
 import { describe, expect } from "vitest";
 import { orleansTest } from "@thresh/testing/orleans-test";
 import { LifecycleSubject, type LifecycleObserver } from "@thresh/runtime/lifecycle-subject";
