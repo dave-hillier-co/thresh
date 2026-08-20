@@ -56,13 +56,13 @@ export type DeactivateHandler = (
 ) => void | Promise<void>;
 
 /**
- * What a grain factory returns: the message surface — the interface
- * implementation, plus an optional self incoming-call filter (under
+ * What a grain factory returns: the grain's behaviour towards messages — the
+ * interface implementation, plus an optional self incoming-call filter (under
  * `INCOMING_CALL_FILTER`), which is itself part of how messages are handled.
  * Lifecycle is *not* returned: register it with {@link useOnActivate} /
  * {@link useOnDeactivate}, like any other facet hook.
  */
-export type GrainSurface<T> = T & Partial<SelfFilteringGrain>;
+export type GrainBehaviour<T> = T & Partial<SelfFilteringGrain>;
 
 export interface DefineGrainOptions extends Omit<GrainOptions, "name"> {
   /** Mark every method reentrant (the functional equivalent of `@reentrant()`). */
@@ -157,7 +157,7 @@ export function useOnDeactivate(ctx: GrainSetup, handler: DeactivateHandler): vo
  */
 export function defineGrain<T extends object>(
   name: string,
-  factory: (ctx: GrainSetup) => GrainSurface<T>,
+  factory: (ctx: GrainSetup) => GrainBehaviour<T>,
   options: DefineGrainOptions = {},
 ): new () => Grain {
   class FunctionalGrain extends Grain {
@@ -166,12 +166,12 @@ export function defineGrain<T extends object>(
     // catalog's method dispatch finds them.
     override setContext(context: GrainContext): void {
       super.setContext(context);
-      const surface = factory(createSetup(this, context));
+      const behaviour = factory(createSetup(this, context));
       // String keys are the interface methods; symbol keys carry system hooks
       // (e.g. a self incoming-call filter under `INCOMING_CALL_FILTER`).
-      const keys = [...Object.keys(surface), ...Object.getOwnPropertySymbols(surface)];
+      const keys = [...Object.keys(behaviour), ...Object.getOwnPropertySymbols(behaviour)];
       for (const key of keys) {
-        const value = (surface as Record<PropertyKey, unknown>)[key];
+        const value = (behaviour as Record<PropertyKey, unknown>)[key];
         if (typeof value !== "function") continue;
         // A returned lifecycle hook would install as an own property and
         // silently shadow the composed runners below, dropping every hook the
