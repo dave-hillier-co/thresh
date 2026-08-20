@@ -9,6 +9,10 @@ Issues #18–#37 were implemented and closed in the 2026-07-24 burn-down, includ
 remainders their implementations initially left undone (storage cancellation signals, per-call
 deadline API, keepalive unbind on deactivation, and full-facet `@readOnly` guard coverage).
 
+## Review
+
+- [Project review — 2026-08-04](docs/project-review-2026-08-04.md) confirms the current stated aims are met, with only the explicitly beyond-parity browser work and deferred stream-backing polish left open.
+
 ## Beyond parity
 
 - [ ] [#38](https://github.com/dave-hillier-co/thresh/issues/38) Browser state
