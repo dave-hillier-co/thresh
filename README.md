@@ -125,6 +125,10 @@ Postgres and Kafka back the durable provider implementations.
 
 ## Documentation
 
+The documentation is published as a searchable Docsify site and in agent-friendly forms:
+`docs/llms.txt` is a concise map and `docs/llms-full.txt` is generated as a single
+context document. Run `pnpm docs:dev` locally or `pnpm docs:build` for the GitHub Pages artifact.
+
 The target is **feature parity with Orleans 10**, so the model, persistence, reminders, streams and
 transactions are deliberately the same as Orleans — read the Orleans source for their mechanics. The
 docs cover only what is worth writing down here:

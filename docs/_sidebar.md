@@ -1,0 +1,17 @@
+- **Guide**
+  - [Introduction](guide/)
+  - [Quick start](guide/quick-start.md)
+  - [Grains and calls](guide/grains.md)
+  - [State and transactions](guide/state.md)
+  - [Timers, reminders, and jobs](guide/background-work.md)
+  - [Streams](guide/streams.md)
+  - [Hosting and Kubernetes](guide/hosting.md)
+  - [Testing](guide/testing.md)
+- **Reference**
+  - [Package map](reference/packages.md)
+  - [Agent reference](reference/agents.md)
+  - [Orleans deviations](deviations.md)
+  - [TypeScript grain API](typescript-grain-api.md)
+- **For AI agents**
+  - [llms.txt](llms.txt)
+  - [Full context](llms-full.txt)
