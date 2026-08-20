@@ -1,0 +1,413 @@
+# Thresh full documentation
+
+---
+Source: docs/guide/index.md
+---
+
+# Introduction
+
+Thresh is a TypeScript virtual actor runtime. **Grains** are logical objects that are always
+addressable. The runtime creates an in-memory activation on demand, routes calls to it, serializes
+its turns, and collects it after an idle period. Callers hold lightweight references rather than
+connections to a particular process.
+
+## Mental model
+
+1. Define a TypeScript contract with a supported `GrainKey<K>`.
+2. Give that contract a stable wire identity with `defineGrainInterface`.
+3. Implement it with `defineGrain` and register the implementation on each silo.
+4. Obtain a reference with `getGrain(definition, key)` and call asynchronous methods.
+
+Activation-local closure variables are volatile. Use a state facet for data that must survive
+deactivation. A grain processes one call at a time by default, but calls can cross silos and should
+always be treated as remote: keep arguments serializable, avoid blocking, and propagate errors.
+
+## Choose a facility
+
+| Need | Facility |
+|---|---|
+| Mutable durable record | persistent state |
+| Pure event folding into a snapshot | reducer state / reducer grain |
+| Atomic state spanning grains | transactional state |
+| Event log and durable collections | journaling / durable state |
+| Work only while activation lives | grain timer |
+| Durable scheduled callback | reminder |
+| Durable retryable queue work | durable job |
+| Ordered pub/sub | stream |
+| Best-effort fan-out | broadcast channel |
+
+Thresh targets Orleans 10 semantics where practical. See [deviations](/deviations) for intentional
+TypeScript and Kubernetes differences and the project `EPICS.md` for implementation status.
+
+
+---
+Source: docs/guide/quick-start.md
+---
+
+# Quick start
+
+## Requirements
+
+- Node.js 22 or newer
+- pnpm 10
+
+This repository is currently a private workspace: consume `@thresh/*` packages through the
+workspace rather than npm. Install and validate it with `pnpm install`, `pnpm typecheck`, and
+`pnpm test`.
+
+## Define a contract and implementation
+
+```ts
+import { defineGrain } from "@thresh/core/define-grain";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainKey } from "@thresh/core/key-kinds";
+
+type Counter = GrainKey<string> & {
+  increment(): Promise<number>;
+  value(): Promise<number>;
+};
+
+export const counter = defineGrainInterface<Counter>("example.counter", {
+  options: { value: { readOnly: true } },
+});
+
+export const CounterGrain = defineGrain<Counter>("Counter", () => {
+  let count = 0;
+  return { increment: async () => ++count, value: async () => count };
+});
+```
+
+Interface names are protocol identifiers: keep them stable and globally unique. Public grain
+methods return promises. The key marker is compile-time only and determines which key type
+`getGrain` accepts. For executable setup, copy `examples/greeter`; for real multi-node transport
+copy `examples/cluster`; for deployment copy `examples/k8s-silo`.
+
+
+---
+Source: docs/guide/grains.md
+---
+
+# Grains and calls
+
+## Identity and keys
+
+Intersect the contract with `GrainKey<string>`, `GrainKey<bigint>`, `GrainKey<Guid>`, or a supported
+compound key. Define the wire contract once with `defineGrainInterface<T>(name, config?)`. The
+returned definition is passed to `getGrain`; the returned proxy implements `T`.
+
+## Functional lifecycle
+
+`defineGrain(name, setup)` runs `setup` once per activation. Its returned behavior may implement
+`onActivate`, `onDeactivate`, and `onSetupState`. The setup context exposes the grain identity,
+runtime access, timers, reminders, streams, and other activation services. Do not leak closure state
+outside the grain.
+
+Each normal method call is one serialized turn. `readOnly` interface options declare calls that do
+not mutate state and enable runtime optimizations; violating read-only state guards throws. Other
+method options include response timeout, transaction behavior, interleaving, and one-way delivery.
+
+## Calls and failure
+
+Grain references are location transparent and serializable. Calls may fail because application code
+throws, a deadline expires, cancellation propagates, load is shed, or a node disappears. Design
+commands to be idempotent where retry is possible. Never rely on a specific activation or silo.
+
+Use `RequestContext` for small cross-cutting string headers, incoming/outgoing call filters for
+logging or policy, and `GrainCancellationToken` for cancellation across a grain boundary. Class
+grains and decorators remain supported for Orleans ports; prefer functional grains for new code.
+
+
+---
+Source: docs/guide/state.md
+---
+
+# State and transactions
+
+State in ordinary closure variables exists only for one activation. Choose durability deliberately.
+
+## Persistent and reducer state
+
+`usePersistentState<T>(ctx, name, options)` exposes `value` plus explicit `read`, `write`, and
+`clear` operations. Configure its named provider with `useMemoryStorage`, `addRedisStorage`, or
+`addPostgresStorage`. Memory providers are only for examples and tests. Storage uses optimistic
+versioning; do not silently overwrite inconsistent-state failures.
+
+`useReducerState` applies a pure `(state, event) => state` reducer and persists its snapshot.
+`defineReducerGrain` can expose `dispatch(action)` and `query()` and return Elm-style effects for
+cross-grain work. Keep reducers deterministic and free of I/O.
+
+## Transactions and journals
+
+`useTransactionalState` supplies transactional operations. Mark interface methods with transaction
+options and configure a transactional storage provider. Transactions coordinate participating
+grain state; keep them short and avoid unrelated external side effects.
+
+Journaling stores events, periodically snapshots state, and truncates the log. `useDurableState`,
+`useDurableDictionary`, `useDurableList`, `useDurableQueue`, and `useDurableSet` expose journaled
+collections. Configure memory or Redis journaling under the same provider name used by the grain.
+
+
+---
+Source: docs/guide/background-work.md
+---
+
+# Timers, reminders, and durable jobs
+
+**Timers** are activation-scoped periodic work. They disappear on deactivation or silo failure and
+callbacks run through grain scheduling. Use a timer only when loss is acceptable.
+
+**Reminders** persist registrations and reactivate the target grain to deliver ticks. Configure
+memory, Redis, or Postgres reminders and make handlers idempotent. Delivery can repeat during
+failure, so a reminder is a durable trigger, not an exactly-once transaction.
+
+**Durable jobs** are sharded queued work with retry/poll outcomes. Attach a handler with
+`useDurableJobHandler`; return `completed`, `pollAfter(duration)`, or `failed(error)`. Jobs suit
+payload-bearing retryable work and survive activation loss. Configure memory or Redis job shards
+and an explicit retry policy.
+
+
+---
+Source: docs/guide/streams.md
+---
+
+# Streams and broadcast channels
+
+Streams decouple producers from consumers. Obtain a typed stream from a named provider and stream
+identity, subscribe a handler, and publish values. Keep the subscription handle when you need to
+unsubscribe or resume explicitly.
+
+Memory streams suit one process and tests. Redis, Postgres, and Kafka pulling providers provide
+durable queues; generator streams produce configured values. Provider names must match on all
+silos. Subscription registries, cursors, filters, and failure stores have separate durability.
+Consumers must be idempotent because failover can redeliver; sequence tokens express ordering, not
+global exactly-once execution.
+
+Implicit subscriptions bind a grain interface to a namespace and activate matching consumers.
+Broadcast channels are lighter best-effort fan-out; use them for transient notifications rather
+than recoverable processing.
+
+
+---
+Source: docs/guide/hosting.md
+---
+
+# Hosting and Kubernetes
+
+`createSilo(config)` returns a fluent `SiloBuilder`. Configure membership, transport, required
+providers, and grain registrations, then call `build()`, `start()`, and `stop()`. All silos in a
+deployment share `clusterId` and stable logical `serviceId`.
+
+## Production checklist
+
+- Use WebSocket transport and Kubernetes membership.
+- Advertise the pod IP/port and grant the service account EndpointSlice access.
+- Replace memory providers with Redis, Postgres, or Kafka for durable data.
+- Keep registrations, protocol versions, and provider names compatible across silos.
+- Enable health endpoints and startup/readiness/liveness probes.
+- Enable tracing, metrics, structured logging, and appropriate call filters.
+- Handle `SIGTERM`, drain, and await graceful shutdown during rolling updates.
+- Tune load shedding, turn queues, collection, timeouts, and resource limits.
+
+The `examples/k8s-silo/deploy` directory shows the headless service, StatefulSet, RBAC, and Redis.
+Its opt-in end-to-end test covers routing, pod loss, state survival, and rolling updates.
+
+Builder groups include membership (`useStaticMembership`, `useKubernetesMembership`), transport
+(`useInProcessTransport`, `useWebSocketTransport`), operations (`useHealthEndpoints`, `useTracing`,
+`useMetrics`, `useLogging`), and memory/Redis/Postgres/Kafka providers.
+
+
+---
+Source: docs/guide/testing.md
+---
+
+# Testing
+
+Use `TestCluster.start()` from `@thresh/testing/test-cluster` for integration tests. It creates
+multiple in-process silos with shared memory backends while retaining real routing, activation,
+serialization, membership, and failure behavior.
+
+Use `FakeTimeProvider` to advance collection, timeout, timer, and reminder behavior without sleeps.
+Test activation loss and restart, duplicate delivery/idempotency, concurrent calls, remote routing,
+provider failure, and graceful shutdown. Unit-test pure reducers separately. Run fast suites with
+`pnpm test` and Orleans behavioral ports with `pnpm test:parity`.
+
+
+---
+Source: docs/reference/packages.md
+---
+
+# Package map
+
+Thresh uses subpath imports; there is intentionally no barrel export. Import the defining file, for
+example `@thresh/core/define-grain`.
+
+| Package | Responsibility |
+|---|---|
+| `@thresh/core` | contracts, identity, authoring, lifecycle, state interfaces, streams, reminders |
+| `@thresh/hosting` | silo builder/lifecycle, providers, health endpoints |
+| `@thresh/runtime` | activations, scheduling, placement, cluster node, grain services |
+| `@thresh/client` | external clients, gateways, observers |
+| `@thresh/messaging` | serializers and in-process/WebSocket transport |
+| `@thresh/directory` | activation directory and location cache |
+| `@thresh/persistence` | memory, Redis, and Postgres grain storage |
+| `@thresh/transactions` | coordination and transactional storage |
+| `@thresh/journaling` | journals, snapshots, durable collections |
+| `@thresh/reminders` | reminder service and durable tables |
+| `@thresh/streams` | stream providers, subscriptions, cursors |
+| `@thresh/durable-jobs` | durable shard-backed jobs |
+| `@thresh/clustering-k8s` | EndpointSlice watching and membership |
+| `@thresh/observability` | OpenTelemetry and logging filters |
+| `@thresh/testing` | multi-silo `TestCluster` |
+| `@thresh/parity` | Orleans port/scorecard tests; not an app dependency |
+
+The TypeScript source is the exact API reference. Start with `core/define-grain.ts`,
+`core/grain-interface.ts`, `hosting/silo-builder.ts`, and `testing/test-cluster.ts`.
+
+
+---
+Source: docs/reference/agents.md
+---
+
+# Agent reference
+
+This project is ESM, strict TypeScript, Node 22+, pnpm 10, Vitest, ESLint, and Prettier. Preserve
+subpath imports and do not invent package-root barrels.
+
+## Reliable workflow
+
+1. Read `README.md`, `EPICS.md`, a relevant example, package source, and adjacent tests.
+2. Find symbols with `rg`; imports map to `packages/<name>/src/<subpath>.ts`.
+3. Write or update a focused test before behavior changes.
+4. Run `pnpm typecheck`, focused tests, `pnpm test`, and `pnpm lint`.
+5. For parity work, find the matching `packages/parity` test and document deviations.
+
+## Invariants
+
+- Interface names and keys are persistent protocol identity; calls cross serialization boundaries.
+- One activation owns a grain and normal turns are serialized.
+- Closure fields are volatile; durable state needs a configured named provider.
+- Registrations and compatible configuration must exist on every serving silo.
+- Timers are local; reminder/job handlers must be idempotent; streams can redeliver.
+- Transactions do not make arbitrary external side effects atomic.
+- Memory providers are not production durability.
+
+Use `/llms.txt` for the map or `/llms-full.txt` for consolidated context.
+
+
+---
+Source: docs/deviations.md
+---
+
+# How this differs from Orleans
+
+This is a faithful TypeScript port of Orleans' virtual-actor model, hosted on Kubernetes. **Almost
+everything works as it does in Orleans** — the actor model, the grain directory and placement,
+persistence, timers and reminders, streams, and cross-grain ACID transactions. For the mechanics of
+any of those, read the Orleans source; we don't re-document it. What follows is the high-level
+summary of the deliberate deviations. [`EPICS.md`](../EPICS.md) tracks what is shipped; the
+[`README`](../README.md) has the intent and a quick example.
+
+## TypeScript idioms
+
+- **References are a runtime ES `Proxy`**, not compile-time generated code, and calls dispatch by
+  **method name** — a typed interface is a compile-time view, with no generated method table. There
+  is no build step.
+- **Serialization is registered at runtime** (`@serializable`) rather than source-generated;
+  MessagePack is the default wire format.
+- **Transport is WebSocket over HTTP**, behind an abstraction.
+- **Single-threaded turns** are enforced by a per-activation turn scheduler. The guarantee is
+  identical to Orleans; the mechanism differs because `await` yields the Node event loop.
+- The code is a **pnpm workspace of small `@thresh/*` packages** with no barrel files and standard
+  TC39 decorators (no `reflect-metadata`), run straight from source.
+
+## Kubernetes-native hosting
+
+Kubernetes is the **membership authority**, replacing Orleans' membership table, status gossip, and
+probe-graph failure detector. A silo watches the EndpointSlices of a headless `Service`: ready
+endpoints are live silos, removed endpoints are dead. Silos run as a `StatefulSet` (stable ordinals
+keep a restarted silo in the same ring position); liveness/readiness probes drive failure detection
+and the graceful drain. Silo identity is `podName` + `podUid` rather than Orleans' `IP:port:generation`.
+
+| Orleans mechanism | Replaced by |
+| --- | --- |
+| Membership table + gossip | Kubernetes API watch on Pod endpoints |
+| Probe-graph failure detection | Liveness/readiness probes + endpoint removal |
+| Silo generation counters | Pod name + UID |
+| Gateway list provider (clients) | Kubernetes `Service` / DNS |
+| Cluster discovery providers | The Kubernetes control plane |
+
+## Functional / reducer authoring
+
+Grains are authored as **factory closures** (`defineGrain` + hooks like `usePersistentState`) rather
+than classes with attributes; the Orleans-style class form is retained underneath as the substrate
+and interop surface. **Reducer** and **single-dispatch** grains add an event-folding authoring shape
+on top. These change how a grain is *written*, not what it *is* — the runtime, guarantees, and
+lifecycle are unchanged.
+
+## Additions beyond Orleans
+
+A few capabilities layer on top of the faithful model without changing it: **durable journaling**
+(a grain that journals each mutation and replays it on activation) and **durable jobs** (sharded,
+at-least-once scheduled grain invocation). A further, **not-yet-built** direction is **browser state
+replication** — a live read-view of grain state in the browser under a server-enforced trust model.
+
+
+---
+Source: docs/typescript-grain-api.md
+---
+
+# TypeScript grain API idioms
+
+Thresh keeps Orleans-compatible names for parity work, but application code can be
+more idiomatic TypeScript than a direct C# port.
+
+## Prefer structural type aliases over `I*` interfaces
+
+A grain surface is just the structural shape of the methods callers can invoke.
+You do not need an `I` prefix or declaration-merging-style names.
+
+```ts
+import { defineGrain } from "@thresh/core/define-grain";
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainKey } from "@thresh/core/key-kinds";
+
+type Thermostat = GrainKey<string> & {
+  onUpdate(status: ThermostatStatus): Promise<Command[]>;
+};
+
+const thermostat = defineGrainInterface<Thermostat>("example.Thermostat");
+
+const ThermostatGrain = defineGrain<Thermostat>("Thermostat", (ctx) => ({
+  async onUpdate(status) {
+    // ...
+    return [];
+  },
+}));
+```
+
+This reads like ordinary TypeScript: a lowercase value (`thermostat`) carries the
+runtime descriptor, while the `Thermostat` type is erased at compile time.
+
+## Use `GrainKey<TKey>` for key type, not Orleans marker names
+
+The older `GrainWithStringKey`, `GrainWithIntegerKey`, and compound-key marker
+interfaces remain supported because they map directly to Orleans concepts. For
+new TypeScript code, `GrainKey<TKey>` or `KeyedGrain<TKey>` makes the API intent
+clear without encoding the key kind in a C#-style interface name.
+
+```ts
+type Account = GrainKey<bigint> & {
+  deposit(cents: number): Promise<void>;
+  balance(): Promise<number>;
+};
+```
+
+If no key marker is present, `getGrain` still defaults to `string` keys for
+backwards compatibility.
+
+## Keep `defineGrainInterface` as the runtime descriptor
+
+TypeScript erases interfaces and type aliases, so Thresh still needs a value to
+carry the stable interface id, version, and per-method invocation options. Treat
+that value like a schema or route descriptor rather than a C# interface object.
+
