@@ -7,7 +7,7 @@ import { GreeterGrain } from "@thresh/example-greeter/greeter-grain";
 import { greeter } from "@thresh/example-greeter/interfaces";
 
 export interface GreeterDemoResult {
-  /** The first greeting — proves onActivate ran before it (carries the prefix). */
+  /** The first greeting — proves the activate hook ran before it (carries the prefix). */
   firstGreeting: string;
   /** Count after several concurrent greets — proves serialized turns (no lost ++). */
   countAfterConcurrent: number;
