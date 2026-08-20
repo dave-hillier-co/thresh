@@ -1,5 +1,5 @@
 import { defineGrain, usePersistentState } from "@thresh/core/define-grain";
-import type { ICart } from "@thresh/example-migration/interfaces";
+import type { Cart } from "@thresh/example-migration/interfaces";
 
 interface CartState {
   items: string[];
@@ -12,7 +12,7 @@ interface CartState {
  * target silo and rehydrates it there, skipping the storage read — so the move
  * never loses unflushed state. Functional-first (`defineGrain` + hooks).
  */
-export const CartGrain = defineGrain<ICart>("Cart", (ctx) => {
+export const CartGrain = defineGrain<Cart>("Cart", (ctx) => {
   const cart = usePersistentState<CartState>(ctx, "cart", {
     defaultValue: (): CartState => ({ items: [] }),
   });

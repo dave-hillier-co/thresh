@@ -3,7 +3,7 @@ import { grain } from "@thresh/core/decorators";
 import { Grain } from "@thresh/core/grain";
 import { GrainId } from "@thresh/core/grain-id";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import type { Remindable, TickStatus } from "@thresh/core/reminder";
 import { SiloAddress } from "@thresh/core/silo-address";
 import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
@@ -14,7 +14,7 @@ import { StaticMembershipService } from "@thresh/runtime/static-membership";
 import { createSilo } from "@thresh/hosting/silo-builder";
 import type { SiloHost } from "@thresh/hosting/silo-host";
 
-interface IBeacon extends GrainWithStringKey {
+interface IBeacon extends GrainKey<string> {
   begin(): Promise<void>;
 }
 const IBeacon = defineGrainInterface<IBeacon>("IBeacon.reminders");

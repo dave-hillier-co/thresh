@@ -4,7 +4,7 @@ import { MemoryGrainStorage } from "@thresh/persistence/memory-grain-storage";
 import { createSilo } from "@thresh/hosting/silo-builder";
 import type { SiloHost } from "@thresh/hosting/silo-host";
 import { AccountGrain } from "@thresh/example-bank/account-grain-functional";
-import { IAccount, type AccountState } from "@thresh/example-bank/interfaces";
+import { account, type AccountState } from "@thresh/example-bank/interfaces";
 
 export interface BankDemoResult {
   alice: AccountState;
@@ -20,7 +20,7 @@ export function buildBankSilo(storage: MemoryGrainStorage): SiloHost {
     .useStaticMembership([local])
     .useInProcessTransport(new InProcessNetwork())
     .useMemoryStorage(storage)
-    .registerGrain(AccountGrain, { interfaces: [IAccount] })
+    .registerGrain(AccountGrain, { interfaces: [account] })
     .build();
 }
 
@@ -38,12 +38,12 @@ export async function runBankDemo(): Promise<BankDemoResult> {
   let alice: AccountState;
   let bob: AccountState;
   try {
-    await silo.getGrain(IAccount, "alice").deposit(10_000); // $100.00
-    await silo.getGrain(IAccount, "alice").deposit(5_000); // $50.00
-    await silo.getGrain(IAccount, "bob").deposit(2_000); // $20.00
-    await silo.getGrain(IAccount, "alice").transferTo("bob", 3_000); // $30.00 → bob
-    alice = await silo.getGrain(IAccount, "alice").statement();
-    bob = await silo.getGrain(IAccount, "bob").statement();
+    await silo.getGrain(account, "alice").deposit(10_000); // $100.00
+    await silo.getGrain(account, "alice").deposit(5_000); // $50.00
+    await silo.getGrain(account, "bob").deposit(2_000); // $20.00
+    await silo.getGrain(account, "alice").transferTo("bob", 3_000); // $30.00 → bob
+    alice = await silo.getGrain(account, "alice").statement();
+    bob = await silo.getGrain(account, "bob").statement();
   } finally {
     await silo.stop(); // pod dies; only the folded snapshot is durable
   }
@@ -51,7 +51,7 @@ export async function runBankDemo(): Promise<BankDemoResult> {
   const restarted = buildBankSilo(storage); // new pod, same durable store
   await restarted.start();
   try {
-    const aliceAfterRestart = await restarted.getGrain(IAccount, "alice").statement();
+    const aliceAfterRestart = await restarted.getGrain(account, "alice").statement();
     return { alice, bob, aliceAfterRestart };
   } finally {
     await restarted.stop();

@@ -3,7 +3,7 @@ import {
   type BroadcastChannelHandler,
 } from "@thresh/core/broadcast-channel";
 import { defineGrain } from "@thresh/core/define-grain";
-import { type Alert, type IRegionMonitor } from "@thresh/example-broadcast/interfaces";
+import { type Alert, type RegionMonitor } from "@thresh/example-broadcast/interfaces";
 
 /**
  * A per-region dashboard, implicitly subscribed to the `alerts` namespace. A
@@ -12,7 +12,7 @@ import { type Alert, type IRegionMonitor } from "@thresh/example-broadcast/inter
  * handler as a turn, with no explicit subscribe. It accumulates what it has seen
  * since this activation.
  */
-export const RegionMonitorGrain = defineGrain<IRegionMonitor>(
+export const RegionMonitorGrain = defineGrain<RegionMonitor>(
   "RegionMonitor",
   () => {
     const received: Alert[] = [];

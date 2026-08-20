@@ -2,7 +2,7 @@
 // IGeneratorTestDerivedGrain1.cs, IGeneratorTestDerivedGrain2.cs,
 // IGeneratorTestDerivedDerivedGrain.cs @ v10.1.0 (MIT).
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithIntegerKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 
 /** Upstream `UnitTests.GrainInterfaces.ReturnCode`. */
 export type ReturnCode = "OK" | "Fail";
@@ -15,7 +15,7 @@ export interface MemberVariables {
 }
 
 /** Upstream `UnitTests.GrainInterfaces.IGeneratorTestGrain`. */
-export interface IGeneratorTestGrain extends GrainWithIntegerKey {
+export interface IGeneratorTestGrain extends GrainKey<bigint> {
   byteSet(data: Uint8Array): Promise<Uint8Array>;
   stringSet(str: string): Promise<void>;
   stringIsNullOrEmpty(): Promise<boolean>;

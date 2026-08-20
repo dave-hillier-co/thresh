@@ -4,11 +4,11 @@ import { Grain } from "@thresh/core/grain";
 import { GrainId } from "@thresh/core/grain-id";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
 import type { GrainType } from "@thresh/core/grain-type";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import { TestCluster } from "@thresh/testing/test-cluster";
 import { waitFor } from "@thresh/testing/wait";
 
-interface ICounter extends GrainWithStringKey {
+interface ICounter extends GrainKey<string> {
   increment(): Promise<number>;
 }
 const ICounter = defineGrainInterface<ICounter>("TestClusterCounter");
@@ -33,7 +33,7 @@ const counterId = (key: string) => new GrainId("TestClusterCounter" as GrainType
 let notifications: string[] = [];
 let watcherTargetKey = "watcher";
 
-interface IWatcherGrain extends GrainWithStringKey {
+interface IWatcherGrain extends GrainKey<string> {
   ping(): Promise<void>;
   notify(fromKey: string): Promise<void>;
 }
@@ -50,7 +50,7 @@ class WatcherGrain extends Grain implements IWatcherGrain {
   }
 }
 
-interface INotifierGrain extends GrainWithStringKey {
+interface INotifierGrain extends GrainKey<string> {
   touch(): Promise<void>;
 }
 const INotifierGrain = defineGrainInterface<INotifierGrain>("TeardownRaceNotifier");

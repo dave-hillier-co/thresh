@@ -1,6 +1,6 @@
 import { defineGrain, useTransactionalState } from "@thresh/core/define-grain";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 
 /**
  * A bank account whose balance is **transactional** state. Unlike the
@@ -13,13 +13,13 @@ interface Balance {
   cents: number;
 }
 
-export interface ITxAccount extends GrainWithStringKey {
+export type TxAccount = GrainKey<string> & {
   deposit(cents: number): Promise<void>;
   withdraw(cents: number): Promise<void>;
   balance(): Promise<number>;
-}
+};
 
-export const ITxAccount = defineGrainInterface<ITxAccount>("example.bank.ITxAccount", {
+export const txAccount = defineGrainInterface<TxAccount>("example.bank.txAccount", {
   options: {
     deposit: { transaction: "join" },
     withdraw: { transaction: "join" },
@@ -27,19 +27,19 @@ export const ITxAccount = defineGrainInterface<ITxAccount>("example.bank.ITxAcco
   },
 });
 
-export interface ITeller extends GrainWithStringKey {
+export type Teller = GrainKey<string> & {
   open(account: string, cents: number): Promise<void>;
   transfer(from: string, to: string, cents: number): Promise<void>;
-}
+};
 
-export const ITeller = defineGrainInterface<ITeller>("example.bank.ITeller", {
+export const teller = defineGrainInterface<Teller>("example.bank.teller", {
   options: {
     open: { transaction: "create" },
     transfer: { transaction: "create" },
   },
 });
 
-export const TxAccountGrain = defineGrain<ITxAccount>("TxAccount", (ctx) => {
+export const TxAccountGrain = defineGrain<TxAccount>("TxAccount", (ctx) => {
   const balance = useTransactionalState<Balance>(ctx, "balance", {
     initial: () => ({ cents: 0 }),
   });
@@ -57,14 +57,14 @@ export const TxAccountGrain = defineGrain<ITxAccount>("TxAccount", (ctx) => {
   };
 });
 
-export const TellerGrain = defineGrain<ITeller>("Teller", (ctx) => ({
+export const TellerGrain = defineGrain<Teller>("Teller", (ctx) => ({
   open: async (account, cents) => {
-    await ctx.getGrain(ITxAccount, account).deposit(cents);
+    await ctx.getGrain(txAccount, account).deposit(cents);
   },
   // One transaction spanning both accounts: credit then debit. If the debit
   // overdraws and throws, the whole transaction aborts and the credit is undone.
   transfer: async (from, to, cents) => {
-    await ctx.getGrain(ITxAccount, to).deposit(cents);
-    await ctx.getGrain(ITxAccount, from).withdraw(cents);
+    await ctx.getGrain(txAccount, to).deposit(cents);
+    await ctx.getGrain(txAccount, from).withdraw(cents);
   },
 }));

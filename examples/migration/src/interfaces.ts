@@ -1,5 +1,5 @@
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import type { SiloAddress } from "@thresh/core/silo-address";
 
 /**
@@ -7,7 +7,7 @@ import type { SiloAddress } from "@thresh/core/silo-address";
  * losing state — even items added since the last persist (carried in the
  * migration bag, not re-read from storage).
  */
-export interface ICart extends GrainWithStringKey {
+export type Cart = GrainKey<string> & {
   /** Add an item to the in-memory cart WITHOUT persisting it yet. */
   add(sku: string): Promise<number>;
   /** Persist the cart to storage. */
@@ -16,7 +16,7 @@ export interface ICart extends GrainWithStringKey {
   items(): Promise<string[]>;
   /** Ask the runtime to migrate this activation to `target` next time it goes idle. */
   moveTo(target: SiloAddress): Promise<void>;
-}
-export const ICart = defineGrainInterface<ICart>("ICart.migration", {
+};
+export const cart = defineGrainInterface<Cart>("cart.migration", {
   options: { items: { readOnly: true } },
 });

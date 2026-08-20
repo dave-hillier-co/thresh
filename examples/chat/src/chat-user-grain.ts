@@ -1,6 +1,6 @@
 import { defineGrain } from "@thresh/core/define-grain";
 import type { StreamHandler } from "@thresh/core/stream";
-import { CHAT, type ChatMessage, type IChatUser } from "@thresh/example-chat/interfaces";
+import { CHAT, type ChatMessage, type ChatUser } from "@thresh/example-chat/interfaces";
 
 /**
  * A chat member. `join` subscribes to the room stream — or, if this activation
@@ -12,7 +12,7 @@ import { CHAT, type ChatMessage, type IChatUser } from "@thresh/example-chat/int
  * neighbour's. `onNext` mutates `received` with no lock — proof it runs as a
  * turn on this activation.
  */
-export const ChatUserGrain = defineGrain<IChatUser>("ChatUser", (ctx) => {
+export const ChatUserGrain = defineGrain<ChatUser>("ChatUser", (ctx) => {
   const received: ChatMessage[] = [];
 
   const handler = (): StreamHandler<ChatMessage> => ({

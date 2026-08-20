@@ -22,10 +22,10 @@
 // which is carried into the dehydration bag exactly the way upstream's grain
 // itself does it internally.
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithIntegerKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import type { SiloAddress } from "@thresh/core/silo-address";
 
-export interface IMigrationTestGrain extends GrainWithIntegerKey {
+export interface IMigrationTestGrain extends GrainKey<bigint> {
   setState(state: number): Promise<void>;
   getState(): Promise<number>;
   migrateOnIdle(target?: SiloAddress): Promise<void>;
@@ -43,7 +43,7 @@ export const IMigrationTestGrain = defineGrainInterface<IMigrationTestGrain>(
 );
 
 /** Upstream's `Grain<TGrainState>`-backed variant: a single persistent-state facet. */
-export interface IMigrationTestGrainGrainOfT extends GrainWithIntegerKey {
+export interface IMigrationTestGrainGrainOfT extends GrainKey<bigint> {
   setState(state: number): Promise<void>;
   getState(): Promise<number>;
   migrateOnIdle(target?: SiloAddress): Promise<void>;
@@ -53,7 +53,7 @@ export const IMigrationTestGrainGrainOfT = defineGrainInterface<IMigrationTestGr
   "DefaultCluster.Tests.General.IMigrationTestGrain_GrainOfT",
 );
 
-export interface IMigrationTestGrainIPersistentStateOfT extends GrainWithIntegerKey {
+export interface IMigrationTestGrainIPersistentStateOfT extends GrainKey<bigint> {
   setState(a: number, b: number): Promise<void>;
   getState(): Promise<[number, number]>;
   migrateOnIdle(target?: SiloAddress): Promise<void>;

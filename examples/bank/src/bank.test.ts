@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { MemoryGrainStorage } from "@thresh/persistence/memory-grain-storage";
 import { buildBankSilo, runBankDemo } from "@thresh/example-bank/demo";
-import { IAccount } from "@thresh/example-bank/interfaces";
+import { account } from "@thresh/example-bank/interfaces";
 
 describe("bank reducer grains", () => {
   it("runs the demo end-to-end: events fold to state, transfer moves funds, snapshot survives restart", async () => {
@@ -19,7 +19,7 @@ describe("bank reducer grains", () => {
     const silo = buildBankSilo(new MemoryGrainStorage());
     await silo.start();
     try {
-      const acct = silo.getGrain(IAccount, "x");
+      const acct = silo.getGrain(account, "x");
       await acct.deposit(1_000);
       await expect(acct.withdraw(5_000)).rejects.toThrow(/insufficient/);
       expect(await acct.statement()).toEqual({ balanceCents: 1_000, deposits: 1, withdrawals: 0 });

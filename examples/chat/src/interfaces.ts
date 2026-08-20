@@ -1,5 +1,5 @@
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 
 export interface ChatMessage {
   from: string;
@@ -7,19 +7,19 @@ export interface ChatMessage {
 }
 
 /** A room: anyone can say something; the text fans out to every member. */
-export interface IChatRoom extends GrainWithStringKey {
+export type ChatRoom = GrainKey<string> & {
   say(from: string, text: string): Promise<void>;
-}
+};
 
 /** A member: joins a room and accumulates the messages it receives. */
-export interface IChatUser extends GrainWithStringKey {
+export type ChatUser = GrainKey<string> & {
   join(room: string): Promise<void>;
   history(): Promise<ChatMessage[]>;
-}
+};
 
-export const IChatRoom = defineGrainInterface<IChatRoom>("example.IChatRoom");
+export const chatRoom = defineGrainInterface<ChatRoom>("example.chatRoom");
 
-export const IChatUser = defineGrainInterface<IChatUser>("example.IChatUser", {
+export const chatUser = defineGrainInterface<ChatUser>("example.chatUser", {
   options: { history: { readOnly: true } },
 });
 

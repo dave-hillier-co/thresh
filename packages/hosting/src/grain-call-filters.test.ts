@@ -9,12 +9,12 @@ import {
   type OutgoingGrainCallFilter,
 } from "@thresh/core/grain-call-filter";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import { SiloAddress } from "@thresh/core/silo-address";
 import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
 import { createSilo } from "@thresh/hosting/silo-builder";
 
-interface Greeter extends GrainWithStringKey {
+interface Greeter extends GrainKey<string> {
   greet(name: string): Promise<string>;
 }
 const Greeter = defineGrainInterface<Greeter>("FilterGreeter");
@@ -30,7 +30,7 @@ class GreeterGrain extends Grain implements Greeter {
 }
 
 // A grain that filters its own incoming calls (Orleans IIncomingGrainCallFilter).
-interface Echoer extends GrainWithStringKey {
+interface Echoer extends GrainKey<string> {
   echo(s: string): Promise<string>;
 }
 const Echoer = defineGrainInterface<Echoer>("FilterEchoer");

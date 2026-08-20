@@ -9,10 +9,10 @@
 // return value from the client object rather than firing-and-forgetting a
 // notification. None of these methods are one-way.
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithIntegerKey, GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 
 /** Client-hosted object a grain calls back into and awaits a result from. */
-export interface IClientAddressableTestClientObject extends GrainWithStringKey {
+export interface IClientAddressableTestClientObject extends GrainKey<string> {
   onHappyPath(message: string): Promise<string>;
   onSadPath(message: string): Promise<void>;
   onSerialStress(n: number): Promise<number>;
@@ -25,7 +25,7 @@ export const IClientAddressableTestClientObject =
   );
 
 /** Client-hosted producer a grain polls for data. */
-export interface IClientAddressableTestProducer extends GrainWithStringKey {
+export interface IClientAddressableTestProducer extends GrainKey<string> {
   poll(): Promise<number>;
 }
 
@@ -33,7 +33,7 @@ export const IClientAddressableTestProducer = defineGrainInterface<IClientAddres
   "UnitTests.GrainInterfaces.IClientAddressableTestProducer",
 );
 
-export interface IClientAddressableTestGrain extends GrainWithIntegerKey {
+export interface IClientAddressableTestGrain extends GrainKey<bigint> {
   setTarget(target: IClientAddressableTestClientObject): Promise<void>;
   happyPath(message: string): Promise<string>;
   sadPath(message: string): Promise<void>;
@@ -45,7 +45,7 @@ export const IClientAddressableTestGrain = defineGrainInterface<IClientAddressab
   "UnitTests.GrainInterfaces.IClientAddressableTestGrain",
 );
 
-export interface IClientAddressableTestConsumer extends GrainWithIntegerKey {
+export interface IClientAddressableTestConsumer extends GrainKey<bigint> {
   pollProducer(): Promise<number>;
   setup(): Promise<void>;
 }
@@ -54,7 +54,7 @@ export const IClientAddressableTestConsumer = defineGrainInterface<IClientAddres
   "UnitTests.GrainInterfaces.IClientAddressableTestConsumer",
 );
 
-export interface IClientAddressableTestRendezvousGrain extends GrainWithIntegerKey {
+export interface IClientAddressableTestRendezvousGrain extends GrainKey<bigint> {
   getProducer(): Promise<IClientAddressableTestProducer>;
   setProducer(producer: IClientAddressableTestProducer): Promise<void>;
 }

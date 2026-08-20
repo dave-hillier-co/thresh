@@ -3,7 +3,7 @@ import { defineGrain, useTransactionalState } from "@thresh/core/define-grain";
 import { grain, transactionalState } from "@thresh/core/decorators";
 import { Grain } from "@thresh/core/grain";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import { SiloAddress } from "@thresh/core/silo-address";
 import type { TransactionalState } from "@thresh/core/transactional-state";
 import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
@@ -13,18 +13,18 @@ interface Balance {
   cents: number;
 }
 
-interface Account extends GrainWithStringKey {
+interface Account extends GrainKey<string> {
   deposit(cents: number): Promise<void>;
   withdraw(cents: number): Promise<void>;
   balance(): Promise<number>;
 }
 
-interface FnAccount extends GrainWithStringKey {
+interface FnAccount extends GrainKey<string> {
   deposit(cents: number): Promise<void>;
   balance(): Promise<number>;
 }
 
-interface Atm extends GrainWithStringKey {
+interface Atm extends GrainKey<string> {
   transfer(from: string, to: string, cents: number): Promise<void>;
   fund(account: string, cents: number): Promise<void>;
   fundFn(account: string, cents: number): Promise<void>;

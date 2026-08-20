@@ -7,7 +7,7 @@ import { AlertPublisherGrain } from "@thresh/example-broadcast/alert-publisher-g
 import { AuditLogGrain } from "@thresh/example-broadcast/audit-log-grain";
 import { RegionMonitorGrain } from "@thresh/example-broadcast/region-monitor-grain";
 import { runBroadcastDemo } from "@thresh/example-broadcast/demo";
-import { IAlertPublisher, IAuditLog, IRegionMonitor } from "@thresh/example-broadcast/interfaces";
+import { alertPublisher, auditLog, regionMonitor } from "@thresh/example-broadcast/interfaces";
 
 const local = new SiloAddress("silo-0", "uid-0", "silo-0:11111");
 
@@ -16,9 +16,9 @@ function buildSilo(): SiloHost {
     .useStaticMembership([local])
     .useInProcessTransport(new InProcessNetwork())
     .useBroadcastChannels()
-    .registerGrain(AlertPublisherGrain, { interfaces: [IAlertPublisher] })
-    .registerGrain(RegionMonitorGrain, { interfaces: [IRegionMonitor] })
-    .registerGrain(AuditLogGrain, { interfaces: [IAuditLog] })
+    .registerGrain(AlertPublisherGrain, { interfaces: [alertPublisher] })
+    .registerGrain(RegionMonitorGrain, { interfaces: [regionMonitor] })
+    .registerGrain(AuditLogGrain, { interfaces: [auditLog] })
     .build();
 }
 
@@ -27,11 +27,11 @@ describe("broadcast channels (pub/sub fan-out acceptance)", () => {
     const silo = buildSilo();
     await silo.start();
     try {
-      await silo.getGrain(IAlertPublisher, "ops").raise("eu", "disk pressure");
+      await silo.getGrain(alertPublisher, "ops").raise("eu", "disk pressure");
       // Both the region monitor and the region audit log — distinct grain types
       // implicitly subscribed to "alerts" — receive the same publish.
-      const monitor = await silo.getGrain(IRegionMonitor, "eu").alerts();
-      const audit = await silo.getGrain(IAuditLog, "eu").entries();
+      const monitor = await silo.getGrain(regionMonitor, "eu").alerts();
+      const audit = await silo.getGrain(auditLog, "eu").entries();
       expect(monitor.map((a) => a.text)).toEqual(["disk pressure"]);
       expect(audit).toEqual(["[eu] disk pressure"]);
     } finally {
@@ -43,12 +43,12 @@ describe("broadcast channels (pub/sub fan-out acceptance)", () => {
     const silo = buildSilo();
     await silo.start();
     try {
-      await silo.getGrain(IAlertPublisher, "ops").raise("eu", "eu-only");
-      expect((await silo.getGrain(IRegionMonitor, "eu").alerts()).map((a) => a.text)).toEqual([
+      await silo.getGrain(alertPublisher, "ops").raise("eu", "eu-only");
+      expect((await silo.getGrain(regionMonitor, "eu").alerts()).map((a) => a.text)).toEqual([
         "eu-only",
       ]);
       // The us monitor was never published to, so it has seen nothing.
-      expect(await silo.getGrain(IRegionMonitor, "us").alerts()).toEqual([]);
+      expect(await silo.getGrain(regionMonitor, "us").alerts()).toEqual([]);
     } finally {
       await silo.stop();
     }

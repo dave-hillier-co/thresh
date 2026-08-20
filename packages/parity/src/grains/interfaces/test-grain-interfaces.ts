@@ -3,9 +3,9 @@
 // StartTimer/TestRequestContext/DoLongAction; only the subset the ported
 // BasicActivationTests cases exercise is declared here.
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithIntegerKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 
-export interface ITestGrain extends GrainWithIntegerKey {
+export interface ITestGrain extends GrainKey<bigint> {
   getKey(): Promise<bigint>;
   getLabel(): Promise<string>;
   setLabel(label: string): Promise<void>;
@@ -23,7 +23,7 @@ export interface ITestGrain extends GrainWithIntegerKey {
 export const ITestGrain = defineGrainInterface<ITestGrain>("UnitTests.GrainInterfaces.ITestGrain");
 
 /** Upstream's `ITestGrainLongOnActivateAsync`: activation validates the key like `ITestGrain`. */
-export interface ITestGrainLongOnActivateAsync extends GrainWithIntegerKey {
+export interface ITestGrainLongOnActivateAsync extends GrainKey<bigint> {
   getKey(): Promise<bigint>;
 }
 

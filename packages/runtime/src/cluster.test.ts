@@ -3,12 +3,12 @@ import { grain } from "@thresh/core/decorators";
 import { Grain } from "@thresh/core/grain";
 import { GrainId } from "@thresh/core/grain-id";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import { SiloAddress } from "@thresh/core/silo-address";
 import { ConsistentHashRing } from "@thresh/directory/consistent-hash-ring";
 import { TestCluster, type TestSiloHandle } from "@thresh/testing/test-cluster";
 
-interface ICounter extends GrainWithStringKey {
+interface ICounter extends GrainKey<string> {
   increment(by: number): Promise<number>;
 }
 const ICounter = defineGrainInterface<ICounter>("ICounter.cluster");
@@ -23,7 +23,7 @@ class CounterGrain extends Grain implements ICounter {
 }
 
 // preferLocal makes each node try to activate locally, forcing a CAS race.
-interface ILocal extends GrainWithStringKey {
+interface ILocal extends GrainKey<string> {
   ping(): Promise<string>;
 }
 const ILocal = defineGrainInterface<ILocal>("ILocal.cluster");

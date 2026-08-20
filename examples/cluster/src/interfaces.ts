@@ -1,5 +1,5 @@
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 
 export interface ScoreEntry {
   player: string;
@@ -11,11 +11,11 @@ export interface ScoreEntry {
  * against it; because a grain has exactly one activation, every `record` — no
  * matter which silo it originates on — lands on the same in-memory tally.
  */
-export interface ILeaderboard extends GrainWithStringKey {
+export type Leaderboard = GrainKey<string> & {
   record(player: string, score: number): Promise<void>;
   top(limit?: number): Promise<ScoreEntry[]>;
-}
+};
 
-export const ILeaderboard = defineGrainInterface<ILeaderboard>("example.ILeaderboard", {
+export const leaderboard = defineGrainInterface<Leaderboard>("example.leaderboard", {
   options: { top: { readOnly: true } },
 });

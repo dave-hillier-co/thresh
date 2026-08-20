@@ -17,14 +17,14 @@ import { grain } from "@thresh/core/decorators";
 import { Grain } from "@thresh/core/grain";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
 import { Guid } from "@thresh/core/guid";
-import type { GrainWithIntegerKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import { orleansTest } from "@thresh/testing/orleans-test";
 import { TestCluster } from "@thresh/testing/test-cluster";
 
 const STREAM_NAMESPACE = "StatelessWorkerStreamingNamespace";
 const STREAM_PROVIDER = "StreamProvider";
 
-interface IStatelessWorkerStreamConsumerGrain extends GrainWithIntegerKey {
+interface IStatelessWorkerStreamConsumerGrain extends GrainKey<bigint> {
   becomeConsumer(streamId: Guid, providerName: string): Promise<void>;
 }
 const IStatelessWorkerStreamConsumerGrain =

@@ -3,11 +3,11 @@
 import { grain } from "@thresh/core/decorators";
 import { Grain } from "@thresh/core/grain";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithIntegerKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import { PLACEMENT_HINT_KEY, RequestContext } from "@thresh/core/request-context";
 import type { SiloAddress } from "@thresh/core/silo-address";
 
-export interface IE extends GrainWithIntegerKey {
+export interface IE extends GrainKey<bigint> {
   firstPing(silo2: string): Promise<void>;
   ping(): Promise<void>;
   getAddress(): Promise<SiloAddress>;
@@ -16,7 +16,7 @@ export const IE = defineGrainInterface<IE>(
   "UnitTests.ActivationRepartitioningTests.CustomToleranceTests.IE",
 );
 
-export interface IF extends GrainWithIntegerKey {
+export interface IF extends GrainKey<bigint> {
   ping(): Promise<void>;
   getAddress(): Promise<SiloAddress>;
 }
@@ -24,7 +24,7 @@ export const IF = defineGrainInterface<IF>(
   "UnitTests.ActivationRepartitioningTests.CustomToleranceTests.IF",
 );
 
-export interface IX extends GrainWithIntegerKey {
+export interface IX extends GrainKey<bigint> {
   ping(): Promise<void>;
   getAddress(): Promise<SiloAddress>;
 }

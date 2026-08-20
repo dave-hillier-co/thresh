@@ -1,39 +1,36 @@
-import type { CompoundKey } from "./grain-key";
+import type { CompoundKey, GrainKey as RuntimeGrainKey } from "./grain-key";
 import type { Guid } from "./guid";
 
 /**
- * Marker interfaces a grain interface extends to declare its key kind, so the
- * factory can enforce the key type. The phantom field is never read.
+ * Phantom marker a grain interface/type alias intersects with to declare the
+ * key type accepted by `getGrain`. This is the TypeScript-first form: keep the
+ * message surface as a plain structural type and add `GrainKey<TKey>` for the
+ * identity shape.
+ *
+ * @example
+ * type Greeter = GrainKey<string> & {
+ *   greet(name: string): Promise<string>;
+ * };
  */
-export interface GrainWithStringKey {
-  readonly __key?: string;
+export interface GrainKey<TKey extends RuntimeGrainKey = string> {
+  readonly __key?: TKey;
 }
 
-export interface GrainWithIntegerKey {
-  readonly __key?: bigint;
-}
+/** Alias for `GrainKey<TKey>` when the grain surface reads better as a noun. */
+export type KeyedGrain<TKey extends RuntimeGrainKey = string> = GrainKey<TKey>;
 
-export interface GrainWithGuidKey {
-  readonly __key?: Guid;
-}
+/** Orleans-compatible marker names retained for ports and existing examples. */
+export interface GrainWithStringKey extends GrainKey<string> {}
+
+export interface GrainWithIntegerKey extends GrainKey<bigint> {}
+
+export interface GrainWithGuidKey extends GrainKey<Guid> {}
 
 /** Orleans' `IGrainWithGuidCompoundKey`: a Guid primary key plus a string extension. */
-export interface GrainWithGuidCompoundKey {
-  readonly __key?: CompoundKey<Guid>;
-}
+export interface GrainWithGuidCompoundKey extends GrainKey<CompoundKey<Guid>> {}
 
 /** Orleans' `IGrainWithIntegerCompoundKey`: an integer primary key plus a string extension. */
-export interface GrainWithIntegerCompoundKey {
-  readonly __key?: CompoundKey<bigint>;
-}
+export interface GrainWithIntegerCompoundKey extends GrainKey<CompoundKey<bigint>> {}
 
 /** Maps a grain interface to the key type its factory call requires. */
-export type GrainKeyFor<T> = T extends GrainWithGuidCompoundKey
-  ? CompoundKey<Guid>
-  : T extends GrainWithIntegerCompoundKey
-    ? CompoundKey<bigint>
-    : T extends GrainWithIntegerKey
-      ? bigint
-      : T extends GrainWithGuidKey
-        ? Guid
-        : string;
+export type GrainKeyFor<T> = T extends GrainKey<infer TKey> ? TKey : string;

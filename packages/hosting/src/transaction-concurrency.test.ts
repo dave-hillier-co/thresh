@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { grain, transactionalState } from "@thresh/core/decorators";
 import { Grain } from "@thresh/core/grain";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import { SiloAddress } from "@thresh/core/silo-address";
 import type { TransactionalState } from "@thresh/core/transactional-state";
 import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
@@ -12,12 +12,12 @@ interface Count {
   n: number;
 }
 
-interface Counter extends GrainWithStringKey {
+interface Counter extends GrainKey<string> {
   bump(): Promise<void>;
   value(): Promise<number>;
 }
 
-interface Runner extends GrainWithStringKey {
+interface Runner extends GrainKey<string> {
   /** Bump the counter inside a transaction, then hold the transaction open. */
   bumpAndHold(counter: string): Promise<void>;
   /** Bump the counter inside its own transaction and commit. */

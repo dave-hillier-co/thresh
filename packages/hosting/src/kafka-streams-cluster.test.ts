@@ -6,7 +6,7 @@ import { grain } from "@thresh/core/decorators";
 import { Grain } from "@thresh/core/grain";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
 import { stableHash32 } from "@thresh/core/hash";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import { SiloAddress } from "@thresh/core/silo-address";
 import type { StreamHandler } from "@thresh/core/stream";
 import { ConsistentHashRing } from "@thresh/directory/consistent-hash-ring";
@@ -112,12 +112,12 @@ afterAll(async () => {
   }
 });
 
-interface IChatRoom extends GrainWithStringKey {
+interface IChatRoom extends GrainKey<string> {
   say(text: string): Promise<void>;
 }
 const IChatRoom = defineGrainInterface<IChatRoom>("IChatRoom.kafka-cluster");
 
-interface IChatUser extends GrainWithStringKey {
+interface IChatUser extends GrainKey<string> {
   join(room: string): Promise<void>;
   count(): Promise<number>;
 }

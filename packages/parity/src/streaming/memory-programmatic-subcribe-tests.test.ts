@@ -43,10 +43,10 @@
 import { expect } from "vitest";
 import { grain } from "@thresh/core/decorators";
 import { Grain } from "@thresh/core/grain";
-import type { GrainKey } from "@thresh/core/grain-key";
+import type { GrainKey as RuntimeGrainKey } from "@thresh/core/grain-key";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
 import { grainReferenceIdentity } from "@thresh/core/grain-reference";
-import type { GrainWithGuidKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import {
   STREAM_SUBSCRIPTION_OBSERVER,
   tryGetStreamSubscriptionManager,
@@ -56,11 +56,12 @@ import {
 import { orleansTest } from "@thresh/testing/orleans-test";
 import { TestCluster } from "@thresh/testing/test-cluster";
 import { randomGuidKey } from "@thresh/parity/support/keys";
+import type { Guid } from "@thresh/core/guid";
 
 const StreamProviderName = "StreamProvider1";
 const StreamProviderName2 = "StreamProvider2";
 
-interface ISubscribeGrain extends GrainWithGuidKey {
+interface ISubscribeGrain extends GrainKey<Guid> {
   canGetSubscriptionManager(providerName: string): Promise<boolean>;
 }
 const ISubscribeGrain = defineGrainInterface<ISubscribeGrain>("ISubscribeGrain", {
@@ -75,7 +76,7 @@ class SubscribeGrain extends Grain implements ISubscribeGrain {
   }
 }
 
-interface IPassiveConsumerGrain extends GrainWithGuidKey {
+interface IPassiveConsumerGrain extends GrainKey<Guid> {
   getNumberConsumed(): Promise<number>;
 }
 const IPassiveConsumerGrain = defineGrainInterface<IPassiveConsumerGrain>("IPassiveConsumerGrain", {
@@ -100,7 +101,7 @@ class PassiveConsumerGrain extends Grain implements IPassiveConsumerGrain {
   }
 }
 
-type IJerkConsumerGrain = GrainWithGuidKey;
+type IJerkConsumerGrain = GrainKey<Guid>;
 const IJerkConsumerGrain = defineGrainInterface<IJerkConsumerGrain>("IJerkConsumerGrain");
 
 /** Unsubscribes on any subscription added to it (Orleans `Jerk_ConsumerGrain`). */
@@ -111,8 +112,12 @@ class JerkConsumerGrain extends Grain {
   }
 }
 
-interface ITypedProducerGrain extends GrainWithGuidKey {
-  becomeProducer(streamKey: GrainKey, streamNamespace: string, providerName: string): Promise<void>;
+interface ITypedProducerGrain extends GrainKey<Guid> {
+  becomeProducer(
+    streamKey: RuntimeGrainKey,
+    streamNamespace: string,
+    providerName: string,
+  ): Promise<void>;
   produce(): Promise<void>;
   getNumberProduced(): Promise<number>;
 }
@@ -129,7 +134,7 @@ class TypedProducerGrain extends Grain implements ITypedProducerGrain {
   private numProduced = 0;
 
   async becomeProducer(
-    streamKey: GrainKey,
+    streamKey: RuntimeGrainKey,
     streamNamespace: string,
     providerName: string,
   ): Promise<void> {

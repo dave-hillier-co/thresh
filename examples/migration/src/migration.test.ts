@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { GrainId } from "@thresh/core/grain-id";
 import { buildMigrationCluster, siloAddress } from "@thresh/example-migration/cluster";
 import { runMigrationDemo } from "@thresh/example-migration/demo";
-import { ICart } from "@thresh/example-migration/interfaces";
+import { cart } from "@thresh/example-migration/interfaces";
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 async function settleUntil(pred: () => boolean, max = 200): Promise<void> {
@@ -19,19 +19,19 @@ describe("grain migration (live activation move acceptance)", () => {
     const [node0, node1] = cluster.silos;
     try {
       // random->0 places the cart on silo-0; persist "apple", add "pear" in memory only.
-      await node0!.getGrain(ICart, "cart-1").add("apple");
-      await node0!.getGrain(ICart, "cart-1").checkout();
-      await node0!.getGrain(ICart, "cart-1").add("pear");
+      await node0!.getGrain(cart, "cart-1").add("apple");
+      await node0!.getGrain(cart, "cart-1").checkout();
+      await node0!.getGrain(cart, "cart-1").add("pear");
       expect(node0!.isActive(cartId)).toBe(true);
 
-      await node0!.getGrain(ICart, "cart-1").moveTo(siloAddress(1));
+      await node0!.getGrain(cart, "cart-1").moveTo(siloAddress(1));
       cluster.time.advance(31_000);
       await settleUntil(() => node1!.isActive(cartId));
 
       // The activation moved silos, and the unpersisted "pear" came with it.
       expect(node0!.isActive(cartId)).toBe(false);
       expect(node1!.isActive(cartId)).toBe(true);
-      expect(await node1!.getGrain(ICart, "cart-1").items()).toEqual(["apple", "pear"]);
+      expect(await node1!.getGrain(cart, "cart-1").items()).toEqual(["apple", "pear"]);
     } finally {
       await cluster.stop();
     }

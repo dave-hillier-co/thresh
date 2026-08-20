@@ -25,7 +25,7 @@ import { expect } from "vitest";
 import { grain, implicitStreamSubscription } from "@thresh/core/decorators";
 import { Grain } from "@thresh/core/grain";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import { STREAM_SUBSCRIPTION_OBSERVER, type StreamHandler } from "@thresh/core/stream";
 import type { GeneratedEvent } from "@thresh/streams/generator-stream-queue";
 import { orleansTest } from "@thresh/testing/orleans-test";
@@ -38,7 +38,7 @@ const EVENTS_IN_STREAM = 100;
 const TOTAL_QUEUE_COUNT = 4;
 const REPORTER_ID = "generated-stream-reporter";
 
-interface IGeneratedEventReporterGrain extends GrainWithStringKey {
+interface IGeneratedEventReporterGrain extends GrainKey<string> {
   reportResult(
     streamKey: string,
     streamProvider: string,
@@ -77,7 +77,7 @@ class GeneratedEventReporterGrain extends Grain implements IGeneratedEventReport
   }
 }
 
-interface IGeneratedEventCollectorGrain extends GrainWithStringKey {
+interface IGeneratedEventCollectorGrain extends GrainKey<string> {
   marker(): Promise<string>;
 }
 const IGeneratedEventCollectorGrain = defineGrainInterface<IGeneratedEventCollectorGrain>(

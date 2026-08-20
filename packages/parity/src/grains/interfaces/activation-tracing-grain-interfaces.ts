@@ -9,7 +9,7 @@
 // asserts on what the CALLED grain observes of its own trace context
 // (span id, trace state, baggage), not on captured spans.
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithIntegerKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 
 /**
  * What a grain call sees of its own OpenTelemetry span (the port analogue of
@@ -22,7 +22,7 @@ export interface ActivityData {
   readonly baggage: Readonly<Record<string, string>>;
 }
 
-export interface IActivityGrain extends GrainWithIntegerKey {
+export interface IActivityGrain extends GrainKey<bigint> {
   getActivityId(): Promise<string | undefined>;
   /** Reports this activation's trace id/span id/trace state/baggage — see `ActivityData`. */
   getActivityData(): Promise<ActivityData>;
@@ -32,7 +32,7 @@ export const IActivityGrain = defineGrainInterface<IActivityGrain>(
   "UnitTests.GrainInterfaces.IActivityGrain",
 );
 
-export interface IPersistentStateActivityGrain extends GrainWithIntegerKey {
+export interface IPersistentStateActivityGrain extends GrainKey<bigint> {
   getActivityId(): Promise<string | undefined>;
   getStateValue(): Promise<number>;
 }

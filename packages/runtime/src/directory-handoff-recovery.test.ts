@@ -3,7 +3,7 @@ import { grain } from "@thresh/core/decorators";
 import { Grain } from "@thresh/core/grain";
 import { GrainId } from "@thresh/core/grain-id";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import type { MembershipService } from "@thresh/core/membership";
 import { SiloAddress } from "@thresh/core/silo-address";
 import { RejectionError } from "@thresh/core/errors";
@@ -21,7 +21,7 @@ import type {
 import { ClusterNode } from "@thresh/runtime/cluster-node";
 import { StaticMembershipService } from "@thresh/runtime/static-membership";
 
-interface ICounter extends GrainWithStringKey {
+interface ICounter extends GrainKey<string> {
   increment(by: number): Promise<number>;
 }
 const ICounter = defineGrainInterface<ICounter>("ICounter.handoffRecovery");

@@ -1,5 +1,5 @@
 import { defineGrain } from "@thresh/core/define-grain";
-import type { IGreeter } from "@thresh/example-greeter/interfaces";
+import type { Greeter } from "@thresh/example-greeter/interfaces";
 
 /**
  * A minimal grain showing the core actor guarantees with no providers:
@@ -10,7 +10,7 @@ import type { IGreeter } from "@thresh/example-greeter/interfaces";
  * - the `count` is volatile activation state — after the grain deactivates while
  *   idle, the next call reactivates it fresh and the count starts again at 1.
  */
-export const GreeterGrain = defineGrain<IGreeter>("Greeter", (ctx) => {
+export const GreeterGrain = defineGrain<Greeter>("Greeter", (ctx) => {
   let prefix = "uninitialised";
   let count = 0;
 

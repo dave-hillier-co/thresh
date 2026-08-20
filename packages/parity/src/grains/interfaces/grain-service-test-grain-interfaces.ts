@@ -10,9 +10,9 @@
 // and `IEchoExtension` (the grain-extension the service hosts) need declaring
 // here.
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithIntegerKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 
-export interface IGrainServiceTestGrain extends GrainWithIntegerKey {
+export interface IGrainServiceTestGrain extends GrainKey<bigint> {
   getHelloWorldUsingCustomService(): Promise<string>;
   callHasStarted(): Promise<boolean>;
   callHasStartedInBackground(): Promise<boolean>;

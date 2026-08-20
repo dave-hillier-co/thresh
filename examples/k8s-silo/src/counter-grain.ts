@@ -1,5 +1,5 @@
 import { defineGrain, usePersistentState } from "@thresh/core/define-grain";
-import type { CounterReply, ICounter } from "@thresh/example-k8s-silo/interfaces";
+import type { Counter, CounterReply } from "@thresh/example-k8s-silo/interfaces";
 
 interface CounterState {
   value: number;
@@ -13,7 +13,7 @@ const hostName = (): string => process.env.POD_NAME ?? "local";
  * host pod dies the activation reactivates on a survivor and resumes from the
  * stored value rather than starting over.
  */
-export const CounterGrain = defineGrain<ICounter>("Counter", (ctx) => {
+export const CounterGrain = defineGrain<Counter>("Counter", (ctx) => {
   const state = usePersistentState<CounterState>(ctx, "counter", {
     defaultValue: (): CounterState => ({ value: 0 }),
   });

@@ -6,9 +6,9 @@
 // — the ported tests below already cover the shared behavior.
 import type { Duration } from "@thresh/core/duration";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithIntegerKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 
-export interface ITimerGrain extends GrainWithIntegerKey {
+export interface ITimerGrain extends GrainKey<bigint> {
   stopDefaultTimer(): Promise<void>;
   getTimerPeriod(): Promise<Duration>;
   getCounter(): Promise<number>;
@@ -23,7 +23,7 @@ export const ITimerGrain = defineGrainInterface<ITimerGrain>(
 // RestartTimer(name, due)/RestartTimer(name, due, period); TS interfaces cannot
 // overload across the wire (dispatch is by method name), so both take their optional
 // trailing argument as an optional parameter instead.
-export interface ITimerCallGrain extends GrainWithIntegerKey {
+export interface ITimerCallGrain extends GrainKey<bigint> {
   getTickCount(): Promise<number>;
   /** The captured error's message, or `undefined` if the timer callback never threw. */
   getException(): Promise<string | undefined>;
@@ -37,7 +37,7 @@ export const ITimerCallGrain = defineGrainInterface<ITimerCallGrain>(
   "UnitTests.GrainInterfaces.ITimerCallGrain",
 );
 
-export interface INonReentrantTimerCallGrain extends GrainWithIntegerKey {
+export interface INonReentrantTimerCallGrain extends GrainKey<bigint> {
   getTickCount(): Promise<number>;
   getException(): Promise<string | undefined>;
   startTimer(name: string, delay: Duration): Promise<void>;

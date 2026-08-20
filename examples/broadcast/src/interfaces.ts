@@ -1,5 +1,5 @@
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 
 /** One alert broadcast to a region's channel. */
 export interface Alert {
@@ -8,19 +8,19 @@ export interface Alert {
 }
 
 /** Publishes alerts to a region's broadcast channel. */
-export interface IAlertPublisher extends GrainWithStringKey {
+export type AlertPublisher = GrainKey<string> & {
   raise(region: string, text: string): Promise<void>;
-}
-export const IAlertPublisher = defineGrainInterface<IAlertPublisher>("IAlertPublisher.broadcast");
+};
+export const alertPublisher = defineGrainInterface<AlertPublisher>("alertPublisher.broadcast");
 
 /** A per-region dashboard that shows the alerts it has received. */
-export interface IRegionMonitor extends GrainWithStringKey {
+export type RegionMonitor = GrainKey<string> & {
   alerts(): Promise<Alert[]>;
-}
-export const IRegionMonitor = defineGrainInterface<IRegionMonitor>("IRegionMonitor.broadcast");
+};
+export const regionMonitor = defineGrainInterface<RegionMonitor>("regionMonitor.broadcast");
 
 /** A per-region audit log that records every alert it has received. */
-export interface IAuditLog extends GrainWithStringKey {
+export type AuditLog = GrainKey<string> & {
   entries(): Promise<string[]>;
-}
-export const IAuditLog = defineGrainInterface<IAuditLog>("IAuditLog.broadcast");
+};
+export const auditLog = defineGrainInterface<AuditLog>("auditLog.broadcast");

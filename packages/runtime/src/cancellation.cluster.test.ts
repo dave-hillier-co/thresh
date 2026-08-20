@@ -4,11 +4,11 @@ import { GrainTaskCanceledError } from "@thresh/core/errors";
 import { Grain } from "@thresh/core/grain";
 import type { GrainCancellationToken } from "@thresh/core/grain-cancellation-token";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import { TestCluster, type TestSiloHandle } from "@thresh/testing/test-cluster";
 
 /** A grain whose `longWait` honours a `GrainCancellationToken` (Orleans cooperative cancellation). */
-interface ILongWaitGrain extends GrainWithStringKey {
+interface ILongWaitGrain extends GrainKey<string> {
   longWait(token: GrainCancellationToken, delayMs: number, callId: string): Promise<void>;
   wasCancelled(callId: string): Promise<boolean>;
 }

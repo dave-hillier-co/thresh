@@ -4,7 +4,7 @@ import { Grain } from "@thresh/core/grain";
 import { GrainId } from "@thresh/core/grain-id";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
 import type { GrainType } from "@thresh/core/grain-type";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import { SiloAddress } from "@thresh/core/silo-address";
 import type { TransactionalState } from "@thresh/core/transactional-state";
 import type { TransactionalStateStorage } from "@thresh/core/transactional-storage";
@@ -16,10 +16,10 @@ interface Balance {
   cents: number;
 }
 
-interface Account extends GrainWithStringKey {
+interface Account extends GrainKey<string> {
   balance(): Promise<number>;
 }
-interface Ledger extends GrainWithStringKey {
+interface Ledger extends GrainKey<string> {
   open(): Promise<void>;
 }
 

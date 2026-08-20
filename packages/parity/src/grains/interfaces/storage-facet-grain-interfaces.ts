@@ -1,8 +1,8 @@
 // Ported from dotnet/orleans test/Orleans.Runtime.Tests/StorageFacet/StorageFacetGrain.cs @ v10.1.0 (MIT).
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithIntegerKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 
-export interface IStorageFacetGrain extends GrainWithIntegerKey {
+export interface IStorageFacetGrain extends GrainKey<bigint> {
   getNames(): Promise<string[]>;
   getExtendedInfo(): Promise<string[]>;
 }

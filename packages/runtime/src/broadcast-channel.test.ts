@@ -8,7 +8,7 @@ import { grain, implicitChannelSubscription } from "@thresh/core/decorators";
 import { defineGrain } from "@thresh/core/define-grain";
 import { Grain } from "@thresh/core/grain";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import { SiloAddress } from "@thresh/core/silo-address";
 import { InProcessNetwork, InProcessTransport } from "@thresh/messaging/in-process-transport";
 import { ClusterNode } from "@thresh/runtime/cluster-node";
@@ -17,7 +17,7 @@ import { StaticMembershipService } from "@thresh/runtime/static-membership";
 // Module sink so observed items survive across activations (keyed by grain key).
 let observed: Array<{ key: string; namespace: string; item: unknown }> = [];
 
-interface IWatcher extends GrainWithStringKey {
+interface IWatcher extends GrainKey<string> {
   marker(): Promise<string>;
 }
 const IWatcher = defineGrainInterface<IWatcher>("IWatcher.broadcast");
@@ -37,7 +37,7 @@ class WatcherGrain extends Grain implements IWatcher {
   }
 }
 
-interface IPlain extends GrainWithStringKey {
+interface IPlain extends GrainKey<string> {
   marker(): Promise<string>;
 }
 const IPlain = defineGrainInterface<IPlain>("IPlain.broadcast");
@@ -51,7 +51,7 @@ class PlainGrain extends Grain implements IPlain {
   }
 }
 
-interface IPublisher extends GrainWithStringKey {
+interface IPublisher extends GrainKey<string> {
   raise(item: string): Promise<void>;
 }
 const IPublisher = defineGrainInterface<IPublisher>("IPublisher.broadcast");

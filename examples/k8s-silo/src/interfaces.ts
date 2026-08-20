@@ -1,5 +1,5 @@
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 
 /** A counter read: its current value and the silo (pod) the activation runs on. */
 export interface CounterReply {
@@ -14,11 +14,11 @@ export interface CounterReply {
  * incrementing through any pod hits the same activation — and the activation
  * moves to a survivor when its host pod dies.
  */
-export interface ICounter extends GrainWithStringKey {
+export type Counter = GrainKey<string> & {
   increment(): Promise<CounterReply>;
   current(): Promise<CounterReply>;
-}
+};
 
-export const ICounter = defineGrainInterface<ICounter>("k8s.ICounter", {
+export const counter = defineGrainInterface<Counter>("k8s.counter", {
   options: { current: { readOnly: true } },
 });

@@ -3,7 +3,7 @@ import { grain } from "@thresh/core/decorators";
 import { Grain } from "@thresh/core/grain";
 import { GrainId } from "@thresh/core/grain-id";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import type { SiloAddress } from "@thresh/core/silo-address";
 import type { CompatibilityKind } from "@thresh/core/version-compatibility";
 import type { VersionSelectorKind } from "@thresh/core/version-selector";
@@ -11,7 +11,7 @@ import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
 import type { Message } from "@thresh/messaging/message";
 import { TestCluster } from "@thresh/testing/test-cluster";
 
-interface ICounter extends GrainWithStringKey {
+interface ICounter extends GrainKey<string> {
   increment(by: number): Promise<number>;
 }
 // All versions share one name → one id; only the version differs.

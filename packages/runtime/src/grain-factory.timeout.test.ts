@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { GrainCallTimeoutError } from "@thresh/core/errors";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import type { Dispatcher } from "@thresh/runtime/dispatcher";
 import { GrainFactory } from "@thresh/runtime/grain-factory";
 import { FakeTimeProvider } from "@thresh/runtime/test-support/fake-time-provider";
 
-interface ISlow extends GrainWithStringKey {
+interface ISlow extends GrainKey<string> {
   hang(): Promise<string>;
   fireAndForget(): Promise<string>;
 }

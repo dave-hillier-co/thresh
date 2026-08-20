@@ -4,9 +4,9 @@
 // serializer-codec failure injection (.NET serializer internals) — see that
 // test file's EXCLUDED entries.
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithIntegerKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 
-export interface IExceptionGrain extends GrainWithIntegerKey {
+export interface IExceptionGrain extends GrainKey<bigint> {
   canceled(): Promise<void>;
   throwsInvalidOperationException(): Promise<void>;
   throwsNullReferenceException(): Promise<void>;

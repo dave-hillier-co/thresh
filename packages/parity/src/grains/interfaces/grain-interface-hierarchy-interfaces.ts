@@ -1,6 +1,6 @@
 // Ported from dotnet/orleans test/Grains/TestGrainInterfaces/GrainInterfaceHierarchyIGrains.cs @ v10.1.0 (MIT).
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithIntegerKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 
 /** Upstream `IDoSomething`: not itself a grain interface, mixed into the ones below. */
 export interface IDoSomething {
@@ -10,7 +10,7 @@ export interface IDoSomething {
   getA(): Promise<number>;
 }
 
-export interface IDoSomethingEmptyGrain extends IDoSomething, GrainWithIntegerKey {}
+export interface IDoSomethingEmptyGrain extends IDoSomething, GrainKey<bigint> {}
 
 export const IDoSomethingEmptyGrain = defineGrainInterface<IDoSomethingEmptyGrain>(
   "TestGrainInterfaces.IDoSomethingEmptyGrain",
@@ -32,7 +32,7 @@ export const IDoSomethingWithMoreEmptyGrain = defineGrainInterface<IDoSomethingW
   "TestGrainInterfaces.IDoSomethingWithMoreEmptyGrain",
 );
 
-export interface IDoSomethingWithMoreGrain extends IDoSomething, GrainWithIntegerKey {
+export interface IDoSomethingWithMoreGrain extends IDoSomething, GrainKey<bigint> {
   doThat(): Promise<string>;
   setB(b: number): Promise<void>;
   incrementB(): Promise<void>;

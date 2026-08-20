@@ -21,7 +21,7 @@
 import { expect } from "vitest";
 import { defineGrain, useTransactionalState } from "@thresh/core/define-grain";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import { TransactionsDisabledError } from "@thresh/core/errors";
 import { TestCluster } from "@thresh/testing/test-cluster";
 import { orleansTest } from "@thresh/testing/orleans-test";
@@ -30,13 +30,13 @@ interface Counter {
   value: number;
 }
 
-interface TransactionTestGrain extends GrainWithStringKey {
+interface TransactionTestGrain extends GrainKey<string> {
   set(delta: number): Promise<void>;
   add(delta: number): Promise<void>;
   get(): Promise<number>;
 }
 
-interface TransactionCoordinatorGrain extends GrainWithStringKey {
+interface TransactionCoordinatorGrain extends GrainKey<string> {
   multiGrainSet(keys: string[], delta: number): Promise<void>;
 }
 
