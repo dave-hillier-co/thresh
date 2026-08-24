@@ -39,7 +39,7 @@ describe("implicit stream subscriptions — declaration", () => {
 
   it("records namespaces on a functional grain via defineGrain options", () => {
     const Watcher = defineGrain("FnWatcher", () => ({}), { implicitSubscriptions: ["room"] });
-    expect(getGrainMetadata(Watcher)?.implicitSubscriptions).toEqual(["room"]);
+    expect(getGrainMetadata(Watcher.grain)?.implicitSubscriptions).toEqual(["room"]);
   });
 });
 

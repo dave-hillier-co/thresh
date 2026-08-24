@@ -20,18 +20,18 @@ let events: string[] = [];
 // Two independent "layers" register their own hooks, as separate helpers would:
 // activation runs them in registration order, deactivation unwinds them LIFO.
 const LayeredGrain = defineGrain<ILayered>("Layered", (ctx) => {
-  useOnActivate(ctx, (reason) => {
+  useOnActivate((reason) => {
     events.push(`activate:outer:${reason}`);
   });
-  useOnDeactivate(ctx, (reason) => {
+  useOnDeactivate((reason) => {
     events.push(`deactivate:outer:${reason.code}`);
   });
 
-  useOnActivate(ctx, async (reason) => {
+  useOnActivate(async (reason) => {
     await Promise.resolve();
     events.push(`activate:inner:${reason}`);
   });
-  useOnDeactivate(ctx, async () => {
+  useOnDeactivate(async () => {
     await Promise.resolve();
     events.push("deactivate:inner");
   });
@@ -46,27 +46,27 @@ const LayeredGrain = defineGrain<ILayered>("Layered", (ctx) => {
 
 // An activate hook that throws fails the activation; a deactivate hook that
 // throws must still let the rest of the stack unwind.
-const BadActivateGrain = defineGrain<ILayered>("BadActivate", (ctx) => {
-  useOnActivate(ctx, () => {
+const BadActivateGrain = defineGrain<ILayered>("BadActivate", () => {
+  useOnActivate(() => {
     events.push("activate:first");
   });
-  useOnActivate(ctx, () => {
+  useOnActivate(() => {
     throw new Error("boom");
   });
-  useOnActivate(ctx, () => {
+  useOnActivate(() => {
     events.push("activate:third");
   });
   return { ping: async (): Promise<string> => "pong" };
 });
 
-const BadDeactivateGrain = defineGrain<ILayered>("BadDeactivate", (ctx) => {
-  useOnDeactivate(ctx, () => {
+const BadDeactivateGrain = defineGrain<ILayered>("BadDeactivate", () => {
+  useOnDeactivate(() => {
     events.push("deactivate:first-registered");
   });
-  useOnDeactivate(ctx, () => {
+  useOnDeactivate(() => {
     throw new Error("teardown boom");
   });
-  useOnDeactivate(ctx, () => {
+  useOnDeactivate(() => {
     events.push("deactivate:last-registered");
   });
   return { ping: async (): Promise<string> => "pong" };
@@ -144,6 +144,8 @@ describe("defineGrain lifecycle hooks (sociable)", () => {
 
     // The factory runs when the runtime binds the context, so the shadowing
     // surface is caught there rather than silently replacing the composed hooks.
-    expect(() => new Legacy().setContext({ id: layeredId("a") } as never)).toThrow(/useOnActivate/);
+    expect(() => new Legacy.grain().setContext({ id: layeredId("a") } as never)).toThrow(
+      /useOnActivate/,
+    );
   });
 });

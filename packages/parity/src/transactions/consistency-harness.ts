@@ -108,7 +108,7 @@ const grainKey = (n: number): string => `g${n}`;
 export const ConsistencyTestGrainImpl = defineGrain<ConsistencyTestGrain>(
   "Orleans.Transactions.TestKit.Consistency.ConsistencyTestGrain",
   (ctx) => {
-    const data = useTransactionalState<ConsistencyState>(ctx, "data", {
+    const data = useTransactionalState<ConsistencyState>("data", {
       initial: () => ({ writerTx: INITIAL_TX, seqNo: 0 }),
     });
     const myNumber = grainNumber(ctx.id.key as string);

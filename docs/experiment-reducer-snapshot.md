@@ -39,6 +39,21 @@ runs through `defineGrain` with named methods, too.
 | **Invokers / dispatch tables per interface** (message → method) | **One uniform invoke loop** dispatching by method name (or by the fixed `dispatch` surface for reducer grains). The action discriminated union carries the per-grain dispatch shape at the *type* level, where TypeScript already lives — not at the runtime level, where it would have to be materialized. |
 | **Activators / DI factories per grain** | **Hooks + factory closures.** `usePersistentState`, `useReducerState`, `useDurable*` read from an ambient "currently-running setup" context — the same trick React uses for `useState`. No per-grain DI registration, no metadata to generate; the convention (rules of hooks, hook ordering) establishes the contract. |
 
+The ambient-context row is no longer aspirational: it is how the hooks work. They take no context
+argument, and resolve the activation being set up from a stack the runtime pushes around the factory
+call and pops in a `finally`. What makes that safe here rather than a leak is that the window is
+**synchronous end to end** — nothing awaits between binding the context and installing the returned
+members — so the run-to-completion turn model closes it. The price is the same one React pays: hooks
+are only callable at the top level of the factory, and an `async` factory is rejected outright. The
+factory's `ctx` parameter stays for everything *after* setup (`ctx.runtime` inside a method body is
+not a hook call). See [`deviations.md`](deviations.md) for the rules as they apply today.
+
+Two further pieces of the React analogy also landed. A `defineGrain` definition **is** its own
+interface — one value serves as registration and contract, with the message surface inferred from the
+factory's return type, the way a component's props are its contract. And an interface's identity is
+its *name* (`stableHash32(name)`), not a generated token — which is what lets there be no build step,
+and equally what makes a rename a wire break.
+
 The pattern is the same in every row: **the variability is moved from runtime shape into types and
 conventions**. Orleans needs codegen because C# does not give you cheap dynamic dispatch, first-class
 closures-as-grains, an ambient hook context, or a runtime serializer registry that competes with

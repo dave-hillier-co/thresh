@@ -20,114 +20,108 @@ reactivates elsewhere on its next call. This is "distributed objects that just w
 ## Quick example
 
 A grain is written as a **factory closure** — the React-inspired functional style is the default.
-Per-activation state lives in closure variables; durable state and other facets come from hooks on
-the setup context; the returned object is the grain's message surface.
+The factory runs once per activation: per-activation state lives in closure variables, durable state
+and other facets come from **hooks**, and the object it returns is the grain's message surface. The
+definition *is* the grain's interface — there is nothing else to declare.
 
 ```ts
-// Interface — the contract callers see. A compile-time view; no method table.
-type Thermostat = GrainKey<string> & {
-  onUpdate(status: ThermostatStatus): Promise<Command[]>;
-};
-const thermostat = defineGrainInterface<Thermostat>("Thermostat");
+import { defineGrain, usePersistentState } from "@thresh/core/define-grain";
 
-// Implementation — a factory closure that runs once per activation.
-const ThermostatGrain = defineGrain<Thermostat>("Thermostat", (ctx) => {
-  const status = usePersistentState<ThermostatStatus>(ctx, "status");
+interface Reading {
+  tempC: number;
+  targetC: number;
+}
+type Command = { kind: "heat" } | { kind: "cool" };
 
-  const onUpdate = async (next: ThermostatStatus): Promise<Command[]> => {
-    status.value = next;
-    await status.write();
-    return [];
-  };
+const Thermostat = defineGrain(
+  "Thermostat",
+  () => {
+    const state = usePersistentState<Reading>("thermostat", {
+      defaultValue: (): Reading => ({ tempC: 20, targetC: 21 }),
+    });
 
-  return { onUpdate };
+    return {
+      onUpdate: async (tempC: number): Promise<Command[]> => {
+        state.value.tempC = tempC;
+        await state.write();
+        if (tempC < state.value.targetC) return [{ kind: "heat" }];
+        if (tempC > state.value.targetC) return [{ kind: "cool" }];
+        return [];
+      },
+
+      getStatus: async (): Promise<Reading> => ({ ...state.value }),
+    };
+  },
+  { interfaceOptions: { getStatus: { readOnly: true } } },
+);
+
+// Host it, then call it — the definition is both the registration and the contract.
+const silo = createSilo({ clusterId: "demo", local })
+  .useStaticMembership([local])
+  .useInProcessTransport(new InProcessNetwork())
+  .useMemoryStorage()
+  .registerGrain(Thermostat)
+  .build();
+
+await silo.start();
+const commands = await silo.getGrain(Thermostat, "kitchen").onUpdate(18); // [{ kind: "heat" }]
+```
+
+`getGrain` returns a lightweight proxy; the grain is activated on first call, wherever the cluster
+decides to place it. The caller does not know — or need to know — which pod that is. Callers see
+exactly the surface the factory returned, promise-lifted; `onActivate`/`onDeactivate` and symbol-keyed
+system hooks are not part of it.
+
+**Hooks follow the rules of hooks.** `usePersistentState`, `useReducerState`, `useTransactionalState`,
+`useDurable*` and `useDurableJobHandler` resolve the activation being set up from an ambient slot that
+is live only during the *synchronous* body of the factory. Call them at the top level of the factory,
+never after an `await`, from a method body, or from `onActivate` — those throw. To reach the runtime
+*after* setup, capture the factory's `ctx` parameter in the closure and use `ctx.runtime` / `ctx.id` /
+`ctx.getGrain` inside method bodies; that is not a hook call and stays valid for the activation's life.
+
+**Fused definitions couple callers to the implementation.** `getGrain(Thermostat, key)` means the
+caller imports the implementation module — and transitively its storage, stream and job dependencies.
+That is the right trade for grains called from inside the same silo or package. For a contract that
+crosses a package or process boundary — an external `@thresh/client` app, an interface with several
+implementations, a grain with no implementation at all — declare it separately instead, and register
+the two together:
+
+```ts
+// contract module — the only thing a remote caller imports
+interface Ledger {
+  post(amount: bigint): Promise<bigint>;
+}
+const Ledger = defineGrainInterface<Ledger, "integer">("example.Ledger");
+
+// implementation module — never imported by callers
+const LedgerGrain = defineGrain<Ledger, "integer">("Ledger", () => {
+  /* … */
 });
 
-// Caller — from a web frontend or another grain.
-const ref = client.getGrain(thermostat, deviceId);
-const commands = await ref.onUpdate(update);
+// hosting: createSilo(…).registerGrain(LedgerGrain, { interfaces: [Ledger] })
+const balance = await client.getGrain(Ledger, 42n).post(5n);
 ```
 
-`client.getGrain` returns a lightweight proxy; the grain is activated on first call, wherever the
-cluster decides to place it. The caller does not know — or need to know — which pod that is. The
-class + decorator form this functional API is built on is still supported as an interop surface.
+An explicit `interfaces` list is exactly the set of interfaces the grain answers to; the definition's
+own interface is *not* added to it. The key kind is stated once, as a type argument
+(`"string"` — the default — `"integer"`, `"guid"`, `"integer-compound"`, `"guid-compound"`), and
+determines the type of the `key` argument to `getGrain`.
 
-## Application architecture
+Every `defineGrain` also publishes an interface under its grain-type name, so `LedgerGrain` above puts
+a `"Ledger"` entry in the process-wide interface registry alongside `"example.Ledger"`. Defining a
+name more than once **merges** into the existing entry rather than replacing it — per-method options
+union, and `extension` and `key` are inherited when omitted — which is what lets a hand-written
+interface module and a same-named fused definition coexist.
 
-At a high level, Thresh splits the Orleans-style virtual actor runtime into a small set of
-workspace packages that can run in-process for tests and examples, or as a set of Kubernetes-hosted
-silos in production. Callers use typed grain references; the runtime resolves and activates grains
-on demand; optional providers add persistence, streams, reminders, transactions, durable jobs and
-observability.
+> **Interface names are wire identity.** An interface id is `stableHash32(name)`, so renaming an
+> interface — including letting a grain's fused interface take the grain-type name where a separately
+> declared name was in use — silently repoints every deployed caller. There is no compile-time signal.
+> Any grain that has been deployed must pin its old name with
+> `defineGrain(name, factory, { interfaceName: "example.IThermostat" })`.
 
-```mermaid
-flowchart TB
-  subgraph App[Applications and examples]
-    Caller[Web APIs, services, tests and other grains]
-    GrainCode[Grain interfaces and implementations]
-  end
-
-  subgraph API[Programming model]
-    Client["@thresh/client\nTyped grain proxies"]
-    Core["@thresh/core\nGrain IDs, references, hooks, facets and contracts"]
-  end
-
-  subgraph Silo["Silo process (@thresh/hosting)"]
-    Builder[SiloBuilder configuration]
-    Runtime["@thresh/runtime\nActivation lifecycle, placement and single-turn execution"]
-    Directory["@thresh/directory\nActivation ownership and location cache"]
-    Messaging["@thresh/messaging\nIn-process or WebSocket transport"]
-    Obs["@thresh/observability\nLogs, metrics and traces"]
-  end
-
-  subgraph Providers[Optional runtime providers]
-    Persistence["@thresh/persistence\nMemory, Redis or Postgres grain state"]
-    Streams["@thresh/streams\nMemory, Redis, Postgres or Kafka streams"]
-    Reminders["@thresh/reminders\nMemory, Redis or Postgres reminder tables"]
-    Transactions["@thresh/transactions\nTransactional state and commit protocol"]
-    Jobs["@thresh/durable-jobs\nShard stores and executors"]
-    Journaling["@thresh/journaling\nDurable grain state machines"]
-  end
-
-  subgraph Cluster[Kubernetes cluster]
-    K8s["@thresh/clustering-k8s\nEndpointSlice-backed membership"]
-    Pods[Peer silo pods]
-    Stores[(Redis, Postgres and Kafka)]
-  end
-
-  Caller --> Client --> Core --> Messaging --> Runtime
-  GrainCode --> Core
-  Builder --> Runtime
-  Runtime <--> Directory
-  Runtime <--> Messaging
-  Runtime --> Obs
-  Runtime --> Persistence
-  Runtime --> Streams
-  Runtime --> Reminders
-  Runtime --> Transactions
-  Runtime --> Jobs
-  Runtime --> Journaling
-  Directory <--> K8s
-  Messaging <--> Pods
-  Persistence --> Stores
-  Streams --> Stores
-  Reminders --> Stores
-  Transactions --> Stores
-  Jobs --> Stores
-  Journaling --> Stores
-```
-
-The core call path is intentionally location-transparent: application code asks the client for a
-grain reference, messaging carries the request to the silo that owns or creates the activation, the
-runtime executes the grain one turn at a time, and provider packages handle any durable state or
-background work. In Kubernetes, membership and peer discovery come from EndpointSlices while Redis,
-Postgres and Kafka back the durable provider implementations.
+The class + decorator form this functional API is built on is still supported as an interop surface.
 
 ## Documentation
-
-The documentation is published as a searchable Docsify site and in agent-friendly forms:
-`docs/llms.txt` is a concise map and `docs/llms-full.txt` is generated as a single
-context document. Run `pnpm docs:dev` locally or `pnpm docs:build` for the GitHub Pages artifact.
 
 The target is **feature parity with Orleans 10**, so the model, persistence, reminders, streams and
 transactions are deliberately the same as Orleans — read the Orleans source for their mechanics. The
@@ -135,8 +129,6 @@ docs cover only what is worth writing down here:
 
 - [How this differs from Orleans](docs/deviations.md) — the deviations only (TypeScript idioms,
   Kubernetes hosting, functional authoring), each linked to its decision record.
-- [TypeScript grain API idioms](docs/typescript-grain-api.md) — naming and typing guidance for
-  writing grain surfaces without C#-style `I*` interfaces or key marker names.
 - [`EPICS.md`](EPICS.md) — the live status board (shipped vs. remaining).
 
 ## Developing

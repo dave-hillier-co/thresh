@@ -25,7 +25,7 @@ import {
 async function buildCluster(): Promise<TestCluster> {
   return TestCluster.start({
     initialSilos: 1,
-    grains: [{ ctor: ConsistencyTestGrainImpl, interfaces: [ConsistencyTestGrainInterface] }],
+    grains: [{ ctor: ConsistencyTestGrainImpl.grain, interfaces: [ConsistencyTestGrainInterface] }],
   });
 }
 

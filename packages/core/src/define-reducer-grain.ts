@@ -2,10 +2,10 @@ import {
   defineGrain,
   usePersistentState,
   type DefineGrainOptions,
+  type GrainDefinition,
   type GrainSetup,
 } from "./define-grain";
-import type { Grain } from "./grain";
-import { defineGrainInterface, type GrainInterface } from "./grain-interface";
+import type { GrainKeyKind } from "./grain-key";
 
 /**
  * What a reducer returns: the next immutable state plus any effects to run after
@@ -46,13 +46,17 @@ export interface ReducerClient<S, A> {
   query(): Promise<S>;
 }
 
-/** A registered reducer grain: usable as a `GrainInterface` for `getGrain`, and carrying its ctor. */
-export interface ReducerGrain<S, A> extends GrainInterface<ReducerClient<S, A>> {
-  /** The implementation constructor, for `registerGrain(grain.grain, { interfaces: [grain] })`. */
-  readonly grain: new () => Grain;
-}
+/**
+ * A registered reducer grain — an ordinary `GrainDefinition` whose message
+ * surface is fixed at `dispatch` + `query`. Pass it to `getGrain` as the
+ * interface, and `registerGrain` as the definition.
+ */
+export type ReducerGrain<S, A> = GrainDefinition<ReducerClient<S, A>>;
 
-export interface DefineReducerGrainOptions<S, A> extends DefineGrainOptions {
+export interface DefineReducerGrainOptions<S, A> extends DefineGrainOptions<
+  GrainKeyKind,
+  ReducerClient<S, A>
+> {
   /** The state before any action has been folded in. */
   initial: () => S;
   /** Pure fold of an action onto state, optionally emitting effects. */
@@ -77,16 +81,19 @@ export function defineReducerGrain<S, A>(
   name: string,
   options: DefineReducerGrainOptions<S, A>,
 ): ReducerGrain<S, A> {
-  const { initial, reduce, stateName = name, provider, ...grainOptions } = options;
+  const {
+    initial,
+    reduce,
+    stateName = name,
+    provider,
+    interfaceOptions,
+    ...grainOptions
+  } = options;
 
-  const iface = defineGrainInterface<ReducerClient<S, A>>(name, {
-    options: { query: { readOnly: true } },
-  });
-
-  const ctor = defineGrain<ReducerClient<S, A>>(
+  return defineGrain<ReducerClient<S, A>, GrainKeyKind>(
     name,
     (ctx: GrainSetup) => {
-      const store = usePersistentState<S>(ctx, stateName, {
+      const store = usePersistentState<S>(stateName, {
         defaultValue: initial,
         ...(provider !== undefined ? { provider } : {}),
       });
@@ -108,8 +115,16 @@ export function defineReducerGrain<S, A>(
 
       return { dispatch, query };
     },
-    grainOptions,
+    {
+      ...grainOptions,
+      // `query` never mutates the snapshot, so it takes a read-only turn. Merge
+      // per-entry, not per-record: a shallow spread lets a caller who sets any
+      // other option on `query` silently drop the default, costing the read-only
+      // turn and its dev-mode mutation guard. Explicit `readOnly` still wins.
+      interfaceOptions: {
+        ...interfaceOptions,
+        query: { readOnly: true, ...interfaceOptions?.query },
+      },
+    },
   );
-
-  return Object.assign(iface, { grain: ctor }) as ReducerGrain<S, A>;
 }

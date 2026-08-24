@@ -1,6 +1,6 @@
 import { durationToMs, type Duration } from "@thresh/core/duration";
 import type { GrainInterface } from "@thresh/core/grain-interface";
-import type { GrainKey } from "@thresh/core/grain-key";
+import type { GrainKey, GrainKeyKind } from "@thresh/core/grain-key";
 import type { GrainRuntime } from "@thresh/core/grain-runtime";
 import type { GrainTimer, TimerOptions } from "@thresh/core/grain-timer";
 import type { GrainReminder, ReminderEntry, ReminderRegistry } from "@thresh/core/reminder";
@@ -53,7 +53,11 @@ export class GrainRuntimeImpl implements GrainRuntime {
     private readonly services: GrainRuntimeServices = {},
   ) {}
 
-  getGrain<T>(def: GrainInterface<T>, key: GrainKey): T {
+  /**
+   * Widens the key to the runtime `GrainKey` union: the declared kind narrows
+   * the caller-facing `GrainRuntime.getGrain`, not this implementation seam.
+   */
+  getGrain<T, K extends GrainKeyKind>(def: GrainInterface<T, K>, key: GrainKey): T {
     return this.factory.getGrain(def, key);
   }
 

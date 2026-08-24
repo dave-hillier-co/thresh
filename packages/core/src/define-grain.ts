@@ -1,7 +1,9 @@
 import { Grain } from "./grain";
 import type { GrainContext } from "./grain-context";
 import type { SelfFilteringGrain } from "./grain-call-filter";
-import type { GrainInterface } from "./grain-interface";
+import { defineGrainInterface, type GrainInterface } from "./grain-interface";
+import type { GrainKeyKind } from "./grain-key";
+import type { InvokeMethodOptions } from "./invoke-options";
 import {
   markBroadcastSubscription,
   markImplicitSubscription,
@@ -11,7 +13,7 @@ import {
   type GrainOptions,
 } from "./grain-metadata";
 import { DURABLE_JOB_HANDLER, type DurableJobHandler } from "./durable-job";
-import type { GrainKeyFor } from "./key-kinds";
+import type { KeyKindFromMarker, KeyTypeOf } from "./key-kinds";
 import type { PersistentState } from "./persistent-state";
 import { registerPersistentField } from "./persistent-state-metadata";
 import type {
@@ -36,7 +38,7 @@ import type { ActivationReason, DeactivationReason } from "./reasons";
  * (`useReducerState`, `usePersistentState`) also read it.
  */
 export interface GrainSetup extends GrainContext {
-  getGrain<T>(def: GrainInterface<T>, key: GrainKeyFor<T>): T;
+  getGrain<T, K extends GrainKeyKind>(def: GrainInterface<T, K>, key: KeyTypeOf<K>): T;
 }
 
 /**
@@ -64,7 +66,75 @@ export type DeactivateHandler = (
  */
 export type GrainBehaviour<T> = T & Partial<SelfFilteringGrain>;
 
-export interface DefineGrainOptions extends Omit<GrainOptions, "name"> {
+/**
+ * A grain definition that *is* its own interface — the shape `defineGrain`
+ * returns, mirroring `defineReducerGrain`. Pass it straight to `getGrain`; the
+ * implementation constructor hangs off `grain` for `registerGrain`.
+ *
+ * The interface is not assigned onto the constructor instead: `Function.name` is
+ * non-writable (so `Object.assign` throws in strict mode) and `ctor.name` is
+ * load-bearing in the `"… is not decorated with @grain()"` diagnostics.
+ */
+export interface GrainDefinition<T, K extends GrainKeyKind = GrainKeyKind> extends GrainInterface<
+  T,
+  K
+> {
+  /** The implementation constructor. */
+  readonly grain: new () => Grain;
+}
+
+/**
+ * A method as a caller sees it across the wire: every call is remote, so a
+ * synchronous return is lifted into a promise.
+ */
+type Remote<F> = F extends (...args: infer A) => infer R
+  ? [R] extends [Promise<unknown>]
+    ? (...args: A) => R
+    : (...args: A) => Promise<Awaited<R>>
+  : never;
+
+/**
+ * The public message surface implied by a factory's return type `R`.
+ *
+ * Inference widens the wire contract to whatever the factory returns, so
+ * everything that is not an interface method is subtracted: `onActivate` /
+ * `onDeactivate` by name, symbol-keyed system hooks (`INCOMING_CALL_FILTER`,
+ * `STREAM_SUBSCRIPTION_OBSERVER`, `BROADCAST_CHANNEL_OBSERVER`,
+ * `DURABLE_JOB_HANDLER`) via `Extract<keyof R, string>`, and non-function
+ * members — which `setContext` does not install either. Keep passing `T`
+ * explicitly for a contract that has to stay stable.
+ */
+export type InferredSurface<R> = {
+  [K in Extract<keyof R, string> as R[K] extends (...args: never[]) => unknown ? K : never]: Remote<
+    R[K]
+  >;
+};
+
+export interface DefineGrainOptions<
+  K extends GrainKeyKind = GrainKeyKind,
+  T = unknown,
+> extends Omit<GrainOptions, "name"> {
+  /**
+   * The key kind callers must address this grain with. State it once: either
+   * here (letting `T` and `K` both be inferred) or as the second type argument
+   * (`defineGrain<IFoo, "integer">`). Supplying both is allowed but they must
+   * agree — a disagreement is a type error here, and a throw at registration
+   * when the mismatch is with a same-named `defineGrainInterface`.
+   */
+  key?: K;
+  /** Per-method invocation flags for the fused interface; only non-default methods need one. */
+  interfaceOptions?: Partial<Record<keyof T & string, InvokeMethodOptions>>;
+  /**
+   * Pin the wire interface name when it must differ from the grain type name.
+   * The interface id is `stableHash32(name)`, so a grain migrating off a
+   * separate `defineGrainInterface("example.IGreeter")` must pin the old name
+   * or every deployed caller's id changes with no compile-time signal.
+   */
+  interfaceName?: string;
+  /** Interface version for rolling upgrades (defaults to 1). */
+  version?: number;
+  /** See `GrainInterface.extension`. Defaults to `false`. */
+  extension?: boolean;
   /** Mark every method reentrant (the functional equivalent of `@reentrant()`). */
   reentrant?: boolean;
   /**
@@ -83,29 +153,58 @@ export interface DefineGrainOptions extends Omit<GrainOptions, "name"> {
   implicitChannelSubscriptions?: readonly string[];
 }
 
-// The grain instance is carried on the setup behind a private symbol so the
-// facet hooks can register their field metadata against it without widening the
-// public `GrainSetup` surface.
-const INSTANCE = Symbol("thresh.functional.instance");
-
-interface InternalSetup extends GrainSetup {
-  [INSTANCE]: object;
+/** The activation a factory is currently running for, and the setup handed to it. */
+interface ActiveSetup {
+  readonly instance: object;
+  readonly setup: GrainSetup;
 }
 
-function createSetup(instance: object, context: GrainContext): GrainSetup {
-  const setup: InternalSetup = {
+// A stack, not a single slot: a factory may legitimately activate another grain
+// (and so run another factory) while it is itself running, and the inner
+// activation must not steal the outer one's facet registrations. `setContext`
+// pushes and pops in a `finally`, and the window is synchronous end to end —
+// nothing awaits between the push and the pop — so at most one entry per
+// activation is ever live.
+const setupStack: ActiveSetup[] = [];
+
+/**
+ * How many grain factories are currently running. Zero everywhere outside the
+ * synchronous body of a factory; the runtime asserts on it before creating an
+ * activation (see `Catalog.create`) to catch a leaked setup early.
+ */
+export function setupDepth(): number {
+  return setupStack.length;
+}
+
+function activeSetup(hookName: string): ActiveSetup {
+  const top = setupStack[setupStack.length - 1];
+  if (top === undefined) {
+    throw new Error(
+      `${hookName}() may only be called synchronously, at the top level of a defineGrain ` +
+        `factory. It was called outside a factory, after an await, or from a method body / ` +
+        `onActivate.`,
+    );
+  }
+  return top;
+}
+
+/**
+ * The setup of the factory currently running — the same value the factory
+ * receives as its `ctx` argument. Additive sugar for helper functions that want
+ * `id` / `runtime` / `getGrain` without threading `ctx` through; capturing `ctx`
+ * from the factory parameter and using it inside a method body remains the way
+ * to reach the runtime after setup has finished.
+ */
+export function useContext(): GrainSetup {
+  return activeSetup("useContext").setup;
+}
+
+function createSetup(context: GrainContext): GrainSetup {
+  return {
     id: context.id,
     runtime: context.runtime,
     getGrain: (def, key) => context.runtime.getGrain(def, key),
-    [INSTANCE]: instance,
   };
-  return setup;
-}
-
-function instanceOf(ctx: GrainSetup): object {
-  const instance = (ctx as InternalSetup)[INSTANCE];
-  if (instance === undefined) throw new Error("useX hooks must be called with the grain setup ctx");
-  return instance;
 }
 
 // Lifecycle handlers are registered per activation instance, the same way the
@@ -123,8 +222,8 @@ const deactivateHandlers = createFieldRegistry<DeactivateHandler>();
  * is awaited in turn, and a hook that throws fails the activation (the
  * remaining ones do not run), exactly as a throwing `onActivate` does.
  */
-export function useOnActivate(ctx: GrainSetup, handler: ActivateHandler): void {
-  activateHandlers.register(instanceOf(ctx), handler);
+export function useOnActivate(handler: ActivateHandler): void {
+  activateHandlers.register(activeSetup("useOnActivate").instance, handler);
 }
 
 /**
@@ -137,8 +236,8 @@ export function useOnActivate(ctx: GrainSetup, handler: ActivateHandler): void {
  * one that throws does not strand the hooks under it — the unwind runs to the
  * bottom and the first failure is then surfaced.
  */
-export function useOnDeactivate(ctx: GrainSetup, handler: DeactivateHandler): void {
-  deactivateHandlers.register(instanceOf(ctx), handler);
+export function useOnDeactivate(handler: DeactivateHandler): void {
+  deactivateHandlers.register(activeSetup("useOnDeactivate").instance, handler);
 }
 
 /**
@@ -151,22 +250,65 @@ export function useOnDeactivate(ctx: GrainSetup, handler: DeactivateHandler): vo
  * Lifecycle belongs to the hooks (`useOnActivate` / `useOnDeactivate`), not to
  * the returned object.
  *
- * The returned constructor registers and activates through the same catalog,
+ * The returned definition registers and activates through the same catalog,
  * scheduler and facet-binding machinery as a class grain, so the two styles
- * coexist; pass it to `registerGrain` like any other.
+ * coexist; pass `definition.grain` to `registerGrain` like any other constructor.
+ *
+ * The definition *is* the grain interface — there is nothing else to declare for
+ * an in-package grain. Reach for `defineGrainInterface` instead when the contract
+ * crosses a package or process boundary: inferring it from the implementation
+ * means every caller imports the implementation module (and transitively its
+ * storage, stream and job dependencies), which is worse coupling than the
+ * duplication it removes.
  */
+// One overload, not two. A pair split on a `Partial<...>` constraint cannot work:
+// every `Partial<T>` is a weak type, so a factory returning only plain methods has
+// no property in common with it and silently falls through to the second overload,
+// publishing its *raw* return type with sync methods left unlifted. Inferring `T`
+// from the return type and mapping it once covers both call styles — implicit
+// (`T` = what the factory returns) and explicit (`defineGrain<IFoo>(...)`).
+export function defineGrain<T extends object, K extends GrainKeyKind = KeyKindFromMarker<T>>(
+  name: string,
+  factory: (ctx: GrainSetup) => GrainBehaviour<T>,
+  options?: DefineGrainOptions<K, InferredSurface<T>>,
+): GrainDefinition<InferredSurface<T>, K>;
 export function defineGrain<T extends object>(
   name: string,
   factory: (ctx: GrainSetup) => GrainBehaviour<T>,
-  options: DefineGrainOptions = {},
-): new () => Grain {
+  options: DefineGrainOptions<GrainKeyKind, Record<string, unknown>> = {},
+): GrainDefinition<T, GrainKeyKind> {
   class FunctionalGrain extends Grain {
     // Run the factory once the runtime binds the context (before `preActivate`
     // reads facets), then install the returned methods as own members so the
     // catalog's method dispatch finds them.
     override setContext(context: GrainContext): void {
       super.setContext(context);
-      const behaviour = factory(createSetup(this, context));
+      const setup = createSetup(context);
+      setupStack.push({ instance: this, setup });
+      let behaviour: GrainBehaviour<T>;
+      try {
+        behaviour = factory(setup);
+      } finally {
+        setupStack.pop();
+      }
+      const thenable = behaviour as { then?: unknown; catch?: unknown } | undefined;
+      if (typeof thenable?.then === "function") {
+        // The activation fails on the synchronous error below, but the async
+        // body keeps running detached: its first hook call after an await throws
+        // the scope error into a promise nobody holds, which Node reports as an
+        // unhandled rejection — fatal under `--unhandled-rejections=throw`, how a
+        // silo process runs. Swallow it. It is not dropped information: it is the
+        // same misuse the synchronous error names, phrased as a symptom, and core
+        // has no ambient logger to route it to (`Logger` is injected per host, and
+        // no context is bound at this point), so logging it would mean either a
+        // module-level singleton or console I/O that this package does without.
+        if (typeof thenable.catch === "function") {
+          (thenable as Promise<unknown>).catch(() => {});
+        }
+        throw new Error(
+          `defineGrain factory for "${name}" returned a Promise; factories must be synchronous.`,
+        );
+      }
       // String keys are the interface methods; symbol keys carry system hooks
       // (e.g. a self incoming-call filter under `INCOMING_CALL_FILTER`).
       const keys = [...Object.keys(behaviour), ...Object.getOwnPropertySymbols(behaviour)];
@@ -219,8 +361,17 @@ export function defineGrain<T extends object>(
     }
   }
 
-  const { reentrant, implicitSubscriptions, implicitChannelSubscriptions, ...grainOptions } =
-    options;
+  const {
+    reentrant,
+    implicitSubscriptions,
+    implicitChannelSubscriptions,
+    key,
+    interfaceOptions,
+    interfaceName,
+    version,
+    extension,
+    ...grainOptions
+  } = options;
   setGrainOptions(FunctionalGrain as GrainConstructor, name, { ...grainOptions, name });
   if (reentrant === true) markReentrant(FunctionalGrain as GrainConstructor);
   for (const namespace of implicitSubscriptions ?? []) {
@@ -229,7 +380,26 @@ export function defineGrain<T extends object>(
   for (const namespace of implicitChannelSubscriptions ?? []) {
     markBroadcastSubscription(FunctionalGrain as GrainConstructor, namespace);
   }
-  return FunctionalGrain;
+
+  // The definition is its own interface. `defineGrainInterface` merges into any
+  // entry already registered under this name, so pairing a fused definition with
+  // a hand-written interface module of the same name keeps that module's
+  // `extension` / per-method options in the registry a receiving silo reads.
+  // Passing the constructor is what separates that pairing from a second grain
+  // fused under the same name, which the registry rejects rather than merging.
+  const iface = defineGrainInterface<T, GrainKeyKind>(
+    interfaceName ?? name,
+    {
+      ...(interfaceOptions !== undefined
+        ? { options: interfaceOptions as Partial<Record<keyof T & string, InvokeMethodOptions>> }
+        : {}),
+      ...(version !== undefined ? { version } : {}),
+      ...(extension !== undefined ? { extension } : {}),
+      ...(key !== undefined ? { key } : {}),
+    },
+    FunctionalGrain,
+  );
+  return Object.assign(iface, { grain: FunctionalGrain });
 }
 
 /**
@@ -241,8 +411,8 @@ export function defineGrain<T extends object>(
  * must be idempotent — delivery is at-least-once. Mirrors the symbol-observer
  * idiom (`BROADCAST_CHANNEL_OBSERVER`).
  */
-export function useDurableJobHandler(ctx: GrainSetup, handler: DurableJobHandler): void {
-  const instance = instanceOf(ctx);
+export function useDurableJobHandler(handler: DurableJobHandler): void {
+  const { instance } = activeSetup("useDurableJobHandler");
   Object.defineProperty(instance, DURABLE_JOB_HANDLER, {
     value: handler,
     writable: true,
@@ -265,11 +435,10 @@ export interface UseReducerStateOptions<TState, TEvent> {
  * runs (it throws if read before then).
  */
 export function useReducerState<TState, TEvent>(
-  ctx: GrainSetup,
   stateName: string,
   options: UseReducerStateOptions<TState, TEvent>,
 ): ReducerState<TState, TEvent> {
-  const instance = instanceOf(ctx);
+  const { instance } = activeSetup("useReducerState");
   const fieldName = `__thresh_reducer$${stateName}`;
   registerReducerField(instance, {
     fieldName,
@@ -314,11 +483,10 @@ export interface UsePersistentStateOptions<TState> {
  * reads it before `onActivate` (the handle throws if read before then).
  */
 export function usePersistentState<TState>(
-  ctx: GrainSetup,
   stateName: string,
   options: UsePersistentStateOptions<TState> = {},
 ): PersistentState<TState> {
-  const instance = instanceOf(ctx);
+  const { instance } = activeSetup("usePersistentState");
   const fieldName = `__thresh_state$${stateName}`;
   registerPersistentField(instance, {
     fieldName,
@@ -364,11 +532,10 @@ export interface UseTransactionalStateOptions<TState> {
  * inside a transaction (the handle throws if used before binding).
  */
 export function useTransactionalState<TState>(
-  ctx: GrainSetup,
   stateName: string,
   options: UseTransactionalStateOptions<TState>,
 ): TransactionalState<TState> {
-  const instance = instanceOf(ctx);
+  const { instance } = activeSetup("useTransactionalState");
   const fieldName = `__thresh_tx$${stateName}`;
   registerTransactionalField(instance, {
     fieldName,
@@ -407,14 +574,14 @@ export interface UseDurableStateOptions {
  * it yet). Each hook wraps the result in its own facade.
  */
 function createDurableFacetHook<F>(
-  ctx: GrainSetup,
+  hookName: string,
   stateName: string,
   kind: DurableKind,
   fieldPrefix: string,
   label: string,
   options: UseDurableStateOptions,
 ): () => F {
-  const instance = instanceOf(ctx);
+  const { instance } = activeSetup(hookName);
   const fieldName = `${fieldPrefix}${stateName}`;
   registerDurableField(instance, {
     fieldName,
@@ -430,12 +597,11 @@ function createDurableFacetHook<F>(
 }
 
 export function useDurableState<T>(
-  ctx: GrainSetup,
   stateName: string,
   options: UseDurableStateOptions = {},
 ): DurableValue<T> {
   const bound = createDurableFacetHook<DurableValue<T>>(
-    ctx,
+    "useDurableState",
     stateName,
     "value",
     "__thresh_durable$",
@@ -457,12 +623,11 @@ export function useDurableState<T>(
  * map bound and replayed before `onActivate`.
  */
 export function useDurableDictionary<K, V>(
-  ctx: GrainSetup,
   stateName: string,
   options: UseDurableStateOptions = {},
 ): DurableDictionary<K, V> {
   const bound = createDurableFacetHook<DurableDictionary<K, V>>(
-    ctx,
+    "useDurableDictionary",
     stateName,
     "dictionary",
     "__thresh_durabledict$",
@@ -489,12 +654,11 @@ export function useDurableDictionary<K, V>(
  * and replayed before `onActivate`.
  */
 export function useDurableList<T>(
-  ctx: GrainSetup,
   stateName: string,
   options: UseDurableStateOptions = {},
 ): DurableList<T> {
   const bound = createDurableFacetHook<DurableList<T>>(
-    ctx,
+    "useDurableList",
     stateName,
     "list",
     "__thresh_durablelist$",
@@ -523,12 +687,11 @@ export function useDurableList<T>(
  * and replayed before `onActivate`.
  */
 export function useDurableQueue<T>(
-  ctx: GrainSetup,
   stateName: string,
   options: UseDurableStateOptions = {},
 ): DurableQueue<T> {
   const bound = createDurableFacetHook<DurableQueue<T>>(
-    ctx,
+    "useDurableQueue",
     stateName,
     "queue",
     "__thresh_durablequeue$",
@@ -555,12 +718,11 @@ export function useDurableQueue<T>(
  * values bound and replayed before `onActivate`.
  */
 export function useDurableSet<T>(
-  ctx: GrainSetup,
   stateName: string,
   options: UseDurableStateOptions = {},
 ): DurableSet<T> {
   const bound = createDurableFacetHook<DurableSet<T>>(
-    ctx,
+    "useDurableSet",
     stateName,
     "set",
     "__thresh_durableset$",

@@ -1,6 +1,6 @@
 import { defineGrain } from "@thresh/core/define-grain";
 import type { StreamHandler } from "@thresh/core/stream";
-import { CHAT, type ChatMessage, type ChatUser } from "@thresh/example-chat/interfaces";
+import { CHAT, type ChatMessage } from "@thresh/example-chat/interfaces";
 
 /**
  * A chat member. `join` subscribes to the room stream — or, if this activation
@@ -12,21 +12,25 @@ import { CHAT, type ChatMessage, type ChatUser } from "@thresh/example-chat/inte
  * neighbour's. `onNext` mutates `received` with no lock — proof it runs as a
  * turn on this activation.
  */
-export const ChatUserGrain = defineGrain<ChatUser>("ChatUser", (ctx) => {
-  const received: ChatMessage[] = [];
+export const ChatUserGrain = defineGrain(
+  "ChatUser",
+  (ctx) => {
+    const received: ChatMessage[] = [];
 
-  const handler = (): StreamHandler<ChatMessage> => ({
-    onNext: async (message) => void received.push(message),
-  });
+    const handler = (): StreamHandler<ChatMessage> => ({
+      onNext: async (message) => void received.push(message),
+    });
 
-  return {
-    join: async (room: string): Promise<void> => {
-      const stream = ctx.runtime.getStreamProvider().getStream<ChatMessage>(CHAT, room);
-      const mine = await stream.getSubscriptions();
-      if (mine.length > 0) await mine[0]!.resume(handler());
-      else await stream.subscribe(handler());
-    },
+    return {
+      join: async (room: string): Promise<void> => {
+        const stream = ctx.runtime.getStreamProvider().getStream<ChatMessage>(CHAT, room);
+        const mine = await stream.getSubscriptions();
+        if (mine.length > 0) await mine[0]!.resume(handler());
+        else await stream.subscribe(handler());
+      },
 
-    history: async (): Promise<ChatMessage[]> => [...received], // a snapshot — never leak the live internal array
-  };
-});
+      history: async (): Promise<ChatMessage[]> => [...received], // a snapshot — never leak the live internal array
+    };
+  },
+  { interfaceOptions: { history: { readOnly: true } } },
+);

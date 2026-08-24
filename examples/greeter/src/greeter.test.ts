@@ -7,7 +7,6 @@ import { createSilo } from "@thresh/hosting/silo-builder";
 import type { SiloHost } from "@thresh/hosting/silo-host";
 import { GreeterGrain } from "@thresh/example-greeter/greeter-grain";
 import { runGreeterDemo } from "@thresh/example-greeter/demo";
-import { greeter } from "@thresh/example-greeter/interfaces";
 
 const local = new SiloAddress("silo-0", "uid-0", "silo-0:11111");
 const tick = () => new Promise((r) => setTimeout(r, 0));
@@ -22,7 +21,7 @@ function buildGreeterSilo(time: FakeTimeProvider): SiloHost {
   })
     .useStaticMembership([local])
     .useInProcessTransport(new InProcessNetwork())
-    .registerGrain(GreeterGrain, { interfaces: [greeter] })
+    .registerGrain(GreeterGrain)
     .build();
 }
 
@@ -32,7 +31,7 @@ describe("greeter (core actor model acceptance)", () => {
     await silo.start();
     try {
       // The prefix is only set in the activate hook; seeing it proves activation ran first.
-      expect(await silo.getGrain(greeter, "en").greet("Ada")).toBe(
+      expect(await silo.getGrain(GreeterGrain, "en").greet("Ada")).toBe(
         "[en] Hello, Ada! (greeting #1)",
       );
     } finally {
@@ -44,9 +43,9 @@ describe("greeter (core actor model acceptance)", () => {
     const silo = buildGreeterSilo(new FakeTimeProvider());
     await silo.start();
     try {
-      const greeterRef = silo.getGrain(greeter, "en");
-      await Promise.all([greeterRef.greet("a"), greeterRef.greet("b"), greeterRef.greet("c")]);
-      expect(await greeterRef.greetings()).toBe(3);
+      const greeter = silo.getGrain(GreeterGrain, "en");
+      await Promise.all([greeter.greet("a"), greeter.greet("b"), greeter.greet("c")]);
+      expect(await greeter.greetings()).toBe(3);
     } finally {
       await silo.stop();
     }
@@ -57,16 +56,16 @@ describe("greeter (core actor model acceptance)", () => {
     const silo = buildGreeterSilo(time);
     await silo.start();
     try {
-      const greeterRef = silo.getGrain(greeter, "en");
-      await greeterRef.greet("Ada");
-      expect(await greeterRef.greetings()).toBe(1);
+      const greeter = silo.getGrain(GreeterGrain, "en");
+      await greeter.greet("Ada");
+      expect(await greeter.greetings()).toBe(1);
 
       time.advance(60_000);
       await tick();
       expect(silo.isActive(new GrainId("Greeter", "en"))).toBe(false);
 
       // Reactivated fresh: volatile count restarts at 1.
-      expect(await greeterRef.greet("Alan")).toBe("[en] Hello, Alan! (greeting #1)");
+      expect(await greeter.greet("Alan")).toBe("[en] Hello, Alan! (greeting #1)");
     } finally {
       await silo.stop();
     }

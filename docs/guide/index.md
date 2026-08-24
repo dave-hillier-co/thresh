@@ -7,10 +7,13 @@ connections to a particular process.
 
 ## Mental model
 
-1. Define a TypeScript contract with a supported `GrainKey<K>`.
-2. Give that contract a stable wire identity with `defineGrainInterface`.
-3. Implement it with `defineGrain` and register the implementation on each silo.
-4. Obtain a reference with `getGrain(definition, key)` and call asynchronous methods.
+1. Write the grain with `defineGrain(name, factory)`. The factory runs once per activation; the
+   object it returns is the message surface, and the definition *is* the contract.
+2. Register that definition on each silo with `registerGrain(definition)`.
+3. Obtain a reference with `getGrain(definition, key)` and call asynchronous methods.
+
+For a contract that crosses a process boundary, declare it separately with `defineGrainInterface` so
+callers need not import the implementation, and register with `registerGrain(ctor, { interfaces })`.
 
 Activation-local closure variables are volatile. Use a state facet for data that must survive
 deactivation. A grain processes one call at a time by default, but calls can cross silos and should

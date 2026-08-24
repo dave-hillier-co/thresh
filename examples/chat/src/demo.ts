@@ -5,7 +5,7 @@ import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
 import { createSilo } from "@thresh/hosting/silo-builder";
 import { ChatRoomGrain } from "@thresh/example-chat/chat-room-grain";
 import { ChatUserGrain } from "@thresh/example-chat/chat-user-grain";
-import { chatRoom, chatUser, type ChatMessage } from "@thresh/example-chat/interfaces";
+import type { ChatMessage } from "@thresh/example-chat/interfaces";
 
 export interface ChatDemoResult {
   /** Messages each member received during the fan-out phase. */
@@ -37,37 +37,37 @@ export async function runChatDemo(): Promise<ChatDemoResult> {
     .useStaticMembership([local])
     .useInProcessTransport(new InProcessNetwork())
     .useMemoryStreams()
-    .registerGrain(ChatRoomGrain, { interfaces: [chatRoom] })
-    .registerGrain(ChatUserGrain, { interfaces: [chatUser] })
+    .registerGrain(ChatRoomGrain)
+    .registerGrain(ChatUserGrain)
     .build();
 
   await silo.start();
   try {
     const members = ["alice", "bob", "carol"];
-    for (const name of members) await silo.getGrain(chatUser, name).join("general");
+    for (const name of members) await silo.getGrain(ChatUserGrain, name).join("general");
 
-    await silo.getGrain(chatRoom, "general").say("alice", "hello everyone");
+    await silo.getGrain(ChatRoomGrain, "general").say("alice", "hello everyone");
     await tick();
 
     const fanOut: Record<string, ChatMessage[]> = {};
-    for (const name of members) fanOut[name] = await silo.getGrain(chatUser, name).history();
+    for (const name of members) fanOut[name] = await silo.getGrain(ChatUserGrain, name).history();
 
     // Keep alice active across a sweep; let bob fall idle and be collected.
     time.advance(25_000);
-    await silo.getGrain(chatUser, "alice").history();
+    await silo.getGrain(ChatUserGrain, "alice").history();
     time.advance(20_000);
     await tick();
     const bobCollected = !silo.isActive(new GrainId("ChatUser", "bob"));
 
     // Two messages land while bob is away; alice still receives them live.
-    await silo.getGrain(chatRoom, "general").say("alice", "you around?");
-    await silo.getGrain(chatRoom, "general").say("carol", "guess not");
+    await silo.getGrain(ChatRoomGrain, "general").say("alice", "you around?");
+    await silo.getGrain(ChatRoomGrain, "general").say("carol", "guess not");
     await tick();
 
     // Bob comes back and resumes its own subscription from where it left off.
-    await silo.getGrain(chatUser, "bob").join("general");
+    await silo.getGrain(ChatUserGrain, "bob").join("general");
     await tick();
-    const bobHistory = await silo.getGrain(chatUser, "bob").history();
+    const bobHistory = await silo.getGrain(ChatUserGrain, "bob").history();
 
     return {
       fanOut,
