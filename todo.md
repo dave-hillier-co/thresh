@@ -9,6 +9,14 @@ Issues #18–#37 were implemented and closed in the 2026-07-24 burn-down, includ
 remainders their implementations initially left undone (storage cancellation signals, per-call
 deadline API, keepalive unbind on deactivation, and full-facet `@readOnly` guard coverage).
 
+## Driven by the first production use case
+
+[SpaceDB](https://github.com/dave-hillier-co/spacedb) — a wire-compatible SpiceDB on Thresh,
+ported from the Orleans implementation — is the first production consumer, and the gaps it hits
+land here. Closed so far: custom-storage log consistency, custom placement strategies, and
+`raceAbort` for cancellation-as-clean-exit. [`docs/orleans-to-thresh-port.md`](docs/orleans-to-thresh-port.md)
+is the mechanical Orleans→Thresh reference that port maintains.
+
 ## Beyond parity
 
 - [ ] [#38](https://github.com/dave-hillier-co/thresh/issues/38) Browser state

@@ -7,6 +7,7 @@ import { PreferLocalPlacement } from "@thresh/runtime/placement/prefer-local-pla
 import { RandomPlacement } from "@thresh/runtime/placement/random-placement";
 import { ResourceOptimizedPlacement } from "@thresh/runtime/placement/resource-optimized-placement";
 import type { PlacementStrategy } from "@thresh/runtime/placement/placement-strategy";
+import type { PlacementStrategyRegistry } from "@thresh/runtime/placement/placement-strategy-registry";
 import {
   PreferredMatchSiloMetadataPlacementFilterDirector,
   RequiredMatchSiloMetadataPlacementFilterDirector,
@@ -14,8 +15,16 @@ import {
 import { SiloRoleBasedPlacement } from "@thresh/runtime/placement/silo-role-based-placement";
 import { StatelessWorkerPlacement } from "@thresh/runtime/placement/stateless-worker-placement";
 
-/** Resolve the placement strategy a grain type's metadata selects. */
-export function placementStrategyFor(metadata: GrainMetadata): PlacementStrategy {
+/**
+ * Resolve the placement strategy a grain type's metadata selects. A `"custom"` placement
+ * resolves its named strategy from `registry` (populated by a silo builder's
+ * `addPlacementStrategy(name, strategy)`); throws if it names none, or names one no registry
+ * (or an unpopulated one) has. Stateless-worker placement wins over everything, as in Orleans.
+ */
+export function placementStrategyFor(
+  metadata: GrainMetadata,
+  registry?: PlacementStrategyRegistry,
+): PlacementStrategy {
   if (metadata.options.stateless) return new StatelessWorkerPlacement();
   switch (metadata.options.placement) {
     case "preferLocal":
@@ -30,6 +39,19 @@ export function placementStrategyFor(metadata: GrainMetadata): PlacementStrategy
     }
     case "resourceOptimized":
       return new ResourceOptimizedPlacement();
+    case "custom": {
+      // Resolved by name from the silo builder's `addPlacementStrategy` registry, exactly as a
+      // `"custom"` placement-filter descriptor resolves from `addPlacementFilter`. Orleans
+      // reaches the equivalent through DI on the grain's `[PlacementStrategy]` attribute.
+      const name = metadata.options.strategy;
+      if (name === undefined)
+        throw new Error(`${metadata.grainType}: placement "custom" requires options.strategy`);
+      if (registry === undefined)
+        throw new Error(
+          `${metadata.grainType}: no placement strategy registered: "${name}" (none are; did the silo builder call addPlacementStrategy?)`,
+        );
+      return registry.resolve(name);
+    }
     case "random":
     case undefined:
     default:

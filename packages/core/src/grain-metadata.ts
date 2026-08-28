@@ -30,7 +30,18 @@ export type PlacementFilterDescriptor =
 export interface GrainOptions {
   /** Override the grain type name (defaults to the class name without "Grain"). */
   name?: string;
-  placement?: "random" | "preferLocal" | "activationCount" | "siloRole" | "resourceOptimized";
+  placement?:
+    | "random"
+    | "preferLocal"
+    | "activationCount"
+    | "siloRole"
+    | "resourceOptimized"
+    | "custom";
+  /**
+   * The name of the custom placement strategy required by `placement: "custom"`, resolved from
+   * the silo builder's `addPlacementStrategy(name, strategy)` registry at placement time.
+   */
+  strategy?: string;
   /** The silo role required by `placement: "siloRole"`. */
   role?: string;
   /** Filters that prune candidate silos by metadata before the placement strategy runs. */

@@ -44,6 +44,22 @@ and interop surface. **Reducer** and **single-dispatch** grains add an event-fol
 on top. These change how a grain is *written*, not what it *is* — the runtime, guarantees, and
 lifecycle are unchanged.
 
+## Bounded CAS retry under custom-storage log consistency
+
+A `JournaledGrain` that also implements `CustomStorageInterface` owns its own log persistence,
+mirroring Orleans' `ICustomStorageInterface<TState, TDelta>`. One thing deliberately differs.
+
+Orleans' `CustomStorageAdaptor.WriteAsync` is *stubborn*: when the compare-and-set is rejected it
+re-reads storage and retries **forever**, because that retry runs on a background log-consistency
+protocol loop and nothing is waiting on it. Thresh has no such loop — `confirmEvents()` is awaited
+inside the grain turn — so an unbounded retry would hold the activation until the stuck-turn
+watchdog fired, turning a storage conflict into a hang.
+
+The adaptor therefore retries a bounded number of times (5 by default, configurable) and then
+throws `InconsistentStateError`, carrying the expected and stored versions in the etag fields. The
+events stay pending, so a later `confirmEvents()` retries them: the caller chooses whether to keep
+waiting, rather than the framework deciding for it.
+
 ## Additions beyond Orleans
 
 A few capabilities layer on top of the faithful model without changing it: **durable journaling**

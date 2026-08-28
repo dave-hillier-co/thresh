@@ -28,6 +28,47 @@ export interface LogViewAdaptor<TState, TEvent> {
 }
 
 /**
+ * The storage contract a grain implements when it owns its own log persistence, mirroring
+ * Orleans' `ICustomStorageInterface<TState, TDelta>`. A `JournaledGrain` that also implements
+ * this is bound to the custom-storage adaptor instead of the journal substrate: the grain
+ * decides where and how the log lives (per-version rows, snapshots, compaction), and the
+ * adaptor only keeps the cached view and drives the compare-and-set.
+ *
+ * Note the adaptor never retains the log under this contract, so `retrieveConfirmedEvents` is
+ * unsupported -- as it is in Orleans, whose `CustomStorageAdaptor` leaves
+ * `RetrieveLogSegment` at its `NotSupportedException` base.
+ */
+export interface CustomStorageInterface<TState, TDelta> {
+  /**
+   * Reads the current version and state from storage. The returned state must not be shared
+   * with anything the grain keeps mutating -- the adaptor treats it as its own.
+   */
+  readStateFromStorage(): Promise<{ version: number; state: TState }>;
+
+  /**
+   * Applies `updates` to storage if the stored version still matches `expectedVersion`,
+   * returning whether it did. On success the stored version must increase by exactly
+   * `updates.length`. Returning `false` (or throwing) makes the adaptor re-read and retry.
+   */
+  applyUpdatesToStorage(updates: readonly TDelta[], expectedVersion: number): Promise<boolean>;
+
+  /** Clears the stored state. Called by `clearLog`. */
+  clearStoredState(): Promise<void>;
+}
+
+/** Whether `instance` implements the custom-storage contract. */
+export function isCustomStorageHost<TState, TDelta>(
+  instance: object,
+): instance is CustomStorageInterface<TState, TDelta> {
+  const candidate = instance as Partial<CustomStorageInterface<TState, TDelta>>;
+  return (
+    typeof candidate.readStateFromStorage === "function" &&
+    typeof candidate.applyUpdatesToStorage === "function" &&
+    typeof candidate.clearStoredState === "function"
+  );
+}
+
+/**
  * A base class for log-consistent grains, mirroring Orleans'
  * `JournaledGrain<TGrainState, TEventBase>`. Subclasses raise events instead of
  * mutating state directly; `raiseEvent` is visible immediately through

@@ -36,6 +36,14 @@ for how the design differs from Orleans.
   version-aware placement.
 - **Broadcast channels** — lightweight in-cluster pub/sub to implicit subscribers.
 - **Grain call filters** — incoming, outgoing, and per-grain interception.
+- **Custom-storage log consistency** — a `JournaledGrain` that also implements
+  `CustomStorageInterface` owns its own log persistence (per-version rows, snapshots,
+  compaction) and the binder routes it past the journal substrate, mirroring Orleans'
+  `ICustomStorageInterface<TState, TDelta>` and its `CustomStorageAdaptor`.
+- **Custom placement strategies** — named strategies registered with
+  `addPlacementStrategy(name, strategy)` and selected by `{ placement: "custom", strategy }`,
+  the whole-strategy counterpart of the existing placement-filter registry (Orleans
+  `IPlacementDirector`).
 - **External client** — gateway-routed client with gateway discovery + failover, verified in-process
   and over real WebSocket sockets.
 - **Reducer & functional-first authoring** — `defineGrain` + hooks, snapshot reducers, dispatch

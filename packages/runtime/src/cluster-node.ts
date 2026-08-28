@@ -111,6 +111,7 @@ import {
 import { resolvePlacementHintValue } from "@thresh/runtime/placement/placement-hint";
 import type { PlacementFilter } from "@thresh/runtime/placement/placement-filter";
 import type { PlacementFilterRegistry } from "@thresh/runtime/placement/placement-filter-registry";
+import type { PlacementStrategyRegistry } from "@thresh/runtime/placement/placement-strategy-registry";
 import { RandomPlacement } from "@thresh/runtime/placement/random-placement";
 import type {
   PlacementContext,
@@ -261,6 +262,11 @@ export interface ClusterNodeOptions {
    * `placementFilters` descriptor resolves against (Orleans `AddPlacementFilter`).
    */
   placementFilterRegistry?: PlacementFilterRegistry;
+  /**
+   * Named custom placement strategies a grain's `{ placement: "custom", strategy }` option
+   * resolves against (the whole-strategy counterpart of `placementFilterRegistry`).
+   */
+  placementStrategyRegistry?: PlacementStrategyRegistry;
   /**
    * Load-shedding config (Orleans `LoadSheddingOptions`). Defaults to shedding
    * disabled. When enabled and this silo's (test-hooks-latched) CPU usage
@@ -1222,7 +1228,9 @@ export class ClusterNode {
 
   private placementFor(grainType: GrainType): PlacementStrategy {
     const reg = this.grainTypes.get(grainType);
-    return reg ? placementStrategyFor(reg.metadata) : randomPlacement;
+    return reg
+      ? placementStrategyFor(reg.metadata, this.options.placementStrategyRegistry)
+      : randomPlacement;
   }
 
   /** True once this silo declares a version > 1 or a versioning policy is set. */

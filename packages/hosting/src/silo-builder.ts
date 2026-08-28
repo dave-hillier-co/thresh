@@ -36,6 +36,8 @@ import {
   type GrainFacetFactory,
 } from "@thresh/persistence/grain-facet-registry";
 import { PlacementFilterRegistry } from "@thresh/runtime/placement/placement-filter-registry";
+import { PlacementStrategyRegistry } from "@thresh/runtime/placement/placement-strategy-registry";
+import type { PlacementStrategy } from "@thresh/runtime/placement/placement-strategy";
 import type { PlacementFilter } from "@thresh/runtime/placement/placement-filter";
 import {
   bindTransactionalStates,
@@ -255,6 +257,7 @@ export class SiloBuilder {
   private journalStorage: JournalStorageRegistry | undefined;
   private grainFacets: GrainFacetRegistry | undefined;
   private placementFilters: PlacementFilterRegistry | undefined;
+  private placementStrategies: PlacementStrategyRegistry | undefined;
   private reminderTable: ReminderTable | undefined;
   private reminderServiceOptions: ReminderServiceOptions | undefined;
   private jobShardStore: JobShardStore | undefined;
@@ -745,6 +748,18 @@ export class SiloBuilder {
   }
 
   /**
+   * Register a named custom placement strategy (Orleans `IPlacementDirector` behind a
+   * `[PlacementStrategy]` attribute). A grain opts in with
+   * `{ placement: "custom", strategy: name }`, resolved here by `name` at placement time.
+   * The whole-strategy counterpart of `addPlacementFilter`, which prunes candidates rather
+   * than choosing among them.
+   */
+  addPlacementStrategy(name: string, strategy: PlacementStrategy): this {
+    (this.placementStrategies ??= new PlacementStrategyRegistry()).add(name, strategy);
+    return this;
+  }
+
+  /**
    * Register an incoming grain-call filter (Orleans `IIncomingGrainCallFilter`).
    * Filters wrap every grain-method dispatch on this silo, in registration order
    * (the first registered is the outermost); each proceeds via `context.invoke()`.
@@ -1148,6 +1163,9 @@ export class SiloBuilder {
       ...(this.grainExtensions.size > 0 ? { grainExtensionFactories: this.grainExtensions } : {}),
       ...(this.placementFilters !== undefined
         ? { placementFilterRegistry: this.placementFilters }
+        : {}),
+      ...(this.placementStrategies !== undefined
+        ? { placementStrategyRegistry: this.placementStrategies }
         : {}),
       // Transactional facets need no storage provider in this slice, so the
       // binder always runs; persistent/reducer facets bind only when storage is

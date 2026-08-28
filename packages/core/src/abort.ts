@@ -45,3 +45,43 @@ export function raceSignal<T>(promise: Promise<T>, signal: AbortSignal | undefin
     );
   });
 }
+
+/**
+ * The value {@link raceAbort} resolves to when the signal fires before the promise settles.
+ * A unique symbol, so it can never collide with a legitimate result value.
+ */
+export const ABORTED: unique symbol = Symbol("thresh.aborted");
+
+/**
+ * Race `promise` against `signal`, resolving to {@link ABORTED} if the signal fires first
+ * rather than rejecting — the settle-with-a-sentinel counterpart of {@link raceSignal}.
+ *
+ * Use it where cancellation is a *clean exit* rather than an error: the shape a C# port writes
+ * as `Task.WhenAny(work, Task.Delay(Timeout.Infinite, ct))`, where the cancellation ends a loop
+ * normally. Reaching for `raceSignal` there turns a `yield break` into a thrown
+ * `GrainCallAbortedError`, which is a behaviour change, not a translation.
+ *
+ * As with `raceSignal`, the underlying operation is NOT interrupted — this abandons only the
+ * *wait* for it. A rejection from `promise` itself still propagates.
+ */
+export function raceAbort<T>(
+  promise: Promise<T>,
+  signal: AbortSignal | undefined,
+): Promise<T | typeof ABORTED> {
+  if (signal === undefined) return promise;
+  if (signal.aborted) return Promise.resolve(ABORTED);
+  return new Promise<T | typeof ABORTED>((resolve, reject) => {
+    const onAbort = (): void => resolve(ABORTED);
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (err: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(err);
+      },
+    );
+  });
+}
