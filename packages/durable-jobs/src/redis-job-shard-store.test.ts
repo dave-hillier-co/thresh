@@ -11,7 +11,10 @@ type Client = ReturnType<typeof createClient>;
 
 /** Probe Redis once at load time so the suite skips cleanly without it. */
 async function reachable(url: string): Promise<Client | undefined> {
-  const probe = createClient({ url });
+  // `reconnectStrategy: false` is load-bearing, not tidiness: node-redis retries a refused
+  // connection forever by default, so `connect()` below never settles when no Redis is
+  // listening and this module-load probe hangs the whole suite instead of skipping it.
+  const probe = createClient({ url, socket: { reconnectStrategy: false, connectTimeout: 500 } });
   probe.on("error", () => {});
   try {
     await probe.connect();

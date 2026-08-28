@@ -15,7 +15,10 @@ const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
 type Client = ReturnType<typeof createClient>;
 
 async function reachable(url: string): Promise<Client | undefined> {
-  const probe = createClient({ url });
+  // `reconnectStrategy: false` is load-bearing, not tidiness: node-redis retries a refused
+  // connection forever by default, so `connect()` below never settles when no Redis is
+  // listening and this module-load probe hangs the whole suite instead of skipping it.
+  const probe = createClient({ url, socket: { reconnectStrategy: false, connectTimeout: 500 } });
   probe.on("error", () => {});
   try {
     await probe.connect();
