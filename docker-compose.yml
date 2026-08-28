@@ -1,0 +1,76 @@
+# Backing services for the provider-backed test suites.
+#
+# Every suite that needs one of these probes it at load time and calls
+# `describe.skipIf(...)` when it is unreachable, so the whole file is optional:
+# without it `pnpm test` still passes, it just silently covers less. Bring these
+# up (`./scripts/ensure-services.sh`) to run the Redis, Postgres and Kafka
+# suites locally, which is what CI does.
+#
+# Ports are the defaults the suites assume (REDIS_URL, PG_URL, KAFKA_BROKERS
+# override them). Nothing here is seeded: each suite creates its own uniquely
+# named table or topic and drops it again, so the containers stay disposable.
+
+name: thresh
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: thresh-redis
+    ports:
+      - "6390:6379"
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: thresh-postgres
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_HOST_AUTH_METHOD: trust
+      POSTGRES_DB: postgres
+    # Test data is disposable; keeping it off disk makes a cold start faster and
+    # stops a wedged run from poisoning the next one.
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  # Apache Kafka in KRaft mode (no ZooKeeper). Redpanda was tried first for its
+  # faster start, but the pulling-stream and queue suites hang against it, so the
+  # real broker it is. Auto-topic-creation stays off: the suites create their own
+  # topics and a silent auto-create would mask a bug in that path.
+  kafka:
+    image: apache/kafka:3.9.0
+    container_name: thresh-kafka
+    ports:
+      - "9192:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9192
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1",
+        ]
+      interval: 3s
+      timeout: 10s
+      retries: 30

@@ -142,6 +142,43 @@ pnpm typecheck    # type-check every package
 pnpm lint         # ESLint + Prettier
 ```
 
+### Backing services
+
+The Redis, Postgres and Kafka suites probe their service when the file loads and
+skip themselves when it is unreachable, so `pnpm test` passes without any of
+them — it just covers less. Bringing them up is what turns those suites on:
+
+```sh
+./scripts/ensure-services.sh          # start Redis, Postgres and Kafka in Docker
+eval "$(./scripts/ensure-services.sh --env)"   # point the suites at them
+pnpm test
+./scripts/ensure-services.sh --down   # stop them again
+```
+
+With all three up, exactly one unit test file should skip; without them, twelve
+do. They listen on **non-default ports** (6390, 5433, 9192) so they cannot
+collide with — or silently borrow — another project's services on the same
+machine. Borrowing is the dangerous case: a foreign Postgres on 5432 answers the
+probe, fails to be usable, and the suite skips itself, so the run stays green
+while testing nothing.
+
+### CI
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs typecheck and lint,
+then the unit and parity suites with the backing services up, on a **self-hosted
+runner**. It fails the build if more than one unit file skips, so a service that
+stops starting shows up as a red build rather than as quietly reduced coverage.
+
+To install the runner on the Mac mini (idempotent; needs `gh` logged in with
+admin on the repo, and the mini reachable over SSH):
+
+```sh
+./scripts/setup-ci-runner.sh
+```
+
+Parity's skips are unrelated to CI: they are deliberate `orleansTest.excluded`
+backlog entries, and that count is the parity metric itself.
+
 ### Examples
 
 Each example runs end-to-end over in-memory providers and the in-process transport, and is also
