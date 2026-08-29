@@ -108,13 +108,35 @@ function tagged(tag: string, fields: Record<string, unknown>): Record<string, un
   return { [T]: tag, [V]: CURRENT_VERSION, ...fields };
 }
 
-/** Replace runtime value types with tagged, transport-safe plain forms. */
-export function encodeValue(value: unknown): unknown {
-  return encodeInner(value, new Set<unknown>(), "$");
+/**
+ * How a `Uint8Array` is carried.
+ *
+ * The default passes it through untouched, which is what the MessagePack serializer and the
+ * in-memory clone want: msgpack has a native binary type, so tagging binary would cost a third of
+ * every message body. A JSON transport has no such type — `JSON.stringify` turns a typed array into
+ * `{"0":1,...}` and `JSON.parse` hands back a plain object — so the JSON paths
+ * (`serializeValue` and the JSON serializer) ask for the tagged base64 form instead.
+ */
+export interface EncodeValueOptions {
+  /** Encode `Uint8Array` as a tagged base64 envelope rather than passing it through. */
+  readonly binaryAsBase64?: boolean;
 }
 
-function encodeInner(value: unknown, seen: Set<unknown>, path: string): unknown {
-  if (value instanceof Uint8Array) return value; // binary (e.g. a Message body) passes through
+/** Replace runtime value types with tagged, transport-safe plain forms. */
+export function encodeValue(value: unknown, options: EncodeValueOptions = {}): unknown {
+  return encodeInner(value, new Set<unknown>(), "$", options);
+}
+
+function encodeInner(
+  value: unknown,
+  seen: Set<unknown>,
+  path: string,
+  options: EncodeValueOptions,
+): unknown {
+  if (value instanceof Uint8Array) {
+    // Binary (e.g. a Message body) passes through unless the caller's transport cannot carry it.
+    return options.binaryAsBase64 ? tagged("bytes", { value: bytesToBase64(value) }) : value;
+  }
   if (value instanceof Date) return tagged("date", { value: value.getTime() });
   if (typeof value === "bigint") return tagged("bigint", { value: value.toString() });
   if (value instanceof Guid) return tagged("guid", { value: value.toString() });
@@ -154,7 +176,8 @@ function encodeInner(value: unknown, seen: Set<unknown>, path: string): unknown 
     try {
       const fields = surrogate.encode(value);
       const out: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(fields)) out[k] = encodeInner(v, seen, `${path}.${k}`);
+      for (const [k, v] of Object.entries(fields))
+        out[k] = encodeInner(v, seen, `${path}.${k}`, options);
       return tagged(surrogate.tag, out);
     } finally {
       seen.delete(value);
@@ -166,8 +189,8 @@ function encodeInner(value: unknown, seen: Set<unknown>, path: string): unknown 
     seen.add(value);
     try {
       const entries = [...value.entries()].map(([k, v], i) => [
-        encodeInner(k, seen, `${path}[${i}].key`),
-        encodeInner(v, seen, `${path}[${i}].value`),
+        encodeInner(k, seen, `${path}[${i}].key`, options),
+        encodeInner(v, seen, `${path}[${i}].value`, options),
       ]);
       return tagged("map", { entries });
     } finally {
@@ -178,7 +201,9 @@ function encodeInner(value: unknown, seen: Set<unknown>, path: string): unknown 
     if (seen.has(value)) throw new CircularReferenceError(path);
     seen.add(value);
     try {
-      const values = [...value.values()].map((v, i) => encodeInner(v, seen, `${path}[${i}]`));
+      const values = [...value.values()].map((v, i) =>
+        encodeInner(v, seen, `${path}[${i}]`, options),
+      );
       return tagged("set", { values });
     } finally {
       seen.delete(value);
@@ -188,7 +213,7 @@ function encodeInner(value: unknown, seen: Set<unknown>, path: string): unknown 
     if (seen.has(value)) throw new CircularReferenceError(path);
     seen.add(value);
     try {
-      return value.map((v, i) => encodeInner(v, seen, `${path}[${i}]`));
+      return value.map((v, i) => encodeInner(v, seen, `${path}[${i}]`, options));
     } finally {
       seen.delete(value);
     }
@@ -198,7 +223,8 @@ function encodeInner(value: unknown, seen: Set<unknown>, path: string): unknown 
     seen.add(value);
     try {
       const out: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(value)) out[k] = encodeInner(v, seen, `${path}.${k}`);
+      for (const [k, v] of Object.entries(value))
+        out[k] = encodeInner(v, seen, `${path}.${k}`, options);
       return out;
     } finally {
       seen.delete(value);
@@ -221,6 +247,8 @@ export function decodeValue(value: unknown, ctx: CodecContext = {}): unknown {
         return BigInt(obj.value as string);
       case "date":
         return new Date(obj.value as number);
+      case "bytes":
+        return base64ToBytes(obj.value as string);
       case "guid":
         return Guid.parse(obj.value as string);
       case "grainId":
@@ -270,10 +298,52 @@ export function decodeValue(value: unknown, ctx: CodecContext = {}): unknown {
 
 /** JSON string of a value with runtime types tagged; pair with `deserializeValue`. */
 export function serializeValue(value: unknown): string {
-  return JSON.stringify(encodeValue(value));
+  return JSON.stringify(encodeValue(value, { binaryAsBase64: true }));
 }
 
 /** Reverse `serializeValue`, rehydrating runtime value types. */
 export function deserializeValue<T>(json: string, ctx?: CodecContext): T {
   return decodeValue(JSON.parse(json), ctx) as T;
+}
+
+const BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+// Hand-rolled rather than `btoa`/`Buffer`: the core package targets ES2022 with no DOM and no
+// ambient Node types, and the encoding is part of a wire shape, so it is spelled out here and
+// pinned by tests rather than inherited from whichever global happens to exist.
+function bytesToBase64(bytes: Uint8Array): string {
+  let out = "";
+  for (let i = 0; i < bytes.length; i += 3) {
+    const b0 = bytes[i] as number;
+    const b1 = bytes[i + 1];
+    const b2 = bytes[i + 2];
+    out += BASE64_ALPHABET[b0 >> 2];
+    out += BASE64_ALPHABET[((b0 & 0b11) << 4) | ((b1 ?? 0) >> 4)];
+    out += b1 === undefined ? "=" : BASE64_ALPHABET[((b1 & 0b1111) << 2) | ((b2 ?? 0) >> 6)];
+    out += b2 === undefined ? "=" : BASE64_ALPHABET[b2 & 0b111111];
+  }
+  return out;
+}
+
+function base64ToBytes(text: string): Uint8Array {
+  const body = text.endsWith("==")
+    ? text.slice(0, -2)
+    : text.endsWith("=")
+      ? text.slice(0, -1)
+      : text;
+  const bytes = new Uint8Array((body.length * 3) >> 2);
+  let acc = 0;
+  let bits = 0;
+  let at = 0;
+  for (const ch of body) {
+    const digit = BASE64_ALPHABET.indexOf(ch);
+    if (digit < 0) continue;
+    acc = (acc << 6) | digit;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      bytes[at++] = (acc >> bits) & 0xff;
+    }
+  }
+  return bytes;
 }

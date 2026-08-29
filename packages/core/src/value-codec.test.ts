@@ -55,6 +55,61 @@ describe("value-codec", () => {
     });
   });
 
+  describe("binary", () => {
+    // `encodeValue` passes a `Uint8Array` through untouched, which is right for the MessagePack
+    // path (msgpack has a native binary type) and for the in-memory clone. The JSON path has no
+    // such type: `JSON.stringify` turns a typed array into `{"0":1,...}` and `JSON.parse` hands
+    // back a plain object, so every byte array in a durably persisted grain state silently stopped
+    // being a `Uint8Array`. `serializeValue`/`deserializeValue` therefore tag binary as base64.
+    it("round-trips a Uint8Array through serializeValue/deserializeValue", () => {
+      const bytes = new Uint8Array([0, 1, 2, 253, 254, 255]);
+
+      const back = deserializeValue<Uint8Array>(serializeValue(bytes));
+
+      expect(back).toBeInstanceOf(Uint8Array);
+      expect([...back]).toEqual([...bytes]);
+    });
+
+    it("round-trips an empty Uint8Array, and one whose length is not a multiple of three", () => {
+      for (const bytes of [new Uint8Array([]), new Uint8Array([1]), new Uint8Array([1, 2])]) {
+        const back = deserializeValue<Uint8Array>(serializeValue(bytes));
+        expect(back).toBeInstanceOf(Uint8Array);
+        expect([...back]).toEqual([...bytes]);
+      }
+    });
+
+    it("round-trips a Uint8Array nested in an object, an array and a Map value", () => {
+      const value = {
+        schema: new TextEncoder().encode("definition doc {}"),
+        history: [new Uint8Array([9, 8])],
+        byName: new Map<string, Uint8Array>([["a", new Uint8Array([7])]]),
+      };
+
+      const back = deserializeValue<typeof value>(serializeValue(value));
+
+      expect([...back.schema]).toEqual([...value.schema]);
+      expect(back.schema).toBeInstanceOf(Uint8Array);
+      expect([...(back.history[0] ?? [])]).toEqual([9, 8]);
+      expect(back.byName.get("a")).toBeInstanceOf(Uint8Array);
+    });
+
+    it("round-trips every byte value, so the base64 alphabet is exercised end to end", () => {
+      const all = new Uint8Array(256);
+      for (let i = 0; i < 256; i++) all[i] = i;
+
+      expect([...deserializeValue<Uint8Array>(serializeValue(all))]).toEqual([...all]);
+    });
+
+    it("leaves binary as a live Uint8Array for the MessagePack and clone paths", () => {
+      // `encodeValue` with no options is the native-binary path: msgpack carries a `Uint8Array`
+      // itself, so tagging it as base64 there would cost a third of every message body.
+      const bytes = new Uint8Array([1, 2, 3]);
+
+      expect(encodeValue(bytes)).toBe(bytes);
+      expect(decodeValue(encodeValue(bytes))).toBe(bytes);
+    });
+  });
+
   describe("wire compatibility", () => {
     it("decodes an envelope with no version field (the pre-existing wire shape)", () => {
       const legacy = { $thresh: "date", value: 0 };
