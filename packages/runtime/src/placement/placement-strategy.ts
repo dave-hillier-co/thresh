@@ -1,3 +1,4 @@
+import type { GrainId } from "@thresh/core/grain-id";
 import type { GrainType } from "@thresh/core/grain-type";
 import type { SiloAddress } from "@thresh/core/silo-address";
 
@@ -9,6 +10,13 @@ export interface SiloResourceStats {
 /** Information a placement strategy may consult when choosing a silo. */
 export interface PlacementContext {
   localSilo: SiloAddress;
+  /**
+   * The identity of the grain being placed — type AND key. A key-aware director (Orleans reads
+   * `PlacementTarget.GrainIdentity.Key`) cannot work from `grainType` alone: hashing the key is
+   * how a strategy co-locates a grain with the data it reads. Optional because a strategy may be
+   * driven directly in a test with no request behind it; the dispatcher always supplies it.
+   */
+  grainId?: GrainId;
   /** Current activation count on a silo, for load-aware strategies. */
   activationCount?: (silo: SiloAddress) => number;
   /** Static metadata a silo advertises via membership (role, zone, ...), for metadata filters. */

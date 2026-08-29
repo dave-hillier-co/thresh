@@ -108,3 +108,63 @@ describe("DistributedDispatcher ambient deadline (issue #18)", () => {
     expect(forwarded.deadline).toBe(123);
   });
 });
+
+// A key-aware placement strategy (Orleans `IPlacementDirector` reads
+// `target.GrainIdentity.Key`) cannot work from the grain TYPE alone: Spiceport's
+// GraphLocalityPlacementDirector hashes the grain KEY to co-locate compute with its data
+// shard. The dispatcher has the whole `GrainId` in hand as `req.target`, so it passes it
+// through the placement context.
+describe("DistributedDispatcher placement context carries the grain id", () => {
+  it("gives the strategy the target GrainId, not only the grain type", async () => {
+    let seen: GrainId | undefined;
+    const { deps: d } = deps({
+      placementFor: () => ({
+        choose: (_type, cs, ctx) => {
+          seen = ctx.grainId;
+          return cs[cs.length - 1]!; // a remote silo, so the call forwards rather than activating locally
+        },
+      }),
+    });
+
+    await new DistributedDispatcher(d).invoke(request());
+
+    expect(seen?.type).toBe("Counter");
+    expect(seen?.key).toBe("k");
+  });
+
+  it("gives placement filters the same grain id", async () => {
+    let seen: GrainId | undefined;
+    const { deps: d } = deps({
+      filtersFor: () => [
+        {
+          filter: (_t, cs, ctx) => {
+            seen = ctx.grainId;
+            return cs;
+          },
+        },
+      ],
+    });
+
+    await new DistributedDispatcher(d).invoke(request());
+
+    expect(seen?.key).toBe("k");
+  });
+
+  it("does not let a placementContext provider override the dispatcher's grain id", async () => {
+    let seen: GrainId | undefined;
+    const { deps: d } = deps({
+      placementContext: () =>
+        ({ random: () => 0.9, grainId: new GrainId("Other", "wrong") }) as never,
+      placementFor: () => ({
+        choose: (_type, cs, ctx) => {
+          seen = ctx.grainId;
+          return cs[cs.length - 1]!; // a remote silo, so the call forwards rather than activating locally
+        },
+      }),
+    });
+
+    await new DistributedDispatcher(d).invoke(request());
+
+    expect(seen?.type).toBe("Counter");
+  });
+});

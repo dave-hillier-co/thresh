@@ -257,7 +257,13 @@ export class DistributedDispatcher implements Dispatcher {
     // and giving `FilterPlacementCandidates`/`ActivateGrain`/
     // `RegisterDirectoryEntry` a common parent.
     return withPlaceGrainSpan(async () => {
-      const ctx: PlacementContext = { localSilo: this.deps.local, ...this.deps.placementContext() };
+      // `grainId` last: the dispatcher knows the grain being placed, and a context provider
+      // must not be able to name a different one.
+      const ctx: PlacementContext = {
+        localSilo: this.deps.local,
+        ...this.deps.placementContext(),
+        grainId: req.target,
+      };
       // Hard metadata filters first: prune the candidate set by silo metadata; if
       // none qualify, placement fails (the grain has a constraint nothing satisfies).
       let candidates: readonly SiloAddress[] = this.deps.activeSilos();
