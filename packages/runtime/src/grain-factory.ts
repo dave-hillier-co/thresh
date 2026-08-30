@@ -38,23 +38,6 @@ import type { TransactionAgent } from "@thresh/runtime/transaction-agent";
 const newChainId = () => Guid.newGuid().toString();
 
 /**
- * Cross-silo calls round-trip through the MessagePack serializer, which
- * cannot represent `undefined` and turns it into `null` — so a grain method
- * returning nothing (e.g. `Promise<void>`) yields `null` to a caller on a
- * different silo. A same-silo call skips serialization entirely and would
- * otherwise hand back the raw `undefined`, making the caller-visible result
- * shape depend on placement. Normalizing here (the one caller-facing chokepoint
- * every `getGrain`/`getReference` call funnels through) makes it
- * placement-independent: `undefined` becomes `null`, matching what the wire
- * already produces. Deliberately NOT applied to `GrainExtension` calls (routed
- * here too via `getExtensionReference`) — extension/system dispatch semantics
- * distinguish `undefined` and must not be reshaped.
- */
-function normalizeGrainCallResult(value: unknown): unknown {
-  return value === undefined ? null : value;
-}
-
-/**
  * Reduce an aggregate rejection (e.g. `AggregateError`, from `Promise.any` or
  * a hand-rolled fan-out) to its first underlying error, so a transaction abort
  * always carries exactly one root cause (Orleans: `InnerException` is a single
@@ -303,16 +286,18 @@ export class GrainFactory {
               timeoutMs === undefined
                 ? await invokeCall()
                 : await this.raceResponseDeadline(invokeCall(), timeoutMs, prop);
-            // Ordinary, waited-for grain-method calls only (see
-            // `normalizeGrainCallResult`); extension calls (`def.extension ===
-            // true`) pass the raw value through, and so does `oneWay` — a
-            // remote `oneWay` send never waits for (or serializes) a reply, so
-            // it already always yields `undefined` regardless of placement
-            // (see `ClusterNode`'s `oneWay` branch); normalizing only the local
-            // side here would make oneWay itself placement-dependent instead.
-            return def.extension === true || options.oneWay === true
-              ? result
-              : normalizeGrainCallResult(result);
+            // The result passes through UNCHANGED, `undefined` included. It
+            // used to be normalized to `null` here, because the serializer
+            // could not carry `undefined` and a cross-silo call therefore
+            // produced `null` where a same-silo call produced `undefined` —
+            // placement-dependent, so the shape was forced to the wire's.
+            // `encodeValue` now tags a top-level `undefined`, so both paths
+            // yield `undefined` and the normalization would only corrupt it:
+            // a method declared `Promise<T | undefined>` (the shape a ported
+            // .NET `Task<T?>` takes) must hand its caller the `undefined` its
+            // own signature promises, or every `=== undefined` guard downstream
+            // silently fails open on a `null`.
+            return result;
           };
         },
       },

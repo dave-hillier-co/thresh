@@ -19,6 +19,13 @@ summary of the deliberate deviations. [`EPICS.md`](../EPICS.md) tracks what is s
   identical to Orleans; the mechanism differs because `await` yields the Node event loop.
 - The code is a **pnpm workspace of small `@thresh/*` packages** with no barrel files and standard
   TC39 decorators (no `reflect-metadata`), run straight from source.
+- **A grain call carries `undefined` back as `undefined`**, not as `null`, whether the callee is
+  same-silo or cross-silo. C# has one "no value" (`null`); TypeScript has two, and a method declared
+  `Promise<T | undefined>` — the shape every ported `Task<T?>` takes — must hand its caller the one
+  its own signature promises, or a `=== undefined` guard downstream fails open on a `null`. Neither
+  wire format can carry a bare `undefined` (MessagePack writes nil, `JSON.stringify` yields no
+  string at all), so `encodeValue` tags a **top-level** `undefined` and `decodeValue` restores it.
+  Only the top level: a `undefined` MEMBER of a returned object still travels as an omitted key.
 
 ## Kubernetes-native hosting
 
@@ -80,6 +87,16 @@ rebuilding one would hand a same-silo callee a plain object where its signature 
 so a signal held by a class-typed record still does not cross a silo boundary. And a value graph
 containing a cycle is left alone at the point it closes, since a cyclic argument is legal on a
 same-silo call, which never serializes.
+
+## A cancellation crosses a silo boundary AS a cancellation
+
+`GrainCallAbortedError` and `GrainTaskCanceledError` carry no enumerable own properties, so the
+codec's generic object branch used to flatten them to `{}` and a cross-silo caller saw a bare
+`GrainCallError`: `isCancellationError` was false, and a deliberate abort was indistinguishable
+from a retriable call failure. Both now have a codec tag, alongside the `DOMException` that
+`signal.throwIfAborted()` raises, so all three shapes of "the callee stopped because it was
+cancelled" reach the caller with their type intact. Orleans has no counterpart, because
+`OperationCanceledException` is a framework type its serializer already knows.
 
 ## A collection age shorter than the sweep interval is legal
 

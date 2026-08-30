@@ -1,3 +1,4 @@
+import { GrainCallAbortedError, GrainTaskCanceledError } from "./errors";
 import { CancellationTokenPlaceholder, GrainCancellationToken } from "./grain-cancellation-token";
 import { GrainId } from "./grain-id";
 import { keyToString, type GrainKeyKind } from "./grain-key";
@@ -124,7 +125,36 @@ export interface EncodeValueOptions {
 
 /** Replace runtime value types with tagged, transport-safe plain forms. */
 export function encodeValue(value: unknown, options: EncodeValueOptions = {}): unknown {
+  // A TOP-LEVEL `undefined` is a VALUE, not an absent field: it is what a grain method declared
+  // `Promise<T | undefined>` (the shape every ported .NET `Task<T?>` takes) returns when it has
+  // nothing, and what a `void` method returns always. Neither transport can carry it as itself —
+  // MessagePack has no `undefined`, so `encode(undefined)` writes nil and the caller reads `null`;
+  // `JSON.stringify(undefined)` is not a string at all — so the caller's `result === undefined`
+  // guard fails and a `null` is used as if it were a value. Tag it, so the absent case survives
+  // the round trip exactly as it was returned.
+  //
+  // Deliberately only at the TOP: `encodeInner` leaves a nested `undefined` member alone, so an
+  // object's optional field still travels as an OMITTED key (MessagePack's `ignoreUndefined`,
+  // `JSON.stringify`'s own omission) rather than as a tagged envelope. Tagging those too would
+  // grow every message and turn "key absent" into "key present, value undefined".
+  if (value === undefined) return tagged("undefined", {});
   return encodeInner(value, new Set<unknown>(), "$", options);
+}
+
+/**
+ * Encode a value in a POSITIONAL slot - an array element, a `Map` key or value, a `Set` member -
+ * where `undefined` is a value rather than an omittable field. An array is how a grain call's
+ * arguments travel, so an optional parameter passed explicitly as `undefined` lands here: without
+ * the tag it is written as nil and the callee reads `null`, and every `x === undefined` guard in
+ * its body is then wrong. Object MEMBERS deliberately do not come through here (see `encodeValue`).
+ */
+function encodeElement(
+  value: unknown,
+  seen: Set<unknown>,
+  path: string,
+  options: EncodeValueOptions,
+): unknown {
+  return value === undefined ? tagged("undefined", {}) : encodeInner(value, seen, path, options);
 }
 
 function encodeInner(
@@ -170,6 +200,17 @@ function encodeInner(
   if (value instanceof DOMException) {
     return tagged("domException", { name: value.name, message: value.message });
   }
+  // The cancellation family, carried for exactly the reason `DOMException` is: a callee that
+  // stopped because its signal fired must reach the caller AS a cancellation. These have no
+  // enumerable own properties, so the generic object branch below would flatten them to `{}` and
+  // the caller would see a bare `GrainCallError` - making `isCancellationError` false and a
+  // deliberate abort indistinguishable from a retriable call failure.
+  if (value instanceof GrainCallAbortedError) {
+    return tagged("callAborted", { message: value.message });
+  }
+  if (value instanceof GrainTaskCanceledError) {
+    return tagged("taskCanceled", { message: value.message });
+  }
   if (value instanceof SiloAddress) {
     return tagged("silo", {
       podName: value.podName,
@@ -202,8 +243,8 @@ function encodeInner(
     seen.add(value);
     try {
       const entries = [...value.entries()].map(([k, v], i) => [
-        encodeInner(k, seen, `${path}[${i}].key`, options),
-        encodeInner(v, seen, `${path}[${i}].value`, options),
+        encodeElement(k, seen, `${path}[${i}].key`, options),
+        encodeElement(v, seen, `${path}[${i}].value`, options),
       ]);
       return tagged("map", { entries });
     } finally {
@@ -215,7 +256,7 @@ function encodeInner(
     seen.add(value);
     try {
       const values = [...value.values()].map((v, i) =>
-        encodeInner(v, seen, `${path}[${i}]`, options),
+        encodeElement(v, seen, `${path}[${i}]`, options),
       );
       return tagged("set", { values });
     } finally {
@@ -226,7 +267,7 @@ function encodeInner(
     if (seen.has(value)) throw new CircularReferenceError(path);
     seen.add(value);
     try {
-      return value.map((v, i) => encodeInner(v, seen, `${path}[${i}]`, options));
+      return value.map((v, i) => encodeElement(v, seen, `${path}[${i}]`, options));
     } finally {
       seen.delete(value);
     }
@@ -272,8 +313,15 @@ export function decodeValue(value: unknown, ctx: CodecContext = {}): unknown {
           obj.cancelled as boolean,
           obj.asSignal === true,
         );
+      case "undefined":
+        // The top-level absent value `encodeValue` tags; see the note there.
+        return undefined;
       case "domException":
         return new DOMException(obj.message as string, obj.name as string);
+      case "callAborted":
+        return new GrainCallAbortedError(obj.message as string);
+      case "taskCanceled":
+        return new GrainTaskCanceledError(obj.message as string);
       case "silo":
         return new SiloAddress(obj.podName as string, obj.podUid as string, obj.endpoint as string);
       case "map": {

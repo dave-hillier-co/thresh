@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { grain } from "@thresh/core/decorators";
-import { GrainCallError } from "@thresh/core/errors";
+import {
+  GrainCallAbortedError,
+  GrainCallError,
+  GrainTaskCanceledError,
+  isCancellationError,
+} from "@thresh/core/errors";
 import { Grain } from "@thresh/core/grain";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
 import type { GrainWithStringKey } from "@thresh/core/key-kinds";
@@ -42,6 +47,8 @@ interface IThrowingGrain extends GrainWithStringKey {
   throwRegistered(): Promise<void>;
   throwUnregistered(): Promise<void>;
   throwAborted(): Promise<void>;
+  throwCallAborted(): Promise<void>;
+  throwTaskCanceled(): Promise<void>;
 }
 const IThrowingGrain = defineGrainInterface<IThrowingGrain>("IThrowingGrain.errorFidelity");
 
@@ -52,6 +59,14 @@ class ThrowingGrain extends Grain implements IThrowingGrain {
   }
   async throwUnregistered(): Promise<void> {
     throw new UnregisteredError("no surrogate for this one");
+  }
+  async throwCallAborted(): Promise<void> {
+    // What `raceSignal` (`@thresh/core/abort`) raises when the awaited operation's signal fires -
+    // the shape a ported `Task.Delay(ms, ct)` takes.
+    throw new GrainCallAbortedError();
+  }
+  async throwTaskCanceled(): Promise<void> {
+    throw new GrainTaskCanceledError();
   }
   async throwAborted(): Promise<void> {
     // Exactly what `signal.throwIfAborted()` raises when a callee stops because its cancellation
@@ -104,6 +119,45 @@ describe("cross-silo error type fidelity", () => {
       // cancellation from any other failure, so the concrete type is the contract here.
       expect(error).toBeInstanceOf(DOMException);
       expect((error as DOMException).name).toBe("AbortError");
+    } finally {
+      await cluster.dispose();
+    }
+  });
+
+  it("preserves a GrainCallAbortedError, so raceSignal's cancellation stays a cancellation", async () => {
+    // Cancellation is a FAMILY, and a caller distinguishes it from a failure by type: degrading it
+    // to `GrainCallError` makes `isCancellationError` false and a deliberate abort indistinguishable
+    // from a retriable call failure.
+    const cluster = await buildCluster();
+    try {
+      const caller: TestSiloHandle = cluster.silos[1]!;
+      const error = await caller.host
+        .getGrain(IThrowingGrain, "g4")
+        .throwCallAborted()
+        .then(
+          () => undefined,
+          (e: unknown) => e,
+        );
+      expect(error).toBeInstanceOf(GrainCallAbortedError);
+      expect(isCancellationError(error)).toBe(true);
+    } finally {
+      await cluster.dispose();
+    }
+  });
+
+  it("preserves a GrainTaskCanceledError across the same path", async () => {
+    const cluster = await buildCluster();
+    try {
+      const caller: TestSiloHandle = cluster.silos[1]!;
+      const error = await caller.host
+        .getGrain(IThrowingGrain, "g5")
+        .throwTaskCanceled()
+        .then(
+          () => undefined,
+          (e: unknown) => e,
+        );
+      expect(error).toBeInstanceOf(GrainTaskCanceledError);
+      expect(isCancellationError(error)).toBe(true);
     } finally {
       await cluster.dispose();
     }

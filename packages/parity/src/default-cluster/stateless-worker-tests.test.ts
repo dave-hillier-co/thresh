@@ -136,7 +136,9 @@ describe("DefaultCluster.Tests.General.StatelessWorkerTests", () => {
         const task = grain.goFast("go-fast");
         await mayInterleaveCallStarted("go-fast");
         releaseMayInterleaveCalls();
-        await expect(task).resolves.toBeNull();
+        // Upstream asserts the call simply completes; its `Task` has no value, which is
+        // `undefined` here (a grain call carries a top-level `undefined` back as itself).
+        await expect(task).resolves.toBeUndefined();
       },
     );
 

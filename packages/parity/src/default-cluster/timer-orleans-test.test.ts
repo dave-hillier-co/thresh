@@ -109,12 +109,13 @@ describe("DefaultCluster.Tests.TimerTests.TimerOrleansTest", () => {
       time.advance(1000);
       await flush();
       expect(await grain.getTickCount()).toBe(1);
-      // A grain-method call's "no value" result is `null` regardless of
-      // whether the call landed same-silo or cross-silo (GAP-BUG-LOCAL-CALL-UNDEFINED,
-      // now fixed): `GrainFactory`'s caller-facing return path normalizes a
-      // local `undefined` to `null`, matching what the message serializer
-      // already produces for a cross-silo call.
-      expect(await grain.getException()).toBeNull();
+      // A grain-method call's "no value" result is `undefined` regardless of
+      // whether the call landed same-silo or cross-silo: `encodeValue` tags a
+      // top-level `undefined`, so the wire carries it as itself and the caller
+      // sees exactly what `getException`'s `Promise<string | undefined>`
+      // signature promises. (Upstream's `Assert.Null` is C#'s "no value" for a
+      // reference type; `undefined` is this language's.)
+      expect(await grain.getException()).toBeUndefined();
       await grain.stopTimer("async-timer-call");
     },
   );
@@ -159,9 +160,8 @@ describe("DefaultCluster.Tests.TimerTests.TimerOrleansTest", () => {
       time.advance(1000);
       await flush();
       expect(await grain.getTickCount()).toBe(1);
-      // See AsyncTimerTest_GrainCall above: null regardless of placement now
-      // that GAP-BUG-LOCAL-CALL-UNDEFINED is fixed.
-      expect(await grain.getException()).toBeNull();
+      // See AsyncTimerTest_GrainCall above: `undefined` regardless of placement.
+      expect(await grain.getException()).toBeUndefined();
       await grain.stopTimer("non-reentrant-timer");
     },
   );
@@ -202,9 +202,8 @@ describe("DefaultCluster.Tests.TimerTests.TimerOrleansTest", () => {
     await expect(grain.restartTimer(testName, { seconds: 1 }, { seconds: -5 })).rejects.toThrow();
     await expect(grain.restartTimer(testName, { seconds: 1 }, { days: 100_000 })).rejects.toThrow();
 
-    // `null` regardless of placement (GAP-BUG-LOCAL-CALL-UNDEFINED, now fixed
-    // — see AsyncTimerTest_GrainCall above).
-    expect(await grain.getException()).toBeNull();
+    // `undefined` regardless of placement — see AsyncTimerTest_GrainCall above.
+    expect(await grain.getException()).toBeUndefined();
 
     await grain.stopTimer(testName);
 
@@ -215,7 +214,7 @@ describe("DefaultCluster.Tests.TimerTests.TimerOrleansTest", () => {
     await grain2.startTimer(testName, delay, "update_period");
     time.advance(durationToMs(delay) * 2);
     await flush();
-    expect(await grain2.getException()).toBeNull();
+    expect(await grain2.getException()).toBeUndefined();
     expect(await grain2.getTickCount()).toBe(1);
 
     // grain3: the timer's own callback disposes it (operationType
@@ -224,7 +223,7 @@ describe("DefaultCluster.Tests.TimerTests.TimerOrleansTest", () => {
     await grain3.startTimer(testName, delay, "dispose_timer");
     time.advance(durationToMs(delay) * 4);
     await flush();
-    expect(await grain3.getException()).toBeNull();
+    expect(await grain3.getException()).toBeUndefined();
     expect(await grain3.getTickCount()).toBe(1);
   });
 

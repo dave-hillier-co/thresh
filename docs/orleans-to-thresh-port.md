@@ -146,6 +146,17 @@ The exceptions, where the port must do real work:
   epoch-nanos `bigint`; pick one per field and write it down, and note that .NET's 100ns tick
   resolution (seven fractional digits) survives none of `Date`, epoch-millis, or `number`.
   `Guid` becomes `string`.
+- **`DateTimeOffset.UtcNow` as a clock READ, not a stored value.** Where the C# reads the clock to
+  MINT a value that must be greater than the last one — a revision, a sequence stamp, a GC floor —
+  `Date.now()` is not the substitution. It resolves to the millisecond, which is coarser than the
+  interval between successive calls, so the minted value stops tracking the clock (a `now > last ?
+  now : last + 1` mint climbs above it) and any OTHER quantity derived from the same clock — a
+  floor at `now - window`, a deadline — silently disagrees with it. Use
+  `performance.timeOrigin + performance.now()`: the same wall clock at sub-microsecond resolution.
+  Combine the two halves in `bigint` after scaling the small one, never as one float — the sum in
+  nanoseconds is past float64's integer precision and would quantise straight back. The trade is
+  that `performance.now()` is monotonic and does not absorb wall-clock corrections made after
+  process start; for a minted-value clock that is the direction you want.
 
 ## Types and members
 
@@ -298,6 +309,7 @@ paged/cursor protocol. (Streaming *within* a process is fine and maps directly.)
 | `Task.Delay(d, ct)` (a **bounded** delay) | a `setTimeout` promise wrapped in `raceSignal(sleep, signal)`, with the timer cleared in a `finally`. Thresh ships no `delay` helper, so write the three lines locally. A bare `await new Promise(r => setTimeout(r, d))` is **not** a translation: `Task.Delay` observes the token and throws, so dropping the race leaves one unkillable window per iteration — across a retry loop that is the whole retry budget spent after cancellation. |
 | `Task.WhenAny(work, Task.Delay(Infinite, ct))` | `raceAbort(promise, signal)` (`@thresh/core/abort`), which resolves to the `ABORTED` sentinel instead of rejecting — **cancellation as a clean exit**. Porting this with `raceSignal` turns a `yield break` into a thrown `GrainCallAbortedError`. |
 | `Task.FromResult(x)` | `Promise.resolve(x)` from a **non**-`async` method |
+| `Task<T?>` returning null / an optional parameter passed as `null` | `Promise<T \| undefined>` returning `undefined`, and an argument passed as `undefined`. Both survive a grain call as `undefined` — the codec tags a top-level `undefined` and one in a positional slot (array element, `Map` key/value, `Set` member), which is how a call's arguments travel. An `undefined` **member of an object** still travels as an omitted key, which reads back identically. So port C# `null` to `undefined` throughout and keep `=== undefined` guards; do not defensively test for `null` on a grain result. |
 | `TaskCompletionSource<T>` | a `{ promise, resolve }` pair; `RunContinuationsAsynchronously` is a no-op in JS |
 | `CancellationToken` on a **plain interface** (no grain, no ambient source) | a trailing `signal?: AbortSignal | undefined` parameter, kept in the C#'s positional slot |
 | `CancellationToken` on a **grain interface** (Orleans' native grain-call cancellation) | the same trailing `signal?: AbortSignal | undefined` parameter. The grain factory converts a signal argument into the cancellation shape the wire carries and the callee is handed an `AbortSignal` back, so the callee's view does not depend on placement, and an abort after the call is sent reaches the activation. A signal **nested inside an argument** — the shape a ported request record takes when it carries the `CancellationToken` itself — is converted and unwrapped the same way, at any depth reachable through arrays, plain objects, `Map` values and `Set` members. It is **not** reached through a class instance: keep the signal in a plain record (or in its own parameter) if the record's type is a class. |
@@ -346,6 +358,7 @@ second) is already performed by the dispatcher above the strategy, so re-impleme
 | `builder.AddMemoryGrainStorage("name")` | `useMemoryStorage({ name })` |
 | `services.AddSingleton<IFoo, Foo>()` | a module-level value, or a factory passed into `createSilo`. Thresh has no DI container; constructor injection becomes explicit wiring. |
 | `[FromKeyedServices("name")] IGrainStorage` | resolve the named storage from the silo's storage registry and pass it in |
+| `cluster.Services.GetRequiredKeyedService<IGrainStorage>("name")` in a TEST, to read or seed raw storage rows | there is nothing to resolve it back out of. Construct the provider in the TEST, hand the SAME instance to the silo (`builder.addStorage("name", storage)`) and keep the handle for `storage.read`/`storage.write`. Never build a second provider over the same database for the assertions: it grades rows nothing under test wrote, and a migration or flush bug that writes the right key with wrong content still passes. |
 | `IOptions<TOptions>` | a plain options object with defaults applied at the call site |
 | `ILogger<T>` | the logger from the grain context, or the module logger |
 | `services.AddHostedService<T>()` (a service whose only job is to start something at silo boot) | `builder.addStartupTask(async (grains) => ...)`. The task is handed a `GrainFactoryAccess`, which also exposes `createObjectReference`, so anything that must mint an observer reference at boot belongs here — and a silo that does mint one should also call `builder.requireObserverHosting()`, which fails the build on a transport that cannot back the seam instead of at the first observer call (see `docs/deviations.md`). |
@@ -373,11 +386,13 @@ function that builds the object graph, and have both the silo host and the tests
 | `Assert.True(condition)` / `Assert.False(condition)` | `expect(condition).toBe(true)` / `.toBe(false)` |
 | `Assert.True(condition, message)` — the **message-carrying** overload | `expect(condition, message).toBe(true)`. Vitest takes the message as `expect`'s SECOND argument, not as a trailing argument to the matcher, and it is easy to drop on the way across. Do not drop it: in a property-style suite that asserts thousands of times inside nested loops (a reverse/forward cross-check, a generated-world sweep) the interpolated message naming the offending tuple is the ONLY thing that identifies which of the thousands failed — `expected false to be true` on its own is unactionable. Where the same message is built at many sites, wrap it once as a local `assertTrue(condition, message)` so the C#'s call shape ports line-for-line. |
 | `IClassFixture<T>` | a `beforeAll`/`afterAll` pair, or a helper that returns the fixture |
+| `ICollectionFixture<T>` + `[CollectionDefinition]` — one fixture instance shared by SEVERAL test CLASSES | a module exporting the fixture plus a helper that installs the `beforeAll`/`afterAll` pair on the importing file. Vitest isolates test FILES, so the shared-instance half does NOT port: each importing file evaluates its own copy of the module and gets its OWN fixture. Check whether the C# depended on the sharing (one seeded database read by every class) or only tolerated it (a container reused to save start-up time). Per-file instances are stronger isolation, never weaker, but they are also N containers — say which it is where the fixture is defined. |
 | `[Collection("name")]` (non-parallel) | `describe.sequential(...)`, or a file-level sequential config |
 | `Xunit.SkippableFact` / `Skip.If(condition)` | `it.skipIf(condition)` |
 | `Skip.If(condition, reason)` — a skip whose **reason string is load-bearing** | `it(name, (ctx) => ctx.skip(condition, reason))`. `it.skipIf` takes no reason, so it silently drops the message; where the recorded reason is the point of the test (a quarantined fixture reporting why it is not run), the reason must survive into the runner output. |
 | `[MemberData]` over a computed, possibly **empty** row set | `it.for(rows)(...)` — and keep the C#'s empty-set sentinel row. Zero rows is a failure in both runners (xUnit "No data found"; vitest "No test suite found in file"), so the sentinel is not a C# quirk to drop. `it.for` (not `it.each`) is the form that passes a `TestContext` to the case body. |
-| Testcontainers | `testcontainers` (the Node port), same API shape |
+| Testcontainers | `testcontainers` (the Node port), same API shape. Two things do not carry across: probe for the runtime with a BOUNDED `Promise.race` around `getContainerRuntimeClient()` at module load (a suite that HANGS on a missing Docker endpoint is worse than one that fails, and such a suite usually lands in the default test project), and keep the C#'s NARROW catch — skip only on the no-endpoint signal (`Could not find a working container runtime strategy`), and let image-pull and container-start failures ESCAPE, so a Docker-enabled machine can never silently skip a durability gate. |
+| Orleans `ServiceId` used to ISOLATE storage rows between tests | it isolates nothing. Thresh's storage providers key rows by `(grainId, stateName)` alone, with no service/cluster dimension, so `TestClusterOptions.serviceId` does not partition a shared database and two tests over the same singleton grain key COLLIDE. Give each test its own table (or its own database) instead, dropped in a `finally`. |
 
 ## Idioms that need judgement, not substitution
 

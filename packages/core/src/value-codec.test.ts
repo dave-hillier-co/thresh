@@ -48,6 +48,27 @@ describe("value-codec", () => {
       expect(decodeValue(encodeValue(value))).toEqual(value);
     });
 
+    it("round-trips a TOP-LEVEL undefined, so an absent return value stays absent", () => {
+      // The shape a grain method declared `Promise<T | undefined>` returns when it has nothing.
+      // Neither transport can carry a bare `undefined` (MessagePack writes nil; `JSON.stringify`
+      // yields no string at all), so it is tagged — otherwise the caller reads `null` and every
+      // `=== undefined` guard downstream fails open.
+      expect(decodeValue(encodeValue(undefined))).toBeUndefined();
+    });
+
+    it("round-trips a top-level null as null, distinct from undefined", () => {
+      expect(decodeValue(encodeValue(null))).toBeNull();
+    });
+
+    it("leaves a NESTED undefined member as an omitted key, not a tagged envelope", () => {
+      // Deliberate asymmetry: only the top level is tagged. An object's optional field must keep
+      // travelling as an absent key, or every message grows and "key absent" becomes "key present
+      // with an undefined value".
+      const encoded = encodeValue({ a: 1, b: undefined }) as Record<string, unknown>;
+      expect(encoded.b).toBeUndefined();
+      expect((decodeValue(encoded) as Record<string, unknown>).b).toBeUndefined();
+    });
+
     it("round-trips a GrainId", () => {
       const id = new GrainId("Counter", "tenant-42");
       const decoded = decodeValue(encodeValue(id)) as GrainId;

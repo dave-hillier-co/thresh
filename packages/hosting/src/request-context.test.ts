@@ -49,7 +49,9 @@ describe("ambient request context", () => {
     try {
       expect(await silo.getGrain(Caller, "c").propagate("acme", "d")).toBe("acme");
       // No ambient context outside a turn / a fresh chain: the header does not leak.
-      expect(await silo.getGrain(Downstream, "d2").readTenant()).toBeNull();
+      // `undefined`, not `null` — `readTenant` is declared `Promise<string | undefined>` and a
+      // grain call now carries a top-level `undefined` back as itself.
+      expect(await silo.getGrain(Downstream, "d2").readTenant()).toBeUndefined();
     } finally {
       await silo.stop();
     }
