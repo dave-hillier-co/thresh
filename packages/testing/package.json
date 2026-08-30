@@ -7,6 +7,7 @@
     "./*": "./src/*.ts"
   },
   "dependencies": {
+    "@thresh/client": "workspace:*",
     "@thresh/core": "workspace:*",
     "@thresh/durable-jobs": "workspace:*",
     "@thresh/hosting": "workspace:*",

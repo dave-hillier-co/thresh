@@ -6,6 +6,7 @@ import type { GrainTimer, TimerOptions } from "@thresh/core/grain-timer";
 import type { GrainReminder, ReminderEntry, ReminderRegistry } from "@thresh/core/reminder";
 import type { DurableJob, DurableJobScheduler, ScheduleJobRequest } from "@thresh/core/durable-job";
 import type { SiloAddress } from "@thresh/core/silo-address";
+import { systemTimeProvider, type TimeProvider } from "@thresh/core/time-provider";
 import type { BroadcastChannelProvider } from "@thresh/core/broadcast-channel";
 import { isActivationBound, type StreamProvider } from "@thresh/core/stream";
 import { forkTransaction } from "@thresh/core/transaction-info";
@@ -22,6 +23,13 @@ import type { SiloLoadSheddingTestHooks } from "@thresh/runtime/load-shedding";
 import type { GrainServiceRegistry } from "@thresh/runtime/grain-service";
 
 export interface GrainRuntimeServices {
+  /**
+   * The silo's configured clock, surfaced to grain code as
+   * `GrainRuntime.timeProvider`. The catalog always wires the silo's own
+   * `TimeProvider` here; it is optional only so a test can construct a
+   * `GrainRuntimeImpl` directly, and falls back to `systemTimeProvider`.
+   */
+  time?: TimeProvider;
   reminders?: () => ReminderRegistry | undefined;
   streams?: (name?: string) => StreamProvider | undefined;
   broadcastChannels?: (name?: string) => BroadcastChannelProvider | undefined;
@@ -52,6 +60,15 @@ export class GrainRuntimeImpl implements GrainRuntime {
     private readonly activation: ActivationData,
     private readonly services: GrainRuntimeServices = {},
   ) {}
+
+  /**
+   * The silo's configured clock (Orleans `IGrainRuntime.TimeProvider`). The
+   * SAME provider `registerTimer` schedules against, so a grain's own
+   * time-based state advances with a `FakeTimeProvider` in tests.
+   */
+  get timeProvider(): TimeProvider {
+    return this.services.time ?? systemTimeProvider;
+  }
 
   getGrain<T>(def: GrainInterface<T>, key: GrainKey): T {
     return this.factory.getGrain(def, key);

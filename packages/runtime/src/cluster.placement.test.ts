@@ -4,6 +4,8 @@ import { Grain } from "@thresh/core/grain";
 import { GrainId } from "@thresh/core/grain-id";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
 import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import { PreferLocalPlacement } from "@thresh/runtime/placement/prefer-local-placement";
+import type { PlacementStrategy } from "@thresh/runtime/placement/placement-strategy";
 import { TestCluster, type TestSiloHandle } from "@thresh/testing/test-cluster";
 
 interface IPing extends GrainWithStringKey {
@@ -109,6 +111,79 @@ describe("metadata-aware placement across a cluster", () => {
       const hosts = hostsOf(cluster, new GrainId("Balanced", "x"));
       expect(hosts).toHaveLength(1);
       expect(hosts[0]).not.toBe(cluster.silos[0]);
+    } finally {
+      await cluster.dispose();
+    }
+  });
+});
+
+// No `placement` in its metadata: this grain type is the one a silo-wide
+// default strategy is allowed to steer (Orleans' `PlacementStrategy` DI
+// singleton, which `PlacementStrategyResolver` falls back to).
+const IUnplaced = defineGrainInterface<IPing>("IUnplaced.placement");
+@grain()
+class UnplacedGrain extends Grain implements IPing {
+  async ping(): Promise<string> {
+    return "pong";
+  }
+}
+
+// Explicitly random: an explicit per-class choice must beat the silo default.
+const IExplicitRandom = defineGrainInterface<IPing>("IExplicitRandom.placement");
+@grain({ placement: "random" })
+class ExplicitRandomGrain extends Grain implements IPing {
+  async ping(): Promise<string> {
+    return "pong";
+  }
+}
+
+function buildDefaultOverrideCluster(strategy?: PlacementStrategy) {
+  return TestCluster.start({
+    clusterId: "cp-default",
+    initialSilos: 3,
+    random: () => 0, // deterministic: RandomPlacement picks silo-0
+    ...(strategy !== undefined ? { defaultPlacementStrategy: strategy } : {}),
+    grains: [
+      { ctor: UnplacedGrain, interfaces: [IUnplaced] },
+      { ctor: ExplicitRandomGrain, interfaces: [IExplicitRandom] },
+    ],
+  });
+}
+
+describe("silo-wide default placement strategy", () => {
+  it("places a grain that declares no placement with RandomPlacement when unset", async () => {
+    const cluster = await buildDefaultOverrideCluster();
+    try {
+      await cluster.silos[2]!.host.getGrain(IUnplaced, "u").ping();
+      const hosts = hostsOf(cluster, new GrainId("Unplaced", "u"));
+      expect(hosts).toHaveLength(1);
+      expect(hosts[0]).toBe(cluster.silos[0]);
+    } finally {
+      await cluster.dispose();
+    }
+  });
+
+  it("steers a grain that declares no placement", async () => {
+    const cluster = await buildDefaultOverrideCluster(new PreferLocalPlacement());
+    try {
+      // Called from silo-2: preferLocal keeps it there, where random->0 would
+      // have sent it to silo-0.
+      await cluster.silos[2]!.host.getGrain(IUnplaced, "u").ping();
+      const hosts = hostsOf(cluster, new GrainId("Unplaced", "u"));
+      expect(hosts).toHaveLength(1);
+      expect(hosts[0]).toBe(cluster.silos[2]);
+    } finally {
+      await cluster.dispose();
+    }
+  });
+
+  it("does not override an explicit per-class placement", async () => {
+    const cluster = await buildDefaultOverrideCluster(new PreferLocalPlacement());
+    try {
+      await cluster.silos[2]!.host.getGrain(IExplicitRandom, "r").ping();
+      const hosts = hostsOf(cluster, new GrainId("ExplicitRandom", "r"));
+      expect(hosts).toHaveLength(1);
+      expect(hosts[0]).toBe(cluster.silos[0]);
     } finally {
       await cluster.dispose();
     }

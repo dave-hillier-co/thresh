@@ -33,6 +33,21 @@ describe("ConsistentHashRing", () => {
     }
   });
 
+  it("is deterministic when two incarnations of the same pod are both in the view", () => {
+    // A stale entry from a dead pod and its fresh incarnation share a podName,
+    // so their vnodes hash identically and the tie-break decides the owner.
+    // Tie-breaking on `ringKey` alone cannot separate them, so the order
+    // depends on the order the membership view happened to be iterated in —
+    // and two silos with the SAME view then disagree about the owner.
+    const stale = new SiloAddress("silo-0", "uid-OLD", "silo-0:11111");
+    const fresh = new SiloAddress("silo-0", "uid-NEW", "silo-0:11111");
+    const a = new ConsistentHashRing([stale, fresh, silo(1)]);
+    const b = new ConsistentHashRing([fresh, stale, silo(1)]);
+    for (const id of grainIds(200)) {
+      expect(a.ownerOf(id).equals(b.ownerOf(id))).toBe(true);
+    }
+  });
+
   it("distributes ownership roughly evenly", () => {
     const ring = new ConsistentHashRing(silos(4));
     const counts = new Map<string, number>();

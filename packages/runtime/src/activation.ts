@@ -16,6 +16,10 @@ import {
   RejectionError,
 } from "@thresh/core/errors";
 import {
+  mapCancellationValues,
+  type CancellationValue,
+} from "@thresh/core/cancellation-value-walk";
+import {
   CancellationTokenPlaceholder,
   GrainCancellationToken,
 } from "@thresh/core/grain-cancellation-token";
@@ -75,7 +79,7 @@ import { getTransactionalFields } from "@thresh/core/transactional-state-metadat
 import { deadlineSignal } from "@thresh/runtime/ambient-signal";
 import type { InvokeCallOptions } from "@thresh/runtime/dispatcher";
 import { GrainTimerImpl } from "@thresh/runtime/grain-timer-impl";
-import { invocationContext } from "@thresh/runtime/invocation-context";
+import { invocationContext, type InvocationContext } from "@thresh/runtime/invocation-context";
 import type { TimeProvider } from "@thresh/runtime/time-provider";
 import { TurnScheduler } from "@thresh/runtime/turn-scheduler";
 import {
@@ -999,51 +1003,61 @@ export class ActivationData implements GrainContext {
    */
   private bindCancellationTokens(args: unknown[]): void {
     const store = invocationContext.getStore();
+    // Every cancellation value in the argument graph, not only one occupying its
+    // own slot: the caller-side conversion (`GrainFactory`) reaches the same
+    // depth, so an argument record carrying a signal must be unwrapped here or
+    // the method would receive a token where its signature declares a signal.
     for (let i = 0; i < args.length; i++) {
-      const arg = args[i];
-      // A SAME-SILO call never serializes its arguments, so an `asSignal` token
-      // arrives as the token object itself; the method still declared an
-      // `AbortSignal`, so unwrap it here too - otherwise what the callee
-      // receives would depend on placement.
-      if (arg instanceof GrainCancellationToken && arg.asSignal) {
-        args[i] = arg.signal;
-        continue;
-      }
-      if (!(arg instanceof CancellationTokenPlaceholder)) continue;
-      // Auto-install through the catalog's registered factory (which wires
-      // this silo's real cascade canceller — see `Catalog`/`ClusterNode`)
-      // rather than calling `cancellationExtensionFactory` bare; a standalone
-      // activation with no catalog-set factories falls back to a no-op
-      // canceller, matching the pre-cascade single-hop behaviour.
-      const ext = this.getOrSetExtension(
-        ICancellationSourcesExtension.id,
-        () =>
-          (this.extensionFactories?.get(ICancellationSourcesExtension.id)?.(this) ??
-            cancellationExtensionFactory(async () => {})) as CancellationSourcesExtension,
-      );
-      const controller = ext.getOrCreateController(arg.tokenId);
-      if (arg.cancelled) controller.abort();
-      const tokenId = arg.tokenId;
-      // The caller passed a plain `AbortSignal` in this slot (the grain-factory
-      // converted it to a token so it could cross the wire at all), so the
-      // method is owed an `AbortSignal` back, not a token.
-      if (arg.asSignal) {
-        args[i] = controller.signal;
-        continue;
-      }
-      args[i] = new GrainCancellationToken({
-        tokenId,
-        signal: controller.signal,
-        // If the grain forwards this token on to another grain call, the
-        // grain-factory dispatch hook (`recordCancellationTarget`) calls this
-        // so a later `cancelRemoteToken(tokenId)` reaching THIS activation
-        // cascades on to that further target too.
-        onDispatchToTarget: (target) => ext.recordForwardTarget(tokenId, target),
-      });
-      if (store !== undefined) {
-        (store.tokenSignals ??= []).push(controller.signal);
-      }
+      args[i] = mapCancellationValues(args[i], (found) => this.bindCancellationValue(found, store));
     }
+  }
+
+  /** Bind one cancellation value found by `bindCancellationTokens`'s walk. */
+  private bindCancellationValue(
+    found: CancellationValue,
+    store: InvocationContext | undefined,
+  ): unknown {
+    // A SAME-SILO call never serializes its arguments, so an `asSignal` token
+    // arrives as the token object itself; the method still declared an
+    // `AbortSignal`, so unwrap it here too - otherwise what the callee
+    // receives would depend on placement.
+    if (found instanceof GrainCancellationToken) {
+      return found.asSignal ? found.signal : found;
+    }
+    // A bare `AbortSignal` (a same-silo caller that bypassed the factory) is
+    // already the shape the method declared.
+    if (!(found instanceof CancellationTokenPlaceholder)) return found;
+    // Auto-install through the catalog's registered factory (which wires
+    // this silo's real cascade canceller — see `Catalog`/`ClusterNode`)
+    // rather than calling `cancellationExtensionFactory` bare; a standalone
+    // activation with no catalog-set factories falls back to a no-op
+    // canceller, matching the pre-cascade single-hop behaviour.
+    const ext = this.getOrSetExtension(
+      ICancellationSourcesExtension.id,
+      () =>
+        (this.extensionFactories?.get(ICancellationSourcesExtension.id)?.(this) ??
+          cancellationExtensionFactory(async () => {})) as CancellationSourcesExtension,
+    );
+    const controller = ext.getOrCreateController(found.tokenId);
+    if (found.cancelled) controller.abort();
+    const tokenId = found.tokenId;
+    // The caller passed a plain `AbortSignal` in this slot (the grain-factory
+    // converted it to a token so it could cross the wire at all), so the
+    // method is owed an `AbortSignal` back, not a token.
+    if (found.asSignal) return controller.signal;
+    const token = new GrainCancellationToken({
+      tokenId,
+      signal: controller.signal,
+      // If the grain forwards this token on to another grain call, the
+      // grain-factory dispatch hook (`recordCancellationTarget`) calls this
+      // so a later `cancelRemoteToken(tokenId)` reaching THIS activation
+      // cascades on to that further target too.
+      onDispatchToTarget: (target) => ext.recordForwardTarget(tokenId, target),
+    });
+    if (store !== undefined) {
+      (store.tokenSignals ??= []).push(controller.signal);
+    }
+    return token;
   }
 
   /**

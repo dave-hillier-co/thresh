@@ -60,6 +60,64 @@ throws `InconsistentStateError`, carrying the expected and stored versions in th
 events stay pending, so a later `confirmEvents()` retries them: the caller chooses whether to keep
 waiting, rather than the framework deciding for it.
 
+## Cancellation reaches inside an argument
+
+Orleans scans only **top-level** arguments for a `GrainCancellationToken`, on both legs of a call
+(`GrainReferenceRuntime.SetGrainCancellationTokensTarget` records the call's target on the token;
+`CancellationSourcesExtension.RegisterCancellationTokens` swaps the wire token for the activation's
+own). A token nested inside a request record therefore never records a target and is never
+registered, so cancelling it does not reach the callee.
+
+Thresh walks the argument graph instead, so a cancellation value nested inside a plain object, an
+array, a `Map` value or a `Set` member is converted, has the call's target recorded on it, and is
+unwrapped on the callee exactly as one in its own parameter slot. This matters more here than it
+does in Orleans because Thresh's cancellation shape at the API surface is a plain `AbortSignal`,
+which has no wire representation at all: left unconverted, a nested one reaches a cross-silo callee
+as an inert object rather than as a live-but-uncancellable token.
+
+Two bounds on that walk. It does **not** descend into class instances (or grain references), because
+rebuilding one would hand a same-silo callee a plain object where its signature declares the class —
+so a signal held by a class-typed record still does not cross a silo boundary. And a value graph
+containing a cycle is left alone at the point it closes, since a cyclic argument is legal on a
+same-silo call, which never serializes.
+
+## A collection age shorter than the sweep interval is legal
+
+Orleans' `GrainCollectionOptionsValidator` rejects, at host start, any `CollectionAge` — the
+cluster default or a `ClassSpecificCollectionAge` entry — that is not strictly greater than
+`CollectionQuantum`, the collector's sweep period. Thresh validates only that a configured age is
+a finite number of seconds greater than zero, and accepts one shorter than
+`collectionIntervalSeconds`.
+
+The rule exists in Orleans because its collector buckets activations by a ticket derived from the
+quantum, so an age below one quantum has no bucket to land in. Thresh's collector is a plain
+periodic sweep that compares each activation's idle time against its own age limit, and a
+sub-sweep age is therefore meaningful, not degenerate: the activation is collected on the first
+sweep at or after its age elapses. Adopting Orleans' rule would reject a configuration that
+behaves correctly here, and would break the short ages tests legitimately configure against the
+default 60s sweep.
+
+## An observer reference from a silo needs an in-process gateway
+
+Orleans' `IGrainFactory.CreateObjectReference` works on any silo, because an Orleans client leg is
+**duplex over its own outbound connection**: the gateway answers a client on the socket the client
+dialled, so hosting an observer costs the client nothing but a registration.
+
+Thresh's `ClientNode` is not duplex. `connect()` listens on its own endpoint, and a silo delivers a
+call to a client-hosted object by **dialling that advertised endpoint** — over the in-process
+network that is free, but over `WebSocketTransport` it is a second real listening port and a
+reachable address, which `SiloConfig` does not supply. So the embedded client that backs
+`GrainFactoryAccess.createObjectReference` for a startup task (Orleans' `IStartupTask` hook, which
+upstream's `LifecycleObserverCreationTests` exercises with exactly this call) exists only on a silo
+built with `useInProcessTransport(network)`.
+
+The sharp edge is not the restriction, it is where it surfaced: `TestCluster` always configures an
+in-process transport, so an observer push path could be green in every test and throw on the first
+call in production. `SiloBuilder.requireObserverHosting()` is the declaration that closes that — a
+silo that depends on the seam says so, and a transport that cannot back it is rejected at `build()`
+rather than at first use. Declaring nothing keeps the old behaviour, because the common startup task
+never touches the seam.
+
 ## Additions beyond Orleans
 
 A few capabilities layer on top of the faithful model without changing it: **durable journaling**

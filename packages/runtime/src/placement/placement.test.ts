@@ -233,6 +233,37 @@ describe("placementStrategyFor", () => {
   });
 });
 
+describe("placementStrategyFor with a silo-wide default strategy", () => {
+  // Orleans' default placement strategy is a DI singleton
+  // (`services.AddSingleton<PlacementStrategy, RandomPlacement>()` in
+  // DefaultSiloServices), which a silo may replace; `PlacementStrategyResolver`
+  // falls back to it only for a grain type that names no strategy of its own.
+  const siloDefault = new PreferLocalPlacement();
+
+  it("applies to a grain type that declares no placement", () => {
+    expect(placementStrategyFor(meta(), undefined, siloDefault)).toBe(siloDefault);
+  });
+
+  it("keeps RandomPlacement when no silo default is configured", () => {
+    expect(placementStrategyFor(meta(), undefined, undefined)).toBeInstanceOf(RandomPlacement);
+  });
+
+  it("loses to an explicit per-class placement, including an explicit random", () => {
+    expect(
+      placementStrategyFor(meta({ placement: "random" }), undefined, siloDefault),
+    ).toBeInstanceOf(RandomPlacement);
+    expect(
+      placementStrategyFor(meta({ placement: "activationCount" }), undefined, siloDefault),
+    ).toBeInstanceOf(ActivationCountPlacement);
+  });
+
+  it("loses to stateless-worker placement", () => {
+    expect(placementStrategyFor(meta({ stateless: true }), undefined, siloDefault)).toBeInstanceOf(
+      StatelessWorkerPlacement,
+    );
+  });
+});
+
 describe("placementFiltersFor", () => {
   it("returns no filters by default", () => {
     expect(placementFiltersFor(meta())).toEqual([]);

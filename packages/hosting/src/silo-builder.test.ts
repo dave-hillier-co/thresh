@@ -6,7 +6,8 @@ import { defineGrainInterface } from "@thresh/core/grain-interface";
 import type { GrainWithStringKey } from "@thresh/core/key-kinds";
 import { SiloAddress } from "@thresh/core/silo-address";
 import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
-import { createSilo } from "@thresh/hosting/silo-builder";
+import { constructGrain } from "@thresh/runtime/construct-grain";
+import { createSilo, type Registration } from "@thresh/hosting/silo-builder";
 
 interface ICounter extends GrainWithStringKey {
   increment(by: number): Promise<number>;
@@ -115,5 +116,136 @@ describe("createSilo scheduler back-pressure (Orleans SchedulingOptions parity)"
     } finally {
       await host.stop();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Registration typing (issue #58)
+// ---------------------------------------------------------------------------
+
+interface IGreeter extends GrainWithStringKey {
+  greet(): Promise<string>;
+}
+const IGreeter = defineGrainInterface<IGreeter>("IGreeter.hosting");
+
+/**
+ * The normal shape of a grain once there is no DI container: the constructor
+ * takes an options bag, and the silo's `GrainActivator` is the seam that hands
+ * it one. Registering this must type-check without a cast.
+ */
+@grain()
+class GreeterGrain extends Grain implements IGreeter {
+  constructor(private readonly options: { greeting: string }) {
+    super();
+  }
+
+  async greet(): Promise<string> {
+    return `${this.options.greeting} from ${this.id.key}`;
+  }
+}
+
+/**
+ * A consumer's own shared registration list, named by the exported type rather
+ * than restated structurally, and `readonly` so it can be a module constant
+ * without callers having to copy it.
+ */
+const HOSTED_GRAINS: readonly Registration[] = [
+  { ctor: GreeterGrain, interfaces: [IGreeter] },
+  { ctor: CounterGrain, interfaces: [ICounter] },
+];
+
+describe("SiloBuilder grain registration typing", () => {
+  it("registers a grain whose constructor takes an options bag, built by the activator", async () => {
+    const built: string[] = [];
+    const host = createSilo({ clusterId: "c1", local })
+      .useStaticMembership([local])
+      .useInProcessTransport(new InProcessNetwork())
+      .useMessagePackSerialization()
+      .registerGrains(HOSTED_GRAINS)
+      .useGrainActivator({
+        createInstance: (ctor) => {
+          built.push(ctor.name);
+          // No cast at the call site: the activator is handed the registered
+          // class, and constructs the ones it knows about itself.
+          if (ctor === GreeterGrain) return new GreeterGrain({ greeting: "hello" });
+          return constructGrain(ctor);
+        },
+      })
+      .build();
+
+    await host.start();
+    try {
+      expect(await host.getGrain(IGreeter, "x").greet()).toBe("hello from x");
+      // Every other grain type on the silo still falls through to `new ctor()`.
+      expect(await host.getGrain(ICounter, "y").increment(3)).toBe(3);
+    } finally {
+      await host.stop();
+    }
+    expect(built).toContain("GreeterGrain");
+    expect(built).toContain("CounterGrain");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The observer seam and the transport that can back it (issue #55)
+// ---------------------------------------------------------------------------
+
+interface IObserverSeam {
+  notify(value: string): Promise<void>;
+}
+const IObserverSeam = defineGrainInterface<IObserverSeam>("IObserverSeam.hosting");
+
+describe("SiloBuilder observer hosting (createObjectReference from a startup task)", () => {
+  it("hosts an observer from a startup task when the seam is declared and backed", async () => {
+    let reference: IObserverSeam | undefined;
+    const host = createSilo({ clusterId: "c1", local })
+      .useStaticMembership([local])
+      .useInProcessTransport(new InProcessNetwork())
+      .requireObserverHosting()
+      .registerGrain(CounterGrain, { interfaces: [ICounter] })
+      .addStartupTask(async (grains) => {
+        reference = grains.createObjectReference(IObserverSeam, {
+          notify: async () => undefined,
+        });
+        grains.deleteObjectReference(reference);
+      })
+      .build();
+
+    await host.start();
+    try {
+      expect(reference).toBeDefined();
+    } finally {
+      await host.stop();
+    }
+  });
+
+  it("refuses to build when the declared observer seam has no transport that can back it", () => {
+    expect(() =>
+      createSilo({ clusterId: "c1", local })
+        .useStaticMembership([local])
+        .useWebSocketTransport()
+        .requireObserverHosting()
+        .addStartupTask(async (grains) => {
+          grains.createObjectReference(IObserverSeam, { notify: async () => undefined });
+        })
+        .build(),
+    ).toThrow(/requireObserverHosting.*useInProcessTransport/s);
+  });
+
+  it("still builds a WebSocket silo whose startup tasks never host an observer", () => {
+    // The gate is the explicit declaration, not the mere presence of a startup
+    // task: a silo that registers startup tasks for any other reason (SpaceDB's
+    // `addSpiceportGrainServices` registers one unconditionally) must keep
+    // building on a WebSocket transport, as the examples in this repo do.
+    expect(() =>
+      createSilo({ clusterId: "c1", local })
+        .useStaticMembership([local])
+        .useWebSocketTransport()
+        .registerGrain(CounterGrain, { interfaces: [ICounter] })
+        .addStartupTask(async (grains) => {
+          await grains.getGrain(ICounter, "x").increment(1);
+        })
+        .build(),
+    ).not.toThrow();
   });
 });

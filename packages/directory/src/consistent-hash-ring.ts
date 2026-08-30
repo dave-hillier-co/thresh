@@ -1,6 +1,6 @@
 import type { GrainId } from "@thresh/core/grain-id";
 import { stableHash32 } from "@thresh/core/hash";
-import type { SiloAddress } from "@thresh/core/silo-address";
+import { SiloAddress } from "@thresh/core/silo-address";
 
 interface RingNode {
   hash: number;
@@ -29,7 +29,14 @@ export class ConsistentHashRing {
         nodes.push({ hash: stableHash32(`${silo.ringKey}#${v}`), silo });
       }
     }
-    nodes.sort((a, b) => a.hash - b.hash || (a.silo.ringKey < b.silo.ringKey ? -1 : 1));
+    // Ties on the vnode hash break on the full silo address, not on `ringKey`
+    // alone: two incarnations of the same pod share a ringKey, and a tie-break
+    // that cannot separate them leaves the order dependent on the order the
+    // membership view was iterated in — so two silos with the same view
+    // disagree about the owner. `SiloAddress.compare` is a total order, so the
+    // sort is a function of the SET. For distinct podNames it orders exactly as
+    // the old `ringKey` comparison did, since podName is its primary key.
+    nodes.sort((a, b) => a.hash - b.hash || SiloAddress.compare(a.silo, b.silo));
     this.nodes = nodes;
   }
 

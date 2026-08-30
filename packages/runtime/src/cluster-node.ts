@@ -3,6 +3,7 @@ import { newActivationId } from "@thresh/core/activation-id";
 import { clientIdOf, isClient } from "@thresh/core/client-grain-id";
 import { GrainCallError, RejectionError } from "@thresh/core/errors";
 import type { Grain } from "@thresh/core/grain";
+import type { GrainClass } from "@thresh/core/grain-class";
 import { grainAddressEquals, type GrainAddress } from "@thresh/core/grain-address";
 import { GrainId } from "@thresh/core/grain-id";
 import type { GrainInterface } from "@thresh/core/grain-interface";
@@ -183,6 +184,13 @@ export interface ClusterNodeOptions {
    */
   defaultResponseTimeoutMs?: number;
   defaultCollectionAgeSeconds?: number;
+  /**
+   * Per-silo idle-deactivation ages keyed by grain type (Orleans'
+   * `GrainCollectionOptions.ClassSpecificCollectionAge`). An entry overrides
+   * that grain type's own `@grain({ collectionAgeSeconds })`; a type with no
+   * entry keeps the decorator's age, then `defaultCollectionAgeSeconds`.
+   */
+  classSpecificCollectionAgeSeconds?: Readonly<Record<GrainType, number>>;
   /** How often the idle-collection sweep runs (defaults to 60s). */
   collectionIntervalSeconds?: number;
   /**
@@ -267,6 +275,14 @@ export interface ClusterNodeOptions {
    * resolves against (the whole-strategy counterpart of `placementFilterRegistry`).
    */
   placementStrategyRegistry?: PlacementStrategyRegistry;
+  /**
+   * This silo's default placement strategy for grain types that declare no
+   * `placement` of their own — Orleans' `PlacementStrategy` DI singleton, which
+   * `DefaultSiloServices` registers as `RandomPlacement` and a silo may replace.
+   * An explicit per-class `placement` (`"random"` included) and stateless-worker
+   * placement both still win; unset, the default remains `RandomPlacement`.
+   */
+  defaultPlacementStrategy?: PlacementStrategy;
   /**
    * Load-shedding config (Orleans `LoadSheddingOptions`). Defaults to shedding
    * disabled. When enabled and this silo's (test-hooks-latched) CPU usage
@@ -539,6 +555,9 @@ export class ClusterNode {
       factory: this.factory,
       time,
       defaultCollectionAgeSeconds: options.defaultCollectionAgeSeconds ?? 900,
+      ...(options.classSpecificCollectionAgeSeconds !== undefined
+        ? { classSpecificCollectionAgeSeconds: options.classSpecificCollectionAgeSeconds }
+        : {}),
       onDeactivated: (a) => this.onDeactivated(a),
       migrate: (a) => this.migrateActivation(a),
       localSilo: () => this.options.local,
@@ -654,9 +673,9 @@ export class ClusterNode {
     );
   }
 
-  registerGrain<G extends Grain>(
-    ctor: new () => G,
-    registration: { interfaces: GrainInterface<unknown>[] },
+  registerGrain(
+    ctor: GrainClass,
+    registration: { readonly interfaces: readonly GrainInterface<unknown>[] },
   ): this {
     const metadata = getGrainMetadata(ctor);
     if (metadata === undefined) throw new Error(`${ctor.name} is not decorated with @grain()`);
@@ -1229,8 +1248,12 @@ export class ClusterNode {
   private placementFor(grainType: GrainType): PlacementStrategy {
     const reg = this.grainTypes.get(grainType);
     return reg
-      ? placementStrategyFor(reg.metadata, this.options.placementStrategyRegistry)
-      : randomPlacement;
+      ? placementStrategyFor(
+          reg.metadata,
+          this.options.placementStrategyRegistry,
+          this.options.defaultPlacementStrategy,
+        )
+      : (this.options.defaultPlacementStrategy ?? randomPlacement);
   }
 
   /** True once this silo declares a version > 1 or a versioning policy is set. */

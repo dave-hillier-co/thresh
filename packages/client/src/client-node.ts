@@ -10,7 +10,12 @@ import {
   RejectionError,
 } from "@thresh/core/errors";
 import { createClientId, createObserverId, isObserverGrainId } from "@thresh/core/client-grain-id";
-import type { Grain } from "@thresh/core/grain";
+import type { GrainClass } from "@thresh/core/grain-class";
+import type { GrainRegistrationSpec } from "@thresh/core/grain-registration-spec";
+import {
+  mapCancellationValues,
+  type CancellationValue,
+} from "@thresh/core/cancellation-value-walk";
 import {
   CancellationTokenPlaceholder,
   GrainCancellationToken,
@@ -122,7 +127,7 @@ interface RejectionPayload {
 }
 
 interface GrainRegistration {
-  interfaces: GrainInterface<unknown>[];
+  readonly interfaces: readonly GrainInterface<unknown>[];
 }
 
 /** A client-hosted callback object registered under an observer `GrainId`. */
@@ -198,7 +203,7 @@ export class ClientNode implements Dispatcher {
    * silo-side caller would, since TypeScript interfaces are erased). Only the
    * grain's metadata is read; no instance is created.
    */
-  registerGrain(ctor: new () => Grain, registration: GrainRegistration): this {
+  registerGrain(ctor: GrainClass, registration: GrainRegistration): this {
     const metadata = getGrainMetadata(ctor);
     if (metadata === undefined) throw new Error(`${ctor.name} is not decorated with @grain()`);
     for (const iface of registration.interfaces) {
@@ -207,9 +212,7 @@ export class ClientNode implements Dispatcher {
     return this;
   }
 
-  registerGrains(
-    registrations: { ctor: new () => Grain; interfaces: GrainInterface<unknown>[] }[],
-  ) {
+  registerGrains(registrations: readonly GrainRegistrationSpec[]) {
     for (const r of registrations) this.registerGrain(r.ctor, r);
     return this;
   }
@@ -552,19 +555,28 @@ export class ClientNode implements Dispatcher {
    * the controller, mirroring `ActivationData.bindCancellationTokens`.
    */
   private bindCancellationTokens(args: unknown[]): void {
+    // At any depth in a plain container, matching the caller-side conversion in
+    // `GrainFactory` — a signal riding inside a request record is owed the same
+    // unwrap as one in its own argument slot.
     for (let i = 0; i < args.length; i++) {
-      const arg = args[i];
-      if (!(arg instanceof CancellationTokenPlaceholder)) continue;
-      const controller = this.getOrCreateCancellationController(arg.tokenId);
-      if (arg.cancelled) controller.abort();
-      // The caller passed a plain `AbortSignal`; hand the hosted object one
-      // back, exactly as `ActivationData.bindCancellationTokens` does.
-      if (arg.asSignal) {
-        args[i] = controller.signal;
-        continue;
-      }
-      args[i] = new GrainCancellationToken({ tokenId: arg.tokenId, signal: controller.signal });
+      args[i] = mapCancellationValues(args[i], (found) => this.bindCancellationValue(found));
     }
+  }
+
+  /** Bind one cancellation value found by `bindCancellationTokens`'s walk. */
+  private bindCancellationValue(found: CancellationValue): unknown {
+    // A same-silo-shaped token (an `asSignal` one never serialized) still owes
+    // the hosted object an `AbortSignal`; anything else is already its shape.
+    if (found instanceof GrainCancellationToken) {
+      return found.asSignal ? found.signal : found;
+    }
+    if (!(found instanceof CancellationTokenPlaceholder)) return found;
+    const controller = this.getOrCreateCancellationController(found.tokenId);
+    if (found.cancelled) controller.abort();
+    // The caller passed a plain `AbortSignal`; hand the hosted object one
+    // back, exactly as `ActivationData.bindCancellationTokens` does.
+    if (found.asSignal) return controller.signal;
+    return new GrainCancellationToken({ tokenId: found.tokenId, signal: controller.signal });
   }
 
   /** Send a reply for a hosted-object dispatch back to the calling silo. */

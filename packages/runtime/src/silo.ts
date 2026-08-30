@@ -1,4 +1,4 @@
-import type { Grain } from "@thresh/core/grain";
+import type { GrainClass } from "@thresh/core/grain-class";
 import type { GrainId } from "@thresh/core/grain-id";
 import type { GrainInterface } from "@thresh/core/grain-interface";
 import { getGrainMetadata } from "@thresh/core/grain-metadata";
@@ -19,7 +19,7 @@ export interface SiloOptions {
 
 export interface GrainRegistration {
   /** The grain interfaces this implementation serves, used to route `getGrain`. */
-  interfaces: GrainInterface<unknown>[];
+  readonly interfaces: readonly GrainInterface<unknown>[];
 }
 
 /** A single-process silo (Phase 1): catalog, scheduler, factory, collector. */
@@ -51,7 +51,7 @@ export class Silo {
     );
   }
 
-  registerGrain<G extends Grain>(ctor: new () => G, registration: GrainRegistration): this {
+  registerGrain(ctor: GrainClass, registration: GrainRegistration): this {
     const metadata = getGrainMetadata(ctor);
     if (metadata === undefined) throw new Error(`${ctor.name} is not decorated with @grain()`);
     this.grainTypes.set(metadata.grainType, { ctor, metadata });

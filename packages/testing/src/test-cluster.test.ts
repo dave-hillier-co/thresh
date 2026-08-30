@@ -5,6 +5,7 @@ import { GrainId } from "@thresh/core/grain-id";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
 import type { GrainType } from "@thresh/core/grain-type";
 import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
 import { TestCluster } from "@thresh/testing/test-cluster";
 import { waitFor } from "@thresh/testing/wait";
 
@@ -212,6 +213,39 @@ describe("TestCluster", () => {
 
     for (const key of crossSiloKeys) {
       expect(notifications).toContain(key);
+    }
+  });
+});
+
+/**
+ * `classSpecificCollectionAgeSeconds` (#57) reaches the silos it builds. Its sibling
+ * `defaultPlacementStrategy` is covered end-to-end in `cluster.placement.test.ts`, but a
+ * `TestCluster` option that is silently dropped on the way to `SiloConfig` looks exactly like a
+ * working one from the outside, so the plumbing needs its own gate.
+ */
+describe("TestCluster classSpecificCollectionAgeSeconds", () => {
+  it("reaches every silo it builds", async () => {
+    const time = new FakeTimeProvider();
+    const cluster = await TestCluster.start({
+      initialSilos: 1,
+      time,
+      grains: [{ ctor: CounterGrain, interfaces: [ICounter] }],
+      classSpecificCollectionAgeSeconds: { TestClusterCounter: 5 },
+      // The sweep defaults to every 60s, so without this the fake clock's 10s
+      // jump lands between two sweeps and nothing is ever collected.
+      collectionIntervalSeconds: 1,
+    });
+    try {
+      await cluster.getGrain(ICounter, "collected").increment();
+      expect(cluster.silos[0]!.host.isActive(counterId("collected"))).toBe(true);
+
+      // Past the 5s override, and past the collection quantum, so a sweep runs.
+      time.advance(10_000);
+      await waitFor(() => !cluster.silos[0]!.host.isActive(counterId("collected")));
+
+      expect(cluster.silos[0]!.host.isActive(counterId("collected"))).toBe(false);
+    } finally {
+      await cluster.dispose();
     }
   });
 });

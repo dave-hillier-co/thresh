@@ -4,6 +4,7 @@ import { orleansTest } from "@thresh/testing/orleans-test";
 import { TestCluster } from "@thresh/testing/test-cluster";
 import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
 import type { Grain } from "@thresh/core/grain";
+import type { GrainClass } from "@thresh/core/grain-class";
 import type { GrainId } from "@thresh/core/grain-id";
 import type { GrainActivator } from "@thresh/runtime/catalog";
 import {
@@ -23,7 +24,7 @@ const HARDCODED_VALUE = "Hardcoded Test Value";
 class HardcodedGrainActivator implements GrainActivator {
   private released = 0;
 
-  createInstance(_ctor: new () => Grain, _id: GrainId): Grain {
+  createInstance(_ctor: GrainClass, _id: GrainId): Grain {
     return new ExplicitlyRegisteredSimpleDiGrain(HARDCODED_VALUE, BigInt(this.released));
   }
 

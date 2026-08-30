@@ -62,8 +62,10 @@ export interface ManagementContext {
 /**
  * Builds the concrete management-grain class for one silo, closing over its
  * `ManagementContext`. A fresh class per silo (rather than one shared class)
- * because a grain's constructor takes no arguments (`RegisteredGrain.ctor: new
- * () => Grain`) — the per-silo context is captured in the closure instead, and
+ * because the silo constructs this grain through the default `new ctor()` path
+ * (no `GrainActivator` is involved for a built-in system grain, so there is
+ * nowhere to pass a context) — the per-silo context is captured in the closure
+ * instead, and
  * `setGrainOptions` is called directly (bypassing the `@grain()` decorator,
  * which only runs at module-evaluation time on a single static class) so the
  * catalog resolves this dynamically-built class the same as any other

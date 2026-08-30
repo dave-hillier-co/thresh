@@ -1,6 +1,7 @@
 import * as os from "node:os";
 import { GrainCallError } from "@thresh/core/errors";
 import type { Grain } from "@thresh/core/grain";
+import type { GrainClass } from "@thresh/core/grain-class";
 import type { IncomingGrainCallFilter } from "@thresh/core/grain-call-filter";
 import type { BroadcastChannelProvider } from "@thresh/core/broadcast-channel";
 import type { GrainAddress } from "@thresh/core/grain-address";
@@ -22,13 +23,14 @@ import {
   grainManagementExtensionFactory,
   IGrainManagementExtension,
 } from "@thresh/runtime/grain-management-extension";
+import { constructGrain } from "@thresh/runtime/construct-grain";
 import { GrainRuntimeImpl } from "@thresh/runtime/grain-runtime-impl";
 import type { GrainServiceRegistry } from "@thresh/runtime/grain-service";
 import type { SiloLoadSheddingTestHooks } from "@thresh/runtime/load-shedding";
 import type { TimeProvider } from "@thresh/runtime/time-provider";
 
 export interface RegisteredGrain {
-  ctor: new () => Grain;
+  ctor: GrainClass;
   metadata: GrainMetadata;
 }
 
@@ -46,8 +48,13 @@ const DEFAULT_MAX_LOCAL_WORKERS = os.cpus().length || 4;
  * (Orleans `IGrainActivator`) — e.g. object pooling or non-DI construction.
  */
 export interface GrainActivator {
-  /** Construct a grain instance instead of `new ctor()`. */
-  createInstance(ctor: new () => Grain, id: GrainId): Grain;
+  /**
+   * Construct a grain instance instead of `new ctor()`. `ctor` is the class as
+   * it was registered (`GrainClass`), so an activator can hand a grain whose
+   * constructor takes an options bag its bag; `constructGrain(ctor)` is the
+   * default `new ctor()` path, for a fall-through branch.
+   */
+  createInstance(ctor: GrainClass, id: GrainId): Grain;
   /** Called when an activation using this activator is deactivated (idle collection or explicit). */
   disposeInstance?(instance: Grain, id: GrainId): void | Promise<void>;
 }
@@ -57,6 +64,16 @@ export interface CatalogOptions {
   factory: GrainFactory;
   time: TimeProvider;
   defaultCollectionAgeSeconds: number;
+  /**
+   * Per-silo idle-deactivation ages keyed by GRAIN TYPE (Orleans'
+   * `GrainCollectionOptions.ClassSpecificCollectionAge`, which Orleans keys by
+   * grain class name and seeds from `[CollectionAgeLimit]`). An entry OVERRIDES
+   * the grain type's own `@grain({ collectionAgeSeconds })`, which stays the
+   * default; a grain type with no entry is unaffected, so an absent map leaves
+   * the decorator in sole charge. Keyed by grain type rather than `class.name`
+   * because a bundler may rename the class but never the registered type.
+   */
+  classSpecificCollectionAgeSeconds?: Readonly<Record<GrainType, number>>;
   /**
    * Optional hook to construct/dispose grain instances instead of `new ctor()` —
    * e.g. object pooling or non-DI construction. Defaults to `new ctor()` when unset.
@@ -434,8 +451,15 @@ export class Catalog {
   ): ActivationData {
     const reg = this.options.grainTypes.get(id.type);
     if (reg === undefined) throw new GrainCallError(`no grain type registered: ${id.type}`);
+    // Orleans' order, from `GrainTypeSharedContext.GetCollectionAgeLimit`: the grain class's own
+    // declaration first (the `IdleDeactivationPeriod` property written by `[CollectionAgeLimit]`,
+    // which `@grain({ collectionAgeSeconds })` stands in for), THEN the per-silo class-specific
+    // map, then the silo default. A grain type that wants per-silo control declares no age of its
+    // own - the decorator is the stronger statement, not the weaker one.
     const ageSeconds =
-      reg.metadata.options.collectionAgeSeconds ?? this.options.defaultCollectionAgeSeconds;
+      reg.metadata.options.collectionAgeSeconds ??
+      this.options.classSpecificCollectionAgeSeconds?.[id.type] ??
+      this.options.defaultCollectionAgeSeconds;
     const activation = new ActivationData(
       id,
       this.options.time,
@@ -445,6 +469,7 @@ export class Catalog {
       this.options.activationOptions ?? {},
     );
     activation.runtime = new GrainRuntimeImpl(this.options.factory, activation, {
+      time: this.options.time,
       ...(this.options.reminderRegistry !== undefined
         ? { reminders: this.options.reminderRegistry }
         : {}),
@@ -470,7 +495,7 @@ export class Catalog {
     const instance =
       this.options.grainActivator !== undefined
         ? this.options.grainActivator.createInstance(reg.ctor, id)
-        : new reg.ctor();
+        : constructGrain(reg.ctor);
     instance.setContext(activation);
     activation.instance = instance;
     if (this.options.incomingCallFilters !== undefined) {

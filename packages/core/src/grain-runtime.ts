@@ -7,12 +7,26 @@ import type { BroadcastChannelProvider } from "./broadcast-channel";
 import type { DurableJob, ScheduleJobRequest } from "./durable-job";
 import type { GrainReminder } from "./reminder";
 import type { StreamProvider } from "./stream";
+import type { TimeProvider } from "./time-provider";
 
 /**
  * The runtime services a grain reaches through `this.runtime`, resolved per
  * activation.
  */
 export interface GrainRuntime {
+  /**
+   * The silo's configured clock (Orleans `IGrainRuntime.TimeProvider`, which
+   * grains reach through DI). A property, not a method, for the same reason it
+   * is one in Orleans: it is resolved once when the runtime is built, not per
+   * call.
+   *
+   * `registerTimer` already reads this clock internally; exposing it lets grain
+   * code that owns its own time-based state — an `ObserverManager`'s TTL
+   * expiry, a cached value's staleness check — read the SAME clock, so a
+   * `TestCluster` built with a `FakeTimeProvider` can drive that state
+   * deterministically instead of sleeping in real time.
+   */
+  readonly timeProvider: TimeProvider;
   getGrain<T>(def: GrainInterface<T>, key: GrainKeyFor<T>): T;
   registerTimer(
     callback: () => Promise<void>,

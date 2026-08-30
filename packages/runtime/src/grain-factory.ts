@@ -5,6 +5,10 @@ import {
   type OutgoingGrainCallFilter,
 } from "@thresh/core/grain-call-filter";
 import {
+  mapCancellationValues,
+  type CancellationValue,
+} from "@thresh/core/cancellation-value-walk";
+import {
   GrainCancellationToken,
   GrainCancellationTokenSource,
   recordCancellationTarget,
@@ -203,14 +207,28 @@ export class GrainFactory {
             // back to an `AbortSignal` before the method sees it. The token
             // carries the CALLER's own signal, so the cascade below and the
             // encoded `cancelled` flag both observe the caller's abort.
+            //
+            // Both of these reach a cancellation value at ANY depth in a plain
+            // container, not only in its own argument slot: a ported
+            // `CancellationToken` that rides inside a request record is the same
+            // token and is owed the same cascade (`mapCancellationValues`).
+            // Allocated only if this call actually carries cancellation, which
+            // most do not: one closure and no array on the common path.
+            let sentTokens: GrainCancellationToken[] | undefined;
+            const convert = (found: CancellationValue): unknown => {
+              const token = found instanceof AbortSignal ? this.tokenForSignal(found) : found;
+              // A `CancellationTokenPlaceholder` (this call is re-forwarding one
+              // that arrived from the wire and was never bound) passes through
+              // untouched; the codec re-tags it for the next hop.
+              if (!(token instanceof GrainCancellationToken)) return token;
+              (sentTokens ??= []).push(token);
+              return token;
+            };
             for (let i = 0; i < args.length; i += 1) {
-              const arg = args[i];
-              if (arg instanceof AbortSignal) args[i] = this.tokenForSignal(arg);
+              args[i] = mapCancellationValues(args[i], convert);
             }
-            for (const arg of args) {
-              if (arg instanceof GrainCancellationToken) {
-                recordCancellationTarget(arg, target);
-              }
+            if (sentTokens !== undefined) {
+              for (const token of sentTokens) recordCancellationTarget(token, target);
             }
             const ambient = invocationContext.getStore();
             const { transaction, beginsHere } = this.resolveTransaction(

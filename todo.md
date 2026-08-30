@@ -31,6 +31,16 @@ is the mechanical Orleans→Thresh reference that port maintains.
       backing, `addKafkaStreams`) are done; Phase 3 (LISTEN/NOTIFY polish, consumer-lag gauge,
       worked examples) is optional and remains.
 
+- [ ] [#55](https://github.com/dave-hillier-co/thresh/issues/55) follow-on: make the observer
+      seam work on a `WebSocketTransport`-hosted silo. `requireObserverHosting()` now fails such a
+      silo at `build()` instead of at the first `createObjectReference` call, but the underlying
+      restriction stands: `ClientNode.connect()` listens on its own endpoint and the silo dials it
+      back, so a WS-hosted embedded client needs a real second listening port and a reachable
+      advertised address that `SiloConfig` does not supply. Two ways out, both deferred: make the
+      client leg duplex over its own outbound connection (Orleans' shape — `WebSocketTransport`'s
+      socket is send-only today, its message handler consumed by `awaitAck`), or auto-provision an
+      ephemeral port and advertise it. See [`docs/deviations.md`](docs/deviations.md).
+
 ## Orleans test-suite port (parity suite)
 
 The functional test suites of Orleans `v10.1.0` are ported 1:1 into `packages/parity`;

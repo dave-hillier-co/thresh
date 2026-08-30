@@ -1,5 +1,41 @@
+/**
+ * The catch-all base beneath the grain-call failure family — Thresh's answer to
+ * Orleans' `OrleansException`, which is the base of `SiloUnavailableException`,
+ * `OrleansMessageRejectionException` and friends. A transliterated
+ * `catch (OrleansException)` becomes `if (isThreshRuntimeError(error))` rather
+ * than an open-coded `instanceof` list that every newly-added error type
+ * silently falls through as "unexpected".
+ *
+ * Deliberately a NEW class ABOVE the existing leaves rather than a promotion of
+ * one of them: `RejectionError` must not become an `instanceof GrainCallError`,
+ * or every existing narrowing over the leaves quietly widens.
+ *
+ * Cancellation is NOT part of this family — see {@link ThreshCancellationError}.
+ * Orleans' `OperationCanceledException` is likewise not an `OrleansException`,
+ * and a consumer classifies cancellation before transport: conflating the two
+ * turns a caller's cancellation into a retriable availability failure.
+ */
+export class ThreshRuntimeError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "ThreshRuntimeError";
+  }
+}
+
+/**
+ * Whether `error` is any Thresh grain-call failure — the one predicate that
+ * stands in for a C# `catch (OrleansException)`.
+ *
+ * Narrow deliberately: a `TypeError`, a `RangeError` or a plain `Error` is a
+ * programming fault and must NOT be reported as a retriable transport failure,
+ * so this never widens to a bare `Error`.
+ */
+export function isThreshRuntimeError(error: unknown): error is ThreshRuntimeError {
+  return error instanceof ThreshRuntimeError;
+}
+
 /** An error raised while dispatching or executing a grain call. */
-export class GrainCallError extends Error {
+export class GrainCallError extends ThreshRuntimeError {
   constructor(message: string, options?: { cause?: unknown }) {
     super(message, options);
     this.name = "GrainCallError";
@@ -16,7 +52,7 @@ export type RejectionKind =
   | "staleView";
 
 /** A runtime-level refusal the caller can inspect to decide whether to retry. */
-export class RejectionError extends Error {
+export class RejectionError extends ThreshRuntimeError {
   constructor(
     message: string,
     readonly kind: RejectionKind,
@@ -27,7 +63,7 @@ export class RejectionError extends Error {
 }
 
 /** A grain call that did not receive a response within its deadline. */
-export class GrainCallTimeoutError extends Error {
+export class GrainCallTimeoutError extends ThreshRuntimeError {
   constructor(message: string) {
     super(message);
     this.name = "GrainCallTimeoutError";
@@ -42,7 +78,7 @@ export class GrainCallTimeoutError extends Error {
  * generic "no method" case: the interface is a recognised extension, it's
  * just not installed on this particular activation.
  */
-export class GrainExtensionNotInstalledException extends Error {
+export class GrainExtensionNotInstalledException extends ThreshRuntimeError {
   constructor(message: string) {
     super(message);
     this.name = "GrainExtensionNotInstalledException";
@@ -90,7 +126,7 @@ export class TransactionsDisabledError extends Error {
  * `TurnSchedulerOptions.maxEnqueuedRequestsHardLimit`. Transient: the caller
  * should back off and retry, ideally once the activation has drained.
  */
-export class LimitExceededException extends Error {
+export class LimitExceededException extends ThreshRuntimeError {
   constructor(
     readonly limitName: string,
     readonly currentValue: number,
@@ -111,11 +147,44 @@ export class LimitExceededException extends Error {
  * `ClientNode.invoke` when a gateway's reply carries the `"overloaded"`
  * rejection kind.
  */
-export class GatewayTooBusyException extends Error {
+export class GatewayTooBusyException extends ThreshRuntimeError {
   constructor(message = "Gateway too busy") {
     super(message);
     this.name = "GatewayTooBusyException";
   }
+}
+
+/**
+ * The common base beneath the cancellation family. C#'s
+ * `TaskCanceledException` derives from `OperationCanceledException`, so one
+ * `catch (OperationCanceledException)` covers both; TypeScript has no such
+ * hierarchy, and a DOM `AbortError` is a third shape that no class base can
+ * reach. Use {@link isCancellationError} for the full predicate — this base
+ * covers only the two errors Thresh itself raises.
+ *
+ * Deliberately NOT a {@link ThreshRuntimeError}: a cancellation is the caller
+ * getting what it asked for, not a call failure, and mapping it as one turns a
+ * deliberate abort into a retriable availability error.
+ */
+export class ThreshCancellationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ThreshCancellationError";
+  }
+}
+
+/**
+ * Whether `error` is a cancellation, in any of the three shapes it takes:
+ * {@link GrainCallAbortedError}, {@link GrainTaskCanceledError}, and a DOM
+ * `AbortError` (what `AbortSignal.throwIfAborted()` and an aborted `fetch`
+ * raise). The single-predicate counterpart of a C#
+ * `catch (OperationCanceledException)`.
+ */
+export function isCancellationError(error: unknown): boolean {
+  if (error instanceof ThreshCancellationError) return true;
+  // A DOMException in Node, but matched by `name` so a host that raises a
+  // plain `Error` for an aborted operation is still recognised.
+  return error instanceof Error && error.name === "AbortError";
 }
 
 /**
@@ -126,7 +195,7 @@ export class GatewayTooBusyException extends Error {
  * .throwIfCancellationRequested()` or a cancellable await) rather than by the
  * runtime tearing down the call.
  */
-export class GrainTaskCanceledError extends Error {
+export class GrainTaskCanceledError extends ThreshCancellationError {
   constructor(message = "the operation was cancelled via a GrainCancellationToken") {
     super(message);
     this.name = "GrainTaskCanceledError";
@@ -143,7 +212,7 @@ export class GrainTaskCanceledError extends Error {
  * preempts a still-queued turn (`TurnScheduler`) or abandons a wait on a
  * storage-provider call (`@thresh/core/abort`'s `raceSignal`).
  */
-export class GrainCallAbortedError extends Error {
+export class GrainCallAbortedError extends ThreshCancellationError {
   constructor(message = "the call was aborted before it completed") {
     super(message);
     this.name = "GrainCallAbortedError";

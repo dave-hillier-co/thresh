@@ -11,6 +11,9 @@
 // gap this tag used to track — no way to obtain a client, or otherwise host a
 // grain observer, from inside a startup task — is closed for
 // `useInProcessTransport`-configured silos (as `TestCluster`'s always are).
+// A silo that is NOT so configured now says so at build rather than at first
+// observer call, by declaring `SiloBuilder.requireObserverHosting()`; see
+// `docs/deviations.md` for why the embedded client needs an in-process gateway.
 import { describe, expect } from "vitest";
 import { orleansTest } from "@thresh/testing/orleans-test";
 import { TestCluster } from "@thresh/testing/test-cluster";

@@ -1,5 +1,6 @@
 import { durationToMs, type Duration } from "@thresh/core/duration";
-import type { Grain } from "@thresh/core/grain";
+import type { GrainClass } from "@thresh/core/grain-class";
+import type { GrainRegistrationSpec } from "@thresh/core/grain-registration-spec";
 import type {
   IncomingGrainCallFilter,
   OutgoingGrainCallFilter,
@@ -137,6 +138,25 @@ export interface SiloConfig {
   time?: TimeProvider;
   /** Idle-deactivation threshold for grains without their own `collectionAgeSeconds`. */
   collectionAgeSeconds?: number;
+  /**
+   * Per-silo idle-deactivation ages keyed by GRAIN TYPE (Orleans'
+   * `GrainCollectionOptions.ClassSpecificCollectionAge`). An entry overrides that
+   * grain type's own `@grain({ collectionAgeSeconds })` — which remains the
+   * default, and remains in sole charge for a type this map does not name — so
+   * two silos in one process can hold different ages for the same grain class.
+   * Key by the registered grain type (`getGrainMetadata(Ctor).grainType`), never
+   * `Ctor.name`, which a bundler may rename.
+   */
+  classSpecificCollectionAgeSeconds?: Readonly<Record<string, number>>;
+  /**
+   * This silo's default placement strategy for grain types that declare no
+   * `placement` in their `@grain()` metadata (Orleans' `PlacementStrategy` DI
+   * singleton, registered as `RandomPlacement` by `DefaultSiloServices` and
+   * replaceable per silo). An explicit per-class `placement` — `"random"`
+   * included — and `stateless: true` both still win. Unset, the default stays
+   * `RandomPlacement`.
+   */
+  defaultPlacementStrategy?: PlacementStrategy;
   /** How often the idle-collection sweep runs (defaults to 60s). */
   collectionIntervalSeconds?: number;
   /** Injectable RNG for deterministic placement in examples/tests. */
@@ -209,10 +229,13 @@ const DEFAULT_MAX_ENQUEUED_REQUESTS_HARD_LIMIT = 10_000;
 const DEFAULT_MAX_REQUEST_PROCESSING_TIME_MS = 30_000;
 const DEFAULT_DEACTIVATION_TIMEOUT_MS = 30_000;
 
-interface Registration {
-  ctor: new () => Grain;
-  interfaces: GrainInterface<unknown>[];
-}
+/**
+ * One entry in this silo's grain-registration list. Exported (and aliased to
+ * the canonical `GrainRegistrationSpec`) so a consumer can declare its own
+ * shared list — the same one it hands to a cluster client — by name rather
+ * than restating the shape structurally.
+ */
+export type Registration = GrainRegistrationSpec;
 
 /**
  * Grain-factory access handed to startup tasks (Orleans `IGrainFactory`,
@@ -229,6 +252,9 @@ export interface GrainFactoryAccess {
    * requires `useInProcessTransport(network)`: a `WebSocketTransport`-hosted
    * silo would need a second listening port to host a duplex client
    * identity, which no startup task provisions, so this throws in that case.
+   * A silo that depends on the seam should declare
+   * `SiloBuilder.requireObserverHosting()`, which moves that failure to
+   * `build()`.
    */
   createObjectReference<T>(def: GrainInterface<T>, obj: object): T;
   deleteObjectReference(ref: object): void;
@@ -281,6 +307,7 @@ export class SiloBuilder {
   private readonly closers: Array<() => Promise<void>> = [];
   private readonly startupTasks: Array<(grains: GrainFactoryAccess) => Promise<void>> = [];
   private inProcessNetwork: InProcessNetwork | undefined;
+  private observerHostingRequired = false;
   private readonly pullingStreams: PullingStreamProviderHost[] = [];
   private readonly memoryStreams: Array<{
     provider: MemoryStreamProvider;
@@ -1005,15 +1032,15 @@ export class SiloBuilder {
     return this;
   }
 
-  registerGrain<G extends Grain>(
-    ctor: new () => G,
-    registration: { interfaces: GrainInterface<unknown>[] },
+  registerGrain(
+    ctor: GrainClass,
+    registration: { readonly interfaces: readonly GrainInterface<unknown>[] },
   ): this {
     this.registrations.push({ ctor, interfaces: registration.interfaces });
     return this;
   }
 
-  registerGrains(registrations: Registration[]): this {
+  registerGrains(registrations: readonly Registration[]): this {
     this.registrations.push(...registrations);
     return this;
   }
@@ -1054,9 +1081,45 @@ export class SiloBuilder {
     return this;
   }
 
+  /**
+   * Declare that this silo's startup tasks host observer objects
+   * (`GrainFactoryAccess.createObjectReference`), so that a transport which
+   * cannot back that seam is rejected at `build()` rather than at the first
+   * call.
+   *
+   * There is no Orleans counterpart: `IGrainFactory.CreateObjectReference`
+   * works on every Orleans silo, because an Orleans client leg is duplex over
+   * its own outbound connection. Thresh's embedded client is a real
+   * `ClientNode` that LISTENS on its own endpoint — the silo dials it back to
+   * deliver a call — so it can only be gatewayed through an in-process
+   * network today; see `docs/deviations.md`. Declaring the requirement is how
+   * a silo that needs the seam finds that out at build, instead of shipping
+   * green tests (where `TestCluster` always configures an in-process
+   * transport) and failing on the first observer call in production.
+   *
+   * Purely additive: a silo that does not declare it behaves exactly as
+   * before, including the lazy throw from `createObjectReference`.
+   */
+  requireObserverHosting(): this {
+    this.observerHostingRequired = true;
+    return this;
+  }
+
   build(): SiloHost {
     if (this.membership === undefined) throw new Error("silo: no membership configured");
     if (this.transport === undefined) throw new Error("silo: no transport configured");
+    if (this.observerHostingRequired && this.inProcessNetwork === undefined) {
+      throw new Error(
+        "silo: requireObserverHosting() was declared, but the configured transport cannot back " +
+          "the observer seam. GrainFactoryAccess.createObjectReference is hosted by an embedded " +
+          "ClientNode gatewayed through this silo's in-process network; a WebSocketTransport-" +
+          "hosted silo has none, and would need a second listening port and an advertised " +
+          "endpoint for the client identity, which SiloConfig does not supply. Configure " +
+          "useInProcessTransport(network), or drop requireObserverHosting() and do not call " +
+          "createObjectReference from a startup task.",
+      );
+    }
+    validateClassSpecificCollectionAges(this.config.classSpecificCollectionAgeSeconds);
     const health = new HealthCheck();
     const storage = this.storage;
     // Transactional facets default to a per-silo in-memory provider
@@ -1121,6 +1184,12 @@ export class SiloBuilder {
       ...(time !== undefined ? { time } : {}),
       ...(this.config.collectionAgeSeconds !== undefined
         ? { defaultCollectionAgeSeconds: this.config.collectionAgeSeconds }
+        : {}),
+      ...(this.config.classSpecificCollectionAgeSeconds !== undefined
+        ? { classSpecificCollectionAgeSeconds: this.config.classSpecificCollectionAgeSeconds }
+        : {}),
+      ...(this.config.defaultPlacementStrategy !== undefined
+        ? { defaultPlacementStrategy: this.config.defaultPlacementStrategy }
         : {}),
       ...(this.config.collectionIntervalSeconds !== undefined
         ? { collectionIntervalSeconds: this.config.collectionIntervalSeconds }
@@ -1349,7 +1418,10 @@ export class SiloBuilder {
       // WebSocketTransport-hosted silo would need a second listening port to
       // host a duplex client identity, which no startup task provisions —
       // `createObjectReference` below throws lazily (only if actually
-      // called) rather than failing every startup task on such a silo.
+      // called) rather than failing every startup task on such a silo, most
+      // of which never touch the observer seam. `requireObserverHosting()`
+      // is the opt-in that turns that into a build-time failure for a silo
+      // that does depend on it.
       if (embeddedClient !== undefined || inProcessNetwork === undefined) return;
       const embeddedAddress = new SiloAddress(
         `${local.podName}-embedded-client`,
@@ -1371,7 +1443,7 @@ export class SiloBuilder {
         // covers ordinary grain calls.
         ...(incomingCallFilters.length > 0 ? { incomingCallFilters } : {}),
         ...(outgoingCallFilters.length > 0 ? { outgoingCallFilters } : {}),
-      }).registerGrains([...registrations]);
+      }).registerGrains(registrations);
       await client.connect();
       closers.push(async () => client.close());
       embeddedClient = client;
@@ -1384,7 +1456,8 @@ export class SiloBuilder {
             "GrainFactoryAccess.createObjectReference from a startup task requires the silo to " +
               "be built with useInProcessTransport(network); a WebSocketTransport-hosted silo " +
               "would need a second listening port to host a duplex client identity, which no " +
-              "startup task provisions.",
+              "startup task provisions. Declare requireObserverHosting() on the builder to " +
+              "fail at build() instead of here, on the first observer call.",
           );
         }
         return embeddedClient.createObjectReference(def, obj);
@@ -1409,6 +1482,28 @@ export class SiloBuilder {
         await fn(grainFactoryAccess);
       }),
     });
+  }
+}
+
+/**
+ * Reject a nonsense per-grain-type collection age at silo BUILD, the way Orleans'
+ * `GrainCollectionOptionsValidator` rejects one at host start rather than letting a
+ * bad age reach the collector. Only the "is this a duration at all" half is ported:
+ * Orleans additionally requires every age to exceed `CollectionQuantum`, which this
+ * runtime deliberately allows (see `docs/deviations.md`) — a sub-sweep age is honest
+ * here, it simply collects on the first sweep at or after the age elapses.
+ */
+function validateClassSpecificCollectionAges(
+  ages: Readonly<Record<string, number>> | undefined,
+): void {
+  if (ages === undefined) return;
+  for (const [grainType, seconds] of Object.entries(ages)) {
+    if (!Number.isFinite(seconds) || seconds <= 0) {
+      throw new Error(
+        `silo: classSpecificCollectionAgeSeconds["${grainType}"] is ${seconds}; ` +
+          `a collection age must be a finite number of seconds greater than 0`,
+      );
+    }
   }
 }
 

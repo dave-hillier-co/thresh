@@ -1,6 +1,6 @@
 import type { Duration } from "@thresh/core/duration";
 import { GrainCancellationTokenSource } from "@thresh/core/grain-cancellation-token";
-import type { Grain } from "@thresh/core/grain";
+import type { GrainRegistrationSpec } from "@thresh/core/grain-registration-spec";
 import type { GrainId } from "@thresh/core/grain-id";
 import type { GrainInterface } from "@thresh/core/grain-interface";
 import type { GrainKeyFor } from "@thresh/core/key-kinds";
@@ -8,7 +8,7 @@ import type { MembershipService, MembershipSnapshot } from "@thresh/core/members
 import { SiloAddress } from "@thresh/core/silo-address";
 import type { StreamProvider } from "@thresh/core/stream";
 import type { TimeProvider } from "@thresh/core/time-provider";
-import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
+import { InProcessNetwork, InProcessTransport } from "@thresh/messaging/in-process-transport";
 import { ICancellationSourcesExtension } from "@thresh/runtime/cancellation-extension";
 import { MemoryJobShardStore } from "@thresh/durable-jobs/memory-job-shard-store";
 import { MemoryJournalStorage } from "@thresh/journaling/memory-journal-storage";
@@ -17,14 +17,14 @@ import { MemoryReminderTable } from "@thresh/reminders/memory-reminder-table";
 import { MemoryStreamProvider } from "@thresh/streams/memory-stream-provider";
 import { StaticMembershipService } from "@thresh/runtime/static-membership";
 import type { LoadSheddingOptions } from "@thresh/runtime/load-shedding";
+import type { PlacementStrategy } from "@thresh/runtime/placement/placement-strategy";
 import { MemoryTransactionalStorage } from "@thresh/transactions/memory-transactional-storage";
 import { createSilo, type SiloBuilder } from "@thresh/hosting/silo-builder";
 import type { SiloHost } from "@thresh/hosting/silo-host";
+import { createClient, type ClientNode } from "@thresh/client/client-node";
+import { membershipGatewayProvider } from "@thresh/client/gateway-provider";
 
-export interface GrainRegistrationSpec {
-  ctor: new () => Grain;
-  interfaces: GrainInterface<unknown>[];
-}
+export type { GrainRegistrationSpec, ClientNode };
 
 export interface TestClusterOptions {
   /** Number of silos to start with (Orleans TestClusterBuilder defaults to 2). */
@@ -82,6 +82,21 @@ export interface TestClusterOptions {
   random?: () => number;
   /** Idle-deactivation threshold for grains without their own `collectionAgeSeconds`, forwarded to every silo. */
   collectionAgeSeconds?: number;
+  /**
+   * Per-grain-type idle-deactivation ages forwarded to every silo (Orleans'
+   * `GrainCollectionOptions.ClassSpecificCollectionAge`). Applies only to a type
+   * that declares NO `@grain({ collectionAgeSeconds })` of its own: as in
+   * Orleans, the grain class's own age wins over this map. A silo needing a
+   * DIFFERENT map from its peers must be built with `createSilo` directly; this
+   * cluster configures all of its silos alike.
+   */
+  classSpecificCollectionAgeSeconds?: Readonly<Record<string, number>>;
+  /**
+   * Default placement strategy for grain types declaring no `placement`,
+   * forwarded to every silo (Orleans' `PlacementStrategy` DI singleton).
+   * Unset, each silo keeps `RandomPlacement`.
+   */
+  defaultPlacementStrategy?: PlacementStrategy;
   /** How often the idle-collection sweep runs on every silo (defaults to 60s). */
   collectionIntervalSeconds?: number;
   /**
@@ -91,6 +106,12 @@ export interface TestClusterOptions {
    */
   network?: InProcessNetwork;
 }
+
+/**
+ * Distinguishes the client endpoints of clusters sharing one
+ * `InProcessNetwork`, since an endpoint string is the network's map key.
+ */
+let nextClientIndex = 0;
 
 export interface TestSiloHandle {
   readonly index: number;
@@ -125,6 +146,8 @@ export class TestCluster {
   // other (`SiloBuilder.useMemoryStreams` otherwise constructs a fresh
   // provider per call).
   private readonly memoryStreamProviders = new Map<string, MemoryStreamProvider>();
+  // The cluster client, connected on first access — see `client`.
+  private connectedClient: Promise<ClientNode> | undefined;
 
   private constructor(
     private readonly options: TestClusterOptions,
@@ -143,7 +166,13 @@ export class TestCluster {
     return this.live;
   }
 
-  /** The first live silo; ported tests route client-style calls through it. */
+  /**
+   * The first live silo, and the one `getGrain`/`getStreamProvider` route
+   * through. A call made this way is issued BY that silo — it traverses the
+   * silo's own outgoing call filters, which a call from outside the cluster
+   * does not. Where that distinction matters (Orleans' `TestCluster.Client`
+   * is a client, not a silo), use `client` instead.
+   */
   get primary(): TestSiloHandle {
     const first = this.live[0];
     if (first === undefined) throw new Error("TestCluster has no live silos");
@@ -167,6 +196,61 @@ export class TestCluster {
 
   getGrain<T>(def: GrainInterface<T>, key: GrainKeyFor<T>): T {
     return this.primary.host.getGrain(def, key);
+  }
+
+  /**
+   * The cluster client — Orleans' `TestCluster.Client` / `TestCluster.GrainFactory`:
+   * a `ClientNode` OUTSIDE every silo, joined to this cluster's network with
+   * the silos themselves as gateways, hosting the same grain registrations
+   * `TestClusterOptions.grains` gave them (so `getGrain` resolves), plus
+   * `createObjectReference` for observer callbacks.
+   *
+   * It is a genuinely different caller from `getGrain`, and that is the point:
+   * a call through a silo runs that silo's outgoing call filters, a call
+   * through this client runs none of them. Nothing else on `TestCluster` is
+   * routed through it — `getGrain` and `primary` still go through the silo —
+   * so adopting it is per-call and never changes an existing test.
+   *
+   * Connecting is asynchronous, so the accessor yields a promise: `await
+   * cluster.client`. It is created on FIRST access (Orleans creates it during
+   * `Deploy`), because a connected client registers in the cluster's client
+   * directory and opens a silo connection: a cluster that never touches it
+   * sees no traffic it would not otherwise have seen, which is what keeps
+   * message-counting tests built on `TestClusterOptions.network` intact.
+   * `dispose()` closes it, before stopping any silo.
+   *
+   * Grains registered only by a `configureSilo` override are NOT on it; put a
+   * registration in `TestClusterOptions.grains` for the client to address it.
+   */
+  get client(): Promise<ClientNode> {
+    return (this.connectedClient ??= this.connectClient());
+  }
+
+  private async connectClient(): Promise<ClientNode> {
+    // The same error `primary` raises: a cluster with no silos left (or one
+    // already disposed) has nothing for a client to talk to.
+    const membership = this.shared;
+    if (membership === undefined || this.live.length === 0) {
+      throw new Error("TestCluster has no live silos");
+    }
+    const index = nextClientIndex;
+    nextClientIndex += 1;
+    const local = new SiloAddress(
+      `test-client-${index}`,
+      `uid-client-${index}`,
+      `test-client-${index}:22222`,
+    );
+    const client = createClient({
+      clusterId: this.clusterId,
+      local,
+      transport: new InProcessTransport(this.network, this.clusterId),
+      // Every live silo is a gateway, the way Orleans' test client shares the
+      // silos' membership table: a cluster that kills or restarts its primary
+      // keeps a usable client instead of one pinned to a dead endpoint.
+      gateways: membershipGatewayProvider(membership),
+    }).registerGrains(this.options.grains ?? []);
+    await client.connect();
+    return client;
   }
 
   /**
@@ -252,10 +336,20 @@ export class TestCluster {
    * were closing at once, that call could land on a peer whose listener is
    * already gone. Stopping one at a time, and updating membership between
    * each, keeps the remaining silos reachable until it is their own turn.
+   *
+   * The cluster client (if one was ever created) is closed FIRST, matching
+   * Orleans' `StopAllSilosAsync`, which calls `StopClusterClientAsync` before
+   * stopping any silo: a client outliving its gateway leaves a listener on the
+   * network with nothing to serve it.
    */
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
+    const client = this.connectedClient;
+    this.connectedClient = undefined;
+    if (client !== undefined) {
+      await client.then((c) => c.close()).catch(() => undefined);
+    }
     const remaining = this.live;
     this.live = [];
     for (const silo of remaining) {
@@ -305,6 +399,12 @@ export class TestCluster {
       ...(this.options.random !== undefined ? { random: this.options.random } : {}),
       ...(this.options.collectionAgeSeconds !== undefined
         ? { collectionAgeSeconds: this.options.collectionAgeSeconds }
+        : {}),
+      ...(this.options.classSpecificCollectionAgeSeconds !== undefined
+        ? { classSpecificCollectionAgeSeconds: this.options.classSpecificCollectionAgeSeconds }
+        : {}),
+      ...(this.options.defaultPlacementStrategy !== undefined
+        ? { defaultPlacementStrategy: this.options.defaultPlacementStrategy }
         : {}),
       ...(this.options.collectionIntervalSeconds !== undefined
         ? { collectionIntervalSeconds: this.options.collectionIntervalSeconds }

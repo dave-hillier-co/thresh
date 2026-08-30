@@ -20,10 +20,18 @@ import { StatelessWorkerPlacement } from "@thresh/runtime/placement/stateless-wo
  * resolves its named strategy from `registry` (populated by a silo builder's
  * `addPlacementStrategy(name, strategy)`); throws if it names none, or names one no registry
  * (or an unpopulated one) has. Stateless-worker placement wins over everything, as in Orleans.
+ *
+ * `siloDefault` is the silo-wide default strategy (Orleans' `PlacementStrategy` DI
+ * singleton, which `PlacementStrategyResolver` falls back to when no resolver and no
+ * grain property names one). It applies ONLY to a grain type that declares no
+ * `placement` of its own: an explicit per-class choice — `"random"` included — and
+ * stateless-worker placement both still win. Unset, the default stays
+ * `RandomPlacement`, as it is in Orleans' `DefaultSiloServices`.
  */
 export function placementStrategyFor(
   metadata: GrainMetadata,
   registry?: PlacementStrategyRegistry,
+  siloDefault?: PlacementStrategy,
 ): PlacementStrategy {
   if (metadata.options.stateless) return new StatelessWorkerPlacement();
   switch (metadata.options.placement) {
@@ -53,9 +61,12 @@ export function placementStrategyFor(
       return registry.resolve(name);
     }
     case "random":
+      // An explicit `placement: "random"` is a per-class choice, so it beats the
+      // silo-wide default just as any other explicit value does.
+      return new RandomPlacement();
     case undefined:
     default:
-      return new RandomPlacement();
+      return siloDefault ?? new RandomPlacement();
   }
 }
 
