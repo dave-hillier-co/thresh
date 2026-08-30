@@ -24,6 +24,7 @@ import {
   type OutgoingGrainCallFilter,
 } from "@thresh/core/grain-call-filter";
 import type { GrainId } from "@thresh/core/grain-id";
+import { IManagementGrain } from "@thresh/core/management-grain";
 import type { GrainInterface } from "@thresh/core/grain-interface";
 import { getGrainInterface } from "@thresh/core/grain-interface";
 import { getGrainMetadata } from "@thresh/core/grain-metadata";
@@ -48,6 +49,7 @@ import { BroadcastChannelProviderImpl } from "@thresh/runtime/broadcast-channel-
 import { ICancellationSourcesExtension } from "@thresh/runtime/cancellation-extension";
 import type { Dispatcher } from "@thresh/runtime/dispatcher";
 import { GrainFactory } from "@thresh/runtime/grain-factory";
+import { MANAGEMENT_GRAIN_TYPE } from "@thresh/runtime/management-grain";
 import { invocationContext } from "@thresh/runtime/invocation-context";
 import { GatewayManager } from "@thresh/client/gateway-manager";
 import { staticGatewayProvider, type GatewayListProvider } from "@thresh/client/gateway-provider";
@@ -172,6 +174,10 @@ export class ClientNode implements Dispatcher {
       config.serializer ??
       new MessagePackSerializer({ resolveGrainReference: (id) => this.rehydrate(id) });
     this.factory = new GrainFactory((interfaceId) => this.resolveGrainType(interfaceId));
+    // The built-in system grains a silo hosts unconditionally: an Orleans
+    // cluster client can call `IManagementGrain` without registering anything,
+    // and so can this one - there is no application ctor to register it from.
+    this.interfaceToGrainType.set(IManagementGrain.id, MANAGEMENT_GRAIN_TYPE);
     this.factory.setDispatcher(this);
     if (config.outgoingCallFilters !== undefined) {
       this.factory.setOutgoingCallFilters(config.outgoingCallFilters);
@@ -551,6 +557,12 @@ export class ClientNode implements Dispatcher {
       if (!(arg instanceof CancellationTokenPlaceholder)) continue;
       const controller = this.getOrCreateCancellationController(arg.tokenId);
       if (arg.cancelled) controller.abort();
+      // The caller passed a plain `AbortSignal`; hand the hosted object one
+      // back, exactly as `ActivationData.bindCancellationTokens` does.
+      if (arg.asSignal) {
+        args[i] = controller.signal;
+        continue;
+      }
       args[i] = new GrainCancellationToken({ tokenId: arg.tokenId, signal: controller.signal });
     }
   }
@@ -596,6 +608,7 @@ export class ClientNode implements Dispatcher {
     const payload = this.serializer.deserialize<{
       message: string;
       aggregateMessages?: readonly string[];
+      error?: unknown;
     }>(response.body);
     // A non-fire-and-forget broadcast publish's aggregated subscriber
     // failures (`ClusterNode.serializeError`) — reconstruct a real
@@ -608,6 +621,10 @@ export class ClientNode implements Dispatcher {
         payload.message,
       );
     }
+    // A surrogate-registered error rebuilds as its own class (`ClusterNode.serializeError`), so a
+    // client sees the same concrete type a silo caller would; anything else degrades to
+    // `GrainCallError` with the message intact.
+    if (payload.error instanceof Error) throw payload.error;
     throw new GrainCallError(payload.message);
   }
 

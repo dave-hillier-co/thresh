@@ -145,6 +145,7 @@ function encodeInner(
     return tagged("cancellationToken", {
       tokenId: value.tokenId,
       cancelled: value.isCancellationRequested,
+      asSignal: value.asSignal,
     });
   }
   // A placeholder re-entering `encodeValue` (e.g. a call re-forwarded to
@@ -155,7 +156,19 @@ function encodeInner(
   // next hop's `decodeValue` can no longer recognise it as a cancellation
   // token, leaving the eventual callee with a signal-less plain object.
   if (value instanceof CancellationTokenPlaceholder) {
-    return tagged("cancellationToken", { tokenId: value.tokenId, cancelled: value.cancelled });
+    return tagged("cancellationToken", {
+      tokenId: value.tokenId,
+      cancelled: value.cancelled,
+      asSignal: value.asSignal,
+    });
+  }
+  // A `DOMException` (an `AbortSignal`'s `AbortError` above all) is a built-in
+  // error type with no constructor the generic object branch can rebuild, so it
+  // is carried explicitly: a callee that stopped because its signal fired must
+  // reach the caller AS a cancellation, not as a generic call failure whose only
+  // remaining evidence is the message text.
+  if (value instanceof DOMException) {
+    return tagged("domException", { name: value.name, message: value.message });
   }
   if (value instanceof SiloAddress) {
     return tagged("silo", {
@@ -254,7 +267,13 @@ export function decodeValue(value: unknown, ctx: CodecContext = {}): unknown {
       case "grainId":
         return grainIdFrom(obj);
       case "cancellationToken":
-        return new CancellationTokenPlaceholder(obj.tokenId as string, obj.cancelled as boolean);
+        return new CancellationTokenPlaceholder(
+          obj.tokenId as string,
+          obj.cancelled as boolean,
+          obj.asSignal === true,
+        );
+      case "domException":
+        return new DOMException(obj.message as string, obj.name as string);
       case "silo":
         return new SiloAddress(obj.podName as string, obj.podUid as string, obj.endpoint as string);
       case "map": {

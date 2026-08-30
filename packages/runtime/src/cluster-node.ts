@@ -1767,7 +1767,12 @@ export class ClusterNode {
       if (payload.kind === "overloaded") throw new GatewayTooBusyException(payload.message);
       throw new RejectionError(payload.message, payload.kind);
     }
-    const payload = this.serializer.deserialize<{ message: string }>(response.body);
+    const payload = this.serializer.deserialize<{ message: string; error?: unknown }>(
+      response.body,
+    );
+    // A surrogate-registered error rebuilds as its own class; anything else decodes to a value that
+    // is not an `Error` and degrades to `GrainCallError`, keeping the message.
+    if (payload.error instanceof Error) throw payload.error;
     throw new GrainCallError(payload.message);
   }
 
@@ -1890,11 +1895,24 @@ export class ClusterNode {
         }),
       };
     }
+    const message = err instanceof Error ? err.message : String(err);
+    if (err instanceof Error) {
+      try {
+        // Send the error VALUE alongside its message so a type the application has taught the
+        // codec about (`registerSurrogate`) reaches the caller as ITSELF, the way Orleans carries a
+        // `[GenerateSerializer]` exception across the silo boundary. Without this a caller can only
+        // branch on message text, which is presentation rather than contract. An error with no
+        // surrogate encodes to an inert object and the receiver falls back to `message`, so this
+        // costs nothing for types that never opted in.
+        return { kind: "error", body: this.serializer.serialize({ message, error: err }) };
+      } catch {
+        // An error carrying something the codec cannot encode must not turn a remote failure into
+        // a LOCAL serialization failure: the caller is owed the original fault, not this one.
+      }
+    }
     return {
       kind: "error",
-      body: this.serializer.serialize({
-        message: err instanceof Error ? err.message : String(err),
-      }),
+      body: this.serializer.serialize({ message }),
     };
   }
 

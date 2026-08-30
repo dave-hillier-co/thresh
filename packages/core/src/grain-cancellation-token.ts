@@ -14,6 +14,12 @@ export class CancellationTokenPlaceholder {
   constructor(
     readonly tokenId: string,
     readonly cancelled: boolean,
+    /**
+     * The caller passed a plain `AbortSignal` (not a `GrainCancellationToken`)
+     * in this argument slot, so the callee is owed an `AbortSignal` back — see
+     * `GrainCancellationToken.asSignal`.
+     */
+    readonly asSignal: boolean = false,
   ) {}
 }
 
@@ -85,6 +91,13 @@ export interface GrainCancellationTokenInit {
    * cancellation possible (see `recordCancellationTarget`).
    */
   onDispatchToTarget?: (target: GrainId) => void;
+  /**
+   * This token stands in for a plain `AbortSignal` the caller passed in a grain
+   * method's argument slot: the wire carries a cancellation token (the only
+   * cancellation shape Thresh marshals), and the callee is handed the
+   * `AbortSignal` back, because that is what its signature declares.
+   */
+  asSignal?: boolean;
 }
 
 /**
@@ -97,10 +110,12 @@ export interface GrainCancellationTokenInit {
 export class GrainCancellationToken {
   private readonly _tokenId: string;
   private readonly _signal: AbortSignal;
+  private readonly _asSignal: boolean;
 
   constructor(init: GrainCancellationTokenInit) {
     this._tokenId = init.tokenId;
     this._signal = init.signal;
+    this._asSignal = init.asSignal ?? false;
     if (init.source !== undefined) {
       Object.defineProperty(this, SOURCE, { value: init.source, enumerable: false });
     }
@@ -118,6 +133,11 @@ export class GrainCancellationToken {
 
   get signal(): AbortSignal {
     return this._signal;
+  }
+
+  /** See `GrainCancellationTokenInit.asSignal`. */
+  get asSignal(): boolean {
+    return this._asSignal;
   }
 
   get isCancellationRequested(): boolean {

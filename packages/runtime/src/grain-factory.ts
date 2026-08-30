@@ -6,6 +6,7 @@ import {
 } from "@thresh/core/grain-call-filter";
 import {
   GrainCancellationToken,
+  GrainCancellationTokenSource,
   recordCancellationTarget,
 } from "@thresh/core/grain-cancellation-token";
 import { GrainId } from "@thresh/core/grain-id";
@@ -24,6 +25,7 @@ import {
   TransactionInDoubtError,
   TransactionsDisabledError,
 } from "@thresh/core/errors";
+import { ICancellationSourcesExtension } from "@thresh/runtime/cancellation-extension";
 import type { Dispatcher, InvokeCallOptions } from "@thresh/runtime/dispatcher";
 import { invocationContext } from "@thresh/runtime/invocation-context";
 import { systemTimeProvider, type TimeProvider } from "@thresh/runtime/time-provider";
@@ -73,6 +75,14 @@ export class GrainFactory {
   private dispatcher: Dispatcher | undefined;
   private transactionAgent: TransactionAgent | undefined;
   private outgoingCallFilters: readonly OutgoingGrainCallFilter[] = [];
+  /**
+   * One cancellation token per `AbortSignal` ever sent as a grain-call
+   * argument, so repeated calls with the same signal address the SAME token id
+   * on the callee (and one `GrainCancellationTokenSource` accumulates every
+   * target that signal was sent to). Weak, so a finished call's signal is
+   * still collectable.
+   */
+  private readonly signalTokens = new WeakMap<AbortSignal, GrainCancellationToken>();
 
   constructor(
     private readonly resolveGrainType: (interfaceId: number) => GrainType,
@@ -114,6 +124,40 @@ export class GrainFactory {
     return this.buildProxy(def, grainId);
   }
 
+  /**
+   * The `GrainCancellationToken` that stands in for `signal` on the wire,
+   * minted once per signal. Cancelling the caller's signal cancels the source,
+   * which notifies every grain the signal was sent to through
+   * `ICancellationSourcesExtension` - the same cascade an explicit
+   * `GrainCancellationTokenSource` gets.
+   */
+  private tokenForSignal(signal: AbortSignal): GrainCancellationToken {
+    const existing = this.signalTokens.get(signal);
+    if (existing !== undefined) return existing;
+
+    const source = new GrainCancellationTokenSource(async (target, tokenId) => {
+      await this.getReference(ICancellationSourcesExtension, target).cancelRemoteToken(tokenId);
+    });
+    const token = new GrainCancellationToken({
+      tokenId: source.tokenId,
+      signal,
+      source,
+      asSignal: true,
+    });
+    // Mirror the caller's signal onto the source. An ALREADY-aborted signal
+    // still cancels (harmlessly, with no targets recorded yet): what the callee
+    // observes in that case is the encoded `cancelled` flag, which binds its
+    // controller aborted before the method body runs.
+    const cancel = (): void => {
+      void source.cancel().catch(() => undefined);
+    };
+    if (signal.aborted) cancel();
+    else signal.addEventListener("abort", cancel, { once: true });
+
+    this.signalTokens.set(signal, token);
+    return token;
+  }
+
   private buildProxy<T>(def: GrainInterface<T>, target: GrainId): T {
     return new Proxy(
       {},
@@ -148,6 +192,21 @@ export class GrainFactory {
             // FORWARDED target on the binding activation's own extension, so a
             // `cancelRemoteToken` reaching that activation cascades on to `target`
             // (see `recordCancellationTarget`).
+            // A plain `AbortSignal` argument (the shape a ported
+            // `CancellationToken` parameter takes) cannot cross the wire: the
+            // codec has no representation for it, so a cross-silo callee would
+            // receive an inert object and fault on `signal.throwIfAborted()`.
+            // Convert it here, at the one chokepoint every call funnels
+            // through, into the cancellation shape Thresh DOES marshal - a
+            // `GrainCancellationToken` flagged `asSignal`, which the callee side
+            // (`ActivationData.bindCancellationTokens`, `ClientNode`) unwraps
+            // back to an `AbortSignal` before the method sees it. The token
+            // carries the CALLER's own signal, so the cascade below and the
+            // encoded `cancelled` flag both observe the caller's abort.
+            for (let i = 0; i < args.length; i += 1) {
+              const arg = args[i];
+              if (arg instanceof AbortSignal) args[i] = this.tokenForSignal(arg);
+            }
             for (const arg of args) {
               if (arg instanceof GrainCancellationToken) {
                 recordCancellationTarget(arg, target);

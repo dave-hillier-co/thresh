@@ -1001,6 +1001,14 @@ export class ActivationData implements GrainContext {
     const store = invocationContext.getStore();
     for (let i = 0; i < args.length; i++) {
       const arg = args[i];
+      // A SAME-SILO call never serializes its arguments, so an `asSignal` token
+      // arrives as the token object itself; the method still declared an
+      // `AbortSignal`, so unwrap it here too - otherwise what the callee
+      // receives would depend on placement.
+      if (arg instanceof GrainCancellationToken && arg.asSignal) {
+        args[i] = arg.signal;
+        continue;
+      }
       if (!(arg instanceof CancellationTokenPlaceholder)) continue;
       // Auto-install through the catalog's registered factory (which wires
       // this silo's real cascade canceller — see `Catalog`/`ClusterNode`)
@@ -1016,6 +1024,13 @@ export class ActivationData implements GrainContext {
       const controller = ext.getOrCreateController(arg.tokenId);
       if (arg.cancelled) controller.abort();
       const tokenId = arg.tokenId;
+      // The caller passed a plain `AbortSignal` in this slot (the grain-factory
+      // converted it to a token so it could cross the wire at all), so the
+      // method is owed an `AbortSignal` back, not a token.
+      if (arg.asSignal) {
+        args[i] = controller.signal;
+        continue;
+      }
       args[i] = new GrainCancellationToken({
         tokenId,
         signal: controller.signal,
