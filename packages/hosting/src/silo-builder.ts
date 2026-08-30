@@ -743,6 +743,33 @@ export class SiloBuilder {
     return this;
   }
 
+  /**
+   * This silo's own address, as configured. A host that configures its own
+   * membership view (a single-silo dev host naming itself in
+   * `useStaticMembership`) would otherwise have to be handed the address a
+   * second time, alongside the builder that already holds it.
+   */
+  get local(): SiloAddress {
+    return this.config.local;
+  }
+
+  /** The cluster this silo joins, as configured. */
+  get clusterId(): string {
+    return this.config.clusterId;
+  }
+
+  /**
+   * The storage provider registered under `name`, or `undefined` when nothing
+   * is registered under it. The read-back that lets a host hand the SAME
+   * provider instance to something outside the facet machinery — a grain that
+   * takes its storage by constructor injection, say — including the instance a
+   * convenience registration (`addPostgresStorage`, `addRedisStorage`) built
+   * for itself and would otherwise keep private.
+   */
+  storageProvider(name: string): GrainStorage | undefined {
+    return this.storage?.tryGet(name);
+  }
+
   /** Convenience: register an in-memory "default" provider (dev/tests). */
   useMemoryStorage(provider: GrainStorage = new MemoryGrainStorage()): this {
     return this.addStorage("default", provider);

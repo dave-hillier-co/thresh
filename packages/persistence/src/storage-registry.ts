@@ -11,6 +11,11 @@ export class StorageRegistry {
     return this;
   }
 
+  /** The provider registered under `name`, or `undefined` when nothing is. */
+  tryGet(name: string = DEFAULT_PROVIDER): GrainStorage | undefined {
+    return this.providers.get(name);
+  }
+
   get(name: string = DEFAULT_PROVIDER): GrainStorage {
     const storage = this.providers.get(name);
     if (storage === undefined) throw new Error(`no storage provider registered: ${name}`);

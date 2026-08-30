@@ -6,6 +6,8 @@ import { defineGrainInterface } from "@thresh/core/grain-interface";
 import type { GrainWithStringKey } from "@thresh/core/key-kinds";
 import { SiloAddress } from "@thresh/core/silo-address";
 import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
+import { MemoryGrainStorage } from "@thresh/persistence/memory-grain-storage";
+import { PostgresGrainStorage } from "@thresh/persistence/postgres-grain-storage";
 import { constructGrain } from "@thresh/runtime/construct-grain";
 import { createSilo, type Registration } from "@thresh/hosting/silo-builder";
 
@@ -247,5 +249,54 @@ describe("SiloBuilder observer hosting (createObjectReference from a startup tas
         })
         .build(),
     ).not.toThrow();
+  });
+});
+
+describe("SiloBuilder identity read-back", () => {
+  it("exposes the address this silo was configured with", () => {
+    const local = new SiloAddress("s1", "uid-s1", "s1:11111");
+
+    const builder = createSilo({ clusterId: "identity-readback", local });
+
+    // A single-silo dev host configures its own membership view, and the only address it can name
+    // is its own — which it would otherwise have to be told a second time.
+    expect(builder.local).toBe(local);
+    expect(builder.clusterId).toBe("identity-readback");
+  });
+});
+
+describe("SiloBuilder storage read-back", () => {
+  const config = () => ({
+    clusterId: "storage-readback",
+    local: new SiloAddress("s1", "uid-s1", "s1:11111"),
+  });
+
+  it("returns the provider registered under a name", () => {
+    const provider = new MemoryGrainStorage();
+    const builder = createSilo(config()).addStorage("datastore", provider);
+
+    expect(builder.storageProvider("datastore")).toBe(provider);
+  });
+
+  it("returns undefined for a name nothing was registered under", () => {
+    const builder = createSilo(config()).addStorage("datastore", new MemoryGrainStorage());
+
+    expect(builder.storageProvider("other")).toBeUndefined();
+  });
+
+  it("returns undefined when no storage is configured at all", () => {
+    expect(createSilo(config()).storageProvider("datastore")).toBeUndefined();
+  });
+
+  it("reads back the provider a convenience registration constructed", () => {
+    // The Postgres helper builds the provider (and its pool) itself, so reading it back is the
+    // only way a host can hand the SAME instance to something outside the facet machinery — a
+    // grain that takes its storage by constructor injection, say. No connection is opened until
+    // the silo starts, so this stays a pure builder assertion.
+    const builder = createSilo(config()).addPostgresStorage("datastore", {
+      connectionString: "postgres://localhost/thresh-readback",
+    });
+
+    expect(builder.storageProvider("datastore")).toBeInstanceOf(PostgresGrainStorage);
   });
 });
