@@ -11,7 +11,7 @@ deadline API, keepalive unbind on deactivation, and full-facet `@readOnly` guard
 
 ## Driven by the first production use case
 
-[BeneDB](https://github.com/dave-hillier-co/spacedb) — a wire-compatible SpiceDB on Thresh,
+[BeneDB](https://github.com/dave-hillier-co/benedb) — a wire-compatible SpiceDB on Thresh,
 ported from the Orleans implementation — is the first production consumer, and the gaps it hits
 land here. Closed so far: custom-storage log consistency, custom placement strategies,
 `raceAbort` for cancellation-as-clean-exit, a service dimension in the Postgres and Redis storage
