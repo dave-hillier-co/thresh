@@ -164,8 +164,18 @@ export class ClientNode implements Dispatcher {
   private readonly cancellationControllers = new Map<string, AbortController>();
   private readonly incomingCallFilters: readonly IncomingGrainCallFilter[];
   private listener: Listener | undefined;
+  /**
+   * The address this client tells a gateway to reach it on. Starts as the
+   * configured `local` and is replaced by the listener's BOUND address in
+   * `connect()`: a client asking for an ephemeral port (endpoint `host:0`,
+   * which is how a silo provisions its embedded client leg) does not know its
+   * own address until the listener binds, and every message it sends carries
+   * that address as `sendingSilo` for the peer to reply to.
+   */
+  private localAddress: SiloAddress;
 
   constructor(private readonly config: ClientConfig) {
+    this.localAddress = config.local;
     this.callTimeoutMs = config.callTimeoutMs ?? 30_000;
     this.clientId = config.clientId ?? createClientId();
     this.incomingCallFilters = config.incomingCallFilters ?? [];
@@ -220,6 +230,11 @@ export class ClientNode implements Dispatcher {
   /** Begin listening for replies and learn the initial gateway set; resolves once reachable. */
   async connect(): Promise<this> {
     this.listener = await this.config.transport.listen(this.config.local, (m) => this.onMessage(m));
+    // Adopt the address the listener actually bound, before any gateway is
+    // dialled: with an ephemeral port the configured `local` is a placeholder
+    // and the peer would reply to a port nothing listens on.
+    this.localAddress = this.listener.address;
+    this.connections.setSelf(this.localAddress);
     await this.gateways.refresh();
     // Eagerly open a connection to a gateway so its `onAccept` fires and the
     // client-directory gossip runs immediately, rather than waiting for the
@@ -379,7 +394,7 @@ export class ClientNode implements Dispatcher {
           correlationId,
           direction: req.options.oneWay ? "oneWay" : "request",
           targetGrain: req.target,
-          sendingSilo: this.config.local,
+          sendingSilo: this.localAddress,
           sendingGrain: req.sender,
           interfaceId: req.interfaceId,
           method: req.method,
@@ -447,7 +462,7 @@ export class ClientNode implements Dispatcher {
       if (message.direction === "oneWay") return;
       await this.replyToCaller(
         message,
-        responseTo(message, "success", this.serializer.serialize(undefined), this.config.local),
+        responseTo(message, "success", this.serializer.serialize(undefined), this.localAddress),
       );
       return;
     }
@@ -463,7 +478,7 @@ export class ClientNode implements Dispatcher {
             message: `no object hosted for observer ${message.targetGrain.toString()}`,
             kind: "unknownTarget",
           }),
-          this.config.local,
+          this.localAddress,
         ),
       );
       return;
@@ -527,12 +542,12 @@ export class ClientNode implements Dispatcher {
       if (message.direction === "oneWay") return;
       await this.replyToCaller(
         message,
-        responseTo(message, "success", this.serializer.serialize(result), this.config.local),
+        responseTo(message, "success", this.serializer.serialize(result), this.localAddress),
       );
     } catch (err) {
       if (message.direction === "oneWay") return;
       const { kind, body } = this.serializeError(err);
-      await this.replyToCaller(message, responseTo(message, kind, body, this.config.local));
+      await this.replyToCaller(message, responseTo(message, kind, body, this.localAddress));
     }
   }
 
@@ -591,19 +606,33 @@ export class ClientNode implements Dispatcher {
     }
   }
 
-  /** Map a thrown error to the `(kind, body)` of an error/rejection response. */
+  /**
+   * Map a thrown error to the `(kind, body)` of an error/rejection response.
+   *
+   * Mirrors `ClusterNode.serializeError`: the error VALUE travels alongside its message, so a
+   * domain error raised inside a client-hosted object (an observer callback) reaches the CALLING
+   * GRAIN with its type — rebuilt by its surrogate, or as
+   * `UnavailableExceptionFallbackException` carrying the name and carried state. Sending only the
+   * message made this leg strictly worse than the silo's: registering a surrogate did not help,
+   * because there was nothing on the wire for it to rebuild from.
+   */
   private serializeError(err: unknown): { kind: ResponseKind; body: Uint8Array } {
-    return err instanceof RejectionError
-      ? {
-          kind: "rejection",
-          body: this.serializer.serialize({ message: err.message, kind: err.kind }),
-        }
-      : {
-          kind: "error",
-          body: this.serializer.serialize({
-            message: err instanceof Error ? err.message : String(err),
-          }),
-        };
+    if (err instanceof RejectionError) {
+      return {
+        kind: "rejection",
+        body: this.serializer.serialize({ message: err.message, kind: err.kind }),
+      };
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    if (err instanceof Error) {
+      try {
+        return { kind: "error", body: this.serializer.serialize({ message, error: err }) };
+      } catch {
+        // An error carrying something the codec cannot encode must not turn the callee's failure
+        // into a LOCAL serialization failure: the caller is owed the original fault, not this one.
+      }
+    }
+    return { kind: "error", body: this.serializer.serialize({ message }) };
   }
 
   private interpretResponse(response: Message): unknown {
@@ -634,8 +663,9 @@ export class ClientNode implements Dispatcher {
       );
     }
     // A surrogate-registered error rebuilds as its own class (`ClusterNode.serializeError`), so a
-    // client sees the same concrete type a silo caller would; anything else degrades to
-    // `GrainCallError` with the message intact.
+    // client sees the same concrete type a silo caller would; a type with no surrogate arrives as
+    // an `UnavailableExceptionFallbackException` carrying its name and carried state.
+    // `GrainCallError` remains the floor for a peer that sent no error value at all.
     if (payload.error instanceof Error) throw payload.error;
     throw new GrainCallError(payload.message);
   }

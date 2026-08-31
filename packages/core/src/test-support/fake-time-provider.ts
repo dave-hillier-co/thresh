@@ -20,6 +20,21 @@ export class FakeTimeProvider implements TimeProvider {
     return this.current;
   }
 
+  /**
+   * The same instant as {@link now} in epoch nanoseconds, derived from the fake
+   * clock rather than the machine's — so a caller that mints ordered values from
+   * the high-resolution reading is still driven by {@link advance}, and reads the
+   * same value twice within one fake instant.
+   */
+  nowNanos(): bigint {
+    // Widen BEFORE scaling, for the same reason `systemTimeProvider` does: a
+    // realistic epoch instant in nanoseconds (~1.8e18) is past float64's
+    // integer-exact range, so `current * 1_000_000` in float rounds. Advanced
+    // to 1_700_000_000_123 the float form yields ...123000064n, breaking the
+    // `nowNanos() === BigInt(now()) * 1_000_000n` identity this fake promises.
+    return BigInt(Math.round(this.current)) * 1_000_000n;
+  }
+
   setTimer(handler: () => void, delayMs: number): TimerHandle {
     const timer: FakeTimer = {
       id: this.nextId++,

@@ -98,6 +98,49 @@ from a retriable call failure. Both now have a codec tag, alongside the `DOMExce
 cancelled" reach the caller with their type intact. Orleans has no counterpart, because
 `OperationCanceledException` is a framework type its serializer already knows.
 
+## An unresolvable error type carries its name, not its class
+
+Orleans' `ExceptionCodec` writes the type name, message and properties for **every** exception and
+resolves that name back to a `Type` on receipt, so a `catch (MyDomainException)` keeps working
+across a silo boundary with no registration at all. Thresh cannot resolve an application class from
+a name — nothing maps a wire string to a constructor, and doing so from untrusted input would be a
+gadget. So `registerSurrogate` remains how an application type round-trips as ITSELF.
+
+What is no longer lost is its name, message and own enumerable properties. Its `stack` and its
+`cause` still are: the stack is a local artefact of the sending process, and `cause` is specified
+as a NON-enumerable own property, so `Object.entries` does not reach it. Orleans carries both — a
+remote stack trace via `ExceptionDispatchInfo.SetRemoteStackTrace`, and the inner exception
+recursively — so this is narrower than `ExceptionCodec`, not equal to it. Both were left out to
+keep every error response and every persisted state that happens to nest an `Error` from growing.
+
+An `Error` subclass has no enumerable own
+properties, so the codec's generic object branch used to flatten it to `{}` and the caller got a
+bare `GrainCallError` carrying only the message — the type it discriminates on gone, with nothing
+warning. `encodeValue` now has an `Error` branch (after the surrogate lookup and after the
+cancellation family's own tags, so both still win) carrying `name`, `message` and the own
+enumerable properties, and `decodeValue` rebuilds:
+
+- one of **Thresh's own** error classes, or one of JavaScript's built-in ones (`TypeError`,
+  `RangeError` and friends — the analogue of Orleans resolving the `System.*` namespace with no
+  registration), matched against a closed table and what keeps `isThreshRuntimeError` and an
+  `instanceof GrainCallError` narrowing firing cross-silo. The name alone never selects the
+  constructor: the SENDER must also have proved `value instanceof` the class of that name, and only
+  then does a `thresh` marker travel with it. Orleans gets that for free from an assembly-qualified
+  type name; matching a bare `name` string would not, because an application is free to declare its
+  own `class LimitExceededException` and a decoder trusting the string would rebuild Thresh's — a
+  `ThreshRuntimeError` — so the caller's `isThreshRuntimeError` would answer true for a permanent
+  domain failure and retry it;
+- otherwise **`UnavailableExceptionFallbackException`**, upstream's own fallback class, carrying
+  `errorType` (mirrored onto `name`, which is how JavaScript discriminates errors) and
+  `properties`, also copied onto the instance so a transliterated `error.limit` reads.
+
+Two consequences worth stating. The fallback is deliberately a plain `Error` and **not** a
+`ThreshRuntimeError`, matching upstream's fallback deriving from `Exception` rather than
+`OrleansException`: a domain error that classified as a Thresh transport failure would be retried
+forever against a request that can never succeed. And a caller that previously received
+`GrainCallError` for an unregistered remote error now receives the fallback instead — the
+degradation moved from silent to recoverable, which is the whole point.
+
 ## A collection age shorter than the sweep interval is legal
 
 Orleans' `GrainCollectionOptionsValidator` rejects, at host start, any `CollectionAge` — the
@@ -114,26 +157,64 @@ sweep at or after its age elapses. Adopting Orleans' rule would reject a configu
 behaves correctly here, and would break the short ages tests legitimately configure against the
 default 60s sweep.
 
-## An observer reference from a silo needs an in-process gateway
+## A client leg listens; it is not duplex over its outbound connection
 
-Orleans' `IGrainFactory.CreateObjectReference` works on any silo, because an Orleans client leg is
-**duplex over its own outbound connection**: the gateway answers a client on the socket the client
-dialled, so hosting an observer costs the client nothing but a registration.
+Orleans' client leg is **duplex over its own outbound connection**: the gateway answers a client on
+the socket the client dialled, so a client needs no reachable address of its own and
+`IGrainFactory.CreateObjectReference` costs nothing but a registration.
 
-Thresh's `ClientNode` is not duplex. `connect()` listens on its own endpoint, and a silo delivers a
-call to a client-hosted object by **dialling that advertised endpoint** — over the in-process
-network that is free, but over `WebSocketTransport` it is a second real listening port and a
-reachable address, which `SiloConfig` does not supply. So the embedded client that backs
-`GrainFactoryAccess.createObjectReference` for a startup task (Orleans' `IStartupTask` hook, which
-upstream's `LifecycleObserverCreationTests` exercises with exactly this call) exists only on a silo
-built with `useInProcessTransport(network)`.
+Thresh's `ClientNode` listens instead. Every socket here carries traffic one way — `connect()`
+returns a send-only `Connection` whose only inbound read is the preamble ack — and the reply, or a
+gateway's push to a client-hosted observer, travels over a **reverse connection to the peer's
+advertised endpoint**. `InProcessTransport` has always worked that way (its reverse connection is
+`network.deliver(from, ...)`, keyed by address), and `WebSocketTransport`'s accepted connection does
+the same: it dials the endpoint the peer announced in its preamble rather than writing back down the
+accepted socket, which would land on the dialler with nothing listening.
 
-The sharp edge is not the restriction, it is where it surfaced: `TestCluster` always configures an
-in-process transport, so an observer push path could be green in every test and throw on the first
-call in production. `SiloBuilder.requireObserverHosting()` is the declaration that closes that — a
-silo that depends on the seam says so, and a transport that cannot back it is rejected at `build()`
-rather than at first use. Declaring nothing keeps the old behaviour, because the common startup task
-never touches the seam.
+The cost of not being duplex is that a client needs an address a gateway can reach. It is not a
+restriction on WHERE the seam works: a silo whose startup task calls
+`GrainFactoryAccess.createObjectReference` provisions its embedded `ClientNode` leg on whatever
+transport the silo itself uses, asking for an **ephemeral port** (`host:0`) on the silo's own host
+and adopting the address the listener actually bound — `ClientNode.connect()` replaces its
+configured `local` with `Listener.address` before it dials anything, so the endpoint it advertises
+is the one it is really reachable on. That leg only ever has to be reachable from its gateway, which
+is this silo in this process, because a call for a client-hosted object is routed to the client's
+gateway silo first (`ClusterNode.routeToClient`) and never dialled directly by another silo.
+
+`SiloBuilder.requireObserverHosting()` remains the declaration that a silo depends on the seam, and
+still fails at `build()` rather than at first use if the configured transport cannot give the leg a
+listener. Both transports the builder configures can, so it no longer rejects a
+`WebSocketTransport`-hosted silo.
+
+## The clock's fine reading is an epoch instant, not a stopwatch tick
+
+Orleans reads time through `System.TimeProvider`, which pairs `GetUtcNow()` with
+`GetTimestamp()`/`TimestampFrequency`/`GetElapsedTime()`. The fine half is an opaque, ORIGIN-FREE
+tick, and Orleans uses it only to measure elapsed time — `ActivationRebalancerWorker` suspends
+until `now + frequency * duration`, `GrainMigratabilityChecker` ages a cache.
+
+Thresh's `TimeProvider` adds a single `nowNanos(): bigint` instead: the same wall clock as `now()`,
+in nanoseconds since the Unix epoch. The pair collapses to one reading because the caller that
+needed it does not measure an interval, it MINTS ORDERED VALUES from the clock — SpaceDB's
+sequencer mints MVCC revisions as epoch nanoseconds — and an origin-free tick cannot be one of
+those. A millisecond is coarser than the interval between that grain's commits, so per-millisecond
+values collide, the sequence falls to a synthetic increment, and the values stop being timestamps
+while staying monotonic; anything later mixing the two (a GC floor of `min(head, now - window)`)
+then lands on the wrong side.
+
+`nowNanos` is **optional**, so every two-method structural implementation that predates it still
+satisfies the interface. Read it through `nowNanosOf(time)`, which scales `now()` for a provider
+without one — the fallback is millisecond-quantised, so a caller needing values distinct within a
+millisecond needs a provider that implements the fine reading. Both of Thresh's do.
+
+Two consequences worth naming. On `systemTimeProvider` the two readings come from different
+sources — `Date.now()` and `performance.timeOrigin + performance.now()` — so `nowNanos` never
+steps backwards but does not absorb a wall-clock correction made after process start, and can
+drift from `now()`. That trade is deliberate for a caller minting ordered values, and it is the
+same split Orleans has between `DateTimeOffset.UtcNow` and `Stopwatch`. On `FakeTimeProvider` the
+fine reading is derived from the fake's own `current`, not the machine's, so `advance()` still
+drives it and one fake instant reads the same value twice — the fake stays authoritative, which is
+the obligation that comes with adding the reading at all.
 
 ## Additions beyond Orleans
 

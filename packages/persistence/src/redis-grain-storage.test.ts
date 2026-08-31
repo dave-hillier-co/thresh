@@ -179,3 +179,40 @@ describe.skipIf(client === undefined)("RedisGrainStorage", () => {
     });
   });
 });
+
+// Issue #59: Orleans' Redis provider prefixes every key with the ServiceId
+// (`{ServiceId}/state/`, `RedisGrainStorage.cs:56`), so several clusters can
+// share one Redis and stay partitioned. Thresh's `keyPrefix` is a deployment
+// namespace, not a service identity, and nothing partitioned by service.
+describe.skipIf(client === undefined)("RedisGrainStorage service partitioning (issue #59)", () => {
+  beforeEach(async () => {
+    await deleteAll(client!, `${prefix}*`);
+  });
+
+  it("keeps two service ids on separate keys for the same grain and state", async () => {
+    const alpha = new RedisGrainStorage(client!, { keyPrefix: prefix, serviceId: "alpha" });
+    const a = makeState(alpha);
+    a.value.cents = 1;
+    await a.write();
+
+    // A second cluster has never seen this grain: its read must find nothing,
+    // and its blind write must succeed, because alpha's key is not its key.
+    const beta = new RedisGrainStorage(client!, { keyPrefix: prefix, serviceId: "beta" });
+    const b = makeState(beta);
+    await b.read();
+    expect(b.exists).toBe(false);
+    b.value.cents = 2;
+    await b.write();
+
+    const reAlpha = makeState(
+      new RedisGrainStorage(client!, { keyPrefix: prefix, serviceId: "alpha" }),
+    );
+    await reAlpha.read();
+    expect(reAlpha.value.cents).toBe(1);
+    const reBeta = makeState(
+      new RedisGrainStorage(client!, { keyPrefix: prefix, serviceId: "beta" }),
+    );
+    await reBeta.read();
+    expect(reBeta.value.cents).toBe(2);
+  });
+});

@@ -11,6 +11,13 @@ import {
   type SurrogateDescriptor,
 } from "@thresh/core/value-codec";
 import { GrainId } from "@thresh/core/grain-id";
+import {
+  GrainCallError,
+  isThreshRuntimeError,
+  LimitExceededException as ThreshLimitExceededException,
+  RejectionError,
+  UnavailableExceptionFallbackException,
+} from "@thresh/core/errors";
 
 describe("value-codec", () => {
   afterEach(() => {
@@ -252,6 +259,151 @@ describe("value-codec", () => {
         expect(decoded[1]).toBeInstanceOf(Square);
         expect((decoded[1] as Square).side).toBe(4);
       });
+    });
+  });
+
+  describe("errors without a surrogate", () => {
+    /** A domain error the codec has never been taught about -- the shape issue #61 is about. */
+    class QuotaExceededError extends Error {
+      constructor(
+        message: string,
+        readonly limit: number,
+      ) {
+        super(message);
+        this.name = "QuotaExceededError";
+      }
+    }
+
+    it("carries name, message and own enumerable properties for an unregistered Error subclass", () => {
+      const decoded = decodeValue(encodeValue(new QuotaExceededError("over the limit", 42)));
+      expect(decoded).toBeInstanceOf(Error);
+      expect(decoded).toBeInstanceOf(UnavailableExceptionFallbackException);
+      const error = decoded as UnavailableExceptionFallbackException;
+      expect(error.name).toBe("QuotaExceededError");
+      expect(error.errorType).toBe("QuotaExceededError");
+      expect(error.message).toBe("over the limit");
+      expect(error.properties.limit).toBe(42);
+      expect((error as unknown as QuotaExceededError).limit).toBe(42);
+    });
+
+    it("round-trips through serializeValue/deserializeValue", () => {
+      const decoded = deserializeValue<Error>(serializeValue(new QuotaExceededError("nope", 7)));
+      expect(decoded).toBeInstanceOf(UnavailableExceptionFallbackException);
+      expect(decoded.name).toBe("QuotaExceededError");
+      expect(decoded.message).toBe("nope");
+    });
+
+    it("carries a plain Error as an Error rather than flattening it to {}", () => {
+      const decoded = decodeValue(encodeValue(new Error("plain")));
+      expect(decoded).toBeInstanceOf(Error);
+      expect((decoded as Error).name).toBe("Error");
+      expect((decoded as Error).message).toBe("plain");
+    });
+
+    it("encodes an Error nested inside a plain object and an array", () => {
+      const decoded = decodeValue(
+        encodeValue({ failures: [new QuotaExceededError("deep", 1)] }),
+      ) as { failures: Error[] };
+      expect(decoded.failures[0]).toBeInstanceOf(UnavailableExceptionFallbackException);
+      expect(decoded.failures[0]!.name).toBe("QuotaExceededError");
+    });
+
+    it("rebuilds a Thresh runtime error as its own class, not as the fallback", () => {
+      // The runtime's own error family is the analogue of Orleans resolving an exception type it
+      // knows: `catch (OrleansException)` keeps working across the wire, so `isThreshRuntimeError`
+      // and an `instanceof GrainCallError` narrowing must too.
+      const decoded = decodeValue(encodeValue(new GrainCallError("boom")));
+      expect(decoded).toBeInstanceOf(GrainCallError);
+      expect((decoded as GrainCallError).message).toBe("boom");
+
+      const rejection = decodeValue(encodeValue(new RejectionError("nope", "siloDraining")));
+      expect(rejection).toBeInstanceOf(RejectionError);
+      expect((rejection as RejectionError).kind).toBe("siloDraining");
+    });
+
+    it("lets a registered surrogate win over the generic Error branch", () => {
+      registerSurrogate<QuotaExceededError>({
+        tag: "test.quota",
+        test: (value) => value instanceof QuotaExceededError,
+        encode: (error) => ({ message: error.message, limit: error.limit }),
+        decode: (fields) =>
+          new QuotaExceededError(fields.message as string, fields.limit as number),
+      });
+      const decoded = decodeValue(encodeValue(new QuotaExceededError("over", 3)));
+      expect(decoded).toBeInstanceOf(QuotaExceededError);
+      expect(decoded).not.toBeInstanceOf(UnavailableExceptionFallbackException);
+    });
+
+    it("throws CircularReferenceError when an error's own property points back at it", () => {
+      const error = new Error("self") as Error & { self?: unknown };
+      error.self = error;
+      expect(() => encodeValue(error)).toThrow(CircularReferenceError);
+    });
+
+    it("falls back for an error tag naming a class this process does not know", () => {
+      const decoded = decodeValue({
+        $thresh: "error",
+        $tsvv: 1,
+        name: "SomeFutureError",
+        message: "from a newer build",
+        properties: { code: 9 },
+      });
+      expect(decoded).toBeInstanceOf(UnavailableExceptionFallbackException);
+      expect((decoded as Error).name).toBe("SomeFutureError");
+      expect((decoded as UnavailableExceptionFallbackException).properties.code).toBe(9);
+    });
+
+    // Orleans keys its rebuild on an assembly-qualified type name, so an application exception can
+    // never be mistaken for a framework one. Matching on the bare `name` string can: an
+    // application is free to declare a class called `LimitExceededException`, a name Thresh's own
+    // errors table uses. Rebuilding THAT as a `ThreshRuntimeError` would make a caller's
+    // `isThreshRuntimeError` -- the transliteration of `catch (OrleansException)` -- answer true
+    // for a permanent domain failure and retry it.
+    it("does not rebuild an application error that merely shares a Thresh error's name", () => {
+      class LimitExceededException extends Error {
+        constructor(
+          message: string,
+          readonly quotaName: string,
+        ) {
+          super(message);
+          this.name = "LimitExceededException";
+        }
+      }
+
+      const decoded = decodeValue(
+        encodeValue(new LimitExceededException("tenant over quota", "seats")),
+      ) as UnavailableExceptionFallbackException & { quotaName?: string };
+
+      expect(decoded).toBeInstanceOf(UnavailableExceptionFallbackException);
+      expect(isThreshRuntimeError(decoded)).toBe(false);
+      expect(decoded).not.toBeInstanceOf(ThreshLimitExceededException);
+      expect(decoded.name).toBe("LimitExceededException");
+      expect(decoded.message).toBe("tenant over quota");
+      expect(decoded.quotaName).toBe("seats");
+    });
+
+    // Orleans rebuilds the `System.*` namespace with no registration, and upstream leans on it:
+    // GrainCallFilterTests catches ArgumentOutOfRangeException BY TYPE on a cross-silo call.
+    it("rebuilds JavaScript's built-in error classes as themselves", () => {
+      const range = decodeValue(encodeValue(new RangeError("index out of range")));
+      expect(range).toBeInstanceOf(RangeError);
+      expect((range as RangeError).message).toBe("index out of range");
+
+      const type = decodeValue(encodeValue(new TypeError("not a function")));
+      expect(type).toBeInstanceOf(TypeError);
+      expect(isThreshRuntimeError(type)).toBe(false);
+    });
+
+    it("still rebuilds the real Thresh error of that name as itself", () => {
+      const decoded = decodeValue(
+        encodeValue(new ThreshLimitExceededException("seats", 11, 10)),
+      ) as ThreshLimitExceededException;
+
+      expect(decoded).toBeInstanceOf(ThreshLimitExceededException);
+      expect(isThreshRuntimeError(decoded)).toBe(true);
+      expect(decoded.limitName).toBe("seats");
+      expect(decoded.currentValue).toBe(11);
+      expect(decoded.maxValue).toBe(10);
     });
   });
 

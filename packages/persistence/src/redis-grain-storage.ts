@@ -4,6 +4,7 @@ import { InconsistentStateError } from "@thresh/core/errors";
 import type { GrainId } from "@thresh/core/grain-id";
 import type { GrainStorage, StateHolder } from "@thresh/core/grain-storage";
 import { deserializeValue, serializeValue } from "@thresh/core/value-codec";
+import { DEFAULT_SERVICE_ID } from "@thresh/core/default-service-id";
 
 /** A connected node-redis client (the subset this provider drives). */
 export type RedisClient = ReturnType<typeof createClient>;
@@ -11,6 +12,15 @@ export type RedisClient = ReturnType<typeof createClient>;
 export interface RedisGrainStorageOptions {
   /** Namespace for keys in the shared Redis (defaults to `"thresh"`). */
   keyPrefix?: string;
+  /**
+   * Logical service identity this provider's keys belong to (Orleans'
+   * `ClusterOptions.ServiceId`, which its Redis provider puts in the key prefix
+   * as `{ServiceId}/state/` — `RedisGrainStorage.cs:56`). Two clusters pointed
+   * at the same Redis stay partitioned by it. Defaults to `"default"`, Orleans'
+   * own `ClusterOptions.DefaultServiceId`; `SiloBuilder` threads the silo's
+   * `serviceId ?? clusterId`.
+   */
+  serviceId?: string;
 }
 
 const CONFLICT = "THRESH_ETAG_CONFLICT";
@@ -49,12 +59,14 @@ return 'OK'`;
  */
 export class RedisGrainStorage implements GrainStorage {
   private readonly keyPrefix: string;
+  private readonly serviceId: string;
 
   constructor(
     private readonly client: RedisClient,
     options: RedisGrainStorageOptions = {},
   ) {
     this.keyPrefix = options.keyPrefix ?? "thresh";
+    this.serviceId = options.serviceId ?? DEFAULT_SERVICE_ID;
   }
 
   async read<T>(
@@ -134,7 +146,12 @@ export class RedisGrainStorage implements GrainStorage {
     throw err;
   }
 
+  /**
+   * `{keyPrefix}:{serviceId}:state:{grainId}/{stateName}` — Orleans' own key is
+   * `{ServiceId}/state/{grainId}/{grainType}`; the extra `keyPrefix` segment is
+   * Thresh's deployment namespace, which Orleans has no counterpart for.
+   */
   private key(stateName: string, grainId: GrainId): string {
-    return `${this.keyPrefix}:state:${grainId.toString()}/${stateName}`;
+    return `${this.keyPrefix}:${this.serviceId}:state:${grainId.toString()}/${stateName}`;
   }
 }

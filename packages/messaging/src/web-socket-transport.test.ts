@@ -1,14 +1,11 @@
-import { once } from "node:events";
 import { afterEach, describe, expect, it } from "vitest";
-import { WebSocket } from "ws";
 import { RejectionError } from "@thresh/core/errors";
 import { GrainId } from "@thresh/core/grain-id";
 import { SiloAddress } from "@thresh/core/silo-address";
 import { CorrelationTable } from "@thresh/messaging/correlation-table";
 import { JsonSerializer } from "@thresh/messaging/json-serializer";
-import { MessagePackSerializer } from "@thresh/messaging/msgpack-serializer";
 import { nextCorrelationId, responseTo, type Message } from "@thresh/messaging/message";
-import type { ConnectionPreamble, Listener } from "@thresh/messaging/transport";
+import type { Connection, ConnectionPreamble, Listener } from "@thresh/messaging/transport";
 import { WebSocketTransport } from "@thresh/messaging/web-socket-transport";
 
 const CLUSTER = "c1";
@@ -90,15 +87,22 @@ describe("WebSocketTransport", () => {
     ).rejects.toBeInstanceOf(RejectionError);
   });
 
-  it("fires the onAccept hook with the preamble (including clientId) and the held connection can push a message the connecting peer receives", async () => {
+  // The preamble half of this case is unchanged. Its push half used to assert
+  // that the held connection wrote back down the ACCEPTED socket, proved with a
+  // raw `ws` client that installed its own message handler. No Thresh node has
+  // one — `connect()` returns a send-only `Connection` whose only inbound read
+  // is the ack — so that mechanism could never deliver to a real peer, which is
+  // issue #55: a gateway pushing to a client-hosted observer over real sockets
+  // was silently dropped. The connection now reaches the peer's ADVERTISED
+  // listener, as `InProcessTransport`'s reverse connection always did, so this
+  // asserts arrival there instead of on the dialling socket.
+  it("fires the onAccept hook with the preamble (including clientId) and the held connection reaches the peer's advertised listener", async () => {
+    const transportA = new WebSocketTransport(CLUSTER);
     const transportB = new WebSocketTransport(CLUSTER);
-    const clientAddress = loopback("client");
     const clientId = new GrainId("Client", "1");
-    const msgpack = new MessagePackSerializer();
     let acceptedPreamble: ConnectionPreamble | undefined;
-    let heldConnection:
-      | Parameters<NonNullable<Parameters<WebSocketTransport["listen"]>[2]>>[1]
-      | undefined;
+    let heldConnection: Connection | undefined;
+    let pushed: number | undefined;
 
     const listenerB = await transportB.listen(
       loopback("B"),
@@ -108,35 +112,75 @@ describe("WebSocketTransport", () => {
         heldConnection = connection;
       },
     );
-    openListeners.push(listenerB);
+    // The "client" listens on its own ephemeral port, exactly as `ClientNode`
+    // does, and advertises the BOUND address in its preamble.
+    const listenerA = await transportA.listen(loopback("client"), (msg) => {
+      pushed = body.deserialize<number>(msg.body);
+    });
+    openListeners.push(listenerA, listenerB);
 
-    const [host, port] = listenerB.address.endpoint.split(":");
-    const socket = new WebSocket(`ws://${host}:${port}`);
-    socket.binaryType = "arraybuffer";
-    await once(socket, "open");
-    socket.send(
-      msgpack.serialize({
-        protocolVersion: 1,
-        siloAddress: clientAddress,
-        clusterId: CLUSTER,
-        clientId,
-      } satisfies ConnectionPreamble),
-    );
-    await once(socket, "message"); // ACK
+    const conn = await transportA.connect(listenerB.address, {
+      ...preamble(listenerA.address),
+      clientId,
+    });
 
     await expect.poll(() => heldConnection).toBeDefined();
-    expect(acceptedPreamble?.siloAddress).toEqual(clientAddress);
+    expect(acceptedPreamble?.siloAddress).toEqual(listenerA.address);
     expect(acceptedPreamble?.clientId).toEqual(clientId);
 
-    const pushed = new Promise<number>((resolve) => {
-      socket.once("message", (data: ArrayBuffer) => {
-        const msg = msgpack.deserialize<Message>(new Uint8Array(data));
-        resolve(body.deserialize<number>(msg.body));
-      });
-    });
     heldConnection?.send(request(nextCorrelationId(), "oneWay", 13));
 
-    await expect(pushed).resolves.toBe(13);
-    socket.close();
+    await expect.poll(() => pushed, { timeout: 2000 }).toBe(13);
+    await conn.close();
+  });
+
+  // The reverse leg is dialled lazily on first send. Memoizing the dial PROMISE would make one
+  // unlucky attempt permanent: the rejection stays cached, every later push awaits it, and the
+  // peer is unreachable for the life of the accepted socket even once its listener is back.
+  // The consumer symptom is silent -- `ClusterNode.deliverToProxy` registers a correlation and
+  // fire-and-forgets, so the caller just blocks for the full call timeout with nothing logged.
+  it("re-dials the reverse connection after a failed attempt instead of caching the failure", async () => {
+    const transportA = new WebSocketTransport(CLUSTER);
+    const transportB = new WebSocketTransport(CLUSTER);
+    let heldConnection: Connection | undefined;
+    let pushed: number | undefined;
+
+    const listenerB = await transportB.listen(
+      loopback("B"),
+      () => undefined,
+      (_preambleIn, connection) => {
+        heldConnection = connection;
+      },
+    );
+    openListeners.push(listenerB);
+
+    // Bind once to claim a concrete port, then give it up: the address A advertises is real but
+    // nothing is listening on it yet, so the gateway's first dial must fail.
+    const probe = await transportA.listen(loopback("client"), () => undefined);
+    const clientAddress = probe.address;
+    await probe.close();
+
+    const conn = await transportA.connect(listenerB.address, preamble(clientAddress));
+    await expect.poll(() => heldConnection).toBeDefined();
+
+    heldConnection?.send(request(nextCorrelationId(), "oneWay", 1)); // dropped: nothing is listening
+    await expect.poll(() => heldConnection).toBeDefined();
+
+    // The client comes up on the address it advertised, and a later push must reach it.
+    const listenerA = await transportA.listen(clientAddress, (msg) => {
+      pushed = body.deserialize<number>(msg.body);
+    });
+    openListeners.push(listenerA);
+
+    await expect
+      .poll(
+        () => {
+          heldConnection?.send(request(nextCorrelationId(), "oneWay", 21));
+          return pushed;
+        },
+        { timeout: 5000 },
+      )
+      .toBe(21);
+    await conn.close();
   });
 });

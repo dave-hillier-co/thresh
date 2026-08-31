@@ -1,4 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { randomUUID } from "node:crypto";
+import { createServer } from "node:net";
+import { afterAll, describe, expect, it } from "vitest";
+import { Pool } from "pg";
+import { createClient } from "redis";
 import { grain } from "@thresh/core/decorators";
 import { Grain } from "@thresh/core/grain";
 import { GrainId } from "@thresh/core/grain-id";
@@ -8,6 +12,7 @@ import { SiloAddress } from "@thresh/core/silo-address";
 import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
 import { MemoryGrainStorage } from "@thresh/persistence/memory-grain-storage";
 import { PostgresGrainStorage } from "@thresh/persistence/postgres-grain-storage";
+import { serializeValue } from "@thresh/core/value-codec";
 import { constructGrain } from "@thresh/runtime/construct-grain";
 import { createSilo, type Registration } from "@thresh/hosting/silo-builder";
 
@@ -221,7 +226,14 @@ describe("SiloBuilder observer hosting (createObjectReference from a startup tas
     }
   });
 
-  it("refuses to build when the declared observer seam has no transport that can back it", () => {
+  it("builds a WebSocket silo that declares the observer seam", () => {
+    // This used to throw: the embedded client leg existed only over an
+    // in-process network, and the build-time refusal was how that limitation
+    // announced itself instead of a lazy throw on the first observer call.
+    // Issue #55 removed the limitation — a WebSocket-hosted silo now
+    // auto-provisions an ephemeral listening port for the leg — so the
+    // declaration is satisfied rather than rejected. The push path itself is
+    // proved over real sockets further down.
     expect(() =>
       createSilo({ clusterId: "c1", local })
         .useStaticMembership([local])
@@ -231,7 +243,7 @@ describe("SiloBuilder observer hosting (createObjectReference from a startup tas
           grains.createObjectReference(IObserverSeam, { notify: async () => undefined });
         })
         .build(),
-    ).toThrow(/requireObserverHosting.*useInProcessTransport/s);
+    ).not.toThrow();
   });
 
   it("still builds a WebSocket silo whose startup tasks never host an observer", () => {
@@ -250,6 +262,74 @@ describe("SiloBuilder observer hosting (createObjectReference from a startup tas
         .build(),
     ).not.toThrow();
   });
+});
+
+/** Ask the OS for a free TCP port so a WebSocket-hosted silo doesn't collide on one. */
+function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const probe = createServer();
+    probe.once("error", reject);
+    probe.listen(0, "127.0.0.1", () => {
+      const info = probe.address();
+      const port = typeof info === "object" && info !== null ? info.port : 0;
+      probe.close(() => resolve(port));
+    });
+  });
+}
+
+interface INotifier extends GrainWithStringKey {
+  subscribe(observer: IObserverSeam): Promise<void>;
+  fire(value: string): Promise<void>;
+}
+const INotifier = defineGrainInterface<INotifier>("INotifier.hosting");
+
+@grain()
+class NotifierGrain extends Grain implements INotifier {
+  private observer: IObserverSeam | undefined;
+  async subscribe(observer: IObserverSeam): Promise<void> {
+    this.observer = observer;
+  }
+  async fire(value: string): Promise<void> {
+    await this.observer?.notify(value);
+  }
+}
+
+describe("SiloBuilder observer hosting over real WebSocket sockets (issue #55)", () => {
+  it("pushes to an observer a startup task hosted on a WebSocket-transport silo", async () => {
+    // A TestCluster cannot see this: it always configures an in-process
+    // transport, where the reverse connection the gateway holds is an
+    // address-keyed route back into the client's own listener, free of charge.
+    // Over real sockets the client identity has to earn one — an ephemeral
+    // port it binds and then ADVERTISES, since the gateway pushes by dialling
+    // that endpoint rather than writing back down the accepted socket. That is
+    // the whole of #55.
+    const port = await freePort();
+    const address = new SiloAddress("silo-ws", "uid-ws", `127.0.0.1:${port}`);
+    const received: string[] = [];
+
+    const host = createSilo({ clusterId: "c-ws-observer", local: address })
+      .useStaticMembership([address])
+      .useWebSocketTransport()
+      .requireObserverHosting()
+      .registerGrain(NotifierGrain, { interfaces: [INotifier] })
+      .addStartupTask(async (grains) => {
+        const observer = grains.createObjectReference(IObserverSeam, {
+          notify: async (value: string) => {
+            received.push(value);
+          },
+        });
+        await grains.getGrain(INotifier, "n").subscribe(observer);
+        await grains.getGrain(INotifier, "n").fire("over-sockets");
+      })
+      .build();
+
+    await host.start();
+    try {
+      expect(received).toEqual(["over-sockets"]);
+    } finally {
+      await host.stop();
+    }
+  }, 20_000);
 });
 
 describe("SiloBuilder identity read-back", () => {
@@ -299,4 +379,233 @@ describe("SiloBuilder storage read-back", () => {
 
     expect(builder.storageProvider("datastore")).toBeInstanceOf(PostgresGrainStorage);
   });
+});
+
+// ---------------------------------------------------------------------------
+// Service identity reaches the storage providers the builder constructs (#59)
+// ---------------------------------------------------------------------------
+
+const PG_URL = process.env.PG_URL ?? "postgres://localhost:5432/postgres";
+
+/** Probe Postgres once at load time so the suite skips cleanly without it. */
+async function postgresReachable(connectionString: string): Promise<Pool | undefined> {
+  const probe = new Pool({ connectionString });
+  probe.on("error", () => {});
+  try {
+    await probe.query("SELECT 1");
+    return probe;
+  } catch {
+    await probe.end().catch(() => {});
+    return undefined;
+  }
+}
+
+const sharedPool = await postgresReachable(PG_URL);
+
+describe.skipIf(sharedPool === undefined)(
+  "SiloBuilder service identity in storage (issue #59)",
+  () => {
+    it("keeps two clusters sharing one Postgres table on separate rows", async () => {
+      const table = `thresh_hosting_${randomUUID().replace(/-/g, "")}`;
+      const build = (serviceId: string, podName: string) => {
+        const address = new SiloAddress(podName, `uid-${podName}`, `${podName}:11111`);
+        return createSilo({ clusterId: "shared-deployment", serviceId, local: address })
+          .useStaticMembership([address])
+          .useInProcessTransport(new InProcessNetwork())
+          .addPostgresStorage("datastore", { connectionString: PG_URL, tableName: table });
+      };
+
+      const alphaBuilder = build("alpha", "silo-alpha");
+      const betaBuilder = build("beta", "silo-beta");
+      const alphaHost = alphaBuilder.build();
+      const betaHost = betaBuilder.build();
+      await alphaHost.start();
+      await betaHost.start();
+      try {
+        const alpha = alphaBuilder.storageProvider("datastore")!;
+        const beta = betaBuilder.storageProvider("datastore")!;
+        const id = new GrainId("Datastore", "0");
+
+        const a = { value: { cents: 1 }, etag: undefined as string | undefined, exists: false };
+        await alpha.write("balance", id, a);
+
+        // The other cluster's silo must see nothing under the same grain and
+        // state name, and its own blind write must not collide with alpha's row.
+        const b = { value: { cents: 0 }, etag: undefined as string | undefined, exists: false };
+        await beta.read("balance", id, b);
+        expect(b.exists).toBe(false);
+        b.value = { cents: 2 };
+        await beta.write("balance", id, b);
+
+        const reread = {
+          value: { cents: 0 },
+          etag: undefined as string | undefined,
+          exists: false,
+        };
+        await alpha.read("balance", id, reread);
+        expect(reread.value.cents).toBe(1);
+      } finally {
+        await alphaHost.stop();
+        await betaHost.stop();
+        await sharedPool!.query(`DROP TABLE IF EXISTS ${table}`);
+      }
+    }, 20_000);
+
+    // The case a real deployment actually hits: a silo configured with only a
+    // `clusterId`, over a table that predates the service column. The migration
+    // backfills existing rows to DEFAULT_SERVICE_ID, so the builder's default
+    // MUST be that same literal — a default of `clusterId` would stamp the rows
+    // "default" and then read them back under the cluster id, matching nothing:
+    // the grain activates empty and its next write orphans the original row.
+    it("reads rows migrated from the pre-service_id schema on a silo with no serviceId", async () => {
+      const legacy = `thresh_hosting_legacy_${randomUUID().replace(/-/g, "")}`;
+      await sharedPool!.query(
+        `CREATE TABLE ${legacy} (
+           grain_id text NOT NULL,
+           state_name text NOT NULL,
+           data text NOT NULL,
+           etag text NOT NULL,
+           PRIMARY KEY (grain_id, state_name)
+         )`,
+      );
+      const id = new GrainId("Datastore", "0");
+      await sharedPool!.query(
+        `INSERT INTO ${legacy} (grain_id, state_name, data, etag) VALUES ($1, $2, $3, $4)`,
+        [id.toString(), "balance", serializeValue({ cents: 77 }), "legacy-etag"],
+      );
+
+      const address = new SiloAddress("silo-legacy", "uid-legacy", "silo-legacy:11111");
+      const builder = createSilo({ clusterId: "prod", local: address })
+        .useStaticMembership([address])
+        .useInProcessTransport(new InProcessNetwork())
+        .addPostgresStorage("datastore", { connectionString: PG_URL, tableName: legacy });
+      const host = builder.build();
+      await host.start();
+      try {
+        const storage = builder.storageProvider("datastore")!;
+        const state = { value: { cents: 0 }, etag: undefined as string | undefined, exists: false };
+        await storage.read("balance", id, state);
+        expect(state.exists).toBe(true);
+        expect(state.value.cents).toBe(77);
+      } finally {
+        await host.stop();
+        await sharedPool!.query(`DROP TABLE IF EXISTS ${legacy}`);
+      }
+    }, 20_000);
+
+    // Orleans keeps ServiceId independent of ClusterId precisely so a
+    // redeployment that changes the cluster id keeps its state
+    // (ClusterOptions.cs:36). Two silos differing ONLY in clusterId therefore
+    // share one service namespace and SEE each other's rows. This asserts the
+    // fallback itself: it fails against `serviceId ?? clusterId`, which would
+    // partition them and strand the first deployment's state.
+    it("keeps one service namespace across a clusterId change when no serviceId is set", async () => {
+      const table = `thresh_hosting_${randomUUID().replace(/-/g, "")}`;
+      const build = (clusterId: string, podName: string) => {
+        const address = new SiloAddress(podName, `uid-${podName}`, `${podName}:11111`);
+        return createSilo({ clusterId, local: address })
+          .useStaticMembership([address])
+          .useInProcessTransport(new InProcessNetwork())
+          .addPostgresStorage("datastore", { connectionString: PG_URL, tableName: table });
+      };
+
+      const beforeBuilder = build("prod-1", "silo-before");
+      const afterBuilder = build("prod-2", "silo-after");
+      const beforeHost = beforeBuilder.build();
+      const afterHost = afterBuilder.build();
+      await beforeHost.start();
+      await afterHost.start();
+      try {
+        const id = new GrainId("Datastore", "0");
+        const written = {
+          value: { cents: 5 },
+          etag: undefined as string | undefined,
+          exists: false,
+        };
+        await beforeBuilder.storageProvider("datastore")!.write("balance", id, written);
+
+        const reread = {
+          value: { cents: 0 },
+          etag: undefined as string | undefined,
+          exists: false,
+        };
+        await afterBuilder.storageProvider("datastore")!.read("balance", id, reread);
+        expect(reread.exists).toBe(true);
+        expect(reread.value.cents).toBe(5);
+      } finally {
+        await beforeHost.stop();
+        await afterHost.stop();
+        await sharedPool!.query(`DROP TABLE IF EXISTS ${table}`);
+      }
+    }, 20_000);
+  },
+);
+
+// ---------------------------------------------------------------------------
+// The Redis half of the same wiring (#59). The Postgres cases above cannot see
+// it: `addRedisStorage` threads `serviceId` through a separate call site, and
+// dropping it there leaves the whole suite green.
+// ---------------------------------------------------------------------------
+
+const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
+
+async function redisReachable(url: string): Promise<boolean> {
+  const probe = createClient({ url });
+  probe.on("error", () => {});
+  try {
+    await probe.connect();
+    await probe.ping();
+    await probe.quit();
+    return true;
+  } catch {
+    await probe.quit().catch(() => {});
+    return false;
+  }
+}
+
+const redisUp = await redisReachable(REDIS_URL);
+
+describe.skipIf(!redisUp)("SiloBuilder service identity in Redis storage (issue #59)", () => {
+  it("keeps two services sharing one Redis prefix on separate keys", async () => {
+    const prefix = `thresh_hosting_${randomUUID().replace(/-/g, "")}`;
+    const build = (serviceId: string, podName: string) => {
+      const address = new SiloAddress(podName, `uid-${podName}`, `${podName}:11111`);
+      return createSilo({ clusterId: "shared-deployment", serviceId, local: address })
+        .useStaticMembership([address])
+        .useInProcessTransport(new InProcessNetwork())
+        .addRedisStorage("datastore", { url: REDIS_URL, keyPrefix: prefix });
+    };
+
+    const alphaBuilder = build("alpha", "silo-r-alpha");
+    const betaBuilder = build("beta", "silo-r-beta");
+    const alphaHost = alphaBuilder.build();
+    const betaHost = betaBuilder.build();
+    await alphaHost.start();
+    await betaHost.start();
+    try {
+      const id = new GrainId("Datastore", "0");
+      const a = { value: { cents: 1 }, etag: undefined as string | undefined, exists: false };
+      await alphaBuilder.storageProvider("datastore")!.write("balance", id, a);
+
+      const b = { value: { cents: 0 }, etag: undefined as string | undefined, exists: false };
+      await betaBuilder.storageProvider("datastore")!.read("balance", id, b);
+      expect(b.exists).toBe(false);
+    } finally {
+      await alphaHost.stop();
+      await betaHost.stop();
+      const cleanup = createClient({ url: REDIS_URL });
+      cleanup.on("error", () => {});
+      await cleanup.connect();
+      // scanIterator yields a BATCH per iteration, not a single key.
+      for await (const batch of cleanup.scanIterator({ MATCH: `${prefix}:*` })) {
+        const keys = Array.isArray(batch) ? batch : [batch];
+        if (keys.length > 0) await cleanup.del(keys);
+      }
+      await cleanup.quit();
+    }
+  }, 20_000);
+});
+
+afterAll(async () => {
+  await sharedPool?.end();
 });

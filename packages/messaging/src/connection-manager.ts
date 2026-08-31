@@ -15,11 +15,24 @@ export class ConnectionManager {
 
   constructor(
     private readonly transport: Transport,
-    private readonly self: SiloAddress,
+    private self: SiloAddress,
     private readonly clusterId: string,
     /** When set, advertised in the preamble so the accepting silo learns this is a client connection. */
     private readonly clientId?: GrainId,
   ) {}
+
+  /**
+   * Adopt the address this node actually listens on, once its listener has
+   * bound. A node that asks for an EPHEMERAL port (endpoint `host:0` — an
+   * embedded client leg on a silo, which has no port of its own to advertise)
+   * only learns its real address from `Listener.address`, and the peer it dials
+   * has to be told that one: the preamble's `siloAddress` is what the peer
+   * replies to. Call before the first `get`, so no pooled connection has
+   * already announced the placeholder.
+   */
+  setSelf(address: SiloAddress): void {
+    this.self = address;
+  }
 
   get(to: SiloAddress): Promise<Connection> {
     const key = to.endpoint;

@@ -112,10 +112,10 @@ const systemWideOutgoing: OutgoingGrainCallFilter = async (ctx) => {
       await ctx.invoke();
       return;
     } catch (error) {
-      // A cross-silo outgoing call surfaces the remote failure as a
-      // GrainCallError carrying just the message (the original error class
-      // does not survive the wire), so match on message text rather than
-      // `instanceof RangeError` here. Scoped to `IOutgoingMethodInterceptionGrain`
+      // A cross-silo outgoing call surfaces a remote `RangeError` as an
+      // `UnavailableExceptionFallbackException` whose `name` is "RangeError" — the built-in class
+      // itself is not rebuilt, only recorded — so `instanceof RangeError` is still the wrong
+      // predicate here and the filter matches on message text. Scoped to `IOutgoingMethodInterceptionGrain`
       // only — this filter is silo-wide (every outgoing call from `TestCluster`'s
       // one silo host goes through it, including calls this file's other tests
       // make to `IGrainCallFilterTestGrain.throwIfGreaterThanZero`), so it must

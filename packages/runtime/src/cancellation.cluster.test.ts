@@ -80,10 +80,9 @@ describe("cooperative grain cancellation", () => {
       // rather than the pre-cancelled/racing case covered below.
       await new Promise((resolve) => setTimeout(resolve, 20));
       await source.cancel();
-      // The reject crosses the wire as a generic error (only `RejectionError`
-      // preserves its subtype across silos — see `ClusterNode.serializeError`),
-      // so the caller sees `GrainCallError` here, not `GrainTaskCanceledError`
-      // itself; the grain-side state (`wasCancelled`) is what proves the
+      // Assert on the message, not the class: which of the cancellation shapes the callee raises
+      // depends on which abort path wins the race. Error TYPE does cross the wire now (see
+      // `cluster.error-fidelity.test.ts`); the grain-side state (`wasCancelled`) is what proves the
       // *callee* actually observed `GrainTaskCanceledError`.
       await expect(call).rejects.toThrow(/cancelled/i);
       expect(await caller.host.getGrain(ILongWaitGrain, "g2").wasCancelled("call-2")).toBe(true);

@@ -20,13 +20,12 @@ import { createClusterClient } from "@thresh/parity/support/client";
 
 const testClass = "UnitTests.CancellationTests.GrainCancellationTokenTests";
 
-/** Every rejection this suite checks for is a cooperative cancellation, whether
- * it arrives as the exact `GrainTaskCanceledError` (in-process) or a generic
- * `GrainCallError` carrying its message (crossed a silo boundary — only
- * `RejectionError` subtypes survive `ClusterNode.serializeError`; see
- * `cancellation.cluster.test.ts`). Asserting on the message rather than the
- * instance keeps this suite indifferent to which silo a grain happened to
- * activate on. */
+/** Every rejection this suite checks for is a cooperative cancellation. The cancellation family
+ * now crosses a silo boundary AS itself (`cluster.error-fidelity.test.ts`), but the rejection this
+ * suite sees is not always one of those three shapes — a cancelled call can also lose its race and
+ * surface as whatever the grain's own abort path raised. Asserting on the message rather than the
+ * instance keeps the suite indifferent to which silo a grain happened to activate on, which is what
+ * upstream's placement-agnostic assertion means here. */
 async function expectCancelled(task: Promise<unknown>): Promise<void> {
   await expect(task).rejects.toThrow(/cancelled/i);
 }

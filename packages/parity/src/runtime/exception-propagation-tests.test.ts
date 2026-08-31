@@ -62,13 +62,12 @@ describe("UnitTests.General.ExceptionPropagationTests", () => {
     "UnitTests.General.ExceptionPropagationTests.TaskCancelationPropagation",
     async () => {
       // Upstream asserts a `TaskCanceledException`; the analogue here is the
-      // `GrainTaskCanceledError` the grain's canceled-task stand-in throws. We
-      // assert on the message rather than the class because error *type* is not
-      // preserved across a silo boundary — `serializeError` (cluster-node.ts)
-      // reduces a thrown grain error to `{ message }` on the wire, so a
-      // cross-silo caller receives a generic `GrainCallError` carrying the same
-      // message. A class assertion would therefore be placement-dependent
-      // (passes same-silo, fails cross-silo); the message is placement-stable.
+      // `GrainTaskCanceledError` the grain's canceled-task stand-in throws.
+      // Assert on the message rather than the class: the grain's stand-in may
+      // raise any of the three cancellation shapes depending on which abort
+      // path wins, and the message is the part that is stable across all of
+      // them. (Error type itself now DOES survive the wire — see
+      // `cluster.error-fidelity.test.ts`.)
       const grain = cluster.getGrain(IExceptionGrain, randomIntegerKey());
       await expect(grain.canceled()).rejects.toThrow(/cancel/i);
     },

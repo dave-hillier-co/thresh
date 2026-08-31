@@ -68,6 +68,39 @@ class NotifierGrain extends Grain implements INotifierGrain {
   }
 }
 
+/**
+ * A grain that registers a reminder during activation and swallows the failure
+ * if no reminder service is configured — the SpaceDB shape behind #62.
+ */
+interface IReminderRegistrar extends GrainWithStringKey {
+  ping(): Promise<string>;
+  activationError(): Promise<string>;
+}
+const IReminderRegistrar = defineGrainInterface<IReminderRegistrar>("TestClusterReminderRegistrar");
+
+@grain({ name: "TestClusterReminderRegistrar" })
+class ReminderRegistrarGrain extends Grain implements IReminderRegistrar {
+  private failure = "none";
+
+  override async onActivate(): Promise<void> {
+    try {
+      await this.runtime.registerReminder("tick", { ms: 5000 }, { ms: 1_000_000 });
+    } catch (error) {
+      this.failure = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  async ping(): Promise<string> {
+    return "pong";
+  }
+
+  async activationError(): Promise<string> {
+    return this.failure;
+  }
+}
+
+const registrarId = (key: string) => new GrainId("TestClusterReminderRegistrar" as GrainType, key);
+
 const notifierId = (key: string) => new GrainId("TeardownRaceNotifier" as GrainType, key);
 const watcherId = (key: string) => new GrainId("TeardownRaceWatcher" as GrainType, key);
 
@@ -244,6 +277,52 @@ describe("TestCluster classSpecificCollectionAgeSeconds", () => {
       await waitFor(() => !cluster.silos[0]!.host.isActive(counterId("collected")));
 
       expect(cluster.silos[0]!.host.isActive(counterId("collected"))).toBe(false);
+    } finally {
+      await cluster.dispose();
+    }
+  });
+});
+
+/**
+ * `reminders: false` (#62). Orleans expresses "this deployment has no reminder
+ * service" by simply not calling `UseInMemoryReminderService()`; `TestCluster`
+ * used to call `.useReminders(this.reminderTable)` unconditionally, so the
+ * absent-service case could only be approximated by a reminder table whose
+ * writes reject — which tests "the reminder service failed", not "there is no
+ * reminder service".
+ */
+describe("TestCluster reminders", () => {
+  it("builds silos with no reminder service when reminders is false, and grains still activate", async () => {
+    const cluster = await TestCluster.start({
+      initialSilos: 1,
+      reminders: false,
+      grains: [{ ctor: ReminderRegistrarGrain, interfaces: [IReminderRegistrar] }],
+    });
+    try {
+      const grainRef = cluster.getGrain(IReminderRegistrar, "no-service");
+      // Activation registers a reminder and swallows the failure; the grain
+      // still activates and serves the call.
+      expect(await grainRef.activationError()).toBe("reminders are not configured on this silo");
+      expect(await grainRef.ping()).toBe("pong");
+      // The absent service is absent, not a table that rejects: nothing was written.
+      expect(await cluster.reminderTable.readForGrain(registrarId("no-service"))).toHaveLength(0);
+    } finally {
+      await cluster.dispose();
+    }
+  });
+
+  it("installs the reminder service by default", async () => {
+    const cluster = await TestCluster.start({
+      initialSilos: 1,
+      grains: [{ ctor: ReminderRegistrarGrain, interfaces: [IReminderRegistrar] }],
+    });
+    try {
+      const grainRef = cluster.getGrain(IReminderRegistrar, "with-service");
+      expect(await grainRef.activationError()).toBe("none");
+      await waitFor(
+        async () =>
+          (await cluster.reminderTable.readForGrain(registrarId("with-service"))).length === 1,
+      );
     } finally {
       await cluster.dispose();
     }

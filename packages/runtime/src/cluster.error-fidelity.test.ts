@@ -3,8 +3,11 @@ import { grain } from "@thresh/core/decorators";
 import {
   GrainCallAbortedError,
   GrainCallError,
+  GrainCallTimeoutError,
   GrainTaskCanceledError,
   isCancellationError,
+  isThreshRuntimeError,
+  UnavailableExceptionFallbackException,
 } from "@thresh/core/errors";
 import { Grain } from "@thresh/core/grain";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
@@ -35,9 +38,15 @@ registerSurrogate<QuotaExceededError>({
   decode: (fields) => new QuotaExceededError(fields.message as string, fields.limit as number),
 });
 
-/** An error with NO surrogate: it must still degrade to `GrainCallError`, never to a crash. */
+/**
+ * An error with NO surrogate — the shape issue #61 is about. It must still reach the caller with
+ * enough of itself to be discriminated on: the type name and any carried state.
+ */
 class UnregisteredError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    readonly limit: number,
+  ) {
     super(message);
     this.name = "UnregisteredError";
   }
@@ -49,6 +58,7 @@ interface IThrowingGrain extends GrainWithStringKey {
   throwAborted(): Promise<void>;
   throwCallAborted(): Promise<void>;
   throwTaskCanceled(): Promise<void>;
+  throwRuntimeError(): Promise<void>;
 }
 const IThrowingGrain = defineGrainInterface<IThrowingGrain>("IThrowingGrain.errorFidelity");
 
@@ -58,7 +68,7 @@ class ThrowingGrain extends Grain implements IThrowingGrain {
     throw new QuotaExceededError("over the limit", 42);
   }
   async throwUnregistered(): Promise<void> {
-    throw new UnregisteredError("no surrogate for this one");
+    throw new UnregisteredError("no surrogate for this one", 42);
   }
   async throwCallAborted(): Promise<void> {
     // What `raceSignal` (`@thresh/core/abort`) raises when the awaited operation's signal fires -
@@ -67,6 +77,9 @@ class ThrowingGrain extends Grain implements IThrowingGrain {
   }
   async throwTaskCanceled(): Promise<void> {
     throw new GrainTaskCanceledError();
+  }
+  async throwRuntimeError(): Promise<void> {
+    throw new GrainCallTimeoutError("too slow");
   }
   async throwAborted(): Promise<void> {
     // Exactly what `signal.throwIfAborted()` raises when a callee stops because its cancellation
@@ -163,7 +176,11 @@ describe("cross-silo error type fidelity", () => {
     }
   });
 
-  it("still degrades an unregistered error to GrainCallError, keeping its message", async () => {
+  it("carries an unregistered error's name and carried state, so the caller can still discriminate", async () => {
+    // This used to arrive as a bare `GrainCallError` carrying only the message: the codec's
+    // generic object branch flattened an `Error` subclass (no enumerable own properties) to `{}`,
+    // so the type the caller discriminates on was gone and nothing warned. Orleans' answer is
+    // `UnavailableExceptionFallbackException`, which carries the type name and the properties.
     const cluster = await buildCluster();
     try {
       const caller: TestSiloHandle = cluster.silos[1]!;
@@ -174,8 +191,55 @@ describe("cross-silo error type fidelity", () => {
           () => undefined,
           (e: unknown) => e,
         );
-      expect(error).toBeInstanceOf(GrainCallError);
+      expect(error).toBeInstanceOf(UnavailableExceptionFallbackException);
+      expect((error as Error).name).toBe("UnregisteredError");
       expect((error as Error).message).toBe("no surrogate for this one");
+      expect((error as UnavailableExceptionFallbackException).errorType).toBe("UnregisteredError");
+      expect((error as unknown as UnregisteredError).limit).toBe(42);
+    } finally {
+      await cluster.dispose();
+    }
+  });
+
+  it("does not report an unregistered domain error as a Thresh transport failure", async () => {
+    // The half of the bug that changed a gRPC status code: a consumer classifying "is this a
+    // retriable transport fault?" asks `isThreshRuntimeError` / `instanceof GrainCallError`. A
+    // domain error that degraded to `GrainCallError` answered YES, and a permanent domain failure
+    // was retried. Orleans' fallback is a plain `Exception`, not an `OrleansException` — so is
+    // this one.
+    const cluster = await buildCluster();
+    try {
+      const caller: TestSiloHandle = cluster.silos[1]!;
+      const error = await caller.host
+        .getGrain(IThrowingGrain, "g6")
+        .throwUnregistered()
+        .then(
+          () => undefined,
+          (e: unknown) => e,
+        );
+      expect(error).not.toBeInstanceOf(GrainCallError);
+      expect(isThreshRuntimeError(error)).toBe(false);
+    } finally {
+      await cluster.dispose();
+    }
+  });
+
+  it("keeps a Thresh runtime error as its own class across the wire", async () => {
+    // The runtime's own family is the analogue of Orleans resolving an exception type it knows:
+    // a `catch (OrleansException)` ported as `isThreshRuntimeError` must keep firing cross-silo.
+    const cluster = await buildCluster();
+    try {
+      const caller: TestSiloHandle = cluster.silos[1]!;
+      const error = await caller.host
+        .getGrain(IThrowingGrain, "g7")
+        .throwRuntimeError()
+        .then(
+          () => undefined,
+          (e: unknown) => e,
+        );
+      expect(error).toBeInstanceOf(GrainCallTimeoutError);
+      expect(isThreshRuntimeError(error)).toBe(true);
+      expect((error as Error).message).toBe("too slow");
     } finally {
       await cluster.dispose();
     }

@@ -34,6 +34,44 @@ export function isThreshRuntimeError(error: unknown): error is ThreshRuntimeErro
   return error instanceof ThreshRuntimeError;
 }
 
+const RESERVED_FALLBACK_KEYS = new Set(["name", "message", "stack", "errorType", "properties"]);
+
+/**
+ * The stand-in for an error whose concrete class the receiving process cannot rebuild — Orleans'
+ * `UnavailableExceptionFallbackException`, which its `ExceptionCodec` produces when the wire's
+ * type name does not resolve locally. Carries the original {@link errorType} (also mirrored onto
+ * `name`, which is how JavaScript discriminates errors), the message, and the original's own
+ * enumerable properties — both under {@link properties} and copied onto the instance, so a
+ * transliterated `error.limit` still reads.
+ *
+ * Deliberately a plain `Error` and NOT a {@link ThreshRuntimeError}: upstream's fallback derives
+ * from `Exception`, not `OrleansException`, and a domain error that classified as a Thresh
+ * transport failure would be retried when the failure is permanent. Registering a surrogate for
+ * the type (see `docs/orleans-to-thresh-port.md`) is still what makes it arrive as ITSELF; this is
+ * the floor beneath that, not a replacement for it.
+ */
+export class UnavailableExceptionFallbackException extends Error {
+  /** The `name` the error carried on the sending side — the type this process could not rebuild. */
+  readonly errorType: string;
+  /** The sender's own enumerable properties, decoded. Also copied onto this instance. */
+  readonly properties: Readonly<Record<string, unknown>>;
+
+  constructor(errorType: string, message: string, properties: Record<string, unknown> = {}) {
+    super(message);
+    this.errorType = errorType;
+    // `name` carries the sending type, not this class's own: a caller discriminates on `name` in
+    // JavaScript the way a C# caller discriminates on the exception type, and `instanceof
+    // UnavailableExceptionFallbackException` is already the answer to "was the type rebuilt?".
+    this.name = errorType;
+    this.properties = properties;
+    for (const [key, value] of Object.entries(properties)) {
+      // Never let a carried property overwrite the identity fields above.
+      if (RESERVED_FALLBACK_KEYS.has(key)) continue;
+      (this as unknown as Record<string, unknown>)[key] = value;
+    }
+  }
+}
+
 /** An error raised while dispatching or executing a grain call. */
 export class GrainCallError extends ThreshRuntimeError {
   constructor(message: string, options?: { cause?: unknown }) {

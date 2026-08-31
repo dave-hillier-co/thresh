@@ -13,9 +13,20 @@ deadline API, keepalive unbind on deactivation, and full-facet `@readOnly` guard
 
 [SpaceDB](https://github.com/dave-hillier-co/spacedb) — a wire-compatible SpiceDB on Thresh,
 ported from the Orleans implementation — is the first production consumer, and the gaps it hits
-land here. Closed so far: custom-storage log consistency, custom placement strategies, and
-`raceAbort` for cancellation-as-clean-exit. [`docs/orleans-to-thresh-port.md`](docs/orleans-to-thresh-port.md)
+land here. Closed so far: custom-storage log consistency, custom placement strategies,
+`raceAbort` for cancellation-as-clean-exit, a service dimension in the Postgres and Redis storage
+keys, and the observer seam on a `WebSocketTransport`-hosted silo. [`docs/orleans-to-thresh-port.md`](docs/orleans-to-thresh-port.md)
 is the mechanical Orleans→Thresh reference that port maintains.
+
+The service dimension is an **upgrade break for Redis**, recorded here because nothing else does.
+`RedisGrainStorage`'s key gained a service segment (`{keyPrefix}:{serviceId}:state:…`, was
+`{keyPrefix}:state:…`) and Redis has no `ALTER`, so state written under the old shape is orphaned
+rather than corrupted — unreferenced keys that will never expire. Taken deliberately: Thresh has no
+production deployments, and leaving the segment out keeps two services sharing one Redis silently
+colliding, which is the bug. Postgres is **not** breaking: `start()` migrates an existing table in
+place, backfilling to `DEFAULT_SERVICE_ID`, and a silo that names no `serviceId` reads exactly that
+literal — the two must agree or every pre-existing row goes invisible on the next restart, which is
+the failure this migration exists to avoid.
 
 ## Beyond parity
 
@@ -30,16 +41,6 @@ is the mechanical Orleans→Thresh reference that port maintains.
       (shared provider core), Phase 1 (Postgres backing, `addPostgresStreams`) and Phase 2 (Kafka
       backing, `addKafkaStreams`) are done; Phase 3 (LISTEN/NOTIFY polish, consumer-lag gauge,
       worked examples) is optional and remains.
-
-- [ ] [#55](https://github.com/dave-hillier-co/thresh/issues/55) follow-on: make the observer
-      seam work on a `WebSocketTransport`-hosted silo. `requireObserverHosting()` now fails such a
-      silo at `build()` instead of at the first `createObjectReference` call, but the underlying
-      restriction stands: `ClientNode.connect()` listens on its own endpoint and the silo dials it
-      back, so a WS-hosted embedded client needs a real second listening port and a reachable
-      advertised address that `SiloConfig` does not supply. Two ways out, both deferred: make the
-      client leg duplex over its own outbound connection (Orleans' shape — `WebSocketTransport`'s
-      socket is send-only today, its message handler consumed by `awaitAck`), or auto-provision an
-      ephemeral port and advertise it. See [`docs/deviations.md`](docs/deviations.md).
 
 ## Orleans test-suite port (parity suite)
 

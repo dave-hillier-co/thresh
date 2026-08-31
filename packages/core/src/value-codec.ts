@@ -1,4 +1,26 @@
-import { GrainCallAbortedError, GrainTaskCanceledError } from "./errors";
+import {
+  GatewayTooBusyException,
+  GrainCallAbortedError,
+  GrainCallError,
+  GrainCallTimeoutError,
+  GrainExtensionNotInstalledException,
+  GrainTaskCanceledError,
+  InconsistentStateError,
+  LimitExceededException,
+  ReadOnlyStateViolationError,
+  RejectionError,
+  ThreshCancellationError,
+  ThreshRuntimeError,
+  TransactionAbortedError,
+  TransactionCascadingAbortError,
+  TransactionInDoubtError,
+  TransactionLockUpgradeError,
+  TransactionOrphanCallError,
+  TransactionReadOnlyViolatedError,
+  TransactionsDisabledError,
+  UnavailableExceptionFallbackException,
+  type RejectionKind,
+} from "./errors";
 import { CancellationTokenPlaceholder, GrainCancellationToken } from "./grain-cancellation-token";
 import { GrainId } from "./grain-id";
 import { keyToString, type GrainKeyKind } from "./grain-key";
@@ -41,6 +63,157 @@ export class CircularReferenceError extends Error {
     this.name = "CircularReferenceError";
   }
 }
+
+/**
+ * Rebuild the runtime's OWN error classes from the generic `error` envelope, keyed by the `name`
+ * they carry. This is the counterpart of Orleans' `ExceptionCodec` resolving the wire's type name
+ * through its `TypeConverter`: a type the receiving process knows is reconstructed as itself, and
+ * only an unresolvable one degrades to the fallback. Without it a `catch (OrleansException)`
+ * ported as `isThreshRuntimeError` would stop firing the moment the call crossed a silo.
+ *
+ * Application types belong in `registerSurrogate`, not here — this map is closed over the classes
+ * `@thresh/core/errors` declares, so a rebuild can never run application code the sender chose.
+ */
+const knownErrors = new Map<string, (message: string, props: Record<string, unknown>) => Error>();
+
+/**
+ * The constructor each name in {@link knownErrors} rebuilds, used at ENCODE time to prove the
+ * sender's error really is that Thresh class before the wire claims the name.
+ *
+ * Orleans keys its rebuild on a namespace- and assembly-qualified type name (`ExceptionCodec`
+ * writes `_typeConverter.Format(value.GetType())`), so an application exception can never be
+ * mistaken for a framework one. `name` alone is not that: an application is free to declare
+ * `class LimitExceededException extends Error` — a name Orleans itself uses — and a decoder
+ * matching on the bare string would rebuild Thresh's `LimitExceededException`, a
+ * `ThreshRuntimeError`, with every field `undefined`. The caller's `isThreshRuntimeError` (the
+ * transliteration of `catch (OrleansException)`) would then answer TRUE for a permanent domain
+ * failure and retry it — the exact hazard the error-fidelity work exists to remove.
+ *
+ * So the `thresh` marker is set only when `value instanceof` the registered class holds, and
+ * decode consults this table only when the marker is present. An unmarked name, whatever it says,
+ * takes the fallback.
+ */
+const knownErrorClasses = new Map<string, abstract new (...args: never[]) => Error>();
+
+/** Force a rebuilt error's message to the one that crossed the wire, where the constructor derives it. */
+function withMessage<T extends Error>(error: T, message: string): T {
+  error.message = message;
+  return error;
+}
+
+function registerKnownError(
+  name: string,
+  ctor: abstract new (...args: never[]) => Error,
+  build: (message: string, props: Record<string, unknown>) => Error,
+): void {
+  knownErrors.set(name, build);
+  knownErrorClasses.set(name, ctor);
+}
+
+/** True when `value` genuinely IS the Thresh error class registered under `name`. */
+function isKnownThreshError(value: Error, name: string): boolean {
+  const ctor = knownErrorClasses.get(name);
+  return ctor !== undefined && value instanceof ctor;
+}
+
+registerKnownError("ThreshRuntimeError", ThreshRuntimeError, (m) => new ThreshRuntimeError(m));
+registerKnownError("GrainCallError", GrainCallError, (m) => new GrainCallError(m));
+registerKnownError(
+  "GrainCallTimeoutError",
+  GrainCallTimeoutError,
+  (m) => new GrainCallTimeoutError(m),
+);
+registerKnownError(
+  "GrainExtensionNotInstalledException",
+  GrainExtensionNotInstalledException,
+  (m) => new GrainExtensionNotInstalledException(m),
+);
+registerKnownError(
+  "GatewayTooBusyException",
+  GatewayTooBusyException,
+  (m) => new GatewayTooBusyException(m),
+);
+registerKnownError(
+  "RejectionError",
+  RejectionError,
+  (m, p) => new RejectionError(m, p.kind as RejectionKind),
+);
+registerKnownError("LimitExceededException", LimitExceededException, (m, p) =>
+  withMessage(
+    new LimitExceededException(
+      p.limitName as string,
+      p.currentValue as number,
+      p.maxValue as number,
+    ),
+    m,
+  ),
+);
+registerKnownError(
+  "ThreshCancellationError",
+  ThreshCancellationError,
+  (m) => new ThreshCancellationError(m),
+);
+registerKnownError(
+  "ReadOnlyStateViolationError",
+  ReadOnlyStateViolationError,
+  (m) => new ReadOnlyStateViolationError(m),
+);
+registerKnownError("TransactionsDisabledError", TransactionsDisabledError, (m) =>
+  withMessage(new TransactionsDisabledError(), m),
+);
+registerKnownError(
+  "InconsistentStateError",
+  InconsistentStateError,
+  (m, p) =>
+    new InconsistentStateError(
+      m,
+      p.expectedEtag as string | undefined,
+      p.storedEtag as string | undefined,
+    ),
+);
+registerKnownError("TransactionAbortedError", TransactionAbortedError, (m, p) =>
+  withMessage(new TransactionAbortedError(p.transactionId as string, ""), m),
+);
+registerKnownError("TransactionReadOnlyViolatedError", TransactionReadOnlyViolatedError, (m, p) =>
+  withMessage(new TransactionReadOnlyViolatedError(p.transactionId as string), m),
+);
+registerKnownError("TransactionLockUpgradeError", TransactionLockUpgradeError, (m, p) =>
+  withMessage(new TransactionLockUpgradeError(p.transactionId as string), m),
+);
+registerKnownError("TransactionOrphanCallError", TransactionOrphanCallError, (m, p) =>
+  withMessage(
+    new TransactionOrphanCallError(p.transactionId as string, p.pendingCalls as number),
+    m,
+  ),
+);
+registerKnownError("TransactionCascadingAbortError", TransactionCascadingAbortError, (m, p) =>
+  withMessage(new TransactionCascadingAbortError(p.transactionId as string), m),
+);
+registerKnownError("TransactionInDoubtError", TransactionInDoubtError, (m, p) =>
+  withMessage(new TransactionInDoubtError(p.transactionId as string), m),
+);
+registerKnownError("CircularReferenceError", CircularReferenceError, (m, p) =>
+  withMessage(new CircularReferenceError(p.path as string), m),
+);
+
+// JavaScript's built-in error classes, the analogue of Orleans rebuilding the `System.*` namespace
+// with no registration (`ExceptionSerializationOptions.SupportedNamespacePrefixes` defaults to
+// `{ "Microsoft", "System", "Azure" }`). Upstream depends on it: `GrainCallFilterTests` catches
+// `ArgumentOutOfRangeException` BY TYPE inside an outgoing filter on a cross-silo call. Without
+// these a grain throwing `new RangeError(...)` reaches its caller as the fallback and
+// `instanceof RangeError` is false, so the ported filter tests can only assert `.rejects.toThrow()`
+// where upstream pins the type. Safe for the same reason as the Thresh classes above: the table is
+// closed, and the `thresh` marker still requires the sender to have passed `instanceof`.
+// `Error` itself is deliberately NOT here. It would swallow the diagnostic: a subclass that never
+// sets `this.name` inherits "Error", so it would rebuild as a plain `Error` and the caller would
+// lose the `instanceof UnavailableExceptionFallbackException` signal that says "your type was not
+// reconstructed". The fallback is an `Error` anyway, so nothing is gained by claiming the base.
+registerKnownError("TypeError", TypeError, (m) => new TypeError(m));
+registerKnownError("RangeError", RangeError, (m) => new RangeError(m));
+registerKnownError("ReferenceError", ReferenceError, (m) => new ReferenceError(m));
+registerKnownError("SyntaxError", SyntaxError, (m) => new SyntaxError(m));
+registerKnownError("URIError", URIError, (m) => new URIError(m));
+registerKnownError("EvalError", EvalError, (m) => new EvalError(m));
 
 /**
  * A registered encode/decode pair for a user or library type, keyed by a
@@ -272,6 +445,37 @@ function encodeInner(
       seen.delete(value);
     }
   }
+  // Any remaining `Error` — an application's domain error with no surrogate above all. An `Error`
+  // subclass has no enumerable own properties of its own, so the generic object branch below
+  // flattened it to `{}` and the caller was left with a `GrainCallError` carrying only the message
+  // text: the type it discriminates on was gone, silently. Orleans never had that hazard because
+  // its `ExceptionCodec` writes the type name, the message and the properties for EVERY exception
+  // and only falls back to `UnavailableExceptionFallbackException` when the name does not resolve.
+  // This is the same contract. It sits deliberately LAST among the error branches, so a registered
+  // surrogate — and the cancellation family's own tags — still win.
+  if (value instanceof Error) {
+    if (seen.has(value)) throw new CircularReferenceError(path);
+    seen.add(value);
+    try {
+      const properties: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(value)) {
+        // `name` and `message` travel as dedicated fields; `stack` is a local artefact of the
+        // sending process and would only mislead a reader on the other side.
+        if (k === "name" || k === "message" || k === "stack") continue;
+        properties[k] = encodeInner(v, seen, `${path}.${k}`, options);
+      }
+      const name = typeof value.name === "string" ? value.name : "Error";
+      const fields: Record<string, unknown> = { name, message: value.message };
+      // Only a value that genuinely IS the Thresh class of that name may claim it; see
+      // `knownErrorClasses`. An application error that merely shares the name goes unmarked and
+      // rebuilds as the fallback, never as a `ThreshRuntimeError`.
+      if (isKnownThreshError(value, name)) fields.thresh = true;
+      if (Object.keys(properties).length > 0) fields.properties = properties;
+      return tagged("error", fields);
+    } finally {
+      seen.delete(value);
+    }
+  }
   if (value !== null && typeof value === "object") {
     if (seen.has(value)) throw new CircularReferenceError(path);
     seen.add(value);
@@ -322,6 +526,23 @@ export function decodeValue(value: unknown, ctx: CodecContext = {}): unknown {
         return new GrainCallAbortedError(obj.message as string);
       case "taskCanceled":
         return new GrainTaskCanceledError(obj.message as string);
+      case "error": {
+        const name = typeof obj.name === "string" ? obj.name : "Error";
+        const message = typeof obj.message === "string" ? obj.message : "";
+        const raw = obj.properties;
+        const properties: Record<string, unknown> = {};
+        if (raw !== null && typeof raw === "object") {
+          for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+            properties[k] = decodeValue(v, ctx);
+          }
+        }
+        // The name alone never selects a constructor: the sender must also have marked the value
+        // as one of Thresh's own errors, which it can only do by passing `instanceof`.
+        const known = obj.thresh === true ? knownErrors.get(name) : undefined;
+        return known !== undefined
+          ? known(message, properties)
+          : new UnavailableExceptionFallbackException(name, message, properties);
+      }
       case "silo":
         return new SiloAddress(obj.podName as string, obj.podUid as string, obj.endpoint as string);
       case "map": {

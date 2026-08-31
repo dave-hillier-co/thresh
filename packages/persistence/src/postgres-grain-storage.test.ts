@@ -4,6 +4,7 @@ import { Pool } from "pg";
 import { InconsistentStateError } from "@thresh/core/errors";
 import { GrainId } from "@thresh/core/grain-id";
 import type { GrainStorage } from "@thresh/core/grain-storage";
+import { serializeValue } from "@thresh/core/value-codec";
 import { PersistentStateImpl } from "@thresh/persistence/persistent-state-impl";
 import { PostgresGrainStorage } from "@thresh/persistence/postgres-grain-storage";
 
@@ -158,5 +159,84 @@ describe.skipIf(pool === undefined)("PostgresGrainStorage", () => {
     const limit = makeState(makeStorage(), "limit");
     await limit.read();
     expect(limit.exists).toBe(false);
+  });
+});
+
+// Issue #59: Orleans' AdoNet provider keys a state row by ServiceId + GrainId
+// (`PostgreSQL-Persistence.sql`, `OrleansStorage.serviceid`), so several
+// clusters can share one database and stay partitioned. These two cases pin
+// both halves of adding that dimension here: the partitioning it buys, and the
+// in-place migration that keeps a table written under the old shape readable.
+describe.skipIf(pool === undefined)("PostgresGrainStorage service partitioning (issue #59)", () => {
+  beforeEach(async () => {
+    const storage = makeStorage() as PostgresGrainStorage;
+    await storage.start();
+    await pool!.query(`TRUNCATE TABLE ${table}`);
+  });
+
+  it("keeps two service ids on separate rows for the same grain and state", async () => {
+    const alpha = new PostgresGrainStorage(pool!, { tableName: table, serviceId: "alpha" });
+    await alpha.start();
+    const a = makeState(alpha);
+    a.value.cents = 1;
+    await a.write();
+
+    // A second cluster has never seen this grain: its read must find nothing,
+    // and its blind write must succeed, because alpha's row is not its row.
+    const beta = new PostgresGrainStorage(pool!, { tableName: table, serviceId: "beta" });
+    const b = makeState(beta);
+    await b.read();
+    expect(b.exists).toBe(false);
+    b.value.cents = 2;
+    await b.write();
+
+    // Neither cluster observes the other's value.
+    const reAlpha = makeState(
+      new PostgresGrainStorage(pool!, { tableName: table, serviceId: "alpha" }),
+    );
+    await reAlpha.read();
+    expect(reAlpha.value.cents).toBe(1);
+    const reBeta = makeState(
+      new PostgresGrainStorage(pool!, { tableName: table, serviceId: "beta" }),
+    );
+    await reBeta.read();
+    expect(reBeta.value.cents).toBe(2);
+  });
+
+  it("migrates a table written under the pre-service_id schema and still reads its rows", async () => {
+    const legacy = `${table}_legacy`;
+    await pool!.query(
+      `CREATE TABLE ${legacy} (
+         grain_id text NOT NULL,
+         state_name text NOT NULL,
+         data text NOT NULL,
+         etag text NOT NULL,
+         PRIMARY KEY (grain_id, state_name)
+       )`,
+    );
+    try {
+      await pool!.query(
+        `INSERT INTO ${legacy} (grain_id, state_name, data, etag) VALUES ($1, $2, $3, $4)`,
+        [id.toString(), "balance", serializeValue({ cents: 77 }), "legacy-etag"],
+      );
+
+      const storage = new PostgresGrainStorage(pool!, { tableName: legacy });
+      await storage.start(); // must ALTER the existing table, not skip it
+
+      const state = makeState(storage);
+      await state.read();
+      expect(state.exists).toBe(true);
+      expect(state.value.cents).toBe(77);
+      expect(state.etag).toBe("legacy-etag");
+
+      // The migrated row is still writable under its (defaulted) service id.
+      state.value.cents = 78;
+      await state.write();
+      const reread = makeState(new PostgresGrainStorage(pool!, { tableName: legacy }));
+      await reread.read();
+      expect(reread.value.cents).toBe(78);
+    } finally {
+      await pool!.query(`DROP TABLE IF EXISTS ${legacy}`);
+    }
   });
 });

@@ -51,6 +51,17 @@ export interface TestClusterOptions {
    */
   transactions?: boolean;
   /**
+   * Whether silos are built with a reminder service. Defaults to `true` (every
+   * silo gets the cluster-wide `reminderTable`); pass `false` to build silos
+   * with no reminder service at all, so a grain calling
+   * `runtime.registerReminder` gets "reminders are not configured on this
+   * silo" (Orleans: a test silo whose configurator never calls
+   * `UseInMemoryReminderService()`). `reminderTable` still exists on the
+   * cluster and stays empty; a silo needing its OWN table can still install one
+   * from `configureSilo` via `builder.useReminders(table)`.
+   */
+  reminders?: boolean;
+  /**
    * Per-silo overrides, applied after the defaults. `cluster` is the
    * `TestCluster` under construction — use `cluster.streamProvider(name)` to
    * register a named `MemoryStreamProvider` shared cluster-wide (the way
@@ -413,11 +424,17 @@ export class TestCluster {
       .useMembership(membership)
       .useInProcessTransport(this.network)
       .useMemoryStorage(this.storage)
-      .useReminders(this.reminderTable)
       .useMemoryStreams("default", undefined, this.streamProvider("default"))
       .useBroadcastChannels()
       .useMemoryJournaling(this.journalStorage)
       .useMemoryDurableJobs(this.jobShardStore);
+    // Orleans expresses "this deployment has no reminder service" by simply not
+    // calling `UseInMemoryReminderService()`, so `reminders: false` must leave
+    // the builder's table undefined rather than install a no-op one — that is
+    // what makes the silo build with no `reminderRegistry` at all.
+    if (this.options.reminders ?? true) {
+      builder.useReminders(this.reminderTable);
+    }
     if (this.options.transactions ?? true) {
       builder.useMemoryTransactionalStorage(this.transactionalStorage);
     } else {

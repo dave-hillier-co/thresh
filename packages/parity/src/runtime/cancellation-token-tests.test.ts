@@ -32,10 +32,8 @@ import {
 } from "@thresh/parity/support/cancellation";
 import { createClusterClient } from "@thresh/parity/support/client";
 
-/** Same cross-silo caveat as the sibling suite: assert on the rejection
- * message, not the error class/instance, since a rejection crossing a silo
- * boundary degrades a `GrainTaskCanceledError` to a generic `GrainCallError`
- * carrying the same message — see
+/** Same placement-agnostic assertion as the sibling suite: match on the rejection message rather
+ * than the error class, so the suite does not depend on which silo a grain activated on — see
  * `grain-cancellation-token-tests.test.ts`'s `expectCancelled`. */
 async function expectCancelled(task: Promise<unknown>): Promise<void> {
   await expect(task).rejects.toThrow(/cancel/i);

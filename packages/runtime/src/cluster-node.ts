@@ -1793,8 +1793,10 @@ export class ClusterNode {
     const payload = this.serializer.deserialize<{ message: string; error?: unknown }>(
       response.body,
     );
-    // A surrogate-registered error rebuilds as its own class; anything else decodes to a value that
-    // is not an `Error` and degrades to `GrainCallError`, keeping the message.
+    // A surrogate-registered error rebuilds as its own class, a Thresh runtime error as its own
+    // leaf, and anything else as an `UnavailableExceptionFallbackException` carrying the sender's
+    // type name — so the caller always has something better than message text to discriminate on.
+    // `GrainCallError` remains the floor for a peer that sent no error value at all.
     if (payload.error instanceof Error) throw payload.error;
     throw new GrainCallError(payload.message);
   }
@@ -1897,10 +1899,11 @@ export class ClusterNode {
    * An `AggregateError` (non-fire-and-forget `publishToBroadcastChannel`'s
    * aggregated subscriber failures) carries its inner error messages
    * separately so the receiving end reconstructs a real `AggregateError`
-   * instead of collapsing to a generic error with no `.errors` — the wire has
-   * no general exception-type fidelity, so this is a narrow, deliberate
-   * exception to preserve what `MultipleSubscribersOneBadActorChannelTest`-style
-   * tests assert on (`Assert.Single(ex.InnerExceptions)`).
+   * instead of collapsing to a generic error with no `.errors` — `.errors` is
+   * a non-enumerable own property, so the codec's generic `Error` branch does
+   * not carry it, and this stays the narrow, deliberate exception that
+   * preserves what `MultipleSubscribersOneBadActorChannelTest`-style tests
+   * assert on (`Assert.Single(ex.InnerExceptions)`).
    */
   private serializeError(err: unknown): { kind: ResponseKind; body: Uint8Array } {
     if (err instanceof RejectionError) {
@@ -1924,9 +1927,11 @@ export class ClusterNode {
         // Send the error VALUE alongside its message so a type the application has taught the
         // codec about (`registerSurrogate`) reaches the caller as ITSELF, the way Orleans carries a
         // `[GenerateSerializer]` exception across the silo boundary. Without this a caller can only
-        // branch on message text, which is presentation rather than contract. An error with no
-        // surrogate encodes to an inert object and the receiver falls back to `message`, so this
-        // costs nothing for types that never opted in.
+        // branch on message text, which is presentation rather than contract. A type with NO
+        // surrogate is no longer lost either: `encodeValue`'s generic `Error` branch carries its
+        // name and carried state, and the receiver rebuilds an
+        // `UnavailableExceptionFallbackException`. `message` stays on the envelope for a peer old
+        // enough to send nothing else.
         return { kind: "error", body: this.serializer.serialize({ message, error: err }) };
       } catch {
         // An error carrying something the codec cannot encode must not turn a remote failure into

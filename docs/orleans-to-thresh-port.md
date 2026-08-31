@@ -114,6 +114,7 @@ Supply `readStateFromStorage()` (returning `{ version, state }`),
 | `RegisterGrainTimer(callback, dueTime, period)` | `ctx.runtime.registerTimer(callback, due, period)` |
 | `TimeSpan.FromSeconds(30)` | the `Duration` object literal `{ seconds: 30 }` (`@thresh/core/duration`); `durationToMs` converts. There are no `seconds()`/`minutes()` helper functions. |
 | `TimeProvider` injected into a grain's constructor | `ctx.runtime.timeProvider` (Orleans `IGrainRuntime.TimeProvider`) — the silo's configured clock, the same one `registerTimer` schedules against. Read it for any time-based state the grain owns itself (an `ObserverManager`'s TTL expiry, a staleness check) rather than importing `systemTimeProvider`: pinning to the system clock is what makes a `TestCluster` built with a `FakeTimeProvider` unable to drive that expiry without sleeping in real time. |
+| `timeProvider.GetTimestamp()` / `TimestampFrequency` | `nowNanosOf(ctx.runtime.timeProvider)` (`@thresh/core/time-provider`) — the same clock as `now()`, read as epoch nanoseconds. Orleans' fine reading is an origin-free stopwatch tick for measuring elapsed time; Thresh's is an absolute instant, because what needed it mints ORDERED VALUES from the clock and a millisecond is coarser than the interval between them. Call it through `nowNanosOf`, not `timeProvider.nowNanos!()`: the member is optional so older structural clocks still typecheck, and the helper supplies the (millisecond-quantised) fallback. See [`deviations.md`](deviations.md). |
 
 ## Serialization
 
@@ -129,8 +130,9 @@ The exceptions, where the port must do real work:
   `IConverter<T, TSurrogate>` maps onto the surrogate registry.
 - **Exceptions crossing a grain boundary.** Orleans needs `[GenerateSerializer]` on the
   exception type; Thresh needs the error registered so it round-trips as its own class rather
-  than a plain `Error`. Grep the C# for `[GenerateSerializer]` on anything deriving from
-  `Exception` — each one is a registration in the port.
+  than as `UnavailableExceptionFallbackException`. Grep the C# for `[GenerateSerializer]` on
+  anything deriving from `Exception` — each one is a registration in the port — and add one for
+  any type a caller discriminates on with `instanceof`, whether or not the C# marked it.
 - **Google.Protobuf `CalculateSize()`.** The SERIALIZED byte length of a message, and where a
   size limit is compared against it that length is wire-visible. In ts-proto it is
   `Msg.encode(m).finish().length` — never `JSON.stringify(...).length` and never a UTF-16 char
@@ -216,6 +218,20 @@ indexing expression already yields `T | undefined`, which is usually what the C#
 | a filter around a **ported parse** — `when (ex is FormatException or OverflowException or ArgumentException)` | match what the PORTED parser actually throws, which is often a JS built-in: a hand-rolled `NumberStyles` check typically throws `SyntaxError` for the shape and `RangeError` for the out-of-range value. This is the one place the "rethrow `TypeError`, `RangeError`" rule above is **wrong** — there `RangeError` is a programming fault, here it is the source's `OverflowException` and must be caught. Decide it from the throw sites of the specific parse being called, and say so at the catch. |
 | `OperationCanceledException` (and `TaskCanceledException`, which derives from it) | `isCancellationError(error)` (`@thresh/core/errors`) — one predicate over the whole **abort family**: `GrainCallAbortedError`, `GrainTaskCanceledError` (both extend `ThreshCancellationError`, the `OperationCanceledException` analogue) and a DOM `AbortError`, which no class base can reach. `ThreshCancellationError` is deliberately NOT a `ThreshRuntimeError`, mirroring `OperationCanceledException` not being an `OrleansException`: a cancellation is the caller getting what it asked for, and classifying it as a call failure turns a deliberate abort into a retriable availability error. |
 | `RpcException(new Status(StatusCode.X, detail))` at a gRPC service boundary | a project `RpcError extends Error` carrying a numeric `code` (from `@grpc/grpc-js`'s `status`) and a `details` string, plus an empty `Metadata`. `@grpc/grpc-js` has no `RpcException`: what it consumes is a `ServiceError`, which is an `Error` with exactly those three members, so one class serves both the C#'s `ex.StatusCode`/`ex.Status.Detail` reading and the transport's, and can be handed to `sendUnaryData`/`stream.destroy` unchanged. Declare it ONCE per port — every service file throws the same class — and set `this.name`. Do not reach for a status-per-error-class hierarchy: the C# picks the code at the throw site and those choices are wire-visible. |
+
+**Any exception type a caller catches BY TYPE across a grain call wants a surrogate.** Orleans
+resolves the wire's type name through its `TypeConverter` and rebuilds the exception as itself;
+Thresh's codec has no type resolution for application classes, so `registerSurrogate` is what
+supplies it. Without one, the error still arrives — as an
+`UnavailableExceptionFallbackException` (`@thresh/core/errors`), the port of upstream's
+[`UnavailableExceptionFallbackException`](https://github.com/dotnet/orleans/blob/main/src/Orleans.Serialization/ISerializableSerializer/UnavailableExceptionFallbackException.cs),
+carrying the sender's type name on both `name` and `errorType`, the message, and the original's own
+enumerable properties (under `properties`, and copied onto the instance so `error.limit` reads).
+That is a floor, not a substitute: `instanceof MyDomainError` still misses, and a `catch (MyEx)`
+transliterated as an `instanceof` arm still runs the wrong branch. Discriminating on `name` is the
+fallback for a type that cannot take the registration. Thresh's OWN error classes need nothing —
+the codec rebuilds them by name, so `isThreshRuntimeError` and `isCancellationError` keep firing
+across a silo boundary.
 
 When registering an exception surrogate, encode **only** the carried data where the constructor
 re-derives its message from it; encode the message only when it is the type's sole distinguishing
@@ -402,6 +418,7 @@ function that builds the object graph, and have both the silo host and the tests
 |---|---|
 | `TestCluster` / `TestClusterBuilder` | `TestCluster` (`@thresh/testing/test-cluster`) |
 | `TestCluster.Client` / `TestCluster.GrainFactory` | `await cluster.client` — a `ClientNode` outside every silo, gatewayed through the cluster's membership and registered with `TestClusterOptions.grains`. NOT the same as `cluster.getGrain`, which routes through the primary SILO: a call made there is issued by that silo and runs its outgoing call filters, which a client call does not. Port a `fixture.GrainFactory` / `Client` call site to `cluster.client` and a `grainFactory` resolved from a silo's own container to `cluster.getGrain`; collapsing the two merges cases the C# suite pins apart. The accessor is async (connecting is), it is created on FIRST access rather than at `start()` — a connected client registers in the client directory and opens a gateway connection, so an untouched one costs a message-counting test nothing — and `dispose()` closes it before stopping any silo, as Orleans' `StopAllSilosAsync` does. |
+| a test silo configurator that deliberately never calls `UseInMemoryReminderService()`, to exercise the deployment shape with NO reminder service | `TestCluster.start({ reminders: false })`. `TestCluster` installs the cluster-wide `reminderTable` on every silo by default; `reminders: false` skips that so `runtime.registerReminder` fails with "reminders are not configured on this silo". Not the same as a reminder table whose writes reject — that tests a reminder service that FAILED. A single silo needing its own table can still call `builder.useReminders(table)` from `configureSilo`. |
 | `[Fact]` / `[Theory]` + `[InlineData]` | `it(...)` / `it.each([...])` — and put a `%s` (or `%o`) placeholder in the title. xUnit derives a theory case's display name from its arguments automatically; vitest does not, so a title with no placeholder gives every row the SAME name and a failure no longer says which row failed. |
 | `Assert.Equal(a, b)` | `expect(b).toEqual(a)` — note the argument order flips |
 | `Assert.Same(a, b)` | `expect(b).toBe(a)` |
