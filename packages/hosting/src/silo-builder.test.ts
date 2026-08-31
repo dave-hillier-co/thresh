@@ -248,7 +248,7 @@ describe("SiloBuilder observer hosting (createObjectReference from a startup tas
 
   it("still builds a WebSocket silo whose startup tasks never host an observer", () => {
     // The gate is the explicit declaration, not the mere presence of a startup
-    // task: a silo that registers startup tasks for any other reason (SpaceDB's
+    // task: a silo that registers startup tasks for any other reason (BeneDB's
     // `addSpiceportGrainServices` registers one unconditionally) must keep
     // building on a WebSocket transport, as the examples in this repo do.
     expect(() =>

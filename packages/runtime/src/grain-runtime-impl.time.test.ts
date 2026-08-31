@@ -65,7 +65,7 @@ describe("GrainRuntime.timeProvider", () => {
 });
 
 describe("GrainRuntime.timeProvider high-resolution reading", () => {
-  // A grain that mints ordered values from the clock (SpaceDB's sequencer mints
+  // A grain that mints ordered values from the clock (BeneDB's sequencer mints
   // MVCC revisions as epoch nanoseconds) needs finer than a millisecond, and had
   // to bypass the silo clock to get it — which a FakeTimeProvider then cannot
   // drive. The fine reading comes off the SAME injected clock.

@@ -195,7 +195,7 @@ until `now + frequency * duration`, `GrainMigratabilityChecker` ages a cache.
 
 Thresh's `TimeProvider` adds a single `nowNanos(): bigint` instead: the same wall clock as `now()`,
 in nanoseconds since the Unix epoch. The pair collapses to one reading because the caller that
-needed it does not measure an interval, it MINTS ORDERED VALUES from the clock — SpaceDB's
+needed it does not measure an interval, it MINTS ORDERED VALUES from the clock — BeneDB's
 sequencer mints MVCC revisions as epoch nanoseconds — and an origin-free tick cannot be one of
 those. A millisecond is coarser than the interval between that grain's commits, so per-millisecond
 values collide, the sequence falls to a synthetic increment, and the values stop being timestamps

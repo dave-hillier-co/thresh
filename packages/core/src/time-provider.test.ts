@@ -7,7 +7,7 @@ import { nowNanosOf, systemTimeProvider } from "@thresh/core/time-provider";
 // `GetTimestamp()`/`TimestampFrequency`, and Orleans reads the fine one where a
 // millisecond is too coarse (`ActivationRebalancerWorker`). `TimeProvider.now()`
 // here is `Date.now()`-shaped, so a grain that mints ORDERED VALUES from the
-// silo clock — SpaceDB's sequencer mints MVCC revisions as epoch nanoseconds —
+// silo clock — BeneDB's sequencer mints MVCC revisions as epoch nanoseconds —
 // gets collisions at commit rate and has to bypass the clock to avoid them.
 
 describe("systemTimeProvider.nowNanos", () => {

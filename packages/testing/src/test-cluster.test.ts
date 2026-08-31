@@ -70,7 +70,7 @@ class NotifierGrain extends Grain implements INotifierGrain {
 
 /**
  * A grain that registers a reminder during activation and swallows the failure
- * if no reminder service is configured — the SpaceDB shape behind #62.
+ * if no reminder service is configured — the BeneDB shape behind #62.
  */
 interface IReminderRegistrar extends GrainWithStringKey {
   ping(): Promise<string>;
