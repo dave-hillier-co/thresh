@@ -549,16 +549,28 @@ describe.skipIf(sharedPool === undefined)(
 
 const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
 
+/**
+ * Probe Redis once at load time so the suite skips cleanly without it.
+ *
+ * `reconnectStrategy: false` is load-bearing, not tidiness — the same trap
+ * `redis-grain-storage.test.ts` documents: node-redis retries a refused connection FOREVER by
+ * default, so `connect()` never settles when nothing is listening and this module-level await
+ * hangs the entire file rather than skipping it.
+ */
 async function redisReachable(url: string): Promise<boolean> {
-  const probe = createClient({ url });
+  const probe = createClient({ url, socket: { reconnectStrategy: false, connectTimeout: 500 } });
   probe.on("error", () => {});
   try {
     await probe.connect();
     await probe.ping();
-    await probe.quit();
+    await probe.destroy();
     return true;
   } catch {
-    await probe.quit().catch(() => {});
+    try {
+      await probe.destroy();
+    } catch {
+      /* never connected */
+    }
     return false;
   }
 }
