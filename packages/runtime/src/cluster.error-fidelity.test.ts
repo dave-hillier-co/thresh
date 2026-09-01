@@ -59,6 +59,8 @@ interface IThrowingGrain extends GrainWithStringKey {
   throwCallAborted(): Promise<void>;
   throwTaskCanceled(): Promise<void>;
   throwRuntimeError(): Promise<void>;
+  throwWithCause(): Promise<void>;
+  throwAggregate(): Promise<void>;
 }
 const IThrowingGrain = defineGrainInterface<IThrowingGrain>("IThrowingGrain.errorFidelity");
 
@@ -85,6 +87,25 @@ class ThrowingGrain extends Grain implements IThrowingGrain {
     // Exactly what `signal.throwIfAborted()` raises when a callee stops because its cancellation
     // signal fired: a built-in `DOMException`, not an application error type anyone can register.
     AbortSignal.abort().throwIfAborted();
+  }
+  async throwWithCause(): Promise<void> {
+    function deepInsideTheCallee(): never {
+      throw new RangeError("root");
+    }
+    let root: RangeError;
+    try {
+      deepInsideTheCallee();
+      throw new Error("unreachable");
+    } catch (e) {
+      root = e as RangeError;
+    }
+    throw new GrainCallError("outer", { cause: root });
+  }
+  async throwAggregate(): Promise<void> {
+    function deepInsideTheCallee(): never {
+      throw new AggregateError([new RangeError("a")], "outer", { cause: "root cause" });
+    }
+    deepInsideTheCallee();
   }
 }
 
@@ -240,6 +261,61 @@ describe("cross-silo error type fidelity", () => {
       expect(error).toBeInstanceOf(GrainCallTimeoutError);
       expect(isThreshRuntimeError(error)).toBe(true);
       expect((error as Error).message).toBe("too slow");
+    } finally {
+      await cluster.dispose();
+    }
+  });
+
+  it("carries an error's cause and remote stack trace across a real grain call", async () => {
+    // Split out of #61 as issue #63: `cause` is a non-enumerable spec property, so the generic
+    // `error` envelope never carried it, and a wrapped root cause silently vanished at the silo
+    // boundary. This exercises the fix through a real cross-silo call, not just the codec directly.
+    const cluster = await buildCluster();
+    try {
+      const caller: TestSiloHandle = cluster.silos[1]!;
+      const error = await caller.host
+        .getGrain(IThrowingGrain, "g8")
+        .throwWithCause()
+        .then(
+          () => undefined,
+          (e: unknown) => e,
+        );
+      expect(error).toBeInstanceOf(GrainCallError);
+      expect((error as GrainCallError).message).toBe("outer");
+      expect((error as GrainCallError).cause).toBeInstanceOf(RangeError);
+      expect(((error as GrainCallError).cause as RangeError).message).toBe("root");
+      expect((error as Error).stack).toContain("throwWithCause");
+      expect((error as Error).stack).toContain("--- End of remote stack trace from grain call ---");
+    } finally {
+      await cluster.dispose();
+    }
+  });
+
+  it("carries an AggregateError's typed member errors, cause and remote stack trace across a real grain call", async () => {
+    // Issue #63: `ClusterNode.serializeError` used to short-circuit a directly-thrown
+    // `AggregateError` into the message-only `aggregateMessages` side channel BEFORE reaching the
+    // codec's generic `error` envelope, so the codec's `AggregateError` support (stack, cause,
+    // typed `.errors`) was unreachable here, and silo-to-silo `interpretResponse` never even read
+    // `aggregateMessages` -- collapsing the whole thing to a bare `GrainCallError(message)`.
+    const cluster = await buildCluster();
+    try {
+      const caller: TestSiloHandle = cluster.silos[1]!;
+      const error = await caller.host
+        .getGrain(IThrowingGrain, "g9")
+        .throwAggregate()
+        .then(
+          () => undefined,
+          (e: unknown) => e,
+        );
+      expect(error).toBeInstanceOf(AggregateError);
+      const aggregate = error as AggregateError;
+      expect(aggregate.message).toBe("outer");
+      expect(aggregate.errors).toHaveLength(1);
+      expect(aggregate.errors[0]).toBeInstanceOf(RangeError);
+      expect(aggregate.errors[0].message).toBe("a");
+      expect(aggregate.cause).toBe("root cause");
+      expect(aggregate.stack).toContain("deepInsideTheCallee");
+      expect(aggregate.stack).toContain("--- End of remote stack trace from grain call ---");
     } finally {
       await cluster.dispose();
     }

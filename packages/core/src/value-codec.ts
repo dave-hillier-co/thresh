@@ -214,6 +214,38 @@ registerKnownError("ReferenceError", ReferenceError, (m) => new ReferenceError(m
 registerKnownError("SyntaxError", SyntaxError, (m) => new SyntaxError(m));
 registerKnownError("URIError", URIError, (m) => new URIError(m));
 registerKnownError("EvalError", EvalError, (m) => new EvalError(m));
+registerKnownError(
+  "AggregateError",
+  AggregateError,
+  (m, p) => new AggregateError((p.errors as unknown[]) ?? [], m),
+);
+
+/**
+ * Cap on the plain-string `stack` an error carries across the wire — proportionate to the
+ * diagnostic value of a stack trace without letting every error response (and every persisted
+ * state that happens to nest one) grow unbounded. A truncated stack still names the outermost
+ * frames, which is where a sender-side fault almost always shows.
+ */
+const STACK_TRACE_CAP = 8192;
+const STACK_TRUNCATION_MARKER = "... (truncated)";
+/** Mirrors .NET's "End of stack trace from previous location", the `ExceptionDispatchInfo.SetRemoteStackTrace` marker. */
+const REMOTE_STACK_MARKER = "--- End of remote stack trace from grain call ---";
+
+function capStack(stack: string): string {
+  return stack.length > STACK_TRACE_CAP
+    ? stack.slice(0, STACK_TRACE_CAP) + STACK_TRUNCATION_MARKER
+    : stack;
+}
+
+/**
+ * Install a decoded remote stack as the rebuilt error's own `stack`, the analogue of Orleans'
+ * `ExceptionDispatchInfo.SetRemoteStackTrace`. The sender's frames are kept verbatim — appending
+ * this process's own frames on top would only add rehydration noise — and an explicit marker line
+ * makes clear the trace is not local.
+ */
+function setRemoteStackTrace(error: Error, remoteStack: string): void {
+  error.stack = `${remoteStack}\n${REMOTE_STACK_MARKER}`;
+}
 
 /**
  * A registered encode/decode pair for a user or library type, keyed by a
@@ -459,9 +491,17 @@ function encodeInner(
     try {
       const properties: Record<string, unknown> = {};
       for (const [k, v] of Object.entries(value)) {
-        // `name` and `message` travel as dedicated fields; `stack` is a local artefact of the
-        // sending process and would only mislead a reader on the other side.
-        if (k === "name" || k === "message" || k === "stack") continue;
+        // `name` and `message` travel as dedicated fields; `stack` travels as its own dedicated
+        // field below (not as a generic property); `cause` is a spec-defined NON-enumerable own
+        // property normally, so this loop never sees it — but a caller can still assign one
+        // enumerably, and it has its own dedicated handling below, so an enumerable one is skipped
+        // here rather than double-applied on decode. `errors` gets the SAME treatment, but only for
+        // a genuine `AggregateError` — that is the only case with a dedicated `fields.errors` below
+        // to fall back on; a plain `Error` with its own enumerable `errors` (ajv-style validation
+        // errors, e.g.) has no such fallback, so skipping it here unconditionally would drop it
+        // silently. Let it travel as an ordinary property instead.
+        if (k === "name" || k === "message" || k === "stack" || k === "cause") continue;
+        if (k === "errors" && value instanceof AggregateError) continue;
         properties[k] = encodeInner(v, seen, `${path}.${k}`, options);
       }
       const name = typeof value.name === "string" ? value.name : "Error";
@@ -471,6 +511,21 @@ function encodeInner(
       // rebuilds as the fallback, never as a `ThreshRuntimeError`.
       if (isKnownThreshError(value, name)) fields.thresh = true;
       if (Object.keys(properties).length > 0) fields.properties = properties;
+      // `cause` is a NON-enumerable spec property (`CreateNonEnumerableDataPropertyOrThrow`), so
+      // `Object.entries` above never reaches it — checked here with `in` rather than a truthiness
+      // test, so an explicit `cause: undefined` still crosses the wire as a PRESENT own property.
+      // `encodeElement`, not `encodeInner`: the tagged-undefined path keeps that distinction after
+      // decode too. A nested `Error` cause recurses through this same branch, so a cause chain
+      // rebuilds link by link, and the shared `seen` set turns a cause cycle into the same
+      // `CircularReferenceError` a cycle anywhere else in the graph gets.
+      if ("cause" in value)
+        fields.cause = encodeElement(value.cause, seen, `${path}.cause`, options);
+      if (typeof value.stack === "string") fields.stack = capStack(value.stack);
+      if (value instanceof AggregateError) {
+        fields.errors = value.errors.map((e, i) =>
+          encodeElement(e, seen, `${path}.errors[${i}]`, options),
+        );
+      }
       return tagged("error", fields);
     } finally {
       seen.delete(value);
@@ -536,12 +591,35 @@ export function decodeValue(value: unknown, ctx: CodecContext = {}): unknown {
             properties[k] = decodeValue(v, ctx);
           }
         }
+        const errors = Array.isArray(obj.errors)
+          ? obj.errors.map((e) => decodeValue(e, ctx))
+          : undefined;
+        if (errors !== undefined) properties.errors = errors;
         // The name alone never selects a constructor: the sender must also have marked the value
         // as one of Thresh's own errors, which it can only do by passing `instanceof`.
         const known = obj.thresh === true ? knownErrors.get(name) : undefined;
-        return known !== undefined
-          ? known(message, properties)
-          : new UnavailableExceptionFallbackException(name, message, properties);
+        const error =
+          known !== undefined
+            ? known(message, properties)
+            : new UnavailableExceptionFallbackException(name, message, properties, errors);
+        // `cause` is installed post-construction, uniformly for every known builder and the
+        // fallback alike — none of the ~20 registered builders need to see it, matching the spec's
+        // non-enumerable `CreateNonEnumerableDataPropertyOrThrow` install, so a rebuilt error is
+        // indistinguishable from `new Error(m, { cause })`. A nested `error` envelope recurses
+        // through this same case, so a cause chain rebuilds link by link.
+        if ("cause" in obj) {
+          Object.defineProperty(error, "cause", {
+            value: decodeValue(obj.cause, ctx),
+            writable: true,
+            enumerable: false,
+            configurable: true,
+          });
+        }
+        // The remote stack trace, the analogue of `ExceptionDispatchInfo.SetRemoteStackTrace`: the
+        // sender's frames verbatim, plus an explicit marker so it reads as a rehydrated trace
+        // rather than this process's own.
+        if (typeof obj.stack === "string") setRemoteStackTrace(error, obj.stack);
+        return error;
       }
       case "silo":
         return new SiloAddress(obj.podName as string, obj.podUid as string, obj.endpoint as string);

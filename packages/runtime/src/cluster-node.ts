@@ -1806,14 +1806,27 @@ export class ClusterNode {
       if (payload.kind === "overloaded") throw new GatewayTooBusyException(payload.message);
       throw new RejectionError(payload.message, payload.kind);
     }
-    const payload = this.serializer.deserialize<{ message: string; error?: unknown }>(
-      response.body,
-    );
+    const payload = this.serializer.deserialize<{
+      message: string;
+      error?: unknown;
+      aggregateMessages?: readonly string[];
+    }>(response.body);
     // A surrogate-registered error rebuilds as its own class, a Thresh runtime error as its own
     // leaf, and anything else as an `UnavailableExceptionFallbackException` carrying the sender's
     // type name — so the caller always has something better than message text to discriminate on.
-    // `GrainCallError` remains the floor for a peer that sent no error value at all.
+    // This already covers a genuine `AggregateError` with full fidelity (`.errors`, `cause`,
+    // `stack`) — see `ClusterNode.serializeError` (issue #63) — so `error` is checked FIRST.
     if (payload.error instanceof Error) throw payload.error;
+    // `aggregateMessages` is the compat fallback for a peer old enough to have sent only that
+    // (pre-#63) — a message-only `AggregateError` reconstruction beats collapsing to a
+    // `GrainCallError` that loses `.errors` entirely.
+    if (payload.aggregateMessages !== undefined) {
+      throw new AggregateError(
+        payload.aggregateMessages.map((m) => new Error(m)),
+        payload.message,
+      );
+    }
+    // `GrainCallError` remains the floor for a peer that sent no error value at all.
     throw new GrainCallError(payload.message);
   }
 
@@ -1912,14 +1925,18 @@ export class ClusterNode {
 
   /**
    * Map a thrown error to the `(kind, body)` of an error/rejection response.
-   * An `AggregateError` (non-fire-and-forget `publishToBroadcastChannel`'s
-   * aggregated subscriber failures) carries its inner error messages
-   * separately so the receiving end reconstructs a real `AggregateError`
-   * instead of collapsing to a generic error with no `.errors` — `.errors` is
-   * a non-enumerable own property, so the codec's generic `Error` branch does
-   * not carry it, and this stays the narrow, deliberate exception that
-   * preserves what `MultipleSubscribersOneBadActorChannelTest`-style tests
-   * assert on (`Assert.Single(ex.InnerExceptions)`).
+   *
+   * An `AggregateError` (non-fire-and-forget `publishToBroadcastChannel`'s aggregated subscriber
+   * failures, or one thrown directly by a grain method) goes through the SAME codec `error: err`
+   * envelope as any other error below — `value-codec.ts` carries a genuine `AggregateError`'s
+   * `.errors`, `cause` and `stack` natively (issue #63) — so it round-trips with full fidelity
+   * rather than the message-only reconstruction the old `aggregateMessages` side channel gave.
+   * `aggregateMessages` is still ATTACHED alongside `error` (not instead of it) purely for wire
+   * compatibility during a rolling upgrade — an old peer's `interpretResponse` reads only
+   * `aggregateMessages` and knows nothing of `error` for this shape — and because it is what
+   * `MultipleSubscribersOneBadActorChannelTest`-style tests assert on (`Assert.Single(ex.InnerExceptions)`).
+   * A peer that understands `error` (this codec's own `interpretResponse`, in both
+   * `ClusterNode` and `ClientNode`) prefers it and ignores `aggregateMessages` entirely.
    */
   private serializeError(err: unknown): { kind: ResponseKind; body: Uint8Array } {
     if (err instanceof RejectionError) {
@@ -1929,13 +1946,21 @@ export class ClusterNode {
       };
     }
     if (err instanceof AggregateError) {
-      return {
-        kind: "error",
-        body: this.serializer.serialize({
-          message: err.message,
-          aggregateMessages: err.errors.map((e) => (e instanceof Error ? e.message : String(e))),
-        }),
-      };
+      const aggregateMessages = err.errors.map((e) => (e instanceof Error ? e.message : String(e)));
+      try {
+        return {
+          kind: "error",
+          body: this.serializer.serialize({ message: err.message, error: err, aggregateMessages }),
+        };
+      } catch {
+        // The `AggregateError` itself, or one of its member errors, carries something the codec
+        // cannot encode; fall back to the compat-only envelope so the message-level reconstruction
+        // (and the member messages) still make it across, rather than losing everything.
+        return {
+          kind: "error",
+          body: this.serializer.serialize({ message: err.message, aggregateMessages }),
+        };
+      }
     }
     const message = err instanceof Error ? err.message : String(err);
     if (err instanceof Error) {
