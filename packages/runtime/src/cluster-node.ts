@@ -1915,11 +1915,16 @@ export class ClusterNode {
    * An `AggregateError` (non-fire-and-forget `publishToBroadcastChannel`'s
    * aggregated subscriber failures) carries its inner error messages
    * separately so the receiving end reconstructs a real `AggregateError`
-   * instead of collapsing to a generic error with no `.errors` — `.errors` is
-   * a non-enumerable own property, so the codec's generic `Error` branch does
-   * not carry it, and this stays the narrow, deliberate exception that
-   * preserves what `MultipleSubscribersOneBadActorChannelTest`-style tests
-   * assert on (`Assert.Single(ex.InnerExceptions)`).
+   * instead of collapsing to a generic error with no `.errors`.
+   *
+   * The generic `error` envelope in `value-codec.ts` now carries a genuine
+   * `AggregateError`'s `.errors` natively (issue #63), so this side channel is
+   * no longer the only way an `AggregateError` round-trips. It is kept as-is
+   * for wire compatibility during a rolling upgrade — an old peer still
+   * speaks only `aggregateMessages` — and because it is what
+   * `MultipleSubscribersOneBadActorChannelTest`-style tests assert on
+   * (`Assert.Single(ex.InnerExceptions)`); retiring it in favour of the codec
+   * path is a separate wire-compat decision.
    */
   private serializeError(err: unknown): { kind: ResponseKind; body: Uint8Array } {
     if (err instanceof RejectionError) {

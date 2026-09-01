@@ -188,12 +188,40 @@ across a silo boundary with no registration at all. Thresh cannot resolve an app
 a name — nothing maps a wire string to a constructor, and doing so from untrusted input would be a
 gadget. So `registerSurrogate` remains how an application type round-trips as ITSELF.
 
-What is no longer lost is its name, message and own enumerable properties. Its `stack` and its
-`cause` still are: the stack is a local artefact of the sending process, and `cause` is specified
-as a NON-enumerable own property, so `Object.entries` does not reach it. Orleans carries both — a
-remote stack trace via `ExceptionDispatchInfo.SetRemoteStackTrace`, and the inner exception
-recursively — so this is narrower than `ExceptionCodec`, not equal to it. Both were left out to
-keep every error response and every persisted state that happens to nest an `Error` from growing.
+What is carried is its name, message, own enumerable properties — and now, as of #63, `stack` and
+`cause` too, closing the two gaps #61 deliberately left open.
+
+`cause` round-trips recursively: it is checked for with `in` rather than a truthiness test (so an
+explicit `cause: undefined` still crosses as a present own property, not an absent one), encoded
+through the same element path an array member takes, and installed on the rebuilt error as a
+NON-enumerable own property via `Object.defineProperty` — matching the spec's own
+`CreateNonEnumerableDataPropertyOrThrow` install, so a rebuilt error is indistinguishable from
+`new Error(m, { cause })`. A nested `Error` cause decodes through the same `error` case again, so a
+cause chain rebuilds link by link, each as its own class; a cause cycle (`err.cause === err`) is
+caught by the same `CircularReferenceError` guard a cycle anywhere else in the graph gets.
+
+`stack` travels as a plain, opaque string — never parsed or restructured — capped at 8KB with a
+truncation marker, and installed as a **remote** stack trace: the sender's frames are kept
+verbatim and a trailing marker line (`--- End of remote stack trace from grain call ---`) is
+appended, the analogue of `ExceptionDispatchInfo.SetRemoteStackTrace` (which appends .NET's own
+"End of stack trace from previous location" line). The receiving process's own frames are
+deliberately **not** appended — the rehydration point is noise, not signal.
+
+`AggregateError.errors` — likewise a non-enumerable own property `Object.entries` never reached —
+round-trips too: a genuine `AggregateError` is now in the closed built-ins table (alongside
+`TypeError` and friends) and rebuilds as itself with its member errors decoded; a subclass with its
+own `name` still takes the `UnavailableExceptionFallbackException` fallback, but keeps its decoded
+`.errors` array rather than losing it.
+
+Two things stay narrower than `ExceptionCodec` even after this. There is no analogue of `HResult`
+or `.Data` — Orleans' `SetBaseProperties` restores both alongside the inner exception, and Thresh
+carries neither. And type resolution is unchanged: an application error still round-trips as
+itself only through the closed built-ins table or a registered `registerSurrogate`, never from the
+wire's bare `name` string, for the same gadget-and-spoofing reasons the previous paragraph gives.
+Payload growth was the reason `stack` and `cause` were left out originally; the cap bounds a single
+stack, but a long cause chain of stack-bearing errors still multiplies it, which is worth watching
+if it proves heavy in practice. Sender-side file paths and frames also now cross the wire to
+callers — including external clients via the gateway — the same trade Orleans makes.
 
 An `Error` subclass has no enumerable own
 properties, so the codec's generic object branch used to flatten it to `{}` and the caller got a
