@@ -152,3 +152,57 @@ describe.skipIf(client === undefined)("LocalReminderService over RedisReminderTa
     successor.stop();
   });
 });
+
+// Issue #64: RedisReminderTable partitions only by keyPrefix, so two services
+// sharing one Redis with default prefixes silently share reminder keys — the
+// same collision #59 fixed for grain state. Redis has no ALTER, so (like
+// RedisGrainStorage) this is a deliberate upgrade break: pre-existing keys
+// under the old shape orphan on upgrade (see the pin test below), pinned in
+// todo.md / docs/deviations.md.
+describe.skipIf(client === undefined)("RedisReminderTable service partitioning (issue #64)", () => {
+  beforeEach(async () => {
+    await deleteAll(client!, `${prefix}*`);
+  });
+
+  it("keeps two service ids on separate keys for the same grain and reminder name", async () => {
+    const alpha = new RedisReminderTable(client!, { keyPrefix: prefix, serviceId: "alpha" });
+    await alpha.upsert({
+      grainId: billing,
+      name: "invoice",
+      startAt: new Date(0),
+      period: { hours: 1 },
+    });
+
+    const beta = new RedisReminderTable(client!, { keyPrefix: prefix, serviceId: "beta" });
+    expect(await beta.read(billing, "invoice")).toBeUndefined();
+    const hash = billing.getUniformHashCode();
+    expect(await beta.readRange(hash, hash + 1)).toEqual([]);
+
+    await beta.upsert({
+      grainId: billing,
+      name: "invoice",
+      startAt: new Date(0),
+      period: { hours: 2 },
+    });
+
+    expect((await alpha.read(billing, "invoice"))?.period).toEqual({ hours: 1 });
+    expect((await beta.read(billing, "invoice"))?.period).toEqual({ hours: 2 });
+  });
+
+  it("orphans keys written under the pre-service-dimension key shape (deliberate upgrade break)", async () => {
+    // The old shape had no {serviceId} segment: `${prefix}:rem:index|g:...|e:...`.
+    const oldIndexKey = `${prefix}:rem:index`;
+    const oldEntryKey = `${prefix}:rem:e:${billing.toString()}invoice`;
+    await client!.zAdd(oldIndexKey, {
+      score: billing.getUniformHashCode(),
+      value: `${billing.toString()}invoice`,
+    });
+    await client!.hSet(oldEntryKey, {
+      data: JSON.stringify({ grainId: billing.toString(), name: "invoice" }),
+      etag: "old-etag",
+    });
+
+    const defaultConfigured = new RedisReminderTable(client!, { keyPrefix: prefix });
+    expect(await defaultConfigured.read(billing, "invoice")).toBeUndefined();
+  });
+});

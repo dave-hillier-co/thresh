@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "@thresh/core": "workspace:*",
-    "@thresh/runtime": "workspace:*"
+    "@thresh/runtime": "workspace:*",
+    "redis": "^5.12.1"
   }
 }

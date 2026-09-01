@@ -1,5 +1,6 @@
 import type { Pool } from "pg";
 import { raceSignal } from "@thresh/core/abort";
+import { DEFAULT_SERVICE_ID } from "@thresh/core/default-service-id";
 import { durationToMs, type Duration } from "@thresh/core/duration";
 import { deserializeValue, serializeValue } from "@thresh/core/value-codec";
 import type { AppendableQueue } from "@thresh/streams/pulling-stream-provider-core";
@@ -10,11 +11,12 @@ import { PostgresStreamCursorStore } from "@thresh/streams/postgres-stream-curso
 // them against anything but a plain SQL identifier; all other inputs are bound.
 const IDENTIFIER = /^[a-z_][a-z0-9_]*$/;
 
-// Concurrent silos can race `CREATE TABLE IF NOT EXISTS`; the loser sees a
-// duplicate error even though the table now exists, which is the desired state.
+// Concurrent silos can race `CREATE TABLE IF NOT EXISTS` and the migration
+// below; the loser sees a duplicate error even though the object now exists,
+// which is the desired state.
 function isDuplicate(err: unknown): boolean {
   const code = (err as { code?: string }).code;
-  return code === "23505" || code === "42P07" || code === "42710";
+  return code === "23505" || code === "42P07" || code === "42710" || code === "42701";
 }
 
 /**
@@ -30,6 +32,7 @@ export class PostgresStreamQueue implements AppendableQueue {
   private readonly eventsTable: string;
   private readonly cursors: PostgresStreamCursorStore;
   private readonly retainForMs: number | undefined;
+  private readonly serviceId: string;
 
   constructor(
     private readonly pool: Pool,
@@ -37,12 +40,14 @@ export class PostgresStreamQueue implements AppendableQueue {
     private readonly providerName: string,
     private readonly queueIdx: number,
     retainFor?: Duration,
+    serviceId: string = DEFAULT_SERVICE_ID,
   ) {
     this.eventsTable = `${tablePrefix}_events`;
     if (!IDENTIFIER.test(this.eventsTable)) {
       throw new Error(`invalid table name: ${this.eventsTable}`);
     }
-    this.cursors = new PostgresStreamCursorStore(pool, tablePrefix);
+    this.serviceId = serviceId;
+    this.cursors = new PostgresStreamCursorStore(pool, tablePrefix, serviceId);
     this.retainForMs = retainFor === undefined ? undefined : durationToMs(retainFor);
   }
 
@@ -56,27 +61,60 @@ export class PostgresStreamQueue implements AppendableQueue {
            queue_idx INT NOT NULL,
            stream_key TEXT NOT NULL,
            payload TEXT NOT NULL,
+           service_id TEXT NOT NULL,
            created_at TIMESTAMPTZ NOT NULL DEFAULT now()
          )`,
       );
       await this.pool.query(
         `CREATE INDEX IF NOT EXISTS ${this.eventsTable}_provider_queue_id_idx
-           ON ${this.eventsTable} (provider, queue_idx, id)`,
+           ON ${this.eventsTable} (service_id, provider, queue_idx, id)`,
       );
     } catch (err) {
       if (!isDuplicate(err)) throw err;
     }
+    await this.addServiceIdColumn();
     await this.cursors.start();
+  }
+
+  /**
+   * Bring an events table created before issue #64 up to the
+   * service-partitioned shape, mirroring
+   * `PostgresGrainStorage.addServiceIdColumn()` (#59). The events table has
+   * a surrogate `id` primary key already, so this only adds the column and
+   * backfills it — no primary key to swap — then recreates the lookup index
+   * with `service_id` leading.
+   */
+  private async addServiceIdColumn(): Promise<void> {
+    const existing = await this.pool.query(
+      `SELECT 1 FROM information_schema.columns
+       WHERE table_schema = current_schema() AND table_name = $1 AND column_name = 'service_id'`,
+      [this.eventsTable],
+    );
+    if (existing.rowCount !== 0) return;
+    try {
+      await this.pool.query(
+        `ALTER TABLE ${this.eventsTable}
+           ADD COLUMN IF NOT EXISTS service_id text NOT NULL DEFAULT '${DEFAULT_SERVICE_ID}'`,
+      );
+      await this.pool.query(`ALTER TABLE ${this.eventsTable} ALTER COLUMN service_id DROP DEFAULT`);
+      await this.pool.query(`DROP INDEX IF EXISTS ${this.eventsTable}_provider_queue_id_idx`);
+      await this.pool.query(
+        `CREATE INDEX IF NOT EXISTS ${this.eventsTable}_provider_queue_id_idx
+           ON ${this.eventsTable} (service_id, provider, queue_idx, id)`,
+      );
+    } catch (err) {
+      if (!isDuplicate(err)) throw err;
+    }
   }
 
   /** Append an event for `streamKey`; returns its queue token. */
   async append(streamKey: string, event: unknown, signal?: AbortSignal): Promise<number> {
     const res = await raceSignal(
       this.pool.query<{ id: string }>(
-        `INSERT INTO ${this.eventsTable} (provider, queue_idx, stream_key, payload)
-         VALUES ($1, $2, $3, $4)
+        `INSERT INTO ${this.eventsTable} (provider, queue_idx, stream_key, payload, service_id)
+         VALUES ($1, $2, $3, $4, $5)
          RETURNING id`,
-        [this.providerName, this.queueIdx, streamKey, serializeValue(event)],
+        [this.providerName, this.queueIdx, streamKey, serializeValue(event), this.serviceId],
       ),
       signal,
     );
@@ -88,10 +126,10 @@ export class PostgresStreamQueue implements AppendableQueue {
     const res = await raceSignal(
       this.pool.query<{ id: string; stream_key: string; payload: string }>(
         `SELECT id, stream_key, payload FROM ${this.eventsTable}
-         WHERE provider = $1 AND queue_idx = $2 AND id > $3
+         WHERE provider = $1 AND queue_idx = $2 AND id > $3 AND service_id = $4
          ORDER BY id
-         LIMIT $4`,
-        [this.providerName, this.queueIdx, cursor, count],
+         LIMIT $5`,
+        [this.providerName, this.queueIdx, cursor, this.serviceId, count],
       ),
       signal,
     );
@@ -126,8 +164,9 @@ export class PostgresStreamQueue implements AppendableQueue {
   private async trim(cursor: number): Promise<void> {
     if (this.retainForMs === undefined) {
       await this.pool.query(
-        `DELETE FROM ${this.eventsTable} WHERE provider = $1 AND queue_idx = $2 AND id <= $3`,
-        [this.providerName, this.queueIdx, cursor],
+        `DELETE FROM ${this.eventsTable}
+         WHERE provider = $1 AND queue_idx = $2 AND id <= $3 AND service_id = $4`,
+        [this.providerName, this.queueIdx, cursor, this.serviceId],
       );
       return;
     }
@@ -135,9 +174,9 @@ export class PostgresStreamQueue implements AppendableQueue {
     // and older than `retainFor`.
     await this.pool.query(
       `DELETE FROM ${this.eventsTable}
-       WHERE provider = $1 AND queue_idx = $2 AND id <= $3
-         AND created_at < now() - ($4 || ' milliseconds')::interval`,
-      [this.providerName, this.queueIdx, cursor, this.retainForMs],
+       WHERE provider = $1 AND queue_idx = $2 AND id <= $3 AND service_id = $4
+         AND created_at < now() - ($5 || ' milliseconds')::interval`,
+      [this.providerName, this.queueIdx, cursor, this.serviceId, this.retainForMs],
     );
   }
 }

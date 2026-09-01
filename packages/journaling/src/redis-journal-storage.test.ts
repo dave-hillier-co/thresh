@@ -140,3 +140,44 @@ describe.skipIf(client === undefined)("RedisJournalStorage", () => {
     expect(bv.value).toBe(2);
   });
 });
+
+// Issue #64: RedisJournalStorage partitions only by keyPrefix, so two
+// services sharing one Redis with default prefixes silently share journal
+// logs — the same collision #59 fixed for grain state. Redis has no ALTER, so
+// this is a deliberate upgrade break (mirrors #59's RedisGrainStorage call):
+// a log written under the old key shape orphans on upgrade.
+describe.skipIf(client === undefined)(
+  "RedisJournalStorage service partitioning (issue #64)",
+  () => {
+    beforeEach(async () => {
+      await deleteAll(client!, `${prefix}*`);
+    });
+
+    it("keeps two service ids' logs independent for the same grain and log name", async () => {
+      const alpha = new RedisJournalStorage(client!, { keyPrefix: prefix, serviceId: "alpha" });
+      await alpha.append("journal", id, ["a"], undefined);
+
+      const beta = new RedisJournalStorage(client!, { keyPrefix: prefix, serviceId: "beta" });
+      const segment = await beta.read("journal", id);
+      expect(segment).toEqual({ entries: [], version: undefined });
+
+      // No cross-service version conflict: beta's blind append (expectedVersion
+      // undefined) must succeed even though alpha's log already has a version.
+      const v = await beta.append("journal", id, ["b"], undefined);
+      expect(v).toBe(1);
+
+      const alphaSegment = await alpha.read("journal", id);
+      expect(alphaSegment.entries).toEqual(["a"]);
+    });
+
+    it("orphans a log written under the pre-service-dimension key shape (deliberate upgrade break)", async () => {
+      // Old shape had no {serviceId} segment.
+      await client!.rPush(`${prefix}:journal:${id.toString()}/journal`, ["a", "b"]);
+      await client!.set(`${prefix}:journalver:${id.toString()}/journal`, "2");
+
+      const defaultConfigured = new RedisJournalStorage(client!, { keyPrefix: prefix });
+      const segment = await defaultConfigured.read("journal", id);
+      expect(segment).toEqual({ entries: [], version: undefined });
+    });
+  },
+);

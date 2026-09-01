@@ -129,3 +129,62 @@ describe.skipIf(pool === undefined)("PostgresStreamQueue", () => {
     expect(res.rows.map((r: { id: string }) => Number(r.id))).toContain(token);
   });
 });
+
+// Issue #64: PostgresStreamQueue partitions only by table prefix, provider
+// and queue index, so two services sharing one table would still cross-
+// deliver events even if their subscriptions/cursors were partitioned —
+// service B's agent would read service A's events. This mirrors #59's
+// two-halved coverage: the partitioning a `serviceId` buys, and the in-place
+// migration that keeps a table written under the pre-service_id shape
+// readable.
+describe.skipIf(pool === undefined)("PostgresStreamQueue service partitioning (issue #64)", () => {
+  beforeEach(async () => {
+    if (pool === undefined) return;
+    await pool.query(`DROP TABLE IF EXISTS ${prefix}_events`);
+    await pool.query(`DROP TABLE IF EXISTS ${prefix}_cursors`);
+  });
+
+  it("isolates entries and cursors by service id sharing table, provider and queue", async () => {
+    const alpha = new PostgresStreamQueue(pool!, prefix, "p", 0, undefined, "alpha");
+    const beta = new PostgresStreamQueue(pool!, prefix, "p", 0, undefined, "beta");
+    await alpha.start();
+    await beta.start();
+    await alpha.append("s", "for-alpha");
+
+    expect(await beta.readAfter(0)).toEqual([]);
+    await beta.append("s", "for-beta");
+
+    expect((await alpha.readAfter(0)).map((e) => e.event)).toEqual(["for-alpha"]);
+    expect((await beta.readAfter(0)).map((e) => e.event)).toEqual(["for-beta"]);
+  });
+
+  it("migrates a legacy events table and a default-configured queue reads its rows", async () => {
+    const legacy = `${prefix}_legacy`;
+    await pool!.query(
+      `CREATE TABLE ${legacy}_events (
+         id BIGSERIAL PRIMARY KEY,
+         provider TEXT NOT NULL,
+         queue_idx INT NOT NULL,
+         stream_key TEXT NOT NULL,
+         payload TEXT NOT NULL,
+         created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+       )`,
+    );
+    try {
+      await pool!.query(
+        `INSERT INTO ${legacy}_events (provider, queue_idx, stream_key, payload) VALUES ($1, $2, $3, $4)`,
+        ["p", 0, "s", JSON.stringify("legacy-event")],
+      );
+
+      const migrated = new PostgresStreamQueue(pool!, legacy, "p", 0);
+      await migrated.start(); // must ALTER the existing events table, not skip it
+      expect((await migrated.readAfter(0)).map((e) => e.event)).toEqual(["legacy-event"]);
+
+      const scoped = new PostgresStreamQueue(pool!, legacy, "p", 0, undefined, "beta");
+      expect(await scoped.readAfter(0)).toEqual([]);
+    } finally {
+      await pool!.query(`DROP TABLE IF EXISTS ${legacy}_events`);
+      await pool!.query(`DROP TABLE IF EXISTS ${legacy}_cursors`);
+    }
+  });
+});

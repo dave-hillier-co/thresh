@@ -185,4 +185,27 @@ describe.skipIf(admin === undefined)("Redis transactional storage", () => {
       await restarted.stop();
     }
   });
+
+  // Issue #64: `addRedisTransactionalStorage` must thread the silo's
+  // `serviceId` through to `RedisTransactionalStorage`, not just `keyPrefix`.
+  it("threads the silo's serviceId into the transactional-storage key (issue #64)", async () => {
+    const address = new SiloAddress("silo-svc", "uid-svc", "silo-svc:11111");
+    const silo = createSilo({ clusterId: "redis-tx", serviceId: "svc-a", local: address })
+      .useStaticMembership([address])
+      .useInProcessTransport(new InProcessNetwork())
+      .addRedisTransactionalStorage("default", { url: REDIS_URL, keyPrefix })
+      .registerGrain(AccountGrain, { interfaces: [Account] })
+      .build();
+    await silo.start();
+    try {
+      await silo.getGrain(Account, "acc-svc").credit(10);
+      const keys: string[] = [];
+      for await (const batch of admin!.scanIterator({ MATCH: `${keyPrefix}:svc-a:tx:*` })) {
+        keys.push(...(Array.isArray(batch) ? batch : [batch]));
+      }
+      expect(keys.length).toBeGreaterThan(0);
+    } finally {
+      await silo.stop();
+    }
+  });
 });

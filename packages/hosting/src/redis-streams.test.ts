@@ -116,4 +116,31 @@ describe.skipIf(admin === undefined)("Redis streams end-to-end", () => {
       await silo.stop();
     }
   });
+
+  // Issue #64: `addRedisStreams` must thread the silo's `serviceId` into the
+  // queue/registry/cursor keys `RedisPullingStreamProvider` builds.
+  it("threads the silo's serviceId into the stream queue keys (issue #64)", async () => {
+    const address = new SiloAddress("silo-svc", "uid-svc", "silo-svc:11111");
+    const silo = createSilo({ clusterId: "c1", serviceId: "svc-a", local: address })
+      .useStaticMembership([address])
+      .useInProcessTransport(new InProcessNetwork())
+      .addRedisStreams("default", { url: REDIS_URL, keyPrefix })
+      .registerGrain(DeviceGrain, { interfaces: [IDevice] })
+      .registerGrain(AggregatorGrain, { interfaces: [IAggregator] })
+      .build();
+    await silo.start();
+    try {
+      await silo.getGrain(IAggregator, "dev-svc").readings();
+      await silo.getGrain(IDevice, "dev-svc").report(1);
+      const keys: string[] = [];
+      for await (const batch of admin!.scanIterator({
+        MATCH: `${keyPrefix}:svc-a:streamq:default:*`,
+      })) {
+        keys.push(...(Array.isArray(batch) ? batch : [batch]));
+      }
+      expect(keys.length).toBeGreaterThan(0);
+    } finally {
+      await silo.stop();
+    }
+  });
 });

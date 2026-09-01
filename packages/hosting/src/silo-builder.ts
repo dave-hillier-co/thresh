@@ -429,10 +429,10 @@ export class SiloBuilder {
     serviceOptions?: ReminderServiceOptions,
   ): this {
     const client = this.createManagedRedisClient(options);
-    this.reminderTable = new RedisReminderTable(
-      client,
-      toConfigOption("keyPrefix", options.keyPrefix),
-    );
+    this.reminderTable = new RedisReminderTable(client, {
+      ...toConfigOption("keyPrefix", options.keyPrefix),
+      serviceId: this.serviceIdentity,
+    });
     this.reminderServiceOptions = serviceOptions;
     return this;
   }
@@ -445,7 +445,10 @@ export class SiloBuilder {
   usePostgresReminders(options: { connectionString: string; tableName?: string }): this {
     const pool = new Pool({ connectionString: options.connectionString });
     pool.on("error", () => {});
-    const table = new PostgresReminderTable(pool, toConfigOption("tableName", options.tableName));
+    const table = new PostgresReminderTable(pool, {
+      ...toConfigOption("tableName", options.tableName),
+      serviceId: this.serviceIdentity,
+    });
     this.starters.push(async () => {
       await table.start();
     });
@@ -626,6 +629,7 @@ export class SiloBuilder {
     const provider = new RedisPullingStreamProvider(client, name, {
       ...toConfigOption("keyPrefix", options.keyPrefix),
       ...toConfigOption("failureHandler", failureHandler),
+      serviceId: this.serviceIdentity,
     });
     this.pullingStreams.push(provider);
     this.starters.push(async () => {
@@ -678,6 +682,7 @@ export class SiloBuilder {
       ...toConfigOption("tablePrefix", options.tablePrefix),
       ...toConfigOption("failureHandler", failureHandler),
       ...toConfigOption("retainFor", options.retainFor),
+      serviceId: this.serviceIdentity,
     });
     this.pullingStreams.push(provider);
     this.starters.push(async () => {
@@ -738,8 +743,8 @@ export class SiloBuilder {
       const prefix = tablePrefix ?? "thresh_stream";
       const pool = new Pool({ connectionString });
       pool.on("error", () => {}); // surfaced by start()/queries; don't crash the process
-      registry = new PostgresSubscriptionRegistry(pool, prefix, name);
-      cursorStore = new PostgresStreamCursorStore(pool, prefix);
+      registry = new PostgresSubscriptionRegistry(pool, prefix, name, this.serviceIdentity);
+      cursorStore = new PostgresStreamCursorStore(pool, prefix, this.serviceIdentity);
       this.closers.push(async () => {
         await pool.end();
       });
@@ -748,8 +753,8 @@ export class SiloBuilder {
       const prefix = keyPrefix ?? "thresh";
       const client = createClient({ url });
       client.on("error", () => {});
-      registry = new RedisSubscriptionRegistry(client, prefix, name);
-      cursorStore = new RedisStreamCursorStore(client, prefix);
+      registry = new RedisSubscriptionRegistry(client, prefix, name, this.serviceIdentity);
+      cursorStore = new RedisStreamCursorStore(client, prefix, this.serviceIdentity);
       this.starters.push(async () => {
         await client.connect();
       });
@@ -1045,7 +1050,10 @@ export class SiloBuilder {
     const client = this.createManagedRedisClient(options);
     return this.addTransactionalStorage(
       name,
-      new RedisTransactionalStorage(client, toConfigOption("keyPrefix", options.keyPrefix)),
+      new RedisTransactionalStorage(client, {
+        ...toConfigOption("keyPrefix", options.keyPrefix),
+        serviceId: this.serviceIdentity,
+      }),
     );
   }
 
@@ -1072,7 +1080,10 @@ export class SiloBuilder {
     const client = this.createManagedRedisClient(options);
     return this.addJournaling(
       name,
-      new RedisJournalStorage(client, toConfigOption("keyPrefix", options.keyPrefix)),
+      new RedisJournalStorage(client, {
+        ...toConfigOption("keyPrefix", options.keyPrefix),
+        serviceId: this.serviceIdentity,
+      }),
     );
   }
 

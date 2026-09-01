@@ -2,6 +2,7 @@ import type { Pool } from "pg";
 import type { GrainKey } from "@thresh/core/grain-key";
 import type { GrainType } from "@thresh/core/grain-type";
 import type { Duration } from "@thresh/core/duration";
+import { DEFAULT_SERVICE_ID } from "@thresh/core/default-service-id";
 import type {
   ActivationBoundStreamProvider,
   AsyncStream,
@@ -41,6 +42,14 @@ export interface PostgresPullingStreamProviderOptions {
    * every row at or below the committed cursor is deleted on the next commit.
    */
   retainFor?: Duration;
+  /**
+   * Logical service identity this provider's queues, registry and cursors
+   * belong to (Orleans' `ClusterOptions.ServiceId`). Two clusters pointed at
+   * the same Postgres and provider name stay partitioned by it (issue #64).
+   * Defaults to `"default"`; `SiloBuilder` threads the silo's `serviceId ??
+   * clusterId`.
+   */
+  serviceId?: string;
 }
 
 /**
@@ -73,10 +82,12 @@ export class PostgresPullingStreamProvider implements ActivationBoundStreamProvi
   ) {
     const queueCount = validateQueueCount(name, options.queueCount);
     const tablePrefix = options.tablePrefix ?? "thresh_stream";
-    this.registry = new PostgresSubscriptionRegistry(pool, tablePrefix, name);
+    const serviceId = options.serviceId ?? DEFAULT_SERVICE_ID;
+    this.registry = new PostgresSubscriptionRegistry(pool, tablePrefix, name, serviceId);
     this.queues = Array.from(
       { length: queueCount },
-      (_unused, i) => new PostgresStreamQueue(pool, tablePrefix, name, i, options.retainFor),
+      (_unused, i) =>
+        new PostgresStreamQueue(pool, tablePrefix, name, i, options.retainFor, serviceId),
     );
     this.core = new PullingStreamProviderCore(name, this.queues, this.registry, {
       ...(options.pollIntervalMs !== undefined ? { pollIntervalMs: options.pollIntervalMs } : {}),

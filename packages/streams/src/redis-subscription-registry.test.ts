@@ -3,6 +3,7 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { createClient } from "redis";
 import { GrainId } from "@thresh/core/grain-id";
 import { Guid } from "@thresh/core/guid";
+import { serializeValue } from "@thresh/core/value-codec";
 import { RedisSubscriptionRegistry } from "@thresh/streams/redis-subscription-registry";
 
 const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
@@ -93,3 +94,35 @@ describe.skipIf(client === undefined)("RedisSubscriptionRegistry", () => {
     expect(back?.equals(subscriber)).toBe(true);
   });
 });
+
+// Issue #64: RedisSubscriptionRegistry partitions only by keyPrefix and
+// provider, so two services sharing one Redis with the same provider name
+// silently share subscriptions. Redis has no ALTER, so this is a deliberate
+// upgrade break (mirrors #59's RedisGrainStorage call): a set written under
+// the old key shape orphans on upgrade.
+describe.skipIf(client === undefined)(
+  "RedisSubscriptionRegistry service partitioning (issue #64)",
+  () => {
+    beforeEach(async () => {
+      await deleteAll(client!, `${prefix}*`);
+    });
+
+    it("isolates subscribers by service id sharing prefix and provider", async () => {
+      const alpha = new RedisSubscriptionRegistry(client!, prefix, "default", "alpha");
+      const beta = new RedisSubscriptionRegistry(client!, prefix, "default", "beta");
+      await alpha.subscribe("s", new GrainId("ChatUser", "alice"));
+      await beta.subscribe("s", new GrainId("ChatUser", "bob"));
+      expect(ids(await alpha.subscribers("s"))).toEqual(["ChatUser/alice"]);
+      expect(ids(await beta.subscribers("s"))).toEqual(["ChatUser/bob"]);
+    });
+
+    it("orphans a set written under the pre-service-dimension key shape (deliberate upgrade break)", async () => {
+      // Old shape had no {serviceId} segment: `${prefix}:subs:{provider}:{streamKey}`.
+      const alice = new GrainId("ChatUser", "alice");
+      await client!.sAdd(`${prefix}:subs:default:room/general`, serializeValue(alice));
+
+      const defaultConfigured = new RedisSubscriptionRegistry(client!, prefix, "default");
+      expect(await defaultConfigured.subscribers("room/general")).toEqual([]);
+    });
+  },
+);

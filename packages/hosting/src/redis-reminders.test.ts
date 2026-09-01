@@ -90,4 +90,28 @@ describe.skipIf(admin === undefined)("Redis reminders end-to-end", () => {
       await silo.stop();
     }
   });
+
+  // Issue #64: `useRedisReminders` must thread the silo's `serviceId` into
+  // `RedisReminderTable`, not leave every silo on `DEFAULT_SERVICE_ID`.
+  it("threads the silo's serviceId into the reminder keys (issue #64)", async () => {
+    checks.clear();
+    const address = new SiloAddress("silo-svc", "uid-svc", "silo-svc:11111");
+    const silo = createSilo({ clusterId: "c1", serviceId: "svc-a", local: address })
+      .useStaticMembership([address])
+      .useInProcessTransport(new InProcessNetwork())
+      .useRedisReminders({ url: REDIS_URL, keyPrefix })
+      .registerGrain(BillingGrain, { interfaces: [IBilling] })
+      .build();
+    await silo.start();
+    try {
+      await silo.getGrain(IBilling, "svc-acct").scheduleSelfCheck();
+      const keys: string[] = [];
+      for await (const batch of admin!.scanIterator({ MATCH: `${keyPrefix}:svc-a:rem:*` })) {
+        keys.push(...(Array.isArray(batch) ? batch : [batch]));
+      }
+      expect(keys.length).toBeGreaterThan(0);
+    } finally {
+      await silo.stop();
+    }
+  });
 });

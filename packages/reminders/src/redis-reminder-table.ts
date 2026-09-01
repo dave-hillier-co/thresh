@@ -3,6 +3,7 @@ import type { createClient } from "redis";
 import type { GrainId } from "@thresh/core/grain-id";
 import type { ReminderEntry, ReminderRegistration, ReminderTable } from "@thresh/core/reminder";
 import { deserializeValue, serializeValue } from "@thresh/core/value-codec";
+import { DEFAULT_SERVICE_ID } from "@thresh/core/default-service-id";
 import type { ReminderData } from "./reminder-data";
 
 export type RedisClient = ReturnType<typeof createClient>;
@@ -10,6 +11,19 @@ export type RedisClient = ReturnType<typeof createClient>;
 export interface RedisReminderTableOptions {
   /** Namespace for keys in the shared Redis (defaults to `"thresh"`). */
   keyPrefix?: string;
+  /**
+   * Logical service identity this provider's keys belong to (Orleans'
+   * `ClusterOptions.ServiceId`). Two clusters pointed at the same Redis stay
+   * partitioned by it. Defaults to `"default"`, Orleans' own
+   * `ClusterOptions.DefaultServiceId`; `SiloBuilder` threads the silo's
+   * `serviceId ?? clusterId`.
+   *
+   * Redis has no ALTER: a key written before this option existed has no
+   * `{serviceId}` segment and is invisible to a service-partitioned reader —
+   * a deliberate upgrade break, the same call #59 made for `RedisGrainStorage`
+   * (see todo.md / docs/deviations.md).
+   */
+  serviceId?: string;
 }
 
 // Upsert is unconditional (a fresh etag each time, like MemoryReminderTable):
@@ -39,12 +53,14 @@ return 1`;
  */
 export class RedisReminderTable implements ReminderTable {
   private readonly keyPrefix: string;
+  private readonly serviceId: string;
 
   constructor(
     private readonly client: RedisClient,
     options: RedisReminderTableOptions = {},
   ) {
     this.keyPrefix = options.keyPrefix ?? "thresh";
+    this.serviceId = options.serviceId ?? DEFAULT_SERVICE_ID;
   }
 
   async upsert(registration: ReminderRegistration): Promise<string> {
@@ -116,11 +132,11 @@ export class RedisReminderTable implements ReminderTable {
   }
 
   private indexKey(): string {
-    return `${this.keyPrefix}:rem:index`;
+    return `${this.keyPrefix}:${this.serviceId}:rem:index`;
   }
 
   private grainKey(grainId: GrainId): string {
-    return `${this.keyPrefix}:rem:g:${grainId.toString()}`;
+    return `${this.keyPrefix}:${this.serviceId}:rem:g:${grainId.toString()}`;
   }
 
   private entryKey(grainId: GrainId, name: string): string {
@@ -128,6 +144,6 @@ export class RedisReminderTable implements ReminderTable {
   }
 
   private memberEntryKey(member: string): string {
-    return `${this.keyPrefix}:rem:e:${member}`;
+    return `${this.keyPrefix}:${this.serviceId}:rem:e:${member}`;
   }
 }

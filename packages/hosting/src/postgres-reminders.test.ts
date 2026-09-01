@@ -79,4 +79,27 @@ describe.skipIf(admin === undefined)("Postgres reminders end-to-end", () => {
       await silo.stop();
     }
   });
+
+  // Issue #64: `usePostgresReminders` must thread the silo's `serviceId` into
+  // `PostgresReminderTable`, not leave every silo on `DEFAULT_SERVICE_ID`.
+  it("threads the silo's serviceId into the reminder table's rows (issue #64)", async () => {
+    checks.clear();
+    const address = new SiloAddress("silo-svc", "uid-svc", "silo-svc:11111");
+    const silo = createSilo({ clusterId: "c1", serviceId: "svc-a", local: address })
+      .useStaticMembership([address])
+      .useInProcessTransport(new InProcessNetwork())
+      .usePostgresReminders({ connectionString: PG_URL, tableName })
+      .registerGrain(BillingGrain, { interfaces: [IBilling] })
+      .build();
+    await silo.start();
+    try {
+      await silo.getGrain(IBilling, "svc-acct").scheduleSelfCheck();
+      const res = await admin!.query(`SELECT service_id FROM ${tableName} WHERE service_id = $1`, [
+        "svc-a",
+      ]);
+      expect(res.rowCount).toBeGreaterThan(0);
+    } finally {
+      await silo.stop();
+    }
+  });
 });

@@ -1,6 +1,7 @@
 import type { createClient } from "redis";
 import type { GrainKey } from "@thresh/core/grain-key";
 import type { GrainType } from "@thresh/core/grain-type";
+import { DEFAULT_SERVICE_ID } from "@thresh/core/default-service-id";
 import type {
   ActivationBoundStreamProvider,
   AsyncStream,
@@ -34,6 +35,20 @@ export interface RedisPullingStreamProviderOptions {
    * a store-backed implementation.
    */
   failureHandler?: StreamFailureHandler;
+  /**
+   * Logical service identity this provider's queues, registry and cursors
+   * belong to (Orleans' `ClusterOptions.ServiceId`). Two clusters pointed at
+   * the same Redis and provider name stay partitioned by it — the queues
+   * carry it too (issue #64), not just the registry/cursors, since sharing
+   * the same queue key would cross-deliver events regardless. Defaults to
+   * `"default"`; `SiloBuilder` threads the silo's `serviceId ?? clusterId`.
+   *
+   * Redis has no ALTER: a queue/registry/cursor written before this option
+   * existed has no `{serviceId}` segment and is invisible to a
+   * service-partitioned reader — a deliberate upgrade break, the same call
+   * #59 made for `RedisGrainStorage` (see todo.md / docs/deviations.md).
+   */
+  serviceId?: string;
 }
 
 /**
@@ -61,10 +76,12 @@ export class RedisPullingStreamProvider implements ActivationBoundStreamProvider
   ) {
     const queueCount = validateQueueCount(name, options.queueCount);
     const keyPrefix = options.keyPrefix ?? "thresh";
-    const registry = new RedisSubscriptionRegistry(client, keyPrefix, name);
+    const serviceId = options.serviceId ?? DEFAULT_SERVICE_ID;
+    const registry = new RedisSubscriptionRegistry(client, keyPrefix, name, serviceId);
     const queues = Array.from(
       { length: queueCount },
-      (_unused, i) => new RedisStreamQueue(client, `${keyPrefix}:streamq:${name}:${i}`),
+      (_unused, i) =>
+        new RedisStreamQueue(client, `${keyPrefix}:${serviceId}:streamq:${name}:${i}`),
     );
     this.core = new PullingStreamProviderCore(name, queues, registry, {
       ...(options.pollIntervalMs !== undefined ? { pollIntervalMs: options.pollIntervalMs } : {}),
