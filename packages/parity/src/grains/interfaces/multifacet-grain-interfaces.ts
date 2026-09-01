@@ -2,9 +2,9 @@
 // IMultifacetReader.cs, test/Grains/TestInternalGrainInterfaces/IMultifacetTestGrain.cs,
 // IMultifacetFactoryTestGrain.cs @ v10.1.0 (MIT).
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithIntegerKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 
-export interface IMultifacetWriter extends GrainWithIntegerKey {
+export interface IMultifacetWriter extends GrainKey<bigint> {
   setValue(x: number): Promise<void>;
 }
 
@@ -12,7 +12,7 @@ export const IMultifacetWriter = defineGrainInterface<IMultifacetWriter>(
   "UnitTests.GrainInterfaces.IMultifacetWriter",
 );
 
-export interface IMultifacetReader extends GrainWithIntegerKey {
+export interface IMultifacetReader extends GrainKey<bigint> {
   getValue(): Promise<number>;
 }
 
@@ -26,7 +26,7 @@ export const IMultifacetTestGrain = defineGrainInterface<IMultifacetTestGrain>(
   "UnitTests.GrainInterfaces.IMultifacetTestGrain",
 );
 
-export interface IMultifacetFactoryTestGrain extends GrainWithIntegerKey {
+export interface IMultifacetFactoryTestGrain extends GrainKey<bigint> {
   getReaderOf(grain: IMultifacetTestGrain): Promise<IMultifacetReader>;
   getReader(): Promise<IMultifacetReader | null>;
   getWriterOf(grain: IMultifacetTestGrain): Promise<IMultifacetWriter>;

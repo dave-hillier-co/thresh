@@ -48,7 +48,13 @@ for how the design differs from Orleans.
   and over real WebSocket sockets.
 - **Reducer & functional-first authoring** — `defineGrain` + hooks, snapshot reducers, dispatch
   grains. Every example grain is functional (one `@grain()` class kept on purpose as the living
-  interop example).
+  interop example). Hooks take no context argument (rules-of-hooks: synchronous, top of the factory
+  only); a `defineGrain` definition **is** its own `GrainInterface`, with the message surface inferred
+  from the factory's return type and `interfaceName` available to pin the wire name; key kinds are
+  declared as a type argument (`defineGrainInterface<ICounter, "integer">`) instead of phantom marker
+  interfaces; `registerGrain(def)` takes the `{ interfaces: [...] }` descriptor only when the grain
+  answers to interfaces other than its own. See
+  [`docs/deviations.md`](docs/deviations.md#functional--reducer-authoring).
 - **Durable jobs** — `@thresh/durable-jobs`: sharded (time-bucketed), durable, at-least-once scheduled
   grain invocation, with per-silo concurrency control (limiter + slow-start + overload backoff),
   retry policy, `pollAfter` supervision, and membership-driven shard ownership with dead-silo
@@ -68,7 +74,7 @@ for how the design differs from Orleans.
 - **Ambient cancellation & per-call deadlines** — `@thresh/core/abort`, `AbortSignal` + deadline
   threaded through invocation context, dispatchers, turn scheduler (admission-time preemption),
   `onDeactivate(reason, signal?)` and grain storage; composes with the explicit
-  `GrainCancellationToken` mechanism. Remainders in `todo.md`.
+  `GrainCancellationToken` mechanism.
 - **Scheduler back-pressure & deactivation timeout** — bounded per-activation queues
   (soft-warn/hard-reject with `LimitExceededException`), stuck-turn watchdog, and an enforced
   `deactivationTimeout` that force-invalidates a hung activation.
@@ -92,6 +98,19 @@ for how the design differs from Orleans.
 
 ## ⏸ Deferred
 
+- **Runtime key-kind assertion** — `GrainFactory.getGrain` could assert the supplied key's kind
+  against `GrainInterface.key` when the interface declares one. Held back deliberately: implicit
+  stream subscriptions synthesise string keys for grains whose declared kind may be `integer`
+  (`packages/streams/src/implicit-subscriptions.ts`), so enabling the check without first resolving
+  that would break implicit subscription delivery. The type-level key kind is already enforced.
+- **`GrainWith*Key` marker interfaces** — retained, and now aliases of `GrainKey<TKey>`, so
+  existing declarations compile unchanged and resolve to the same key type
+  (`KeyKindFromMarker` maps marker, intersection, and declared kind to one answer). Not deprecated:
+  intersecting `GrainKey<TKey>` is the recommended form for a separately declared contract, and a
+  fused definition declares `{ key: ... }` instead. Removing the residual no-op
+  `extends GrainWithStringKey` from test fixtures is cosmetic and unscheduled; `packages/parity`
+  keeps them permanently, along with its `I` prefixes and Orleans FQN interface names, because those
+  are upstream identifiers used for 1:1 re-diff.
 - Stream-backing polish (Phase 3 of
   [`docs/stream-backings-postgres-kafka.md`](docs/stream-backings-postgres-kafka.md)):
   LISTEN/NOTIFY wake-up for the Postgres queue, consumer-lag gauges, worked examples.

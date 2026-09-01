@@ -1,9 +1,9 @@
 // Ported from dotnet/orleans test/Grains/TestGrainInterfaces/IActivateDeactivateWatcherGrain.cs
 // and IActivateDeactivateTestGrain.cs @ v10.1.0 (MIT).
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithIntegerKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 
-export interface IActivateDeactivateWatcherGrain extends GrainWithIntegerKey {
+export interface IActivateDeactivateWatcherGrain extends GrainKey<bigint> {
   getActivateCalls(): Promise<string[]>;
   getDeactivateCalls(): Promise<string[]>;
   clear(): Promise<void>;
@@ -20,7 +20,7 @@ export const IActivateDeactivateWatcherGrain =
 // grain classes rather than subclassing, since a grain can implement only one
 // primary interface; the TS grains below mirror that structure.
 
-export interface ISimpleActivateDeactivateTestGrain extends GrainWithIntegerKey {
+export interface ISimpleActivateDeactivateTestGrain extends GrainKey<bigint> {
   doSomething(): Promise<string>;
   doDeactivate(): Promise<void>;
 }
@@ -33,7 +33,7 @@ export const ISimpleActivateDeactivateTestGrain =
 // Upstream's tail-call variant exercises a .NET IL tail-call code path in
 // OnActivateAsync/OnDeactivateAsync; JS has no equivalent distinction, so this
 // grain's behaviour mirrors ISimpleActivateDeactivateTestGrain exactly.
-export interface ITailCallActivateDeactivateTestGrain extends GrainWithIntegerKey {
+export interface ITailCallActivateDeactivateTestGrain extends GrainKey<bigint> {
   doSomething(): Promise<string>;
   doDeactivate(): Promise<void>;
 }
@@ -43,7 +43,7 @@ export const ITailCallActivateDeactivateTestGrain =
     "UnitTests.GrainInterfaces.ITailCallActivateDeactivateTestGrain",
   );
 
-export interface ILongRunningActivateDeactivateTestGrain extends GrainWithIntegerKey {
+export interface ILongRunningActivateDeactivateTestGrain extends GrainKey<bigint> {
   doSomething(): Promise<string>;
   doDeactivate(): Promise<void>;
 }
@@ -53,7 +53,7 @@ export const ILongRunningActivateDeactivateTestGrain =
     "UnitTests.GrainInterfaces.ILongRunningActivateDeactivateTestGrain",
   );
 
-export interface IBadActivateDeactivateTestGrain extends GrainWithIntegerKey {
+export interface IBadActivateDeactivateTestGrain extends GrainKey<bigint> {
   throwSomething(): Promise<void>;
   getKey(): Promise<bigint>;
 }
@@ -63,7 +63,7 @@ export const IBadActivateDeactivateTestGrain =
     "UnitTests.GrainInterfaces.IBadActivateDeactivateTestGrain",
   );
 
-export interface IBadConstructorTestGrain extends GrainWithIntegerKey {
+export interface IBadConstructorTestGrain extends GrainKey<bigint> {
   doSomething(): Promise<string>;
 }
 
@@ -71,7 +71,7 @@ export const IBadConstructorTestGrain = defineGrainInterface<IBadConstructorTest
   "UnitTests.GrainInterfaces.IBadConstructorTestGrain",
 );
 
-export interface ITaskActionActivateDeactivateTestGrain extends GrainWithIntegerKey {
+export interface ITaskActionActivateDeactivateTestGrain extends GrainKey<bigint> {
   doSomething(): Promise<string>;
   doDeactivate(): Promise<void>;
 }
@@ -81,7 +81,7 @@ export const ITaskActionActivateDeactivateTestGrain =
     "UnitTests.GrainInterfaces.ITaskActionActivateDeactivateTestGrain",
   );
 
-export interface ICreateGrainReferenceTestGrain extends GrainWithIntegerKey {
+export interface ICreateGrainReferenceTestGrain extends GrainKey<bigint> {
   doSomething(): Promise<string>;
   forwardCall(otherGrain: IBadActivateDeactivateTestGrain): Promise<void>;
 }
@@ -90,7 +90,7 @@ export const ICreateGrainReferenceTestGrain = defineGrainInterface<ICreateGrainR
   "UnitTests.GrainInterfaces.ICreateGrainReferenceTestGrain",
 );
 
-export interface IDeactivatingWhileActivatingTestGrain extends GrainWithIntegerKey {
+export interface IDeactivatingWhileActivatingTestGrain extends GrainKey<bigint> {
   doSomething(): Promise<string>;
 }
 

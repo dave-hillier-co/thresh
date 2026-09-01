@@ -1,5 +1,5 @@
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 
 export interface ThermostatStatus {
   tempC: number;
@@ -14,31 +14,21 @@ export interface Command {
 }
 
 /** Called by the device frontend. */
-export interface IThermostat extends GrainWithStringKey {
+export type Thermostat = GrainKey<string> & {
   onUpdate(status: ThermostatStatus): Promise<Command[]>;
-}
+};
 
 /** Called by control systems. */
-export interface IThermostatControl extends GrainWithStringKey {
+export type ThermostatControl = GrainKey<string> & {
   getStatus(): Promise<ThermostatStatus>;
   updateConfiguration(config: ThermostatConfiguration): Promise<void>;
-}
+};
 
-/** Rolls up telemetry across the fleet. */
-export interface IFleetAggregator extends GrainWithStringKey {
-  averageTemp(): Promise<number>;
-  sampleCount(): Promise<number>;
-}
+export const thermostat = defineGrainInterface<Thermostat>("example.thermostat");
 
-export const IThermostat = defineGrainInterface<IThermostat>("example.IThermostat");
-
-export const IThermostatControl = defineGrainInterface<IThermostatControl>(
-  "example.IThermostatControl",
+export const thermostatControl = defineGrainInterface<ThermostatControl>(
+  "example.thermostatControl",
   { options: { getStatus: { readOnly: true } } },
 );
-
-export const IFleetAggregator = defineGrainInterface<IFleetAggregator>("example.IFleetAggregator", {
-  options: { averageTemp: { readOnly: true }, sampleCount: { readOnly: true } },
-});
 
 export const TELEMETRY = "telemetry";

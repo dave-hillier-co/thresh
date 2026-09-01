@@ -28,7 +28,7 @@
 // upstream `[InlineData]` row.
 import { defineGrain, useTransactionalState } from "@thresh/core/define-grain";
 import { defineGrainInterface, type GrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import { TransactionAbortedError, TransactionInDoubtError } from "@thresh/core/errors";
 import type { TestCluster } from "@thresh/testing/test-cluster";
 
@@ -82,7 +82,7 @@ function hashCode(s: string): number {
   return h;
 }
 
-export interface ConsistencyTestGrain extends GrainWithStringKey {
+export interface ConsistencyTestGrain extends GrainKey<string> {
   run(
     options: ConsistencyTestOptions,
     depth: number,
@@ -108,7 +108,7 @@ const grainKey = (n: number): string => `g${n}`;
 export const ConsistencyTestGrainImpl = defineGrain<ConsistencyTestGrain>(
   "Orleans.Transactions.TestKit.Consistency.ConsistencyTestGrain",
   (ctx) => {
-    const data = useTransactionalState<ConsistencyState>(ctx, "data", {
+    const data = useTransactionalState<ConsistencyState>("data", {
       initial: () => ({ writerTx: INITIAL_TX, seqNo: 0 }),
     });
     const myNumber = grainNumber(ctx.id.key as string);

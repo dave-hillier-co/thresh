@@ -6,7 +6,7 @@ import { describe, expect } from "vitest";
 import { grain, implicitStreamSubscription } from "@thresh/core/decorators";
 import { Grain } from "@thresh/core/grain";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithGuidKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import {
   STREAM_SUBSCRIPTION_OBSERVER,
   type BatchedStreamItem,
@@ -15,6 +15,7 @@ import {
 import { orleansTest } from "@thresh/testing/orleans-test";
 import { TestCluster } from "@thresh/testing/test-cluster";
 import { randomGuidKey } from "@thresh/parity/support/keys";
+import type { Guid } from "@thresh/core/guid";
 
 const BATCHING_NAMESPACE = "batching";
 const NON_BATCHING_NAMESPACE = "nonbatching";
@@ -24,7 +25,7 @@ interface ConsumptionReport {
   maxBatchSize: number;
 }
 
-interface IStreamBatchingTestConsumerGrain extends GrainWithGuidKey {
+interface IStreamBatchingTestConsumerGrain extends GrainKey<Guid> {
   getConsumptionReport(): Promise<ConsumptionReport>;
 }
 const IStreamBatchingTestConsumerGrain = defineGrainInterface<IStreamBatchingTestConsumerGrain>(

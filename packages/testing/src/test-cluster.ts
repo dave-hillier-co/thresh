@@ -3,7 +3,9 @@ import { GrainCancellationTokenSource } from "@thresh/core/grain-cancellation-to
 import type { GrainRegistrationSpec } from "@thresh/core/grain-registration-spec";
 import type { GrainId } from "@thresh/core/grain-id";
 import type { GrainInterface } from "@thresh/core/grain-interface";
-import type { GrainKeyFor } from "@thresh/core/key-kinds";
+import type { GrainKeyKind } from "@thresh/core/grain-key";
+import type { Registrable } from "@thresh/core/grain-registration";
+import type { KeyTypeOf } from "@thresh/core/key-kinds";
 import type { MembershipService, MembershipSnapshot } from "@thresh/core/membership";
 import { SiloAddress } from "@thresh/core/silo-address";
 import type { StreamProvider } from "@thresh/core/stream";
@@ -26,6 +28,13 @@ import { membershipGatewayProvider } from "@thresh/client/gateway-provider";
 
 export type { GrainRegistrationSpec, ClientNode };
 
+/**
+ * What `TestClusterOptions.grains` accepts: either the constructor form above,
+ * or a `defineGrain`/`defineReducerGrain` definition, which carries its own
+ * interface and so needs nothing alongside it.
+ */
+export type TestGrainSpec = GrainRegistrationSpec | Registrable;
+
 export interface TestClusterOptions {
   /** Number of silos to start with (Orleans TestClusterBuilder defaults to 2). */
   initialSilos?: number;
@@ -38,7 +47,7 @@ export interface TestClusterOptions {
    */
   serviceId?: string;
   /** Grains registered on every silo. */
-  grains?: ReadonlyArray<GrainRegistrationSpec>;
+  grains?: ReadonlyArray<TestGrainSpec>;
   /** Clock injected into every silo; pass a `FakeTimeProvider` for determinism. */
   time?: TimeProvider;
   /**
@@ -205,7 +214,7 @@ export class TestCluster {
     return handle.host.serviceId;
   }
 
-  getGrain<T>(def: GrainInterface<T>, key: GrainKeyFor<T>): T {
+  getGrain<T, K extends GrainKeyKind>(def: GrainInterface<T, K>, key: KeyTypeOf<K>): T {
     return this.primary.host.getGrain(def, key);
   }
 
@@ -441,7 +450,8 @@ export class TestCluster {
       builder.disableTransactions();
     }
     for (const spec of this.options.grains ?? []) {
-      builder.registerGrain(spec.ctor, { interfaces: spec.interfaces });
+      if ("ctor" in spec) builder.registerGrain(spec.ctor, { interfaces: spec.interfaces });
+      else builder.registerGrain(spec);
     }
     this.options.configureSilo?.(builder, { index, address }, this);
     const silo: InternalSilo = { index, address, membership, host: builder.build() };

@@ -9,7 +9,7 @@ import {
 import { grain } from "@thresh/core/decorators";
 import { Grain } from "@thresh/core/grain";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import { SiloAddress } from "@thresh/core/silo-address";
 import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
 import { createSilo } from "@thresh/hosting/silo-builder";
@@ -21,7 +21,7 @@ const reader = new PeriodicExportingMetricReader({ exporter, exportIntervalMilli
 const meterProvider = new MeterProvider({ readers: [reader] });
 metrics.setGlobalMeterProvider(meterProvider);
 
-interface Greeter extends GrainWithStringKey {
+interface Greeter extends GrainKey<string> {
   greet(name: string): Promise<string>;
 }
 const Greeter = defineGrainInterface<Greeter>("MetricsGreeter");

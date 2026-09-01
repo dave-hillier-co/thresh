@@ -3,7 +3,7 @@ import { defineGrain, useDurableJobHandler } from "@thresh/core/define-grain";
 import { completed, pollAfter, type DurableJob } from "@thresh/core/durable-job";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
 import { GrainId } from "@thresh/core/grain-id";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import { PLACEMENT_HINT_KEY, RequestContext } from "@thresh/core/request-context";
 import { SiloAddress } from "@thresh/core/silo-address";
 import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
@@ -18,7 +18,7 @@ const runs = new Map<string, number>();
 const pollAttempts = new Map<string, number>();
 const record = (key: string, map = runs) => map.set(key, (map.get(key) ?? 0) + 1);
 
-interface IWorker extends GrainWithStringKey {
+interface IWorker extends GrainKey<string> {
   ping(): Promise<string>;
 }
 const IWorker = defineGrainInterface<IWorker>("IWorker.jobs");
@@ -28,7 +28,7 @@ const IWorker = defineGrainInterface<IWorker>("IWorker.jobs");
 //  - "boom"    → record a run and throw (Failed → retry policy)
 //  - "poll"    → poll a few times then complete (supervised re-poll)
 const WorkerGrain = defineGrain<IWorker>("Worker", (ctx) => {
-  useDurableJobHandler(ctx, async (job) => {
+  useDurableJobHandler(async (job) => {
     const key = `${String(ctx.id.key)}:${job.name}`;
     if (job.name === "boom") {
       record(key);
@@ -48,7 +48,7 @@ const WorkerGrain = defineGrain<IWorker>("Worker", (ctx) => {
 });
 
 // A scheduler grain that schedules/cancels jobs on a worker via the runtime.
-interface IScheduler extends GrainWithStringKey {
+interface IScheduler extends GrainKey<string> {
   schedule(workerKey: string, name: string, dueMs: number): Promise<DurableJob>;
   cancel(job: DurableJob): Promise<void>;
 }
@@ -96,8 +96,8 @@ function buildSilo(store: MemoryJobShardStore, time: FakeTimeProvider) {
     .useStaticMembership([local])
     .useInProcessTransport(new InProcessNetwork())
     .useMemoryDurableJobs(store)
-    .registerGrain(WorkerGrain, { interfaces: [IWorker] })
-    .registerGrain(SchedulerGrain, { interfaces: [IScheduler] })
+    .registerGrain(WorkerGrain.grain, { interfaces: [IWorker] })
+    .registerGrain(SchedulerGrain.grain, { interfaces: [IScheduler] })
     .build();
 }
 
@@ -219,8 +219,8 @@ describe("durable jobs end-to-end", () => {
     const silo = createSilo({ clusterId: "c1", local })
       .useStaticMembership([local])
       .useInProcessTransport(new InProcessNetwork())
-      .registerGrain(WorkerGrain, { interfaces: [IWorker] })
-      .registerGrain(SchedulerGrain, { interfaces: [IScheduler] })
+      .registerGrain(WorkerGrain.grain, { interfaces: [IWorker] })
+      .registerGrain(SchedulerGrain.grain, { interfaces: [IScheduler] })
       .build();
     await silo.start();
     try {
@@ -252,8 +252,8 @@ describe("durable jobs multi-silo failover", () => {
         .useMembership(ms)
         .useInProcessTransport(net)
         .useMemoryDurableJobs(store)
-        .registerGrain(WorkerGrain, { interfaces: [IWorker] })
-        .registerGrain(SchedulerGrain, { interfaces: [IScheduler] })
+        .registerGrain(WorkerGrain.grain, { interfaces: [IWorker] })
+        .registerGrain(SchedulerGrain.grain, { interfaces: [IScheduler] })
         .build();
 
     const siloA = buildAt(a, membership);
@@ -295,8 +295,8 @@ describe("durable jobs multi-silo failover", () => {
         .useMembership(ms)
         .useInProcessTransport(net)
         .useMemoryDurableJobs(store)
-        .registerGrain(WorkerGrain, { interfaces: [IWorker] })
-        .registerGrain(SchedulerGrain, { interfaces: [IScheduler] })
+        .registerGrain(WorkerGrain.grain, { interfaces: [IWorker] })
+        .registerGrain(SchedulerGrain.grain, { interfaces: [IScheduler] })
         .build();
 
     const siloA = buildAt(a, membership);

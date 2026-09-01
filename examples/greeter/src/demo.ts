@@ -4,10 +4,9 @@ import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
 import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
 import { createSilo } from "@thresh/hosting/silo-builder";
 import { GreeterGrain } from "@thresh/example-greeter/greeter-grain";
-import { IGreeter } from "@thresh/example-greeter/interfaces";
 
 export interface GreeterDemoResult {
-  /** The first greeting — proves onActivate ran before it (carries the prefix). */
+  /** The first greeting — proves the activate hook ran before it (carries the prefix). */
   firstGreeting: string;
   /** Count after several concurrent greets — proves serialized turns (no lost ++). */
   countAfterConcurrent: number;
@@ -37,12 +36,12 @@ export async function runGreeterDemo(): Promise<GreeterDemoResult> {
   })
     .useStaticMembership([local])
     .useInProcessTransport(new InProcessNetwork())
-    .registerGrain(GreeterGrain, { interfaces: [IGreeter] })
+    .registerGrain(GreeterGrain)
     .build();
 
   await silo.start();
   try {
-    const greeter = silo.getGrain(IGreeter, "en");
+    const greeter = silo.getGrain(GreeterGrain, "en");
 
     const firstGreeting = await greeter.greet("Ada");
 

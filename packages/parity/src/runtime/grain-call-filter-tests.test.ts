@@ -11,7 +11,7 @@ import {
 import { grain } from "@thresh/core/decorators";
 import { Grain } from "@thresh/core/grain";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithGuidKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import { castGrainReference } from "@thresh/core/grain-reference";
 import type { ClientNode } from "@thresh/client/client-node";
 import { invocationContext } from "@thresh/runtime/invocation-context";
@@ -32,6 +32,7 @@ import {
 } from "@thresh/parity/grains/impl/method-interception-grain";
 import { createClusterClient } from "@thresh/parity/support/client";
 import { randomGuidKey, randomIntegerKey } from "@thresh/parity/support/keys";
+import type { Guid } from "@thresh/core/guid";
 
 // System-wide incoming filter: mirrors the upstream fixture's
 // `SiloInvokerTestSiloBuilderConfigurator` incoming filter, trimmed to just
@@ -158,7 +159,7 @@ const clientOutgoing: OutgoingGrainCallFilter = async (ctx) => {
 // `onNext` writes the delivered value), then — if it changed — doubles it,
 // proving a stream delivery flows through the grain's incoming call-filter
 // pipeline exactly like an ordinary method call (Orleans parity).
-interface IStreamInterceptionGrain extends GrainWithGuidKey {
+interface IStreamInterceptionGrain extends GrainKey<Guid> {
   getLastStreamValue(): Promise<number>;
 }
 const IStreamInterceptionGrain = defineGrainInterface<IStreamInterceptionGrain>(

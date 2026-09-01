@@ -17,9 +17,9 @@
 // "structure disappeared from the grain's registered set" scenario upstream
 // exercises by constructing a manager with fewer machines.
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 
-export interface IRetiringCollectionsGrainPartial extends GrainWithStringKey {
+export interface IRetiringCollectionsGrainPartial extends GrainKey<string> {
   keepSet(key: unknown, value: unknown): Promise<void>;
   keepGet(key: unknown): Promise<unknown>;
 }

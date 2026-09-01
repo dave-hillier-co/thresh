@@ -62,9 +62,9 @@ describe("DefaultCluster.Tests.InMemoryDurableJobsTests", () => {
       initialSilos: 1,
       time,
       grains: [
-        { ctor: DurableJobGrain, interfaces: [IDurableJobGrain] },
-        { ctor: SchedulerGrain, interfaces: [ISchedulerGrain] },
-        { ctor: RetryTestGrain, interfaces: [IRetryTestGrain] },
+        { ctor: DurableJobGrain.grain, interfaces: [IDurableJobGrain] },
+        { ctor: SchedulerGrain.grain, interfaces: [ISchedulerGrain] },
+        { ctor: RetryTestGrain.grain, interfaces: [IRetryTestGrain] },
       ],
     });
   });

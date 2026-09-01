@@ -1,0 +1,22 @@
+# Thresh
+
+> TypeScript virtual actors with Orleans-inspired semantics and Kubernetes-native clustering.
+
+Thresh is an ESM Node 22+ pnpm workspace. Packages use explicit subpath imports such as
+`@thresh/core/define-grain`; no package-root barrels exist.
+
+## Documentation
+
+- [Introduction](/guide/): mental model and facility selection
+- [Quick start](/guide/quick-start): first contract and grain
+- [Grains and calls](/guide/grains): identity, lifecycle, turns, failures
+- [State](/guide/state): persistent, reducer, transactional, journaled state
+- [Background work](/guide/background-work): timers, reminders, durable jobs
+- [Streams](/guide/streams): delivery and broadcast channels
+- [Hosting](/guide/hosting): production and Kubernetes
+- [Testing](/guide/testing): TestCluster and deterministic tests
+- [Packages](/reference/packages): package and source map
+- [Agent reference](/reference/agents): workflow and invariants
+- [Full context](/llms-full.txt): all primary documentation in one file
+- [Orleans deviations](/deviations)
+- [TypeScript API idioms](/typescript-grain-api)

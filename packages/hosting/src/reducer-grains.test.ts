@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { grain, reducerState } from "@thresh/core/decorators";
 import { Grain } from "@thresh/core/grain";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import type { ReducerState } from "@thresh/core/reducer-state";
 import { SiloAddress } from "@thresh/core/silo-address";
 import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
@@ -22,7 +22,7 @@ const reduceAccount = (state: AccountState, event: AccountEvent): AccountState =
     ? { balanceCents: state.balanceCents + event.cents, transactions: state.transactions + 1 }
     : { balanceCents: state.balanceCents - event.cents, transactions: state.transactions + 1 };
 
-interface IAccount extends GrainWithStringKey {
+interface IAccount extends GrainKey<string> {
   deposit(cents: number): Promise<number>;
   withdraw(cents: number): Promise<number>;
   balance(): Promise<number>;

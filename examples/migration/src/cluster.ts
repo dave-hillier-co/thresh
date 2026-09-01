@@ -5,7 +5,6 @@ import { MemoryGrainStorage } from "@thresh/persistence/memory-grain-storage";
 import { createSilo } from "@thresh/hosting/silo-builder";
 import type { SiloHost } from "@thresh/hosting/silo-host";
 import { CartGrain } from "@thresh/example-migration/cart-grain";
-import { ICart } from "@thresh/example-migration/interfaces";
 
 const CLUSTER = "carts";
 
@@ -46,7 +45,7 @@ export function buildMigrationCluster(): MigrationCluster {
       .useStaticMembership(addresses)
       .useInProcessTransport(network)
       .useMemoryStorage(storage)
-      .registerGrain(CartGrain, { interfaces: [ICart] })
+      .registerGrain(CartGrain)
       .build(),
   );
 

@@ -27,6 +27,9 @@ colliding, which is the bug. Postgres is **not** breaking: `start()` migrates an
 place, backfilling to `DEFAULT_SERVICE_ID`, and a silo that names no `serviceId` reads exactly that
 literal — the two must agree or every pre-existing row goes invisible on the next restart, which is
 the failure this migration exists to avoid.
+## Review
+
+- [Project review — 2026-08-04](docs/project-review-2026-08-04.md) confirms the current stated aims are met, with only the explicitly beyond-parity browser work and deferred stream-backing polish left open.
 
 ## Beyond parity
 
@@ -35,6 +38,14 @@ the failure this migration exists to avoid.
 
 ## Deferred
 
+- [ ] Runtime key-kind assertion in `GrainFactory.getGrain` (assert the supplied key's kind matches
+      `GrainInterface.key` where declared). Blocked on implicit stream subscriptions, which synthesise
+      string keys for possibly integer-keyed grains
+      (`packages/streams/src/implicit-subscriptions.ts`); fix that first or the check breaks implicit
+      delivery. Type-level key kinds are already enforced, so this is defence in depth.
+- [ ] Delete the residual no-op `extends GrainWithStringKey` from non-parity test fixtures. Pure
+      deletion, no type change — the markers stay exported either way (as nominal names for
+      `GrainKey<TKey>`), and `packages/parity` keeps them permanently for upstream traceability.
 - [ ] [#39](https://github.com/dave-hillier-co/thresh/issues/39) Additional stream
       backings behind the existing interfaces —
       [`docs/stream-backings-postgres-kafka.md`](docs/stream-backings-postgres-kafka.md). Phase 0

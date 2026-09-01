@@ -5,11 +5,11 @@
 // reports back; only `getActivityId`'s SPAN ID matters, for parity with the
 // activation-tracing grains' shape).
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithIntegerKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import type { SiloAddress } from "@thresh/core/silo-address";
 
 /** Basic deactivation tracing: a plain `onDeactivate` no-op. */
-export interface IDeactivationTracingTestGrain extends GrainWithIntegerKey {
+export interface IDeactivationTracingTestGrain extends GrainKey<bigint> {
   getActivityId(): Promise<string | undefined>;
 }
 
@@ -18,7 +18,7 @@ export const IDeactivationTracingTestGrain = defineGrainInterface<IDeactivationT
 );
 
 /** Deactivation tracing with a persistent-state write from inside `onDeactivate`. */
-export interface IDeactivationWithWorkTracingTestGrain extends GrainWithIntegerKey {
+export interface IDeactivationWithWorkTracingTestGrain extends GrainKey<bigint> {
   getActivityId(): Promise<string | undefined>;
   wasDeactivated(): Promise<boolean>;
 }
@@ -29,7 +29,7 @@ export const IDeactivationWithWorkTracingTestGrain =
   );
 
 /** Deactivation tracing where `onDeactivate` throws. */
-export interface IDeactivationWithExceptionTracingTestGrain extends GrainWithIntegerKey {
+export interface IDeactivationWithExceptionTracingTestGrain extends GrainKey<bigint> {
   getActivityId(): Promise<string | undefined>;
 }
 
@@ -39,7 +39,7 @@ export const IDeactivationWithExceptionTracingTestGrain =
   );
 
 /** A grain whose constructor throws, so activation never completes. */
-export interface IActivationFailureDeactivationGrain extends GrainWithIntegerKey {
+export interface IActivationFailureDeactivationGrain extends GrainKey<bigint> {
   getActivityId(): Promise<string | undefined>;
 }
 
@@ -56,7 +56,7 @@ export const IActivationFailureDeactivationGrain =
  * takes the target directly, unlike upstream's placement-hint-directed
  * `Cast<IGrainManagementExtension>().MigrateOnIdle()`).
  */
-export interface IDeactivationMigrationTracingTestGrain extends GrainWithIntegerKey {
+export interface IDeactivationMigrationTracingTestGrain extends GrainKey<bigint> {
   setState(state: number): Promise<void>;
   getState(): Promise<number>;
   migrateOnIdle(target?: SiloAddress): Promise<void>;

@@ -3,11 +3,11 @@ import { grain } from "@thresh/core/decorators";
 import { GrainId } from "@thresh/core/grain-id";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
 import { Grain } from "@thresh/core/grain";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import { Silo } from "@thresh/runtime/silo";
 import { FakeTimeProvider } from "@thresh/runtime/test-support/fake-time-provider";
 
-interface ICounter extends GrainWithStringKey {
+interface ICounter extends GrainKey<string> {
   increment(by: number): Promise<number>;
   get(): Promise<number>;
 }
@@ -16,7 +16,7 @@ const ICounter = defineGrainInterface<ICounter>("ICounter.lifecycle", {
   options: { get: { readOnly: true } },
 });
 
-interface IBadActivate extends GrainWithStringKey {
+interface IBadActivate extends GrainKey<string> {
   ping(): Promise<string>;
 }
 

@@ -23,7 +23,7 @@ import type { TestCluster } from "@thresh/testing/test-cluster";
  */
 export async function createClusterClient(
   cluster: TestCluster,
-  grains: ReadonlyArray<GrainRegistrationSpec>,
+  grains: readonly GrainRegistrationSpec[],
   incomingCallFilters?: readonly IncomingGrainCallFilter[],
   outgoingCallFilters?: readonly OutgoingGrainCallFilter[],
 ): Promise<ClientNode> {

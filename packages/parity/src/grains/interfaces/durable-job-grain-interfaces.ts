@@ -2,10 +2,10 @@
 // ISchedulerGrain.cs, IRetryTestGrain.cs @ v10.1.0 (MIT).
 import { defineGrainInterface } from "@thresh/core/grain-interface";
 import type { DurableJob, JobRunContext } from "@thresh/core/durable-job";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 
 /** Upstream `UnitTests.GrainInterfaces.IDurableJobGrain`. */
-export interface IDurableJobGrain extends GrainWithStringKey {
+export interface IDurableJobGrain extends GrainKey<string> {
   scheduleJobAsync(
     jobName: string,
     scheduledTime: Date,
@@ -30,7 +30,7 @@ export const IDurableJobGrain = defineGrainInterface<IDurableJobGrain>(
 );
 
 /** Upstream `UnitTests.GrainInterfaces.ISchedulerGrain`. */
-export interface ISchedulerGrain extends GrainWithStringKey {
+export interface ISchedulerGrain extends GrainKey<string> {
   scheduleJobOnAnotherGrainAsync(
     targetGrainKey: string,
     jobName: string,
@@ -42,7 +42,7 @@ export const ISchedulerGrain = defineGrainInterface<ISchedulerGrain>(
 );
 
 /** Upstream `UnitTests.GrainInterfaces.IRetryTestGrain`. */
-export interface IRetryTestGrain extends GrainWithStringKey {
+export interface IRetryTestGrain extends GrainKey<string> {
   scheduleJobAsync(
     jobName: string,
     scheduledTime: Date,

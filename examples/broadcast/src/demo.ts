@@ -5,7 +5,6 @@ import type { SiloHost } from "@thresh/hosting/silo-host";
 import { AlertPublisherGrain } from "@thresh/example-broadcast/alert-publisher-grain";
 import { AuditLogGrain } from "@thresh/example-broadcast/audit-log-grain";
 import { RegionMonitorGrain } from "@thresh/example-broadcast/region-monitor-grain";
-import { IAlertPublisher, IAuditLog, IRegionMonitor } from "@thresh/example-broadcast/interfaces";
 
 const local = new SiloAddress("silo-0", "uid-0", "silo-0:11111");
 
@@ -15,9 +14,9 @@ export function buildBroadcastSilo(): SiloHost {
     .useStaticMembership([local])
     .useInProcessTransport(new InProcessNetwork())
     .useBroadcastChannels()
-    .registerGrain(AlertPublisherGrain, { interfaces: [IAlertPublisher] })
-    .registerGrain(RegionMonitorGrain, { interfaces: [IRegionMonitor] })
-    .registerGrain(AuditLogGrain, { interfaces: [IAuditLog] })
+    .registerGrain(AlertPublisherGrain)
+    .registerGrain(RegionMonitorGrain)
+    .registerGrain(AuditLogGrain)
     .build();
 }
 
@@ -37,7 +36,7 @@ export async function runBroadcastDemo(): Promise<BroadcastDemoResult> {
   const silo = buildBroadcastSilo();
   await silo.start();
   try {
-    const publisher = silo.getGrain(IAlertPublisher, "ops");
+    const publisher = silo.getGrain(AlertPublisherGrain, "ops");
     await publisher.raise("eu", "disk pressure");
     await publisher.raise("eu", "node drained");
     await publisher.raise("us", "latency spike");
@@ -45,8 +44,10 @@ export async function runBroadcastDemo(): Promise<BroadcastDemoResult> {
     const monitors: Record<string, string[]> = {};
     const audits: Record<string, string[]> = {};
     for (const region of ["eu", "us"]) {
-      monitors[region] = (await silo.getGrain(IRegionMonitor, region).alerts()).map((a) => a.text);
-      audits[region] = await silo.getGrain(IAuditLog, region).entries();
+      monitors[region] = (await silo.getGrain(RegionMonitorGrain, region).alerts()).map(
+        (a) => a.text,
+      );
+      audits[region] = await silo.getGrain(AuditLogGrain, region).entries();
     }
     return { monitors, audits };
   } finally {

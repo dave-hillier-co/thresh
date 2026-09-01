@@ -3,11 +3,11 @@ import { grain } from "@thresh/core/decorators";
 import { Grain } from "@thresh/core/grain";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
 import type { GrainTimer } from "@thresh/core/grain-timer";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import { Silo } from "@thresh/runtime/silo";
 import { FakeTimeProvider } from "@thresh/runtime/test-support/fake-time-provider";
 
-interface ITicker extends GrainWithStringKey {
+interface ITicker extends GrainKey<string> {
   startPeriodic(): Promise<void>;
   startOnce(): Promise<void>;
   stop(): Promise<void>;

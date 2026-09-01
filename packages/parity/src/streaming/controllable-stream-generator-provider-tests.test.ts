@@ -26,7 +26,7 @@ import { expect } from "vitest";
 import { grain, implicitStreamSubscription } from "@thresh/core/decorators";
 import { Grain } from "@thresh/core/grain";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import { IManagementGrain } from "@thresh/core/management-grain";
 import {
   STREAM_GENERATOR_COMMAND_CONFIGURE,
@@ -45,7 +45,7 @@ const TOTAL_QUEUE_COUNT = 4;
 const REPORTER_ID = "controllable-generated-stream-reporter";
 const INITIAL_SILOS = 1;
 
-interface IGeneratedEventReporterGrain extends GrainWithStringKey {
+interface IGeneratedEventReporterGrain extends GrainKey<string> {
   reportResult(
     streamKey: string,
     streamProvider: string,
@@ -84,7 +84,7 @@ class GeneratedEventReporterGrain extends Grain implements IGeneratedEventReport
   }
 }
 
-interface IGeneratedEventCollectorGrain extends GrainWithStringKey {
+interface IGeneratedEventCollectorGrain extends GrainKey<string> {
   marker(): Promise<string>;
 }
 const IGeneratedEventCollectorGrain = defineGrainInterface<IGeneratedEventCollectorGrain>(

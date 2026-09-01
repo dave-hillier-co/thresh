@@ -16,13 +16,13 @@
 import { grain } from "@thresh/core/decorators";
 import { Grain } from "@thresh/core/grain";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import { PLACEMENT_HINT_KEY, RequestContext } from "@thresh/core/request-context";
 import type { SiloAddress } from "@thresh/core/silo-address";
 
 // ── A / B / C / CImmovable / D (Scenarios 1-4) ──────────────────────────────
 
-export interface IBase extends GrainWithStringKey {
+export interface IBase extends GrainKey<string> {
   ping(scenario: string): Promise<void>;
   getAddress(): Promise<SiloAddress>;
 }
@@ -195,7 +195,7 @@ export class D extends GrainBase implements ID {
 // a few times, generating the same shape of communication edge the real
 // protocol reasons about. The interesting part (the repartitioner moving the
 // receivers close to their agent) stays faithful to the real protocol.
-export interface IPullingAgent extends GrainWithStringKey {
+export interface IPullingAgent extends GrainKey<string> {
   ping(): Promise<void>;
   getAddress(): Promise<SiloAddress>;
 }
@@ -203,7 +203,7 @@ export const IPullingAgent = defineGrainInterface<IPullingAgent>(
   "UnitTests.ActivationRepartitioningTests.DefaultToleranceTests.IPullingAgent",
 );
 
-export interface ISR extends GrainWithStringKey {
+export interface ISR extends GrainKey<string> {
   pingAgent(): Promise<void>;
   getAddress(): Promise<SiloAddress>;
 }

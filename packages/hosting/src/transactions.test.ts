@@ -3,7 +3,7 @@ import { defineGrain, useTransactionalState } from "@thresh/core/define-grain";
 import { grain, transactionalState } from "@thresh/core/decorators";
 import { Grain } from "@thresh/core/grain";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import { SiloAddress } from "@thresh/core/silo-address";
 import type { TransactionalState } from "@thresh/core/transactional-state";
 import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
@@ -13,18 +13,18 @@ interface Balance {
   cents: number;
 }
 
-interface Account extends GrainWithStringKey {
+interface Account extends GrainKey<string> {
   deposit(cents: number): Promise<void>;
   withdraw(cents: number): Promise<void>;
   balance(): Promise<number>;
 }
 
-interface FnAccount extends GrainWithStringKey {
+interface FnAccount extends GrainKey<string> {
   deposit(cents: number): Promise<void>;
   balance(): Promise<number>;
 }
 
-interface Atm extends GrainWithStringKey {
+interface Atm extends GrainKey<string> {
   transfer(from: string, to: string, cents: number): Promise<void>;
   fund(account: string, cents: number): Promise<void>;
   fundFn(account: string, cents: number): Promise<void>;
@@ -72,8 +72,8 @@ class AccountGrain extends Grain implements Account {
 }
 
 // Functional counterpart exercising the `useTransactionalState` hook.
-const FnAccountGrain = defineGrain<FnAccount>("TxFacetFnAccount", (ctx) => {
-  const bal = useTransactionalState<Balance>(ctx, "balance", { initial: () => ({ cents: 0 }) });
+const FnAccountGrain = defineGrain<FnAccount>("TxFacetFnAccount", () => {
+  const bal = useTransactionalState<Balance>("balance", { initial: () => ({ cents: 0 }) });
   return {
     deposit: (cents: number) =>
       bal.performUpdate((s) => {
@@ -106,7 +106,7 @@ function buildSilo() {
     .useStaticMembership([local])
     .useInProcessTransport(new InProcessNetwork())
     .registerGrain(AccountGrain, { interfaces: [Account] })
-    .registerGrain(FnAccountGrain, { interfaces: [FnAccount] })
+    .registerGrain(FnAccountGrain.grain, { interfaces: [FnAccount] })
     .registerGrain(AtmGrain, { interfaces: [Atm] })
     .build();
 }

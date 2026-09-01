@@ -1,5 +1,5 @@
 import { GrainId } from "@thresh/core/grain-id";
-import { ILeaderboard, type ScoreEntry } from "@thresh/example-cluster/interfaces";
+import { Leaderboard, type ScoreEntry } from "@thresh/example-cluster/leaderboard-grain";
 import { buildWebSocketCluster, untilConverged } from "@thresh/example-cluster/cluster";
 
 export interface ClusterDemoResult {
@@ -23,13 +23,13 @@ export async function runClusterDemo(): Promise<ClusterDemoResult> {
   const cluster = await buildWebSocketCluster(3);
   await cluster.start();
   try {
-    await cluster.silos[0]!.getGrain(ILeaderboard, "global").record("ada", 10);
-    await cluster.silos[1]!.getGrain(ILeaderboard, "global").record("grace", 30);
-    await cluster.silos[2]!.getGrain(ILeaderboard, "global").record("ada", 25);
+    await cluster.silos[0]!.getGrain(Leaderboard, "global").record("ada", 10);
+    await cluster.silos[1]!.getGrain(Leaderboard, "global").record("grace", 30);
+    await cluster.silos[2]!.getGrain(Leaderboard, "global").record("ada", 25);
 
     const hostIndex = cluster.silos.findIndex((s) => s.isActive(LEADERBOARD));
     const hostSilo = cluster.addresses[hostIndex]!.podName;
-    const top = await cluster.silos[1]!.getGrain(ILeaderboard, "global").top();
+    const top = await cluster.silos[1]!.getGrain(Leaderboard, "global").top();
 
     // The hosting silo dies.
     await cluster.silos[hostIndex]!.stop();
@@ -37,7 +37,7 @@ export async function runClusterDemo(): Promise<ClusterDemoResult> {
 
     // A survivor records again; it retries while the cluster re-resolves the grain.
     const survivor = cluster.silos.find((_, i) => i !== hostIndex)!;
-    await untilConverged(() => survivor.getGrain(ILeaderboard, "global").record("grace", 5));
+    await untilConverged(() => survivor.getGrain(Leaderboard, "global").record("grace", 5));
     const newHostIndex = cluster.silos.findIndex(
       (s, i) => i !== hostIndex && s.isActive(LEADERBOARD),
     );
@@ -47,7 +47,7 @@ export async function runClusterDemo(): Promise<ClusterDemoResult> {
       top,
       afterFailover: {
         newHostSilo: cluster.addresses[newHostIndex]!.podName,
-        top: await survivor.getGrain(ILeaderboard, "global").top(),
+        top: await survivor.getGrain(Leaderboard, "global").top(),
       },
     };
   } finally {

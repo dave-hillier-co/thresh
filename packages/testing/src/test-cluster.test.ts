@@ -1,15 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { grain } from "@thresh/core/decorators";
+import { defineGrain } from "@thresh/core/define-grain";
 import { Grain } from "@thresh/core/grain";
 import { GrainId } from "@thresh/core/grain-id";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
 import type { GrainType } from "@thresh/core/grain-type";
 import type { GrainWithStringKey } from "@thresh/core/key-kinds";
 import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import { TestCluster } from "@thresh/testing/test-cluster";
 import { waitFor } from "@thresh/testing/wait";
 
-interface ICounter extends GrainWithStringKey {
+interface ICounter extends GrainKey<string> {
   increment(): Promise<number>;
 }
 const ICounter = defineGrainInterface<ICounter>("TestClusterCounter");
@@ -34,7 +36,7 @@ const counterId = (key: string) => new GrainId("TestClusterCounter" as GrainType
 let notifications: string[] = [];
 let watcherTargetKey = "watcher";
 
-interface IWatcherGrain extends GrainWithStringKey {
+interface IWatcherGrain extends GrainKey<string> {
   ping(): Promise<void>;
   notify(fromKey: string): Promise<void>;
 }
@@ -51,7 +53,7 @@ class WatcherGrain extends Grain implements IWatcherGrain {
   }
 }
 
-interface INotifierGrain extends GrainWithStringKey {
+interface INotifierGrain extends GrainKey<string> {
   touch(): Promise<void>;
 }
 const INotifierGrain = defineGrainInterface<INotifierGrain>("TeardownRaceNotifier");
@@ -100,6 +102,21 @@ class ReminderRegistrarGrain extends Grain implements IReminderRegistrar {
 }
 
 const registrarId = (key: string) => new GrainId("TestClusterReminderRegistrar" as GrainType, key);
+/** A fused definition: it carries its own interface, so `grains` takes it as-is. */
+const Tally = defineGrain("TestClusterTally", () => {
+  let total = 0;
+  return {
+    add: async (n: number) => {
+      total += n;
+      return total;
+    },
+  };
+});
+
+interface ITally {
+  add(n: number): Promise<number>;
+}
+const ISeparateTally = defineGrainInterface<ITally>("TestClusterSeparateTally");
 
 const notifierId = (key: string) => new GrainId("TeardownRaceNotifier" as GrainType, key);
 const watcherId = (key: string) => new GrainId("TeardownRaceWatcher" as GrainType, key);
@@ -323,6 +340,43 @@ describe("TestCluster reminders", () => {
         async () =>
           (await cluster.reminderTable.readForGrain(registrarId("with-service"))).length === 1,
       );
+    } finally {
+      await cluster.dispose();
+    }
+  });
+});
+
+describe("TestCluster grain registration", () => {
+  it("accepts a bare definition, registering it under its own interface", async () => {
+    const cluster = await TestCluster.start({ initialSilos: 2, grains: [Tally] });
+    try {
+      expect(await cluster.getGrain(Tally, "t1").add(2)).toBe(2);
+      expect(await cluster.silos[1]!.host.getGrain(Tally, "t1").add(3)).toBe(5);
+    } finally {
+      await cluster.dispose();
+    }
+  });
+
+  it("registers a definition under exactly the interfaces it is given", async () => {
+    const cluster = await TestCluster.start({
+      initialSilos: 1,
+      grains: [{ ctor: Tally.grain, interfaces: [ISeparateTally] }],
+    });
+    try {
+      expect(await cluster.getGrain(ISeparateTally, "t2").add(4)).toBe(4);
+    } finally {
+      await cluster.dispose();
+    }
+  });
+
+  it("mixes bare definitions with constructor specs", async () => {
+    const cluster = await TestCluster.start({
+      initialSilos: 1,
+      grains: [Tally, { ctor: CounterGrain, interfaces: [ICounter] }],
+    });
+    try {
+      expect(await cluster.getGrain(Tally, "t3").add(1)).toBe(1);
+      expect(await cluster.getGrain(ICounter, "t3").increment()).toBe(1);
     } finally {
       await cluster.dispose();
     }

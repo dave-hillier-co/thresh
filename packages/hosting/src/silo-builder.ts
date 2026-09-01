@@ -6,7 +6,13 @@ import type {
   OutgoingGrainCallFilter,
 } from "@thresh/core/grain-call-filter";
 import type { GrainInterface } from "@thresh/core/grain-interface";
-import type { GrainKeyFor } from "@thresh/core/key-kinds";
+import type { GrainKeyKind } from "@thresh/core/grain-key";
+import {
+  normalizeRegistration,
+  type GrainRegistration,
+  type Registrable,
+} from "@thresh/core/grain-registration";
+import type { KeyTypeOf } from "@thresh/core/key-kinds";
 import type { MembershipService } from "@thresh/core/membership";
 import { SiloAddress } from "@thresh/core/silo-address";
 import type { CompatibilityKind } from "@thresh/core/version-compatibility";
@@ -250,7 +256,7 @@ export type Registration = GrainRegistrationSpec;
  * `CreateObjectReference` from exactly this hook).
  */
 export interface GrainFactoryAccess {
-  getGrain<T>(def: GrainInterface<T>, key: GrainKeyFor<T>): T;
+  getGrain<T, K extends GrainKeyKind>(def: GrainInterface<T, K>, key: KeyTypeOf<K>): T;
   /**
    * Host a client-style observer reachable from any grain call made during
    * this (or a later) startup task. Backed by an embedded `ClientNode` created
@@ -1130,16 +1136,29 @@ export class SiloBuilder {
     return this;
   }
 
-  registerGrain(
-    ctor: GrainClass,
-    registration: { readonly interfaces: readonly GrainInterface<unknown>[] },
-  ): this {
-    this.registrations.push({ ctor, interfaces: registration.interfaces });
+  /**
+   * Register a grain type. A `defineGrain`/`defineReducerGrain` definition
+   * carries its own interface, so it needs nothing else; a bare constructor
+   * (the `@grain()` class form) must name the interfaces it answers to. An
+   * explicit `interfaces` list is used verbatim — see `normalizeRegistration`.
+   */
+  registerGrain(definition: Registrable, registration?: GrainRegistration): this;
+  registerGrain(ctor: GrainClass, registration: GrainRegistration): this;
+  registerGrain(definition: Registrable | GrainClass, registration?: GrainRegistration): this {
+    // Normalize once, here, so both replays in `build()` (the `ClusterNode`
+    // and the embedded `ClientNode`) read the same resolved records.
+    this.registrations.push(normalizeRegistration(definition, registration));
     return this;
   }
 
-  registerGrains(registrations: readonly Registration[]): this {
-    this.registrations.push(...registrations);
+  registerGrains(registrations: readonly (Registrable | Registration)[]): this {
+    for (const entry of registrations) {
+      this.registrations.push(
+        "ctor" in entry
+          ? normalizeRegistration(entry.ctor, { interfaces: [...entry.interfaces] })
+          : normalizeRegistration(entry),
+      );
+    }
     return this;
   }
 

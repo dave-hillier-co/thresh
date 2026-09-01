@@ -3,20 +3,20 @@ import { defineGrain, useTransactionalState } from "@thresh/core/define-grain";
 import { GrainId } from "@thresh/core/grain-id";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
 import type { GrainType } from "@thresh/core/grain-type";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import { TestCluster } from "@thresh/testing/test-cluster";
 
 interface Balance {
   cents: number;
 }
 
-interface Account extends GrainWithStringKey {
+interface Account extends GrainKey<string> {
   deposit(cents: number): Promise<void>;
   withdraw(cents: number): Promise<void>;
   balance(): Promise<number>;
 }
 
-interface Teller extends GrainWithStringKey {
+interface Teller extends GrainKey<string> {
   fund(account: string, cents: number): Promise<void>;
   transfer(from: string, to: string, cents: number): Promise<void>;
 }
@@ -36,8 +36,8 @@ const Teller = defineGrainInterface<Teller>("ClusterTxTeller", {
 // accounts on specific silos by where it first touches them.
 const AccountGrain = defineGrain<Account>(
   "ClusterTxAccount",
-  (ctx) => {
-    const bal = useTransactionalState<Balance>(ctx, "balance", { initial: () => ({ cents: 0 }) });
+  () => {
+    const bal = useTransactionalState<Balance>("balance", { initial: () => ({ cents: 0 }) });
     return {
       deposit: (cents) =>
         bal.performUpdate((s) => {
@@ -74,8 +74,8 @@ function buildCluster() {
   return TestCluster.start({
     clusterId: "tx-cluster",
     grains: [
-      { ctor: AccountGrain, interfaces: [Account] },
-      { ctor: TellerGrain, interfaces: [Teller] },
+      { ctor: AccountGrain.grain, interfaces: [Account] },
+      { ctor: TellerGrain.grain, interfaces: [Teller] },
     ],
   });
 }

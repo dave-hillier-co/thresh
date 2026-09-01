@@ -3,12 +3,12 @@ import { grain } from "@thresh/core/decorators";
 import { Grain } from "@thresh/core/grain";
 import { GrainId } from "@thresh/core/grain-id";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
 import { PreferLocalPlacement } from "@thresh/runtime/placement/prefer-local-placement";
 import type { PlacementStrategy } from "@thresh/runtime/placement/placement-strategy";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import { TestCluster, type TestSiloHandle } from "@thresh/testing/test-cluster";
 
-interface IPing extends GrainWithStringKey {
+interface IPing extends GrainKey<string> {
   ping(): Promise<string>;
 }
 

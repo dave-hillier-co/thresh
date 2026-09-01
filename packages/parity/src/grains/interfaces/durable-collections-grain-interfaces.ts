@@ -7,9 +7,9 @@
 // activation instead of reaching for the internal state-machine-manager
 // package directly (out of bounds for @thresh/parity).
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 
-export interface IDurableCollectionsGrain extends GrainWithStringKey {
+export interface IDurableCollectionsGrain extends GrainKey<string> {
   // DurableValue<unknown>
   setValue(v: unknown): Promise<void>;
   getValue(): Promise<unknown>;

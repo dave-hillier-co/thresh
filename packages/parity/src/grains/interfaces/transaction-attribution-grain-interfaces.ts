@@ -10,7 +10,7 @@
 // naturally: one `defineGrainInterface` per option, all implementing the
 // same `TransactionAttributionGrain` TS shape.
 import { defineGrainInterface, type GrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import type { TransactionOption } from "@thresh/core/transaction-info";
 
 /** A `TransactionOption`, or `"none"` for a method with no `[Transaction]` attribute at all. */
@@ -31,7 +31,7 @@ export interface AttributionTierEntry {
  * tier: `result[0]` is always this call's own `[id]`; deeper indices collect
  * every descendant's id at that depth, in call order.
  */
-export interface TransactionAttributionGrain extends GrainWithStringKey {
+export interface TransactionAttributionGrain extends GrainKey<string> {
   getNestedTransactionIds(
     tier: number,
     tiers: readonly AttributionTierEntry[][],

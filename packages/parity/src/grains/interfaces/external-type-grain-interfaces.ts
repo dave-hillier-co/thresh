@@ -1,6 +1,6 @@
 // Ported from dotnet/orleans test/Grains/TestGrainInterfaces/IExternalTypeGrain.cs @ v10.1.0 (MIT).
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithIntegerKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 
 /** Upstream `UnitTests.GrainInterfaces.EnumClass`. */
 export interface EnumClass {
@@ -15,7 +15,7 @@ export interface EnumClass {
  * grain assembly; no test calls it and there is no TS analog for
  * `NameObjectCollectionBase`, so it is omitted here.
  */
-export interface IExternalTypeGrain extends GrainWithIntegerKey {
+export interface IExternalTypeGrain extends GrainKey<bigint> {
   getEnumModel(): Promise<EnumClass>;
 }
 export const IExternalTypeGrain = defineGrainInterface<IExternalTypeGrain>(

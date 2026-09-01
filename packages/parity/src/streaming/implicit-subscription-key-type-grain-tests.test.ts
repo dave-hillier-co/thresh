@@ -19,14 +19,14 @@ import { expect } from "vitest";
 import { grain, implicitStreamSubscription } from "@thresh/core/decorators";
 import { Grain } from "@thresh/core/grain";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithIntegerKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import { STREAM_SUBSCRIPTION_OBSERVER, type StreamHandler } from "@thresh/core/stream";
 import { orleansTest } from "@thresh/testing/orleans-test";
 import { TestCluster } from "@thresh/testing/test-cluster";
 
 const STREAM_NAMESPACE = "IImplicitSubscriptionLongKeyGrain";
 
-interface IImplicitSubscriptionLongKeyGrain extends GrainWithIntegerKey {
+interface IImplicitSubscriptionLongKeyGrain extends GrainKey<bigint> {
   getValue(): Promise<number>;
 }
 const IImplicitSubscriptionLongKeyGrain = defineGrainInterface<IImplicitSubscriptionLongKeyGrain>(

@@ -1,0 +1,602 @@
+# Thresh full documentation
+
+---
+Source: docs/guide/index.md
+---
+
+# Introduction
+
+Thresh is a TypeScript virtual actor runtime. **Grains** are logical objects that are always
+addressable. The runtime creates an in-memory activation on demand, routes calls to it, serializes
+its turns, and collects it after an idle period. Callers hold lightweight references rather than
+connections to a particular process.
+
+## Mental model
+
+1. Write the grain with `defineGrain(name, factory)`. The factory runs once per activation; the
+   object it returns is the message surface, and the definition *is* the contract.
+2. Register that definition on each silo with `registerGrain(definition)`.
+3. Obtain a reference with `getGrain(definition, key)` and call asynchronous methods.
+
+For a contract that crosses a process boundary, declare it separately with `defineGrainInterface` so
+callers need not import the implementation, and register with `registerGrain(ctor, { interfaces })`.
+
+Activation-local closure variables are volatile. Use a state facet for data that must survive
+deactivation. A grain processes one call at a time by default, but calls can cross silos and should
+always be treated as remote: keep arguments serializable, avoid blocking, and propagate errors.
+
+## Choose a facility
+
+| Need | Facility |
+|---|---|
+| Mutable durable record | persistent state |
+| Pure event folding into a snapshot | reducer state / reducer grain |
+| Atomic state spanning grains | transactional state |
+| Event log and durable collections | journaling / durable state |
+| Work only while activation lives | grain timer |
+| Durable scheduled callback | reminder |
+| Durable retryable queue work | durable job |
+| Ordered pub/sub | stream |
+| Best-effort fan-out | broadcast channel |
+
+Thresh targets Orleans 10 semantics where practical. See [deviations](/deviations) for intentional
+TypeScript and Kubernetes differences and the project `EPICS.md` for implementation status.
+
+
+---
+Source: docs/guide/quick-start.md
+---
+
+# Quick start
+
+## Requirements
+
+- Node.js 22 or newer
+- pnpm 10
+
+This repository is currently a private workspace: consume `@thresh/*` packages through the
+workspace rather than npm. Install and validate it with `pnpm install`, `pnpm typecheck`, and
+`pnpm test`.
+
+## Write a grain
+
+```ts
+import { defineGrain } from "@thresh/core/define-grain";
+
+export const Counter = defineGrain("Counter", () => {
+  let count = 0;
+  return { increment: async () => ++count, value: async () => count };
+});
+```
+
+The factory runs once per activation and the object it returns is the message surface, so the
+definition is also the contract: `registerGrain(Counter)` on each silo, then
+`getGrain(Counter, key)` to call it. Public grain methods return promises.
+
+Keys default to `string`; declare another kind with `{ key: "integer" }` alongside the factory.
+Per-method invocation options go in `interfaceOptions`:
+
+```ts
+defineGrain("Counter", factory, {
+  key: "integer",
+  interfaceOptions: { value: { readOnly: true } },
+});
+```
+
+## Declare a contract separately when it crosses a process
+
+A fused definition couples callers to the implementation module. Where that is wrong — an external
+client, another service — declare the contract on its own instead:
+
+```ts
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainKey } from "@thresh/core/key-kinds";
+
+type Counter = GrainKey<string> & {
+  increment(): Promise<number>;
+  value(): Promise<number>;
+};
+
+export const counter = defineGrainInterface<Counter>("example.counter", {
+  options: { value: { readOnly: true } },
+});
+```
+
+Interface names are protocol identifiers: keep them stable and globally unique, and pin
+`{ interfaceName }` on any grain that has been deployed. For executable setup, copy
+`examples/greeter`; for real multi-node transport copy `examples/cluster`; for deployment copy
+`examples/k8s-silo`.
+
+
+---
+Source: docs/guide/grains.md
+---
+
+# Grains and calls
+
+## Identity and keys
+
+Declare the key kind on the definition — `{ key: "integer" }` on `defineGrain` or
+`defineGrainInterface`, one of `"string"` (the default), `"integer"`, `"guid"`, `"guid-compound"`,
+or `"integer-compound"`. A separately declared contract can instead intersect `GrainKey<string>`,
+`GrainKey<bigint>`, `GrainKey<Guid>`, or a compound marker; both paths resolve to the same key type,
+so existing marked interfaces keep working unchanged. The definition is passed to `getGrain`; the
+returned proxy implements the contract.
+
+## Functional lifecycle
+
+`defineGrain(name, setup)` runs `setup` once per activation. What `setup` returns is the grain's
+message surface and nothing else — the interface methods, plus an optional self incoming-call filter
+under `INCOMING_CALL_FILTER`. Lifecycle is registered with hooks, like the state facets:
+`useOnActivate(handler)` and `useOnDeactivate(handler)`. Both compose — call them as often as you
+like, from `setup` or from helpers it calls. Activate hooks run in registration order; deactivate
+hooks unwind LIFO, so a hook always tears down before whatever it was set up on top of. Do not leak
+closure state outside the grain.
+
+The definition it returns **is** the grain's interface: the message surface is inferred from what the
+factory returns, so `registerGrain(definition)` and `getGrain(definition, key)` both take it and
+there is no separate interface to declare. This couples callers to the implementation module, which
+is the right trade-off in-process and the wrong one across a process boundary — declare those
+contracts separately with `defineGrainInterface` and register with
+`registerGrain(ctor, { interfaces })`, which also stays the form for one grain under several
+interfaces or per-silo interface versions.
+
+Interface ids are derived from the interface *name*, so renaming one is a wire break. Any grain that
+has ever been deployed must pin `{ interfaceName: "..." }`.
+
+Each normal method call is one serialized turn. `readOnly` interface options declare calls that do
+not mutate state and enable runtime optimizations; violating read-only state guards throws. Other
+method options include response timeout, transaction behavior, interleaving, and one-way delivery.
+
+## Calls and failure
+
+Grain references are location transparent and serializable. Calls may fail because application code
+throws, a deadline expires, cancellation propagates, load is shed, or a node disappears. Design
+commands to be idempotent where retry is possible. Never rely on a specific activation or silo.
+
+Use `RequestContext` for small cross-cutting string headers, incoming/outgoing call filters for
+logging or policy, and `GrainCancellationToken` for cancellation across a grain boundary. Class
+grains and decorators remain supported for Orleans ports; prefer functional grains for new code.
+
+
+---
+Source: docs/guide/state.md
+---
+
+# State and transactions
+
+State in ordinary closure variables exists only for one activation. Choose durability deliberately.
+
+Every facet below is a **hook**: it resolves the activation being set up from an ambient slot that is
+live only during the *synchronous* body of the factory. Call hooks at the top level of the factory,
+never after an `await`, from a method body, or from `onActivate` — those throw an error naming the
+hook and the rule. To reach the runtime after setup, capture the factory's `ctx` parameter in the
+closure and use `ctx.runtime` / `ctx.id` / `ctx.getGrain` from method bodies.
+
+## Persistent and reducer state
+
+`usePersistentState<T>(name, options)` exposes `value` plus explicit `read`, `write`, and
+`clear` operations. Configure its named provider with `useMemoryStorage`, `addRedisStorage`, or
+`addPostgresStorage`. Memory providers are only for examples and tests. Storage uses optimistic
+versioning; do not silently overwrite inconsistent-state failures.
+
+`useReducerState` applies a pure `(state, event) => state` reducer and persists its snapshot.
+`defineReducerGrain` can expose `dispatch(action)` and `query()` and return Elm-style effects for
+cross-grain work. Keep reducers deterministic and free of I/O.
+
+## Transactions and journals
+
+`useTransactionalState` supplies transactional operations. Mark interface methods with transaction
+options and configure a transactional storage provider. Transactions coordinate participating
+grain state; keep them short and avoid unrelated external side effects.
+
+Journaling stores events, periodically snapshots state, and truncates the log. `useDurableState`,
+`useDurableDictionary`, `useDurableList`, `useDurableQueue`, and `useDurableSet` expose journaled
+collections. Configure memory or Redis journaling under the same provider name used by the grain.
+
+
+---
+Source: docs/guide/background-work.md
+---
+
+# Timers, reminders, and durable jobs
+
+**Timers** are activation-scoped periodic work. They disappear on deactivation or silo failure and
+callbacks run through grain scheduling. Use a timer only when loss is acceptable.
+
+**Reminders** persist registrations and reactivate the target grain to deliver ticks. Configure
+memory, Redis, or Postgres reminders and make handlers idempotent. Delivery can repeat during
+failure, so a reminder is a durable trigger, not an exactly-once transaction.
+
+**Durable jobs** are sharded queued work with retry/poll outcomes. Attach a handler with
+`useDurableJobHandler`; return `completed`, `pollAfter(duration)`, or `failed(error)`. Jobs suit
+payload-bearing retryable work and survive activation loss. Configure memory or Redis job shards
+and an explicit retry policy.
+
+
+---
+Source: docs/guide/streams.md
+---
+
+# Streams and broadcast channels
+
+Streams decouple producers from consumers. Obtain a typed stream from a named provider and stream
+identity, subscribe a handler, and publish values. Keep the subscription handle when you need to
+unsubscribe or resume explicitly.
+
+Memory streams suit one process and tests. Redis, Postgres, and Kafka pulling providers provide
+durable queues; generator streams produce configured values. Provider names must match on all
+silos. Subscription registries, cursors, filters, and failure stores have separate durability.
+Consumers must be idempotent because failover can redeliver; sequence tokens express ordering, not
+global exactly-once execution.
+
+Implicit subscriptions bind a grain interface to a namespace and activate matching consumers.
+Broadcast channels are lighter best-effort fan-out; use them for transient notifications rather
+than recoverable processing.
+
+
+---
+Source: docs/guide/hosting.md
+---
+
+# Hosting and Kubernetes
+
+`createSilo(config)` returns a fluent `SiloBuilder`. Configure membership, transport, required
+providers, and grain registrations, then call `build()`, `start()`, and `stop()`. All silos in a
+deployment share `clusterId` and stable logical `serviceId`.
+
+## Production checklist
+
+- Use WebSocket transport and Kubernetes membership.
+- Advertise the pod IP/port and grant the service account EndpointSlice access.
+- Replace memory providers with Redis, Postgres, or Kafka for durable data.
+- Keep registrations, protocol versions, and provider names compatible across silos.
+- Enable health endpoints and startup/readiness/liveness probes.
+- Enable tracing, metrics, structured logging, and appropriate call filters.
+- Handle `SIGTERM`, drain, and await graceful shutdown during rolling updates.
+- Tune load shedding, turn queues, collection, timeouts, and resource limits.
+
+The `examples/k8s-silo/deploy` directory shows the headless service, StatefulSet, RBAC, and Redis.
+Its opt-in end-to-end test covers routing, pod loss, state survival, and rolling updates.
+
+Builder groups include membership (`useStaticMembership`, `useKubernetesMembership`), transport
+(`useInProcessTransport`, `useWebSocketTransport`), operations (`useHealthEndpoints`, `useTracing`,
+`useMetrics`, `useLogging`), and memory/Redis/Postgres/Kafka providers.
+
+
+---
+Source: docs/guide/testing.md
+---
+
+# Testing
+
+Use `TestCluster.start()` from `@thresh/testing/test-cluster` for integration tests. It creates
+multiple in-process silos with shared memory backends while retaining real routing, activation,
+serialization, membership, and failure behavior.
+
+Use `FakeTimeProvider` to advance collection, timeout, timer, and reminder behavior without sleeps.
+Test activation loss and restart, duplicate delivery/idempotency, concurrent calls, remote routing,
+provider failure, and graceful shutdown. Unit-test pure reducers separately. Run fast suites with
+`pnpm test` and Orleans behavioral ports with `pnpm test:parity`.
+
+
+---
+Source: docs/reference/packages.md
+---
+
+# Package map
+
+Thresh uses subpath imports; there is intentionally no barrel export. Import the defining file, for
+example `@thresh/core/define-grain`.
+
+| Package | Responsibility |
+|---|---|
+| `@thresh/core` | contracts, identity, authoring, lifecycle, state interfaces, streams, reminders |
+| `@thresh/hosting` | silo builder/lifecycle, providers, health endpoints |
+| `@thresh/runtime` | activations, scheduling, placement, cluster node, grain services |
+| `@thresh/client` | external clients, gateways, observers |
+| `@thresh/messaging` | serializers and in-process/WebSocket transport |
+| `@thresh/directory` | activation directory and location cache |
+| `@thresh/persistence` | memory, Redis, and Postgres grain storage |
+| `@thresh/transactions` | coordination and transactional storage |
+| `@thresh/journaling` | journals, snapshots, durable collections |
+| `@thresh/reminders` | reminder service and durable tables |
+| `@thresh/streams` | stream providers, subscriptions, cursors |
+| `@thresh/durable-jobs` | durable shard-backed jobs |
+| `@thresh/clustering-k8s` | EndpointSlice watching and membership |
+| `@thresh/observability` | OpenTelemetry and logging filters |
+| `@thresh/testing` | multi-silo `TestCluster` |
+| `@thresh/parity` | Orleans port/scorecard tests; not an app dependency |
+
+The TypeScript source is the exact API reference. Start with `core/define-grain.ts`,
+`core/grain-interface.ts`, `hosting/silo-builder.ts`, and `testing/test-cluster.ts`.
+
+
+---
+Source: docs/reference/agents.md
+---
+
+# Agent reference
+
+This project is ESM, strict TypeScript, Node 22+, pnpm 10, Vitest, ESLint, and Prettier. Preserve
+subpath imports and do not invent package-root barrels.
+
+## Reliable workflow
+
+1. Read `README.md`, `EPICS.md`, a relevant example, package source, and adjacent tests.
+2. Find symbols with `rg`; imports map to `packages/<name>/src/<subpath>.ts`.
+3. Write or update a focused test before behavior changes.
+4. Run `pnpm typecheck`, focused tests, `pnpm test`, and `pnpm lint`.
+5. For parity work, find the matching `packages/parity` test and document deviations.
+
+## Invariants
+
+- Interface names and keys are persistent protocol identity; calls cross serialization boundaries.
+- One activation owns a grain and normal turns are serialized.
+- Closure fields are volatile; durable state needs a configured named provider.
+- Registrations and compatible configuration must exist on every serving silo.
+- Timers are local; reminder/job handlers must be idempotent; streams can redeliver.
+- Transactions do not make arbitrary external side effects atomic.
+- Memory providers are not production durability.
+
+Use `/llms.txt` for the map or `/llms-full.txt` for consolidated context.
+
+
+---
+Source: docs/deviations.md
+---
+
+# How this differs from Orleans
+
+This is a faithful TypeScript port of Orleans' virtual-actor model, hosted on Kubernetes. **Almost
+everything works as it does in Orleans** — the actor model, the grain directory and placement,
+persistence, timers and reminders, streams, and cross-grain ACID transactions. For the mechanics of
+any of those, read the Orleans source; we don't re-document it. What follows is the high-level
+summary of the deliberate deviations. [`EPICS.md`](../EPICS.md) tracks what is shipped; the
+[`README`](../README.md) has the intent and a quick example.
+
+## TypeScript idioms
+
+- **References are a runtime ES `Proxy`**, not compile-time generated code, and calls dispatch by
+  **method name** — a typed interface is a compile-time view, with no generated method table. There
+  is no build step.
+- **A grain interface is a value, not an attribute.** `defineGrainInterface<T, K>(name)` (or the
+  interface a `defineGrain` definition carries) is the thing callers pass to `getGrain`. Its **id is
+  `stableHash32(name)`** — the name *is* the wire identity, so a rename is a wire break with no
+  compile-time signal (see below).
+- **A grain's key kind is a type argument, not a marker interface.** `"string"` (the default),
+  `"integer"`, `"guid"`, `"integer-compound"` or `"guid-compound"`, stated once —
+  `defineGrainInterface<ICounter, "integer">("ICounter")` — and it determines the type of the `key`
+  argument at every `getGrain`. The legacy `GrainWith*Key` phantom markers still work and still imply
+  the same kind, but they are deprecated; new code states the kind.
+- **Serialization is registered at runtime** (`@serializable`) rather than source-generated;
+  MessagePack is the default wire format.
+- **Transport is WebSocket over HTTP**, behind an abstraction.
+- **Single-threaded turns** are enforced by a per-activation turn scheduler. The guarantee is
+  identical to Orleans; the mechanism differs because `await` yields the Node event loop.
+- The code is a **pnpm workspace of small `@thresh/*` packages** with no barrel files and standard
+  TC39 decorators (no `reflect-metadata`), run straight from source.
+
+## Kubernetes-native hosting
+
+Kubernetes is the **membership authority**, replacing Orleans' membership table, status gossip, and
+probe-graph failure detector. A silo watches the EndpointSlices of a headless `Service`: ready
+endpoints are live silos, removed endpoints are dead. Silos run as a `StatefulSet` (stable ordinals
+keep a restarted silo in the same ring position); liveness/readiness probes drive failure detection
+and the graceful drain. Silo identity is `podName` + `podUid` rather than Orleans' `IP:port:generation`.
+
+| Orleans mechanism | Replaced by |
+| --- | --- |
+| Membership table + gossip | Kubernetes API watch on Pod endpoints |
+| Probe-graph failure detection | Liveness/readiness probes + endpoint removal |
+| Silo generation counters | Pod name + UID |
+| Gateway list provider (clients) | Kubernetes `Service` / DNS |
+| Cluster discovery providers | The Kubernetes control plane |
+
+## Functional / reducer authoring
+
+Grains are authored as **factory closures** (`defineGrain` + hooks like `usePersistentState`) rather
+than classes with attributes; the Orleans-style class form is retained underneath as the substrate
+and interop surface. **Reducer** and **single-dispatch** grains (`defineReducerGrain`) add an
+event-folding authoring shape on top. These change how a grain is *written*, not what it *is* — the
+runtime, guarantees, and lifecycle are unchanged.
+
+### Rules of hooks
+
+`usePersistentState`, `useReducerState`, `useTransactionalState`, `useDurableState` /
+`useDurableDictionary` / `useDurableList` / `useDurableQueue` / `useDurableSet`,
+`useDurableJobHandler` and `useContext` take **no context argument**. They resolve the activation
+being set up from an ambient slot that the runtime pushes around the factory call and pops in a
+`finally`. That slot is live only for the *synchronous* body of the factory, so:
+
+- call hooks at the **top level of the factory**, before any `await`;
+- calling one outside a factory, after an `await`, from a method body or from `onActivate` throws,
+  naming the hook;
+- an `async` factory is rejected at activation with "factories must be synchronous" — the ambient
+  slot has already been popped by the time the promise resolves.
+
+The window is synchronous end to end (nothing awaits between the push and the pop), and the slot is a
+stack, so a factory that activates another grain does not steal the inner one's facet registrations.
+
+The factory's **`ctx` parameter stays**, and it is how a grain reaches the runtime *after* setup:
+capture it in the closure and use `ctx.runtime`, `ctx.id` and `ctx.getGrain` inside method bodies and
+lifecycle hooks. `useContext()` returns the same value, for helpers that would otherwise thread `ctx`
+through — but only during setup, like any other hook.
+
+### Definitions are interfaces
+
+`defineGrain(name, factory, options?)` returns a `GrainDefinition<T, K>`, which *extends*
+`GrainInterface<T, K>` and additionally carries `.grain`, the implementation constructor. So one value
+is both the registration and the contract: `registerGrain(Thermostat)` and
+`getGrain(Thermostat, key)`. The message surface `T` is **inferred from what the factory returns** —
+string-keyed function members, promise-lifted, minus `onActivate`/`onDeactivate` and minus
+symbol-keyed system hooks (`INCOMING_CALL_FILTER`, `STREAM_SUBSCRIPTION_OBSERVER`,
+`BROADCAST_CHANNEL_OBSERVER`, `DURABLE_JOB_HANDLER`). Passing `T` explicitly
+(`defineGrain<Ledger, "integer">(…)`) pins the contract instead of inferring it, so an incidental
+helper on the returned object cannot widen the wire surface.
+
+Fusion is a **trade-off, not a strict improvement**. Inferring the contract from the implementation
+means every caller imports the implementation module, and transitively its storage, stream and job
+dependencies. That is fine in-silo and within a package. Across a package or process boundary — an
+external `@thresh/client` app that today imports a ten-line interface module, an interface with more
+than one implementation, or a contract with no implementation at all — keep the interface
+**separately declared** with `defineGrainInterface`, and register the pair:
+`registerGrain(LedgerGrain, { interfaces: [Ledger] })`. `defineGrainInterface` is a first-class,
+recommended API, not a fallback.
+
+Registration resolves to one `{ ctor, interfaces }` pair everywhere (`Silo`, `ClusterNode`,
+`SiloBuilder`, `ClientNode`, `TestCluster`). **An explicit `interfaces` list is used exactly as
+given** — the definition's own interface is not appended to it. A definition contributes its own
+interface only when no list is supplied. A bare constructor still requires the list, because it
+carries no interface; one constructor under several interfaces, and one constructor under per-silo
+interface *versions* for a rolling upgrade, remain expressed that way.
+
+### Interface names are wire identity
+
+The id is `stableHash32(name)`, so **renaming an interface repoints every deployed caller** and
+nothing catches it at compile time. This is the migration hazard worth stating twice: a grain moving
+from a separately declared `defineGrainInterface("example.IThermostat")` to a fused
+`defineGrain("Thermostat")` changes its id unless it pins the old name with
+`{ interfaceName: "example.IThermostat" }`. Any grain that has ever been deployed must pin it.
+
+Two consequences of fusion in the process-wide interface registry:
+
+- **`defineGrain` also registers an interface under the grain-type name.** A grain type called
+  `Counter` now puts a `"Counter"` entry in the registry alongside whatever separately declared
+  interface it answers to. More names in the registry means a slightly larger `stableHash32` collision
+  surface; a genuine collision (two different names, same id) throws at definition time rather than
+  silently taking over the other's calls.
+- **Redefining a name accumulates rather than resets.** `defineGrainInterface` merges into any entry
+  already registered under the same id: per-method `options` union (the later definition wins per
+  method), and `extension` and `key` are inherited when the later definition omits them (a
+  disagreeing `key` throws). `version` is *not* merged — one name at two versions is the
+  rolling-upgrade path. Merging is what lets a hand-written interface module and a same-named fused
+  definition coexist without the second silently dropping the first's `extension: true`, which a
+  *receiving* silo reads back out of the registry.
+
+## Additions beyond Orleans
+
+A few capabilities layer on top of the faithful model without changing it: **durable journaling**
+(a grain that journals each mutation and replays it on activation) and **durable jobs** (sharded,
+at-least-once scheduled grain invocation). A further, **not-yet-built** direction is **browser state
+replication** — a live read-view of grain state in the browser under a server-enforced trust model.
+
+
+---
+Source: docs/typescript-grain-api.md
+---
+
+# TypeScript grain API idioms
+
+Thresh keeps Orleans-compatible names for parity work, but application code can be
+more idiomatic TypeScript than a direct C# port.
+
+## Let the definition be the interface
+
+`defineGrain` infers the message surface from what the factory returns, so the
+definition it hands back *is* the contract. One declaration, not four:
+
+```ts
+import { defineGrain, usePersistentState } from "@thresh/core/define-grain";
+
+const Thermostat = defineGrain("Thermostat", () => {
+  const state = usePersistentState<Reading>("thermostat", {
+    defaultValue: (): Reading => ({ tempC: 20, targetC: 21 }),
+  });
+
+  return {
+    onUpdate: async (tempC: number): Promise<Command[]> => {
+      state.value.tempC = tempC;
+      await state.write();
+      return tempC < state.value.targetC ? [{ kind: "heat" }] : [];
+    },
+  };
+});
+
+silo.registerGrain(Thermostat);
+silo.getGrain(Thermostat, "kitchen");
+```
+
+Callers see exactly the surface the factory returned, promise-lifted;
+`onActivate`/`onDeactivate` and symbol-keyed system hooks are not part of it.
+
+**This is a trade-off, not a strict improvement.** `getGrain(Thermostat, key)`
+means the caller imports the implementation module and its transitive storage and
+stream dependencies. That is right in-process and wrong across a process
+boundary — see below.
+
+## Hooks follow the rules of hooks
+
+`usePersistentState`, `useReducerState`, `useTransactionalState`, `useDurable*`
+and `useDurableJobHandler` resolve the activation being set up from an ambient
+slot that is live only during the *synchronous* body of the factory. Call them at
+the top level of the factory, never after an `await`, from a method body, or from
+`onActivate` — those throw an error naming the hook and the rule.
+
+The factory keeps its `ctx` parameter for reaching the runtime *after* setup:
+capture it in the closure and use `ctx.runtime` / `ctx.id` / `ctx.getGrain` from
+method bodies. That is not a hook call and stays valid for the activation's life.
+`useContext()` returns the same object during setup.
+
+## Declare a cross-process contract separately
+
+When callers must not import the implementation — an external client, a service
+in another process — declare the contract on its own and register the two
+together. This is also the form for one grain under several interfaces, and for
+per-silo interface versions during a rolling upgrade.
+
+```ts
+import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type { GrainKey } from "@thresh/core/key-kinds";
+
+export type Thermostat = GrainKey<string> & {
+  onUpdate(status: ThermostatStatus): Promise<Command[]>;
+};
+
+export const thermostat = defineGrainInterface<Thermostat>("example.thermostat");
+
+silo.registerGrain(ThermostatGrain, { interfaces: [thermostat, thermostatControl] });
+```
+
+A lowercase value (`thermostat`) carries the runtime descriptor; the `Thermostat`
+type is erased at compile time. TypeScript erases interfaces and type aliases, so
+Thresh still needs a value to carry the stable interface id, version, and
+per-method invocation options — treat it like a schema or route descriptor rather
+than a C# interface object.
+
+An explicit `interfaces` list is used verbatim, not unioned with the definition's
+own interface. `registerGrain(Def, { interfaces: [Other] })` therefore leaves
+`getGrain(Def, key)` unroutable, and says so by throwing.
+
+**Interface ids are derived from the name.** Renaming an interface — including by
+fusing a declared one into its implementation — changes the wire id with no
+compile-time signal. Any grain that has ever been deployed must pin
+`{ interfaceName: "example.thermostat" }`.
+
+## Declare the key kind, or intersect `GrainKey<TKey>`
+
+A fused definition has no separate interface to mark, so it declares its key kind
+directly. `"string"` is the default; the others are `"integer"`, `"guid"`,
+`"guid-compound"`, and `"integer-compound"`.
+
+```ts
+const Account = defineGrain("Account", () => ({ ... }), { key: "integer" });
+
+silo.getGrain(Account, 42n);
+```
+
+A separately declared contract intersects the marker instead:
+
+```ts
+type Account = GrainKey<bigint> & {
+  deposit(cents: number): Promise<void>;
+  balance(): Promise<number>;
+};
+```
+
+Both paths resolve to the same key type. The older `GrainWithStringKey`,
+`GrainWithIntegerKey`, and compound-key marker names remain supported as aliases
+of `GrainKey<TKey>`, so a marked interface keeps its caller key type with no
+edit. If no kind is declared and no marker is present,
+`getGrain` defaults to `string` keys.
+

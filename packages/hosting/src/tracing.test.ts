@@ -11,7 +11,7 @@ import {
 import { grain } from "@thresh/core/decorators";
 import { Grain } from "@thresh/core/grain";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import { SiloAddress } from "@thresh/core/silo-address";
 import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
 import { createSilo } from "@thresh/hosting/silo-builder";
@@ -24,11 +24,11 @@ trace.setGlobalTracerProvider(provider);
 context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable());
 propagation.setGlobalPropagator(new W3CTraceContextPropagator());
 
-interface Down extends GrainWithStringKey {
+interface Down extends GrainKey<string> {
   ping(): Promise<string>;
   fail(): Promise<void>;
 }
-interface Front extends GrainWithStringKey {
+interface Front extends GrainKey<string> {
   call(down: string): Promise<string>;
 }
 const Down = defineGrainInterface<Down>("TraceDown");

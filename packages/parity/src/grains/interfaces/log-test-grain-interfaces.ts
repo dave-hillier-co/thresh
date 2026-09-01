@@ -3,14 +3,14 @@
 // raw event-log reads, etc.) used across many log-consistency-provider test
 // suites. Only the members `LogTestGrainClearTests` needs are ported here.
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithIntegerKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 
 export interface AB {
   a: number;
   b: number;
 }
 
-export interface ILogTestGrain extends GrainWithIntegerKey {
+export interface ILogTestGrain extends GrainKey<bigint> {
   getAGlobal(): Promise<number>;
   getALocal(): Promise<number>;
   getBothGlobal(): Promise<AB>;

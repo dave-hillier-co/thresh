@@ -4,7 +4,7 @@ import { createClient } from "redis";
 import { grain, implicitStreamSubscription } from "@thresh/core/decorators";
 import { Grain } from "@thresh/core/grain";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import { SiloAddress } from "@thresh/core/silo-address";
 import { STREAM_SUBSCRIPTION_OBSERVER, type StreamHandler } from "@thresh/core/stream";
 import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
@@ -53,12 +53,12 @@ afterAll(async () => {
   await admin.destroy();
 });
 
-interface IChatRoom extends GrainWithStringKey {
+interface IChatRoom extends GrainKey<string> {
   say(text: string): Promise<void>;
 }
 const IChatRoom = defineGrainInterface<IChatRoom>("IChatRoom.pull");
 
-interface IChatUser extends GrainWithStringKey {
+interface IChatUser extends GrainKey<string> {
   join(room: string): Promise<void>;
   history(): Promise<string[]>;
 }
@@ -98,7 +98,7 @@ class ChatUserGrain extends Grain implements IChatUser {
 // a module sink (the grain may be collected between deliveries).
 const watched: Record<string, string[]> = {};
 
-interface IWatcher extends GrainWithStringKey {
+interface IWatcher extends GrainKey<string> {
   seen(): Promise<string[]>;
 }
 const IWatcher = defineGrainInterface<IWatcher>("IWatcher.pull", {

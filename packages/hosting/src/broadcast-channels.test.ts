@@ -6,17 +6,17 @@ import {
 import { grain, implicitChannelSubscription } from "@thresh/core/decorators";
 import { Grain } from "@thresh/core/grain";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import { SiloAddress } from "@thresh/core/silo-address";
 import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
 import { createSilo } from "@thresh/hosting/silo-builder";
 
-interface IRaiser extends GrainWithStringKey {
+interface IRaiser extends GrainKey<string> {
   raise(message: string): Promise<void>;
 }
 const IRaiser = defineGrainInterface<IRaiser>("IRaiser.broadcast");
 
-interface IMonitor extends GrainWithStringKey {
+interface IMonitor extends GrainKey<string> {
   seen(): Promise<string[]>;
 }
 const IMonitor = defineGrainInterface<IMonitor>("IMonitor.broadcast");

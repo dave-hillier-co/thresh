@@ -3,12 +3,7 @@ import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
 import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
 import { createSilo } from "@thresh/hosting/silo-builder";
 import { FleetAggregatorGrain } from "@thresh/example-thermostat/fleet-aggregator-grain";
-import {
-  IFleetAggregator,
-  IThermostat,
-  IThermostatControl,
-  type Command,
-} from "@thresh/example-thermostat/interfaces";
+import { thermostat, thermostatControl, type Command } from "@thresh/example-thermostat/interfaces";
 import { ThermostatGrain } from "@thresh/example-thermostat/thermostat-grain";
 
 export interface DemoResult {
@@ -37,24 +32,24 @@ export async function runThermostatDemo(): Promise<DemoResult> {
     .useMemoryStorage()
     .useReminders()
     .useMemoryStreams()
-    .registerGrain(ThermostatGrain, { interfaces: [IThermostat, IThermostatControl] })
-    .registerGrain(FleetAggregatorGrain, { interfaces: [IFleetAggregator] })
+    .registerGrain(ThermostatGrain, { interfaces: [thermostat, thermostatControl] })
+    .registerGrain(FleetAggregatorGrain)
     .build();
 
   await silo.start();
   try {
     const device = "kitchen";
     // Start the aggregator so it subscribes to the telemetry stream first.
-    await silo.getGrain(IFleetAggregator, device).sampleCount();
+    await silo.getGrain(FleetAggregatorGrain, device).sampleCount();
 
-    const thermostat = silo.getGrain(IThermostat, device);
+    const thermostatRef = silo.getGrain(thermostat, device);
     const commands: Command[][] = [];
-    commands.push(await thermostat.onUpdate({ tempC: 18 })); // below target -> heat
-    commands.push(await thermostat.onUpdate({ tempC: 23 })); // above target -> cool
+    commands.push(await thermostatRef.onUpdate({ tempC: 18 })); // below target -> heat
+    commands.push(await thermostatRef.onUpdate({ tempC: 23 })); // above target -> cool
     await tick(); // let stream delivery turns run
 
     // Telemetry rolled up from the two updates so far.
-    const aggregator = silo.getGrain(IFleetAggregator, device);
+    const aggregator = silo.getGrain(FleetAggregatorGrain, device);
     const telemetrySamples = await aggregator.sampleCount();
     const telemetryAverage = await aggregator.averageTemp();
 
@@ -62,8 +57,8 @@ export async function runThermostatDemo(): Promise<DemoResult> {
     time.advance(60_000);
     await tick();
 
-    const status = await silo.getGrain(IThermostatControl, device).getStatus();
-    const pending = (await thermostat.onUpdate({ tempC: 21 })).filter(
+    const status = await silo.getGrain(thermostatControl, device).getStatus();
+    const pending = (await thermostatRef.onUpdate({ tempC: 21 })).filter(
       (c) => c.kind === "self-test",
     );
 

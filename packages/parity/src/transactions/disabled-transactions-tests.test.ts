@@ -21,7 +21,7 @@
 import { expect } from "vitest";
 import { defineGrain, useTransactionalState } from "@thresh/core/define-grain";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import { TransactionsDisabledError } from "@thresh/core/errors";
 import { TestCluster } from "@thresh/testing/test-cluster";
 import { orleansTest } from "@thresh/testing/orleans-test";
@@ -30,13 +30,13 @@ interface Counter {
   value: number;
 }
 
-interface TransactionTestGrain extends GrainWithStringKey {
+interface TransactionTestGrain extends GrainKey<string> {
   set(delta: number): Promise<void>;
   add(delta: number): Promise<void>;
   get(): Promise<number>;
 }
 
-interface TransactionCoordinatorGrain extends GrainWithStringKey {
+interface TransactionCoordinatorGrain extends GrainKey<string> {
   multiGrainSet(keys: string[], delta: number): Promise<void>;
 }
 
@@ -56,8 +56,8 @@ const TransactionCoordinatorGrainInterface = defineGrainInterface<TransactionCoo
   { options: { multiGrainSet: { transaction: "create" } } },
 );
 
-const TransactionTestGrainImpl = defineGrain<TransactionTestGrain>("DisabledTxTestGrain", (ctx) => {
-  const counter = useTransactionalState<Counter>(ctx, "counter", {
+const TransactionTestGrainImpl = defineGrain<TransactionTestGrain>("DisabledTxTestGrain", () => {
+  const counter = useTransactionalState<Counter>("counter", {
     initial: () => ({ value: 0 }),
   });
   return {
@@ -89,8 +89,11 @@ async function buildDisabledTransactionsCluster(): Promise<TestCluster> {
     initialSilos: 1,
     transactions: false,
     grains: [
-      { ctor: TransactionTestGrainImpl, interfaces: [TransactionTestGrainInterface] },
-      { ctor: TransactionCoordinatorGrainImpl, interfaces: [TransactionCoordinatorGrainInterface] },
+      { ctor: TransactionTestGrainImpl.grain, interfaces: [TransactionTestGrainInterface] },
+      {
+        ctor: TransactionCoordinatorGrainImpl.grain,
+        interfaces: [TransactionCoordinatorGrainInterface],
+      },
     ],
   });
 }

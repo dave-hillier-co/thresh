@@ -25,7 +25,7 @@ import { afterAll, beforeAll, describe, expect } from "vitest";
 import { grain, implicitStreamSubscription, persistentState } from "@thresh/core/decorators";
 import { Grain } from "@thresh/core/grain";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithGuidKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import type { PersistentState } from "@thresh/core/persistent-state";
 import {
   STREAM_SUBSCRIPTION_OBSERVER,
@@ -38,12 +38,13 @@ import { TestCluster } from "@thresh/testing/test-cluster";
 import { waitFor } from "@thresh/testing/wait";
 import { randomGuidKey } from "@thresh/parity/support/keys";
 import { StreamingDiagnosticObserver } from "@thresh/parity/support/streaming-diagnostics";
+import type { Guid } from "@thresh/core/guid";
 
 const StreamProviderName = "StreamingCacheMissTests";
 const NAMESPACE = "IImplicitSubscriptionCounterGrain";
 const streamInactivityPeriodMs = 5_000;
 
-interface IImplicitSubscriptionCounterGrain extends GrainWithGuidKey {
+interface IImplicitSubscriptionCounterGrain extends GrainKey<Guid> {
   getEventCounter(): Promise<number>;
   getErrorCounter(): Promise<number>;
   deactivate(): Promise<void>;
@@ -120,7 +121,7 @@ function makeInterestingData(): Uint8Array {
 const FAST_SLOW_NAMESPACE = "FastSlowImplicitSubscriptionCounterGrain";
 const SLOW_ACTIVATION_DELAY_MS = 2_000;
 
-interface IFastSlowCounterGrain extends GrainWithGuidKey {
+interface IFastSlowCounterGrain extends GrainKey<Guid> {
   getEventCounter(): Promise<number>;
 }
 const IFastImplicitSubscriptionCounterGrain = defineGrainInterface<IFastSlowCounterGrain>(

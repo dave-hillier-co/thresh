@@ -6,7 +6,7 @@
 import { expect } from "vitest";
 import { defineGrain, useTransactionalState } from "@thresh/core/define-grain";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import { TransactionInDoubtError } from "@thresh/core/errors";
 import { TransactionCommitter } from "@thresh/transactions/transaction-committer";
 import type { TransactionCommitOperation } from "@thresh/transactions/transaction-committer";
@@ -37,7 +37,7 @@ interface Counter {
   value: number;
 }
 
-interface CommitTestGrain extends GrainWithStringKey {
+interface CommitTestGrain extends GrainKey<string> {
   add(delta: number): Promise<number>;
   get(): Promise<number>;
 }
@@ -47,11 +47,11 @@ interface RemoteCommitService {
   calls: { transactionId: string; data: string }[];
 }
 
-interface CommitterTestGrain extends GrainWithStringKey {
+interface CommitterTestGrain extends GrainKey<string> {
   commit(operation: TransactionCommitOperation<RemoteCommitService>): Promise<void>;
 }
 
-interface CommitCoordinatorGrain extends GrainWithStringKey {
+interface CommitCoordinatorGrain extends GrainKey<string> {
   multiGrainAdd(
     committerKey: string,
     operation: TransactionCommitOperation<RemoteCommitService>,
@@ -92,8 +92,8 @@ const CommitCoordinatorGrainInterface = defineGrainInterface<CommitCoordinatorGr
   { options: { multiGrainAdd: { transaction: "create" } } },
 );
 
-const CommitTestGrainImpl = defineGrain<CommitTestGrain>("CommitTestGrain", (ctx) => {
-  const data = useTransactionalState<Counter>(ctx, "data", { initial: () => ({ value: 0 }) });
+const CommitTestGrainImpl = defineGrain<CommitTestGrain>("CommitTestGrain", () => {
+  const data = useTransactionalState<Counter>("data", { initial: () => ({ value: 0 }) });
   return {
     add: (delta) =>
       data.performUpdate((s) => {
@@ -134,9 +134,9 @@ async function buildCluster(): Promise<TestCluster> {
   return TestCluster.start({
     initialSilos: 1,
     grains: [
-      { ctor: CommitTestGrainImpl, interfaces: [CommitTestGrainInterface] },
-      { ctor: CommitterTestGrainImpl, interfaces: [CommitterTestGrainInterface] },
-      { ctor: CommitCoordinatorGrainImpl, interfaces: [CommitCoordinatorGrainInterface] },
+      { ctor: CommitTestGrainImpl.grain, interfaces: [CommitTestGrainInterface] },
+      { ctor: CommitterTestGrainImpl.grain, interfaces: [CommitterTestGrainInterface] },
+      { ctor: CommitCoordinatorGrainImpl.grain, interfaces: [CommitCoordinatorGrainInterface] },
     ],
   });
 }

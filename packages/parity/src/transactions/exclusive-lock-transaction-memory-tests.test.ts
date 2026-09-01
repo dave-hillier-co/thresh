@@ -12,7 +12,7 @@
 import { expect } from "vitest";
 import { defineGrain, useTransactionalState } from "@thresh/core/define-grain";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import { TransactionAbortedError, TransactionLockUpgradeError } from "@thresh/core/errors";
 import { TestCluster } from "@thresh/testing/test-cluster";
 import { orleansTest } from "@thresh/testing/orleans-test";
@@ -21,12 +21,12 @@ interface Counter {
   value: number;
 }
 
-interface LockTestGrain extends GrainWithStringKey {
+interface LockTestGrain extends GrainKey<string> {
   add(delta: number): Promise<number>;
   get(): Promise<number>;
 }
 
-interface LockCoordinatorGrain extends GrainWithStringKey {
+interface LockCoordinatorGrain extends GrainKey<string> {
   /** Orleans `IExclusiveLockCoordinatorGrain.ReadThenWrite`: Get, delay, Add — no exclusive lock. */
   readThenWrite(grainKey: string, value: number): Promise<void>;
 }
@@ -43,8 +43,8 @@ const LockCoordinatorGrainInterface = defineGrainInterface<LockCoordinatorGrain>
   { options: { readThenWrite: { transaction: "create" } } },
 );
 
-const LockTestGrainImpl = defineGrain<LockTestGrain>("LockTestGrain", (ctx) => {
-  const data = useTransactionalState<Counter>(ctx, "data", { initial: () => ({ value: 0 }) });
+const LockTestGrainImpl = defineGrain<LockTestGrain>("LockTestGrain", () => {
+  const data = useTransactionalState<Counter>("data", { initial: () => ({ value: 0 }) });
   return {
     add: (delta) =>
       data.performUpdate((s) => {
@@ -75,8 +75,8 @@ async function buildCluster(): Promise<TestCluster> {
   return TestCluster.start({
     initialSilos: 1,
     grains: [
-      { ctor: LockTestGrainImpl, interfaces: [LockTestGrainInterface] },
-      { ctor: LockCoordinatorGrainImpl, interfaces: [LockCoordinatorGrainInterface] },
+      { ctor: LockTestGrainImpl.grain, interfaces: [LockTestGrainInterface] },
+      { ctor: LockCoordinatorGrainImpl.grain, interfaces: [LockCoordinatorGrainInterface] },
     ],
   });
 }

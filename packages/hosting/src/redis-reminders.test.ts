@@ -4,7 +4,7 @@ import { createClient } from "redis";
 import { grain } from "@thresh/core/decorators";
 import { Grain } from "@thresh/core/grain";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
+import type { GrainKey } from "@thresh/core/key-kinds";
 import type { Remindable, TickStatus } from "@thresh/core/reminder";
 import { SiloAddress } from "@thresh/core/silo-address";
 import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
@@ -46,7 +46,7 @@ afterAll(async () => {
   await admin.destroy();
 });
 
-interface IBilling extends GrainWithStringKey {
+interface IBilling extends GrainKey<string> {
   scheduleSelfCheck(): Promise<void>;
   checkCount(): Promise<number>;
 }

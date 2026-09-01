@@ -5,8 +5,8 @@ import type { Remindable, TickStatus } from "@thresh/core/reminder";
 import {
   TELEMETRY,
   type Command,
-  type IThermostat,
-  type IThermostatControl,
+  type Thermostat,
+  type ThermostatControl,
   type ThermostatConfiguration,
   type ThermostatStatus,
 } from "@thresh/example-thermostat/interfaces";
@@ -36,7 +36,7 @@ const defaultState = (): ThermostatState => ({
  * consumes the telemetry this class publishes.
  */
 @grain()
-export class ThermostatGrain extends Grain implements IThermostat, IThermostatControl, Remindable {
+export class ThermostatGrain extends Grain implements Thermostat, ThermostatControl, Remindable {
   @persistentState("thermostat", { defaultValue: defaultState })
   private state!: PersistentState<ThermostatState>;
 

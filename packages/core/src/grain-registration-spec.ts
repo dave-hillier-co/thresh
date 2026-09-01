@@ -1,5 +1,5 @@
 import type { GrainClass } from "./grain-class";
-import type { GrainInterface } from "./grain-interface";
+import type { AnyGrainInterface } from "./grain-interface";
 
 /**
  * One entry in a grain-registration list: an implementation class and the
@@ -13,5 +13,5 @@ import type { GrainInterface } from "./grain-interface";
  */
 export interface GrainRegistrationSpec {
   readonly ctor: GrainClass;
-  readonly interfaces: readonly GrainInterface<unknown>[];
+  readonly interfaces: readonly AnyGrainInterface[];
 }

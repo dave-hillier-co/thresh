@@ -1,6 +1,4 @@
 import { defineGrain, useTransactionalState } from "@thresh/core/define-grain";
-import { defineGrainInterface } from "@thresh/core/grain-interface";
-import type { GrainWithStringKey } from "@thresh/core/key-kinds";
 
 /**
  * A bank account whose balance is **transactional** state. Unlike the
@@ -13,58 +11,51 @@ interface Balance {
   cents: number;
 }
 
-export interface ITxAccount extends GrainWithStringKey {
-  deposit(cents: number): Promise<void>;
-  withdraw(cents: number): Promise<void>;
-  balance(): Promise<number>;
-}
-
-export const ITxAccount = defineGrainInterface<ITxAccount>("example.bank.ITxAccount", {
-  options: {
-    deposit: { transaction: "join" },
-    withdraw: { transaction: "join" },
-    balance: { transaction: "createOrJoin", readOnly: true },
+export const TxAccountGrain = defineGrain(
+  "TxAccount",
+  () => {
+    const balance = useTransactionalState<Balance>("balance", {
+      initial: () => ({ cents: 0 }),
+    });
+    return {
+      deposit: (cents: number) =>
+        balance.performUpdate((s) => {
+          s.cents += cents;
+        }),
+      withdraw: (cents: number) =>
+        balance.performUpdate((s) => {
+          if (s.cents < cents) throw new Error("insufficient funds");
+          s.cents -= cents;
+        }),
+      balance: () => balance.performRead((s) => s.cents),
+    };
   },
-});
-
-export interface ITeller extends GrainWithStringKey {
-  open(account: string, cents: number): Promise<void>;
-  transfer(from: string, to: string, cents: number): Promise<void>;
-}
-
-export const ITeller = defineGrainInterface<ITeller>("example.bank.ITeller", {
-  options: {
-    open: { transaction: "create" },
-    transfer: { transaction: "create" },
+  {
+    interfaceOptions: {
+      deposit: { transaction: "join" },
+      withdraw: { transaction: "join" },
+      balance: { transaction: "createOrJoin", readOnly: true },
+    },
   },
-});
+);
 
-export const TxAccountGrain = defineGrain<ITxAccount>("TxAccount", (ctx) => {
-  const balance = useTransactionalState<Balance>(ctx, "balance", {
-    initial: () => ({ cents: 0 }),
-  });
-  return {
-    deposit: (cents) =>
-      balance.performUpdate((s) => {
-        s.cents += cents;
-      }),
-    withdraw: (cents) =>
-      balance.performUpdate((s) => {
-        if (s.cents < cents) throw new Error("insufficient funds");
-        s.cents -= cents;
-      }),
-    balance: () => balance.performRead((s) => s.cents),
-  };
-});
-
-export const TellerGrain = defineGrain<ITeller>("Teller", (ctx) => ({
-  open: async (account, cents) => {
-    await ctx.getGrain(ITxAccount, account).deposit(cents);
+export const TellerGrain = defineGrain(
+  "Teller",
+  (ctx) => ({
+    open: async (account: string, cents: number) => {
+      await ctx.getGrain(TxAccountGrain, account).deposit(cents);
+    },
+    // One transaction spanning both accounts: credit then debit. If the debit
+    // overdraws and throws, the whole transaction aborts and the credit is undone.
+    transfer: async (from: string, to: string, cents: number) => {
+      await ctx.getGrain(TxAccountGrain, to).deposit(cents);
+      await ctx.getGrain(TxAccountGrain, from).withdraw(cents);
+    },
+  }),
+  {
+    interfaceOptions: {
+      open: { transaction: "create" },
+      transfer: { transaction: "create" },
+    },
   },
-  // One transaction spanning both accounts: credit then debit. If the debit
-  // overdraws and throws, the whole transaction aborts and the credit is undone.
-  transfer: async (from, to, cents) => {
-    await ctx.getGrain(ITxAccount, to).deposit(cents);
-    await ctx.getGrain(ITxAccount, from).withdraw(cents);
-  },
-}));
+);

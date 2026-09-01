@@ -1,7 +1,8 @@
 import type { Duration } from "./duration";
 import type { GrainInterface } from "./grain-interface";
+import type { GrainKeyKind } from "./grain-key";
 import type { GrainTimer, TimerOptions } from "./grain-timer";
-import type { GrainKeyFor } from "./key-kinds";
+import type { KeyTypeOf } from "./key-kinds";
 import type { SiloAddress } from "./silo-address";
 import type { BroadcastChannelProvider } from "./broadcast-channel";
 import type { DurableJob, ScheduleJobRequest } from "./durable-job";
@@ -27,7 +28,7 @@ export interface GrainRuntime {
    * deterministically instead of sleeping in real time.
    */
   readonly timeProvider: TimeProvider;
-  getGrain<T>(def: GrainInterface<T>, key: GrainKeyFor<T>): T;
+  getGrain<T, K extends GrainKeyKind>(def: GrainInterface<T, K>, key: KeyTypeOf<K>): T;
   registerTimer(
     callback: () => Promise<void>,
     due: Duration,
