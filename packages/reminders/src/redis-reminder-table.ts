@@ -16,7 +16,7 @@ export interface RedisReminderTableOptions {
    * `ClusterOptions.ServiceId`). Two clusters pointed at the same Redis stay
    * partitioned by it. Defaults to `"default"`, Orleans' own
    * `ClusterOptions.DefaultServiceId`; `SiloBuilder` threads the silo's
-   * `serviceId ?? clusterId`.
+   * `serviceId ?? DEFAULT_SERVICE_ID`.
    *
    * Redis has no ALTER: a key written before this option existed has no
    * `{serviceId}` segment and is invisible to a service-partitioned reader —

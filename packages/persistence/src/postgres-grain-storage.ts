@@ -16,7 +16,7 @@ export interface PostgresGrainStorageOptions {
    * `OrleansStorage.serviceid` and includes in every row key). Two clusters
    * pointed at the same table stay partitioned by it. Defaults to `"default"`,
    * Orleans' own `ClusterOptions.DefaultServiceId`; `SiloBuilder` threads the
-   * silo's `serviceId ?? clusterId`.
+   * silo's `serviceId ?? DEFAULT_SERVICE_ID`.
    */
   serviceId?: string;
 }

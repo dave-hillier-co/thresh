@@ -41,7 +41,7 @@ export interface RedisPullingStreamProviderOptions {
    * the same Redis and provider name stay partitioned by it — the queues
    * carry it too (issue #64), not just the registry/cursors, since sharing
    * the same queue key would cross-deliver events regardless. Defaults to
-   * `"default"`; `SiloBuilder` threads the silo's `serviceId ?? clusterId`.
+   * `"default"`; `SiloBuilder` threads the silo's `serviceId ?? DEFAULT_SERVICE_ID`.
    *
    * Redis has no ALTER: a queue/registry/cursor written before this option
    * existed has no `{serviceId}` segment and is invisible to a

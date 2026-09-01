@@ -47,7 +47,7 @@ export interface PostgresPullingStreamProviderOptions {
    * belong to (Orleans' `ClusterOptions.ServiceId`). Two clusters pointed at
    * the same Postgres and provider name stay partitioned by it (issue #64).
    * Defaults to `"default"`; `SiloBuilder` threads the silo's `serviceId ??
-   * clusterId`.
+   * DEFAULT_SERVICE_ID`.
    */
   serviceId?: string;
 }

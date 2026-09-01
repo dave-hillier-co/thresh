@@ -14,7 +14,7 @@ export interface PostgresReminderTableOptions {
    * `ClusterOptions.ServiceId`). Two clusters pointed at the same table stay
    * partitioned by it. Defaults to `"default"`, Orleans' own
    * `ClusterOptions.DefaultServiceId`; `SiloBuilder` threads the silo's
-   * `serviceId ?? clusterId`.
+   * `serviceId ?? DEFAULT_SERVICE_ID`.
    */
   serviceId?: string;
 }

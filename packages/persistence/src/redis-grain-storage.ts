@@ -18,7 +18,7 @@ export interface RedisGrainStorageOptions {
    * as `{ServiceId}/state/` — `RedisGrainStorage.cs:56`). Two clusters pointed
    * at the same Redis stay partitioned by it. Defaults to `"default"`, Orleans'
    * own `ClusterOptions.DefaultServiceId`; `SiloBuilder` threads the silo's
-   * `serviceId ?? clusterId`.
+   * `serviceId ?? DEFAULT_SERVICE_ID`.
    */
   serviceId?: string;
 }

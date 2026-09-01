@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { Pool } from "pg";
 import { PostgresStreamQueue } from "@thresh/streams/postgres-stream-queue";
+import { FakePgPool } from "@thresh/streams/test-support/fake-pg-pool";
 
 const PG_URL = process.env.PG_URL ?? "postgres://localhost:5432/postgres";
 
@@ -186,5 +187,33 @@ describe.skipIf(pool === undefined)("PostgresStreamQueue service partitioning (i
       await pool!.query(`DROP TABLE IF EXISTS ${legacy}_events`);
       await pool!.query(`DROP TABLE IF EXISTS ${legacy}_cursors`);
     }
+  });
+});
+
+// Regression for the ordering bug in start(): `CREATE INDEX IF NOT EXISTS`
+// validates its column list before the `IF NOT EXISTS` skip applies, so
+// issuing it against a legacy (pre-#64) events table — which has no
+// `service_id` column yet — must raise 42703 undefined_column unless
+// `addServiceIdColumn()` has already run. This does not need a live
+// Postgres: a scripted fake client reproduces that one piece of real
+// Postgres behaviour, so the ordering is asserted directly and always runs.
+describe("PostgresStreamQueue start() migration ordering (issue #64)", () => {
+  it("adds service_id before creating any index that references it", async () => {
+    const fake = new FakePgPool();
+    // Model a table created before #64: no service_id column yet.
+    fake.seedTable("legacy_events", [
+      "id",
+      "provider",
+      "queue_idx",
+      "stream_key",
+      "payload",
+      "created_at",
+    ]);
+
+    const queue = new PostgresStreamQueue(fake as never, "legacy", "p", 0);
+
+    // Would throw 42703 if the index is created before the migration adds
+    // service_id to the legacy table.
+    await expect(queue.start()).resolves.toBeUndefined();
   });
 });

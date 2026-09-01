@@ -65,6 +65,16 @@ export class PostgresStreamQueue implements AppendableQueue {
            created_at TIMESTAMPTZ NOT NULL DEFAULT now()
          )`,
       );
+    } catch (err) {
+      if (!isDuplicate(err)) throw err;
+    }
+    // Must run before the index below: on a legacy (pre-#64) table the
+    // `CREATE TABLE IF NOT EXISTS` above no-ops, leaving no `service_id`
+    // column, and Postgres validates an index's columns before its
+    // `IF NOT EXISTS` skip applies — so creating the index first raises
+    // 42703 undefined_column on every restart against such a table.
+    await this.addServiceIdColumn();
+    try {
       await this.pool.query(
         `CREATE INDEX IF NOT EXISTS ${this.eventsTable}_provider_queue_id_idx
            ON ${this.eventsTable} (service_id, provider, queue_idx, id)`,
@@ -72,7 +82,6 @@ export class PostgresStreamQueue implements AppendableQueue {
     } catch (err) {
       if (!isDuplicate(err)) throw err;
     }
-    await this.addServiceIdColumn();
     await this.cursors.start();
   }
 
@@ -81,8 +90,11 @@ export class PostgresStreamQueue implements AppendableQueue {
    * service-partitioned shape, mirroring
    * `PostgresGrainStorage.addServiceIdColumn()` (#59). The events table has
    * a surrogate `id` primary key already, so this only adds the column and
-   * backfills it — no primary key to swap — then recreates the lookup index
-   * with `service_id` leading.
+   * backfills it — no primary key to swap. It also drops the old
+   * `(provider, queue_idx, id)` lookup index, which shares its name with the
+   * `service_id`-leading one `start()` (re)creates immediately after this
+   * returns, so `CREATE INDEX IF NOT EXISTS` there doesn't silently keep the
+   * stale definition.
    */
   private async addServiceIdColumn(): Promise<void> {
     const existing = await this.pool.query(
@@ -98,10 +110,6 @@ export class PostgresStreamQueue implements AppendableQueue {
       );
       await this.pool.query(`ALTER TABLE ${this.eventsTable} ALTER COLUMN service_id DROP DEFAULT`);
       await this.pool.query(`DROP INDEX IF EXISTS ${this.eventsTable}_provider_queue_id_idx`);
-      await this.pool.query(
-        `CREATE INDEX IF NOT EXISTS ${this.eventsTable}_provider_queue_id_idx
-           ON ${this.eventsTable} (service_id, provider, queue_idx, id)`,
-      );
     } catch (err) {
       if (!isDuplicate(err)) throw err;
     }
