@@ -34,15 +34,7 @@ export function isThreshRuntimeError(error: unknown): error is ThreshRuntimeErro
   return error instanceof ThreshRuntimeError;
 }
 
-const RESERVED_FALLBACK_KEYS = new Set([
-  "name",
-  "message",
-  "stack",
-  "errorType",
-  "properties",
-  "cause",
-  "errors",
-]);
+const RESERVED_FALLBACK_KEYS = new Set(["name", "message", "stack", "errorType", "properties"]);
 
 /**
  * The stand-in for an error whose concrete class the receiving process cannot rebuild — Orleans'
@@ -66,8 +58,15 @@ export class UnavailableExceptionFallbackException extends Error {
   /**
    * The decoded member errors of an `AggregateError` this process could not rebuild as itself (an
    * `AggregateError` subclass with its own `name`, e.g.). `errors` is a non-enumerable own property
-   * on the real class, so — like {@link properties} — it is installed explicitly here rather than
-   * through the properties-copy loop below, and reserved from it, so a payload cannot double-apply.
+   * on the real class, so it is installed explicitly here — from the dedicated `errors` argument —
+   * rather than relying solely on the properties-copy loop below.
+   *
+   * `errors` is deliberately NOT in {@link RESERVED_FALLBACK_KEYS}: `value-codec.ts`'s decoder
+   * merges a dedicated wire `errors` array into `properties.errors` too (same reference), so the
+   * loop below re-applying it is a harmless no-op — and reserving it would have silently dropped an
+   * OLD encoder's payload (pre-issue-#63) that had no dedicated `errors`/`cause` fields at all and
+   * instead carried them as ordinary enumerable properties inside `properties`. Letting the loop
+   * reach them is what makes that older wire shape still land something useful.
    */
   readonly errors?: readonly unknown[];
 
@@ -86,7 +85,8 @@ export class UnavailableExceptionFallbackException extends Error {
     this.properties = properties;
     if (errors !== undefined) this.errors = errors;
     for (const [key, value] of Object.entries(properties)) {
-      // Never let a carried property overwrite the identity fields above.
+      // Never let a carried property overwrite the identity fields above. `cause`/`errors` are
+      // deliberately NOT reserved — see the `errors` field doc above.
       if (RESERVED_FALLBACK_KEYS.has(key)) continue;
       (this as unknown as Record<string, unknown>)[key] = value;
     }

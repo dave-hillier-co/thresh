@@ -209,9 +209,27 @@ deliberately **not** appended — the rehydration point is noise, not signal.
 
 `AggregateError.errors` — likewise a non-enumerable own property `Object.entries` never reached —
 round-trips too: a genuine `AggregateError` is now in the closed built-ins table (alongside
-`TypeError` and friends) and rebuilds as itself with its member errors decoded; a subclass with its
-own `name` still takes the `UnavailableExceptionFallbackException` fallback, but keeps its decoded
-`.errors` array rather than losing it.
+`TypeError` and friends) and rebuilds as itself with its member errors, `cause` and `stack` all
+decoded exactly as any other error's; a subclass with its own `name` still takes the
+`UnavailableExceptionFallbackException` fallback, but keeps its decoded `.errors` array rather than
+losing it.
+
+Getting `AggregateError` onto this same path — rather than a separate, lossier one — took a second
+fix. `ClusterNode` already had a dedicated `aggregateMessages` side channel predating #63, built for
+a non-fire-and-forget broadcast publish's aggregated subscriber failures: it carried only the member
+errors' `.message` strings, no types, no `cause`, no `stack`. When #63 first landed, `serializeError`
+still special-cased every `AggregateError` into that side channel BEFORE reaching this codec path at
+all, so a grain that threw an `AggregateError` directly never got the fidelity described above — it
+still collapsed to bare `Error(message)` members, and silo-to-silo calls didn't even read
+`aggregateMessages`, so `.errors` disappeared entirely and the caller saw a plain `GrainCallError`.
+`serializeError` now always tries this codec path first for an `AggregateError`; `aggregateMessages`
+is sent alongside it, not instead of it, purely so a peer that predates this fix (and still speaks
+only the old side channel) gets at least the message-only reconstruction. Every peer in this
+codebase prefers the codec path and ignores `aggregateMessages` when it is present. The one place the
+side channel still matters on its own is if the codec genuinely cannot encode the `AggregateError` or
+one of its members (something uncodable nested inside) — then the response falls back to
+`aggregateMessages` alone, and the caller gets an `AggregateError` whose members are bare
+`Error(message)` stand-ins with no type, `cause`, or `stack`.
 
 Two things stay narrower than `ExceptionCodec` even after this. There is no analogue of `HResult`
 or `.Data` — Orleans' `SetBaseProperties` restores both alongside the inner exception, and Thresh

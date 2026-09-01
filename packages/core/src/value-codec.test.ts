@@ -555,6 +555,35 @@ describe("value-codec", () => {
       expect(decoded.stack).toBeDefined();
     });
 
+    it("round-trips an own enumerable `errors` property on a NON-AggregateError (ajv-style validation errors)", () => {
+      const error = new Error("invalid") as Error & { errors: unknown[] };
+      error.errors = ["must be a string", "must not be empty"];
+
+      const decoded = decodeValue(encodeValue(error)) as UnavailableExceptionFallbackException & {
+        errors?: unknown[];
+      };
+
+      expect(decoded).toBeInstanceOf(UnavailableExceptionFallbackException);
+      expect(decoded.errors).toEqual(["must be a string", "must not be empty"]);
+    });
+
+    it("still lands an enumerable `cause`/`errors` carried in an old encoder's `properties` bag onto the rebuilt fallback instance", () => {
+      // Shape an old encoder (pre-issue-#63) would have produced: no dedicated top-level `cause`
+      // or `errors` fields, both smuggled into `properties` as ordinary enumerable own properties,
+      // exactly what `Object.entries` saw before the dedicated handling existed.
+      const decoded = decodeValue({
+        $thresh: "error",
+        $tsvv: 1,
+        name: "LegacyError",
+        message: "legacy",
+        properties: { cause: "root cause", errors: ["a", "b"] },
+      }) as UnavailableExceptionFallbackException & { cause?: unknown; errors?: unknown };
+
+      expect(decoded).toBeInstanceOf(UnavailableExceptionFallbackException);
+      expect(decoded.cause).toBe("root cause");
+      expect(decoded.errors).toEqual(["a", "b"]);
+    });
+
     it("does not duplicate an enumerable own `cause` into properties", () => {
       const error = new Error("outer") as Error & { cause: unknown };
       Object.defineProperty(error, "cause", {

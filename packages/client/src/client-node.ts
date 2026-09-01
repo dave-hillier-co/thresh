@@ -659,22 +659,24 @@ export class ClientNode implements Dispatcher {
       aggregateMessages?: readonly string[];
       error?: unknown;
     }>(response.body);
-    // A non-fire-and-forget broadcast publish's aggregated subscriber
-    // failures (`ClusterNode.serializeError`) — reconstruct a real
-    // `AggregateError` rather than collapsing to a generic `GrainCallError`,
-    // so a caller can inspect `.errors` the way Orleans callers inspect
-    // `AggregateException.InnerExceptions`.
+    // A surrogate-registered error rebuilds as its own class (`ClusterNode.serializeError`), so a
+    // client sees the same concrete type a silo caller would; a type with no surrogate arrives as
+    // an `UnavailableExceptionFallbackException` carrying its name and carried state. This already
+    // covers a genuine `AggregateError` with full fidelity (`.errors`, `cause`, `stack` — issue
+    // #63), so `error` is checked FIRST, ahead of the `aggregateMessages` compat fallback below.
+    if (payload.error instanceof Error) throw payload.error;
+    // A non-fire-and-forget broadcast publish's aggregated subscriber failures
+    // (`ClusterNode.serializeError`), or any peer old enough to send only this (pre-#63) —
+    // reconstruct a real `AggregateError` rather than collapsing to a generic `GrainCallError`, so
+    // a caller can inspect `.errors` the way Orleans callers inspect `AggregateException.InnerExceptions`.
+    // Lossier than `error` (member MESSAGES only, no cause/stack), which is why `error` wins above.
     if (payload.aggregateMessages !== undefined) {
       throw new AggregateError(
         payload.aggregateMessages.map((m) => new Error(m)),
         payload.message,
       );
     }
-    // A surrogate-registered error rebuilds as its own class (`ClusterNode.serializeError`), so a
-    // client sees the same concrete type a silo caller would; a type with no surrogate arrives as
-    // an `UnavailableExceptionFallbackException` carrying its name and carried state.
     // `GrainCallError` remains the floor for a peer that sent no error value at all.
-    if (payload.error instanceof Error) throw payload.error;
     throw new GrainCallError(payload.message);
   }
 

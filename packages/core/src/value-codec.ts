@@ -492,12 +492,16 @@ function encodeInner(
       const properties: Record<string, unknown> = {};
       for (const [k, v] of Object.entries(value)) {
         // `name` and `message` travel as dedicated fields; `stack` travels as its own dedicated
-        // field below (not as a generic property); `cause` and `errors` are spec-defined
-        // NON-enumerable own properties normally, so this loop never sees them — but a caller can
-        // still assign one enumerably, and both have their own dedicated handling below, so an
-        // enumerable one is skipped here rather than double-applied on decode.
-        if (k === "name" || k === "message" || k === "stack" || k === "cause" || k === "errors")
-          continue;
+        // field below (not as a generic property); `cause` is a spec-defined NON-enumerable own
+        // property normally, so this loop never sees it — but a caller can still assign one
+        // enumerably, and it has its own dedicated handling below, so an enumerable one is skipped
+        // here rather than double-applied on decode. `errors` gets the SAME treatment, but only for
+        // a genuine `AggregateError` — that is the only case with a dedicated `fields.errors` below
+        // to fall back on; a plain `Error` with its own enumerable `errors` (ajv-style validation
+        // errors, e.g.) has no such fallback, so skipping it here unconditionally would drop it
+        // silently. Let it travel as an ordinary property instead.
+        if (k === "name" || k === "message" || k === "stack" || k === "cause") continue;
+        if (k === "errors" && value instanceof AggregateError) continue;
         properties[k] = encodeInner(v, seen, `${path}.${k}`, options);
       }
       const name = typeof value.name === "string" ? value.name : "Error";
