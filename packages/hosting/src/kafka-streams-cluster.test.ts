@@ -104,7 +104,9 @@ if (ready) {
 }
 
 afterAll(async () => {
-  if (kafka !== undefined) {
+  // Guard on `ready`, not just `kafka`: the topic is only created when both
+  // Kafka and Postgres are reachable, and deleting a never-created topic throws.
+  if (ready) {
     const a = kafka.admin();
     await a.connect();
     try {
