@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { IManagementGrain } from "@thresh/core/management-grain";
-import { SiloAddress } from "@thresh/core/silo-address";
 import { InProcessTransport } from "@thresh/messaging/in-process-transport";
 import { TestCluster } from "@thresh/testing/test-cluster";
 import { createClient } from "@thresh/client/client-node";
@@ -20,7 +19,6 @@ describe("a client addressing a built-in system grain", () => {
     });
     const client = createClient({
       clusterId: cluster.clusterId,
-      local: new SiloAddress("sys-client", "uid-sys-client", "sys-client:22222"),
       transport: new InProcessTransport(cluster.network, cluster.clusterId),
       gateway: cluster.primary.address,
     });

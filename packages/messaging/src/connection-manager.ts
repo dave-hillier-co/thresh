@@ -2,7 +2,12 @@ import type { GrainId } from "@thresh/core/grain-id";
 import type { SiloAddress } from "@thresh/core/silo-address";
 import { recordMessageSent, recordQueueLatency } from "@thresh/observability/messaging-metrics";
 import type { Message } from "@thresh/messaging/message";
-import type { Connection, Transport } from "@thresh/messaging/transport";
+import {
+  PROTOCOL_VERSION,
+  type Connection,
+  type MessageHandler,
+  type Transport,
+} from "@thresh/messaging/transport";
 
 /**
  * Pools one duplex connection per peer silo, opened lazily on first use and
@@ -15,24 +20,17 @@ export class ConnectionManager {
 
   constructor(
     private readonly transport: Transport,
-    private self: SiloAddress,
+    private readonly self: SiloAddress,
     private readonly clusterId: string,
     /** When set, advertised in the preamble so the accepting silo learns this is a client connection. */
     private readonly clientId?: GrainId,
+    /**
+     * Forwarded to every dial as `connect`'s third argument, so a push the
+     * peer sends back down the dialled socket after the preamble ack reaches
+     * this node — the duplex half of the connection this manager pools.
+     */
+    private readonly onMessage?: MessageHandler,
   ) {}
-
-  /**
-   * Adopt the address this node actually listens on, once its listener has
-   * bound. A node that asks for an EPHEMERAL port (endpoint `host:0` — an
-   * embedded client leg on a silo, which has no port of its own to advertise)
-   * only learns its real address from `Listener.address`, and the peer it dials
-   * has to be told that one: the preamble's `siloAddress` is what the peer
-   * replies to. Call before the first `get`, so no pooled connection has
-   * already announced the placeholder.
-   */
-  setSelf(address: SiloAddress): void {
-    this.self = address;
-  }
 
   get(to: SiloAddress): Promise<Connection> {
     const key = to.endpoint;
@@ -40,12 +38,16 @@ export class ConnectionManager {
     if (conn === undefined) {
       const dialStart = Date.now();
       conn = this.transport
-        .connect(to, {
-          protocolVersion: 1,
-          siloAddress: this.self,
-          clusterId: this.clusterId,
-          ...(this.clientId ? { clientId: this.clientId } : {}),
-        })
+        .connect(
+          to,
+          {
+            protocolVersion: PROTOCOL_VERSION,
+            siloAddress: this.self,
+            clusterId: this.clusterId,
+            ...(this.clientId ? { clientId: this.clientId } : {}),
+          },
+          this.onMessage,
+        )
         .then((connection) => {
           recordQueueLatency(Date.now() - dialStart, { "thresh.peer": key });
           return instrumented(connection, key);

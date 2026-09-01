@@ -46,7 +46,6 @@ const Unconstructable: GrainDefinition<IGreeter> = Object.assign(
 const newClient = (): ClientNode =>
   createClient({
     clusterId: CLUSTER,
-    local: new SiloAddress("client", "uid-c", "client:22222"),
     transport: new InProcessTransport(new InProcessNetwork(), CLUSTER),
     gateway: new SiloAddress("gateway", "uid-g", "gateway:11111"),
   });

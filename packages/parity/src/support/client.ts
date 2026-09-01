@@ -3,7 +3,6 @@ import type {
   IncomingGrainCallFilter,
   OutgoingGrainCallFilter,
 } from "@thresh/core/grain-call-filter";
-import { SiloAddress } from "@thresh/core/silo-address";
 import { InProcessTransport } from "@thresh/messaging/in-process-transport";
 import { createClient, type ClientNode } from "@thresh/client/client-node";
 import type { TestCluster } from "@thresh/testing/test-cluster";
@@ -27,10 +26,8 @@ export async function createClusterClient(
   incomingCallFilters?: readonly IncomingGrainCallFilter[],
   outgoingCallFilters?: readonly OutgoingGrainCallFilter[],
 ): Promise<ClientNode> {
-  const local = new SiloAddress("test-client", "uid-client", "test-client:22222");
   const client = createClient({
     clusterId: cluster.clusterId,
-    local,
     transport: new InProcessTransport(cluster.network, cluster.clusterId),
     gateway: cluster.primary.address,
     ...(incomingCallFilters !== undefined ? { incomingCallFilters } : {}),

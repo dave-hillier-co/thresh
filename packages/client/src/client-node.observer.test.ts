@@ -10,6 +10,7 @@ import { SiloAddress } from "@thresh/core/silo-address";
 import { InProcessNetwork, InProcessTransport } from "@thresh/messaging/in-process-transport";
 import { nextCorrelationId, type Message } from "@thresh/messaging/message";
 import { MessagePackSerializer } from "@thresh/messaging/msgpack-serializer";
+import type { Connection } from "@thresh/messaging/transport";
 import { ICancellationSourcesExtension } from "@thresh/runtime/cancellation-extension";
 import { waitFor } from "@thresh/testing/wait";
 import { createClient } from "@thresh/client/client-node";
@@ -20,28 +21,40 @@ interface IObserver extends GrainKey<string> {
 const IObserver = defineGrainInterface<IObserver>("IObserver.client");
 
 const CLUSTER = "c1";
-const clientAddr = new SiloAddress("client", "uid-c", "client:33333");
 const siloAddr = new SiloAddress("silo", "uid-s", "silo:33334");
 
 /**
  * A minimal stand-in for the calling silo: it can send a request/oneWay
  * message directly to the client and observe whatever reply (if any) comes
- * back, without spinning up a full `ClusterNode`.
+ * back, without spinning up a full `ClusterNode`. The client never listens
+ * (issue #65), so "directly to the client" means down the connection the
+ * client itself dialled and this fake silo accepted and held — never a
+ * `network.deliver` to a client address, since the client registers none.
  */
 async function startFakeSilo(network: InProcessNetwork) {
   const serializer = new MessagePackSerializer();
   let resolveReply: ((message: Message) => void) | undefined;
   const replies: Message[] = [];
   const transport = new InProcessTransport(network, CLUSTER);
-  const listener = await transport.listen(siloAddr, (message) => {
-    replies.push(message);
-    resolveReply?.(message);
-  });
+  let heldConnection: Connection | undefined;
+  const listener = await transport.listen(
+    siloAddr,
+    (message) => {
+      replies.push(message);
+      resolveReply?.(message);
+    },
+    (_preamble, connection) => {
+      heldConnection = connection;
+    },
+  );
   return {
     serializer,
     listener,
     send(message: Message): void {
-      network.deliver(clientAddr, message, siloAddr);
+      if (heldConnection === undefined) {
+        throw new Error("startFakeSilo: no client has connected yet");
+      }
+      heldConnection.send(message);
     },
     async waitForReply(): Promise<Message> {
       const existing = replies.find((m) => m.direction === "response");
@@ -75,7 +88,6 @@ describe("client object hosting (createObjectReference)", () => {
     const clientId = new GrainId("$client", "c-1");
     const client = createClient({
       clusterId: CLUSTER,
-      local: clientAddr,
       transport: new InProcessTransport(network, CLUSTER),
       gateway: siloAddr,
       clientId,
@@ -95,15 +107,18 @@ describe("client object hosting (createObjectReference)", () => {
   it("invokes the hosted object and replies with a success response", async () => {
     const network = new InProcessNetwork();
     const clientId = new GrainId("$client", "c-2");
+    // The fake silo must be listening BEFORE the client connects: the client
+    // never listens (issue #65), so the only way it can reach a push later is
+    // the connection it dials in `connect()` — the fake silo's `onAccept`
+    // must fire and hold it.
+    const silo = await startFakeSilo(network);
     const client = createClient({
       clusterId: CLUSTER,
-      local: clientAddr,
       transport: new InProcessTransport(network, CLUSTER),
       gateway: siloAddr,
       clientId,
     });
     await client.connect();
-    const silo = await startFakeSilo(network);
     try {
       const handler = { onEvent: vi.fn(async (payload: string) => `got:${payload}`) };
       const ref = client.createObjectReference(IObserver, handler);
@@ -129,15 +144,18 @@ describe("client object hosting (createObjectReference)", () => {
   it("replies with an error response when the hosted method throws", async () => {
     const network = new InProcessNetwork();
     const clientId = new GrainId("$client", "c-3");
+    // The fake silo must be listening BEFORE the client connects: the client
+    // never listens (issue #65), so the only way it can reach a push later is
+    // the connection it dials in `connect()` — the fake silo's `onAccept`
+    // must fire and hold it.
+    const silo = await startFakeSilo(network);
     const client = createClient({
       clusterId: CLUSTER,
-      local: clientAddr,
       transport: new InProcessTransport(network, CLUSTER),
       gateway: siloAddr,
       clientId,
     });
     await client.connect();
-    const silo = await startFakeSilo(network);
     try {
       const handler = {
         onEvent: async () => {
@@ -167,15 +185,18 @@ describe("client object hosting (createObjectReference)", () => {
   it("invokes the hosted object for a oneWay message and sends no reply", async () => {
     const network = new InProcessNetwork();
     const clientId = new GrainId("$client", "c-4");
+    // The fake silo must be listening BEFORE the client connects: the client
+    // never listens (issue #65), so the only way it can reach a push later is
+    // the connection it dials in `connect()` — the fake silo's `onAccept`
+    // must fire and hold it.
+    const silo = await startFakeSilo(network);
     const client = createClient({
       clusterId: CLUSTER,
-      local: clientAddr,
       transport: new InProcessTransport(network, CLUSTER),
       gateway: siloAddr,
       clientId,
     });
     await client.connect();
-    const silo = await startFakeSilo(network);
     try {
       // Resolve exactly when the hosted method runs, so the assertion waits on
       // a real signal rather than a guessed number of microtask ticks.
@@ -216,15 +237,18 @@ describe("client object hosting (createObjectReference)", () => {
   it("stops dispatching to a reference after deleteObjectReference", async () => {
     const network = new InProcessNetwork();
     const clientId = new GrainId("$client", "c-5");
+    // The fake silo must be listening BEFORE the client connects: the client
+    // never listens (issue #65), so the only way it can reach a push later is
+    // the connection it dials in `connect()` — the fake silo's `onAccept`
+    // must fire and hold it.
+    const silo = await startFakeSilo(network);
     const client = createClient({
       clusterId: CLUSTER,
-      local: clientAddr,
       transport: new InProcessTransport(network, CLUSTER),
       gateway: siloAddr,
       clientId,
     });
     await client.connect();
-    const silo = await startFakeSilo(network);
     try {
       const handler = { onEvent: vi.fn(async (payload: string) => payload) };
       const ref = client.createObjectReference(IObserver, handler);
@@ -272,15 +296,18 @@ describe("client-side cancellation binding for hosted objects", () => {
   it("aborts a hosted object's in-flight call when a matching cancelRemoteToken request arrives", async () => {
     const network = new InProcessNetwork();
     const clientId = new GrainId("$client", "c-cancel");
+    // The fake silo must be listening BEFORE the client connects: the client
+    // never listens (issue #65), so the only way it can reach a push later is
+    // the connection it dials in `connect()` — the fake silo's `onAccept`
+    // must fire and hold it.
+    const silo = await startFakeSilo(network);
     const client = createClient({
       clusterId: CLUSTER,
-      local: clientAddr,
       transport: new InProcessTransport(network, CLUSTER),
       gateway: siloAddr,
       clientId,
     });
     await client.connect();
-    const silo = await startFakeSilo(network);
     try {
       const started: string[] = [];
       const cancelled: string[] = [];

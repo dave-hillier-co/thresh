@@ -80,15 +80,19 @@ describe("TestCluster.client (Orleans TestCluster.Client / GrainFactory)", () =>
     }
   });
 
-  it("is created lazily, so a cluster that never touches it puts nothing extra on the network", async () => {
+  it("is created lazily and never registers a listener on the network — the client dials its gateway, never the other way (issue #65)", async () => {
     const network = new RecordingNetwork();
     const cluster = await TestCluster.start({ initialSilos: 2, grains: REGISTRATIONS, network });
     try {
       await cluster.getGrain(IEcho, "a").echo("hi");
       expect(network.registered).toEqual(["test-silo-0:11111", "test-silo-1:11111"]);
 
-      await cluster.client;
-      expect(network.registered).toHaveLength(3);
+      const client = await cluster.client;
+      expect(await client.getGrain(IEcho, "b").echo("bye")).toBe("echo:bye");
+      // Still just the two silos: the client never listens, so it never
+      // appears in the network's registry — a gateway answers, and pushes to
+      // a client-hosted observer, down the connection the client dialled.
+      expect(network.registered).toEqual(["test-silo-0:11111", "test-silo-1:11111"]);
     } finally {
       await cluster.dispose();
     }
@@ -121,21 +125,16 @@ describe("TestCluster.client (Orleans TestCluster.Client / GrainFactory)", () =>
     }
   });
 
-  it("is closed by dispose(), BEFORE the silos it is connected to", async () => {
+  it("is closed by dispose(), so a call issued afterwards rejects rather than hanging on a dead gateway", async () => {
     const network = new RecordingNetwork();
     const cluster = await TestCluster.start({ initialSilos: 2, grains: REGISTRATIONS, network });
     const client = await cluster.client;
-    const clientEndpoint = network.registered[2];
-    expect(clientEndpoint).toBeDefined();
 
     await cluster.dispose();
 
-    expect(network.unregistered[0]).toBe(clientEndpoint);
-    expect(network.unregistered).toEqual([
-      clientEndpoint,
-      "test-silo-0:11111",
-      "test-silo-1:11111",
-    ]);
+    // The client itself never registered anything to unregister (issue #65)
+    // — only the two silos it dialled did.
+    expect(network.unregistered).toEqual(["test-silo-0:11111", "test-silo-1:11111"]);
     await expect(client.getGrain(IEcho, "a").echo("hi")).rejects.toThrow();
   });
 

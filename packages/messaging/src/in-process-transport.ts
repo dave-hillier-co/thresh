@@ -2,13 +2,14 @@ import { RejectionError } from "@thresh/core/errors";
 import type { SiloAddress } from "@thresh/core/silo-address";
 import { recordMessageReceived } from "@thresh/observability/messaging-metrics";
 import type { Message } from "@thresh/messaging/message";
-import type {
-  Connection,
-  ConnectionAcceptHandler,
-  ConnectionPreamble,
-  Listener,
-  MessageHandler,
-  Transport,
+import {
+  PROTOCOL_VERSION,
+  type Connection,
+  type ConnectionAcceptHandler,
+  type ConnectionPreamble,
+  type Listener,
+  type MessageHandler,
+  type Transport,
 } from "@thresh/messaging/transport";
 
 interface Endpoint {
@@ -75,7 +76,20 @@ export class InProcessTransport implements Transport {
     };
   }
 
-  async connect(to: SiloAddress, preamble: ConnectionPreamble): Promise<Connection> {
+  /**
+   * Dial `to`. When the target registered an `onAccept` hook, it gets back a
+   * duplex `Connection` whose `send` delivers straight to THIS dialler's own
+   * `onMessage` hook (via `queueMicrotask`, preserving the async-delivery
+   * fiction the rest of the network uses) — never to a network address, since
+   * a dialler need not (and, for a client, does not) register one. A dialler
+   * that passed no `onMessage` cannot receive anything back, so `send` throws
+   * rather than silently dropping.
+   */
+  async connect(
+    to: SiloAddress,
+    preamble: ConnectionPreamble,
+    onMessage?: MessageHandler,
+  ): Promise<Connection> {
     const endpoint = this.network.lookup(to);
     if (endpoint === undefined) {
       throw new RejectionError(`no listener at ${to.toString()}`, "unknownTarget");
@@ -86,14 +100,29 @@ export class InProcessTransport implements Transport {
         "unknownTarget",
       );
     }
+    if (preamble.protocolVersion !== PROTOCOL_VERSION) {
+      throw new RejectionError(
+        `protocol version mismatch: ${preamble.protocolVersion} != ${PROTOCOL_VERSION}`,
+        "unknownTarget",
+      );
+    }
     const network = this.network;
     const from = preamble.siloAddress;
     if (endpoint.onAccept !== undefined) {
-      const reverseConnection: Connection = {
-        send: (message) => network.deliver(from, message, to),
+      const duplexConnection: Connection = {
+        send: (message) => {
+          if (onMessage === undefined) {
+            throw new RejectionError("peer connection is not duplex", "unknownTarget");
+          }
+          recordMessageReceived({
+            "thresh.peer": to.endpoint,
+            "thresh.message.direction": message.direction,
+          });
+          queueMicrotask(() => void onMessage(message, to));
+        },
         close: async () => undefined,
       };
-      endpoint.onAccept(preamble, reverseConnection);
+      endpoint.onAccept(preamble, duplexConnection);
     }
     return {
       send: (message) => network.deliver(to, message, from),

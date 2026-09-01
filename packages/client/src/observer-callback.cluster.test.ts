@@ -57,13 +57,11 @@ describe("grain -> observer callback routing (dispatcher client-locator + delive
   it("routes a grain call to a client-hosted observer on the same-silo gateway and returns its result", async () => {
     const network = new InProcessNetwork();
     const siloAddr = new SiloAddress("silo-1", "uid-1", "silo-1:11111");
-    const clientAddr = new SiloAddress("client", "uid-c", "client:22222");
     const silo = buildSilo(siloAddr, network, [siloAddr]);
     await silo.start();
 
     const client = createClient({
       clusterId: CLUSTER,
-      local: clientAddr,
       transport: new InProcessTransport(network, CLUSTER),
       gateway: siloAddr,
     }).registerGrain(SubscriberGrain, { interfaces: [ISubscriberGrain] });
@@ -90,11 +88,41 @@ describe("grain -> observer callback routing (dispatcher client-locator + delive
     }
   });
 
+  it("resolves a client's invoke() response via the held accepted connection, even though the client's identity address is undialable (issue #65)", async () => {
+    const network = new InProcessNetwork();
+    const siloAddr = new SiloAddress("silo-1", "uid-1", "silo-1:11111");
+    const silo = buildSilo(siloAddr, network, [siloAddr]);
+    await silo.start();
+
+    const client = createClient({
+      clusterId: CLUSTER,
+      transport: new InProcessTransport(network, CLUSTER),
+      gateway: siloAddr,
+    }).registerGrain(SubscriberGrain, { interfaces: [ISubscriberGrain] });
+    await client.connect();
+
+    try {
+      // Nothing is registered at the client's own synthetic identity endpoint
+      // — dialling it must fail — yet an ordinary call still gets its reply,
+      // because `ClusterNode.reply` answers down the held accepted
+      // connection instead of dialling `sendingSilo` back.
+      expect(network.lookup(new SiloAddress("x", "x", "client:no-such-client"))).toBeUndefined();
+      const grainRef = client.getGrain(ISubscriberGrain, "sub-undialable");
+      const ref = client.createObjectReference(IEventObserver, {
+        onEvent: async (text: string) => `ack:${text}`,
+      });
+      await grainRef.subscribe(ref);
+      expect(await grainRef.poke("ping")).toBe("ack:ping");
+    } finally {
+      await client.close();
+      await silo.stop();
+    }
+  });
+
   it("routes through a gateway silo other than the one hosting the subscriber grain", async () => {
     const network = new InProcessNetwork();
     const silo1Addr = new SiloAddress("silo-1", "uid-1", "silo-1:11111");
     const silo2Addr = new SiloAddress("silo-2", "uid-2", "silo-2:11112");
-    const clientAddr = new SiloAddress("client", "uid-c", "client:22222");
     const addrs = [silo1Addr, silo2Addr];
     const silo1 = buildSilo(silo1Addr, network, addrs);
     // Bias placement to the second candidate (silo2) so the subscriber grain
@@ -107,7 +135,6 @@ describe("grain -> observer callback routing (dispatcher client-locator + delive
     // Client connects to silo1 as its gateway.
     const client = createClient({
       clusterId: CLUSTER,
-      local: clientAddr,
       transport: new InProcessTransport(network, CLUSTER),
       gateway: silo1Addr,
     }).registerGrain(SubscriberGrain, { interfaces: [ISubscriberGrain] });
@@ -141,13 +168,11 @@ describe("grain -> observer callback routing (dispatcher client-locator + delive
   it("propagates an error thrown by the hosted observer back to the calling grain", async () => {
     const network = new InProcessNetwork();
     const siloAddr = new SiloAddress("silo-1", "uid-1", "silo-1:11111");
-    const clientAddr = new SiloAddress("client", "uid-c", "client:22222");
     const silo = buildSilo(siloAddr, network, [siloAddr]);
     await silo.start();
 
     const client = createClient({
       clusterId: CLUSTER,
-      local: clientAddr,
       transport: new InProcessTransport(network, CLUSTER),
       gateway: siloAddr,
     }).registerGrain(SubscriberGrain, { interfaces: [ISubscriberGrain] });
