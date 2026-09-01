@@ -407,6 +407,170 @@ describe("value-codec", () => {
     });
   });
 
+  describe("error cause, stack and AggregateError", () => {
+    it("round-trips a cause, rebuilt as its own class and installed non-enumerably", () => {
+      const decoded = decodeValue(
+        encodeValue(new Error("outer", { cause: new RangeError("inner") })),
+      ) as Error;
+
+      expect(decoded.cause).toBeInstanceOf(RangeError);
+      expect((decoded.cause as RangeError).message).toBe("inner");
+      expect(Object.prototype.propertyIsEnumerable.call(decoded, "cause")).toBe(false);
+    });
+
+    it("round-trips a three-deep cause chain, each link rebuilt as its own class", () => {
+      const root = new TypeError("root");
+      const middle = new GrainCallError("middle", { cause: root });
+      const outer = new Error("outer", { cause: middle });
+
+      const decoded = decodeValue(encodeValue(outer)) as Error;
+
+      expect(decoded.cause).toBeInstanceOf(GrainCallError);
+      const decodedMiddle = decoded.cause as GrainCallError;
+      expect(decodedMiddle.cause).toBeInstanceOf(TypeError);
+      expect((decodedMiddle.cause as TypeError).message).toBe("root");
+    });
+
+    it("round-trips a non-Error cause (a plain object, and a string)", () => {
+      const withObject = decodeValue(
+        encodeValue(new Error("outer", { cause: { reason: "quota" } })),
+      ) as Error;
+      expect(withObject.cause).toEqual({ reason: "quota" });
+
+      const withString = decodeValue(encodeValue(new Error("outer", { cause: "boom" }))) as Error;
+      expect(withString.cause).toBe("boom");
+    });
+
+    it("keeps an explicit `cause: undefined` as a present own property, not an absent one", () => {
+      const decoded = decodeValue(encodeValue(new Error("outer", { cause: undefined }))) as Error;
+      expect("cause" in decoded).toBe(true);
+      expect(decoded.cause).toBeUndefined();
+    });
+
+    it("rebuilds a GrainCallError with its cause, not discarding it a second time", () => {
+      const decoded = decodeValue(
+        encodeValue(new GrainCallError("outer", { cause: new RangeError("root") })),
+      ) as GrainCallError;
+
+      expect(decoded).toBeInstanceOf(GrainCallError);
+      expect(decoded.cause).toBeInstanceOf(RangeError);
+      expect((decoded.cause as RangeError).message).toBe("root");
+    });
+
+    it("installs the sender's stack as a remote stack trace with an end-of-remote-stack marker", () => {
+      function throwFromSender(): never {
+        throw new Error("boom");
+      }
+      let sent: Error;
+      try {
+        throwFromSender();
+        throw new Error("unreachable");
+      } catch (e) {
+        sent = e as Error;
+      }
+
+      const decoded = decodeValue(encodeValue(sent)) as Error;
+
+      expect(decoded.stack).toContain("throwFromSender");
+      expect(decoded.stack).toContain("--- End of remote stack trace from grain call ---");
+    });
+
+    it("caps an oversized stack at STACK_TRACE_CAP with a truncation marker", () => {
+      const error = new Error("boom");
+      error.stack = "x".repeat(20_000);
+
+      const encoded = encodeValue(error) as Record<string, unknown>;
+      const stack = encoded.stack as string;
+
+      expect(stack.length).toBeLessThanOrEqual(8192 + "... (truncated)".length);
+      expect(stack.endsWith("... (truncated)")).toBe(true);
+    });
+
+    it("round-trips an AggregateError, rebuilding it as itself with its member errors", () => {
+      const decoded = decodeValue(
+        encodeValue(new AggregateError([new RangeError("a"), new Error("b")], "many")),
+      ) as AggregateError;
+
+      expect(decoded).toBeInstanceOf(AggregateError);
+      expect(decoded.message).toBe("many");
+      expect(decoded.errors[0]).toBeInstanceOf(RangeError);
+      expect(decoded.errors[0].message).toBe("a");
+      expect(decoded.errors[1]).toBeInstanceOf(Error);
+      expect(decoded.errors[1].message).toBe("b");
+    });
+
+    it("keeps the decoded errors array on the fallback for an AggregateError subclass", () => {
+      class ManyErrors extends AggregateError {
+        constructor(errors: unknown[], message: string) {
+          super(errors, message);
+          this.name = "ManyErrors";
+        }
+      }
+
+      const decoded = decodeValue(
+        encodeValue(new ManyErrors([new RangeError("a")], "many")),
+      ) as UnavailableExceptionFallbackException & { errors?: unknown[] };
+
+      expect(decoded).toBeInstanceOf(UnavailableExceptionFallbackException);
+      expect(decoded.errors).toBeDefined();
+      expect((decoded.errors as Error[])[0]).toBeInstanceOf(RangeError);
+    });
+
+    it("throws CircularReferenceError when an error's cause points back at itself", () => {
+      const error = new Error("self");
+      Object.defineProperty(error, "cause", {
+        value: error,
+        configurable: true,
+        enumerable: false,
+      });
+      expect(() => encodeValue(error)).toThrow(CircularReferenceError);
+    });
+
+    it("round-trips cause, stack and AggregateError.errors through serializeValue/deserializeValue", () => {
+      const original = new GrainCallError("outer", { cause: new RangeError("root") });
+      const decoded = deserializeValue<GrainCallError>(serializeValue(original));
+
+      expect(decoded).toBeInstanceOf(GrainCallError);
+      expect(decoded.cause).toBeInstanceOf(RangeError);
+      expect(decoded.stack).toContain("--- End of remote stack trace from grain call ---");
+
+      const aggDecoded = deserializeValue<AggregateError>(
+        serializeValue(new AggregateError([new RangeError("a")], "many")),
+      );
+      expect(aggDecoded).toBeInstanceOf(AggregateError);
+      expect(aggDecoded.errors[0]).toBeInstanceOf(RangeError);
+    });
+
+    it("still decodes an old envelope with no cause/stack/errors keys exactly as before", () => {
+      const decoded = decodeValue({
+        $thresh: "error",
+        $tsvv: 1,
+        name: "Error",
+        message: "legacy",
+      }) as Error;
+
+      expect(decoded).toBeInstanceOf(Error);
+      expect(decoded.message).toBe("legacy");
+      expect(decoded.cause).toBeUndefined();
+      expect(decoded.stack).toBeDefined();
+    });
+
+    it("does not duplicate an enumerable own `cause` into properties", () => {
+      const error = new Error("outer") as Error & { cause: unknown };
+      Object.defineProperty(error, "cause", {
+        value: new RangeError("inner"),
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
+
+      const encoded = encodeValue(error) as Record<string, unknown>;
+      const properties = encoded.properties as Record<string, unknown> | undefined;
+
+      expect(properties?.cause).toBeUndefined();
+    });
+  });
+
   describe("circular-reference guard", () => {
     it("throws CircularReferenceError for a self-referencing plain object instead of overflowing the stack", () => {
       const obj: Record<string, unknown> = { name: "root" };

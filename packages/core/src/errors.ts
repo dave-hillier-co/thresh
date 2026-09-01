@@ -34,7 +34,15 @@ export function isThreshRuntimeError(error: unknown): error is ThreshRuntimeErro
   return error instanceof ThreshRuntimeError;
 }
 
-const RESERVED_FALLBACK_KEYS = new Set(["name", "message", "stack", "errorType", "properties"]);
+const RESERVED_FALLBACK_KEYS = new Set([
+  "name",
+  "message",
+  "stack",
+  "errorType",
+  "properties",
+  "cause",
+  "errors",
+]);
 
 /**
  * The stand-in for an error whose concrete class the receiving process cannot rebuild — Orleans'
@@ -55,8 +63,20 @@ export class UnavailableExceptionFallbackException extends Error {
   readonly errorType: string;
   /** The sender's own enumerable properties, decoded. Also copied onto this instance. */
   readonly properties: Readonly<Record<string, unknown>>;
+  /**
+   * The decoded member errors of an `AggregateError` this process could not rebuild as itself (an
+   * `AggregateError` subclass with its own `name`, e.g.). `errors` is a non-enumerable own property
+   * on the real class, so — like {@link properties} — it is installed explicitly here rather than
+   * through the properties-copy loop below, and reserved from it, so a payload cannot double-apply.
+   */
+  readonly errors?: readonly unknown[];
 
-  constructor(errorType: string, message: string, properties: Record<string, unknown> = {}) {
+  constructor(
+    errorType: string,
+    message: string,
+    properties: Record<string, unknown> = {},
+    errors?: readonly unknown[],
+  ) {
     super(message);
     this.errorType = errorType;
     // `name` carries the sending type, not this class's own: a caller discriminates on `name` in
@@ -64,6 +84,7 @@ export class UnavailableExceptionFallbackException extends Error {
     // UnavailableExceptionFallbackException` is already the answer to "was the type rebuilt?".
     this.name = errorType;
     this.properties = properties;
+    if (errors !== undefined) this.errors = errors;
     for (const [key, value] of Object.entries(properties)) {
       // Never let a carried property overwrite the identity fields above.
       if (RESERVED_FALLBACK_KEYS.has(key)) continue;
