@@ -72,7 +72,7 @@ describe.skipIf(pool === undefined)("PostgresPullingStreamProvider", () => {
       await waitFor(() => received.length === 1);
       expect(received).toEqual(["hello"]);
     } finally {
-      provider.stop();
+      await provider.stop();
     }
   }, 10_000);
 
@@ -98,7 +98,7 @@ describe.skipIf(pool === undefined)("PostgresPullingStreamProvider", () => {
       expect(delivered[0]!.event).toBe("hi");
       expect(delivered[0]!.subscriber).toBe("ChatBot/lobby");
     } finally {
-      provider.stop();
+      await provider.stop();
     }
   }, 10_000);
 
@@ -113,7 +113,7 @@ describe.skipIf(pool === undefined)("PostgresPullingStreamProvider", () => {
     first.startAgentsFor([0]);
     await first.getStream<string>("chat", "room").publish("m1");
     await waitFor(() => received.length === 1);
-    first.stop();
+    await first.stop();
 
     // A fresh provider instance (new agents) picks up from the durably
     // committed cursor: publishing more events before it starts must not be
@@ -128,7 +128,7 @@ describe.skipIf(pool === undefined)("PostgresPullingStreamProvider", () => {
       await waitFor(() => received.length === 2);
       expect(received).toEqual(["m1", "m2"]);
     } finally {
-      second.stop();
+      await second.stop();
     }
   }, 10_000);
 
@@ -162,7 +162,7 @@ describe.skipIf(pool === undefined)("PostgresPullingStreamProvider", () => {
       expect(failures[0]!.streamKey).toBe("room/bad");
       expect(failures[0]!.attempts).toBe(3);
     } finally {
-      provider.stop();
+      await provider.stop();
     }
   }, 10_000);
 

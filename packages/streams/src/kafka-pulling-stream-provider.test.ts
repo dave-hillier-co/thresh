@@ -129,7 +129,7 @@ describe.skipIf(!ready)("KafkaPullingStreamProvider", () => {
       await waitFor(() => received.length === 1);
       expect(received).toEqual(["hello"]);
     } finally {
-      provider.stop();
+      await provider.stop();
       await provider.disconnect();
     }
   }, 20_000);
@@ -162,7 +162,7 @@ describe.skipIf(!ready)("KafkaPullingStreamProvider", () => {
       expect(delivered[0]!.event).toBe("hi");
       expect(delivered[0]!.subscriber).toBe("ChatBot/lobby");
     } finally {
-      provider.stop();
+      await provider.stop();
       await provider.disconnect();
     }
   }, 20_000);
@@ -188,7 +188,7 @@ describe.skipIf(!ready)("KafkaPullingStreamProvider", () => {
     first.startAgentsFor([0]);
     await first.getStream<string>("chat", "room").publish("m1");
     await waitFor(() => received.length === 1);
-    first.stop();
+    await first.stop();
     await first.disconnect();
 
     // A fresh provider instance (new agents, new Kafka consumer) picks up
@@ -209,7 +209,7 @@ describe.skipIf(!ready)("KafkaPullingStreamProvider", () => {
       await waitFor(() => received.length === 2);
       expect(received).toEqual(["m1", "m2"]);
     } finally {
-      second.stop();
+      await second.stop();
       await second.disconnect();
     }
   }, 30_000);
@@ -250,7 +250,7 @@ describe.skipIf(!ready)("KafkaPullingStreamProvider", () => {
       expect(failures[0]!.streamKey).toBe("room/bad");
       expect(failures[0]!.attempts).toBe(3);
     } finally {
-      provider.stop();
+      await provider.stop();
       await provider.disconnect();
     }
   }, 20_000);

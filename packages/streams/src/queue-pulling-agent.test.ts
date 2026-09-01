@@ -154,3 +154,64 @@ describe.skipIf(client === undefined)("RedisStreamQueue + QueuePullingAgent", ()
 function newQueueAt(queue: RedisStreamQueue): RedisStreamQueue {
   return new RedisStreamQueue(client!, queue.key);
 }
+
+// Shutdown behaviour needs a queue whose reads the test controls, so it fakes
+// the queue (a true boundary) rather than using Redis.
+describe("QueuePullingAgent shutdown", () => {
+  it("stop() resolves only after the in-flight pump settles", async () => {
+    let releaseRead: (entries: never[]) => void = () => undefined;
+    let reads = 0;
+    const queue = {
+      getCursor: async () => 0,
+      readAfter: () => {
+        reads++;
+        return new Promise<never[]>((r) => {
+          releaseRead = r;
+        });
+      },
+      commit: async () => undefined,
+    };
+    const agent = new QueuePullingAgent(queue, async () => undefined, { pollIntervalMs: 5 });
+    agent.start();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(reads).toBe(1);
+
+    let stopped = false;
+    const stopping = agent.stop().then(() => {
+      stopped = true;
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(stopped).toBe(false); // the pump's read is still in flight
+
+    releaseRead([]);
+    await stopping;
+    const readsAtStop = reads;
+    await new Promise((r) => setTimeout(r, 30));
+    expect(reads).toBe(readsAtStop); // no pump runs after stop resolves
+  });
+
+  it("contains a pump failure and keeps polling", async () => {
+    let reads = 0;
+    const queue = {
+      getCursor: async () => 0,
+      readAfter: async () => {
+        reads++;
+        if (reads === 1) throw new Error("transient read failure");
+        return [];
+      },
+      commit: async () => undefined,
+    };
+    const errors: unknown[] = [];
+    const agent = new QueuePullingAgent(queue, async () => undefined, {
+      pollIntervalMs: 5,
+      onPumpError: (err) => {
+        errors.push(err);
+      },
+    });
+    agent.start();
+    await new Promise((r) => setTimeout(r, 50));
+    await agent.stop();
+    expect(reads).toBeGreaterThanOrEqual(2); // the failure did not stop the poll loop
+    expect(errors).toHaveLength(1);
+  });
+});

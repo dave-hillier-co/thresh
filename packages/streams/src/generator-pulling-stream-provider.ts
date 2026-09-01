@@ -119,7 +119,8 @@ export class GeneratorPullingStreamProvider
     const wanted = new Set(indices);
     for (const [i, agent] of this.agents) {
       if (!wanted.has(i)) {
-        agent.stop();
+        // Fire-and-forget: stop() never rejects (pump failures are contained).
+        void agent.stop();
         this.agents.delete(i);
       }
     }
@@ -135,9 +136,10 @@ export class GeneratorPullingStreamProvider
     }
   }
 
-  stop(): void {
-    for (const agent of this.agents.values()) agent.stop();
+  async stop(): Promise<void> {
+    const agents = [...this.agents.values()];
     this.agents.clear();
+    await Promise.all(agents.map((agent) => agent.stop()));
   }
 
   getStream<T>(namespace: string, key: GrainKey): AsyncStream<T> {

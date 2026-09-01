@@ -66,6 +66,12 @@ export interface QueuePullingAgentOptions {
   failureHandler?: StreamFailureHandler;
   /** Sleep injection — the clock is a true boundary, fake it in tests. */
   sleep?: (ms: number) => Promise<void>;
+  /**
+   * Notified when a pump fails outside delivery (cursor read, queue read,
+   * commit). The agent keeps polling — the next poll retries from the
+   * committed cursor. Defaults to `console.error`.
+   */
+  onPumpError?: (error: unknown) => void;
 }
 
 const defaultBackoff = (attempt: number): number => Math.min(50 * 2 ** attempt, 5000);
@@ -91,10 +97,12 @@ export class QueuePullingAgent {
   private readonly retryBackoffMs: (attempt: number) => number;
   private readonly failureHandler: StreamFailureHandler | undefined;
   private readonly sleep: (ms: number) => Promise<void>;
+  private readonly onPumpError: (error: unknown) => void;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private cursor: number | undefined;
   private pumping = false;
   private running = false;
+  private inflight: Promise<void> | undefined;
 
   constructor(
     private readonly queue: PullableQueue,
@@ -107,6 +115,8 @@ export class QueuePullingAgent {
     this.retryBackoffMs = options.retryBackoffMs ?? defaultBackoff;
     this.failureHandler = options.failureHandler;
     this.sleep = options.sleep ?? defaultSleep;
+    this.onPumpError =
+      options.onPumpError ?? ((error) => console.error("stream pump failed", error));
   }
 
   start(): void {
@@ -115,10 +125,12 @@ export class QueuePullingAgent {
     this.schedule(0);
   }
 
-  stop(): void {
+  /** Resolves once any in-flight pump has settled, so the caller can safely close the queue's backing client. */
+  async stop(): Promise<void> {
     this.running = false;
     if (this.timer !== undefined) clearTimeout(this.timer);
     this.timer = undefined;
+    await this.inflight;
   }
 
   /**
@@ -138,7 +150,7 @@ export class QueuePullingAgent {
     if (this.timer !== undefined) clearTimeout(this.timer);
     this.timer = setTimeout(() => {
       this.timer = undefined;
-      void this.pump();
+      this.inflight = this.pump();
     }, delayMs);
   }
 
@@ -158,6 +170,10 @@ export class QueuePullingAgent {
         this.cursor = token;
         await this.queue.commit(token); // commit only after delivery (at-least-once)
       }
+    } catch (err) {
+      // A failed read/commit must not kill the poll loop (or escape as an
+      // unhandled rejection); the next poll retries from the committed cursor.
+      this.onPumpError(err);
     } finally {
       this.pumping = false;
       if (this.running) this.schedule(this.pollIntervalMs);

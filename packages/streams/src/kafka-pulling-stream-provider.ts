@@ -186,8 +186,8 @@ export class KafkaPullingStreamProvider implements ActivationBoundStreamProvider
   }
 
   /** Stop every agent (silo shutdown). Cursors and subscriptions stay in the metadata store. */
-  stop(): void {
-    this.core.stop();
+  async stop(): Promise<void> {
+    await this.core.stop();
   }
 
   /** Disconnects the Kafka producer/consumer/admin client. Call after `stop()` on shutdown. */

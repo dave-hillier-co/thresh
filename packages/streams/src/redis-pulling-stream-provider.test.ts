@@ -66,7 +66,7 @@ describe.skipIf(client === undefined)("RedisPullingStreamProvider", () => {
       await waitFor(() => failures.length === 1);
       expect(failures).toEqual([{ streamKey: "room/bad", attempts: 3 }]);
     } finally {
-      provider.stop();
+      await provider.stop();
     }
   }, 10_000);
 
@@ -92,7 +92,7 @@ describe.skipIf(client === undefined)("RedisPullingStreamProvider", () => {
       // Nothing should throw from the agent even with no handler wired.
       await new Promise((r) => setTimeout(r, 50));
     } finally {
-      provider.stop();
+      await provider.stop();
     }
   }, 10_000);
 

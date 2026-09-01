@@ -146,7 +146,9 @@ export class PullingStreamProviderCore implements ActivationBoundStreamProvider 
     const wanted = new Set(indices);
     for (const [i, agent] of this.agents) {
       if (!wanted.has(i)) {
-        agent.stop();
+        // Fire-and-forget: the successor silo resumes from the committed cursor,
+        // and stop() never rejects (pump failures are contained by the agent).
+        void agent.stop();
         this.agents.delete(i);
       }
     }
@@ -165,10 +167,15 @@ export class PullingStreamProviderCore implements ActivationBoundStreamProvider 
     }
   }
 
-  /** Stop every agent (silo shutdown). Cursors and subscriptions stay in the backing store. */
-  stop(): void {
-    for (const agent of this.agents.values()) agent.stop();
+  /**
+   * Stop every agent (silo shutdown), resolving once their in-flight pumps have
+   * settled so the caller can close the backing client. Cursors and
+   * subscriptions stay in the backing store.
+   */
+  async stop(): Promise<void> {
+    const agents = [...this.agents.values()];
     this.agents.clear();
+    await Promise.all(agents.map((agent) => agent.stop()));
   }
 
   getStream<T>(namespace: string, key: GrainKey): AsyncStream<T> {

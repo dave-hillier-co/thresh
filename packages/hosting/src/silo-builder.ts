@@ -590,7 +590,7 @@ export class SiloBuilder {
       await client.connect();
     });
     this.closers.push(async () => {
-      provider.stop();
+      await provider.stop();
       await client.close();
     });
     return this.addStreamProvider(name, provider);
@@ -643,7 +643,7 @@ export class SiloBuilder {
       await provider.start();
     });
     this.closers.push(async () => {
-      provider.stop();
+      await provider.stop();
       await pool.end();
     });
     return this.addStreamProvider(name, provider);
@@ -735,7 +735,7 @@ export class SiloBuilder {
       await provider.start();
     });
     this.closers.push(async () => {
-      provider.stop();
+      await provider.stop();
       await provider.disconnect();
     });
     return this.addStreamProvider(name, provider);
@@ -758,7 +758,7 @@ export class SiloBuilder {
     const provider = new GeneratorPullingStreamProvider(name, config, options);
     this.pullingStreams.push(provider);
     this.closers.push(async () => {
-      provider.stop();
+      await provider.stop();
     });
     return this.addStreamProvider(name, provider);
   }

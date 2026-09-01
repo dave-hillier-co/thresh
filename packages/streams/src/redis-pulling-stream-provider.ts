@@ -124,8 +124,8 @@ export class RedisPullingStreamProvider implements ActivationBoundStreamProvider
   }
 
   /** Stop every agent (silo shutdown). Cursors and subscriptions stay in Redis. */
-  stop(): void {
-    this.core.stop();
+  async stop(): Promise<void> {
+    await this.core.stop();
   }
 
   getStream<T>(namespace: string, key: GrainKey): AsyncStream<T> {
