@@ -10,7 +10,6 @@ import { waitFor } from "@thresh/testing/wait";
 const CLUSTER = "c1";
 const silo1Addr = new SiloAddress("silo-1", "uid-1", "silo-1:11111");
 const silo2Addr = new SiloAddress("silo-2", "uid-2", "silo-2:11112");
-const clientAddr = new SiloAddress("client", "uid-c", "client:22222");
 
 function buildTwoSiloCluster(network: InProcessNetwork) {
   const addresses = [silo1Addr, silo2Addr];
@@ -41,7 +40,6 @@ describe("client directory: gateway gossip across a cluster", () => {
     const fixedClientId = clientId("c-int");
     const client = createClient({
       clusterId: CLUSTER,
-      local: clientAddr,
       transport: new InProcessTransport(network, CLUSTER),
       gateway: silo1Addr,
       clientId: fixedClientId,
@@ -67,7 +65,6 @@ describe("client directory: gateway gossip across a cluster", () => {
     const fixedClientId = clientId("c-leave");
     const client = createClient({
       clusterId: CLUSTER,
-      local: clientAddr,
       transport: new InProcessTransport(network, CLUSTER),
       gateway: silo1Addr,
       clientId: fixedClientId,

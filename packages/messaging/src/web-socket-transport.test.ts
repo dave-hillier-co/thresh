@@ -12,7 +12,7 @@ const CLUSTER = "c1";
 const body = new JsonSerializer();
 const loopback = (name: string) => new SiloAddress(name, `uid-${name}`, "127.0.0.1:0");
 const preamble = (self: SiloAddress, clusterId = CLUSTER): ConnectionPreamble => ({
-  protocolVersion: 1,
+  protocolVersion: 2,
   siloAddress: self,
   clusterId,
 });
@@ -87,16 +87,12 @@ describe("WebSocketTransport", () => {
     ).rejects.toBeInstanceOf(RejectionError);
   });
 
-  // The preamble half of this case is unchanged. Its push half used to assert
-  // that the held connection wrote back down the ACCEPTED socket, proved with a
-  // raw `ws` client that installed its own message handler. No Thresh node has
-  // one — `connect()` returns a send-only `Connection` whose only inbound read
-  // is the ack — so that mechanism could never deliver to a real peer, which is
-  // issue #55: a gateway pushing to a client-hosted observer over real sockets
-  // was silently dropped. The connection now reaches the peer's ADVERTISED
-  // listener, as `InProcessTransport`'s reverse connection always did, so this
-  // asserts arrival there instead of on the dialling socket.
-  it("fires the onAccept hook with the preamble (including clientId) and the held connection reaches the peer's advertised listener", async () => {
+  // A listener's onAccept connection now writes back down the ACCEPTED socket
+  // rather than dialling the peer's advertised address — this is issue #65's
+  // fix (a real successor to #55, which only made the reverse-dial version of
+  // this work). The dialler advertises a deliberately UNROUTABLE address to
+  // prove the push cannot possibly be arriving via a reverse dial.
+  it("fires the onAccept hook with the preamble (including clientId) and the held connection answers down the socket the dialler dialled", async () => {
     const transportA = new WebSocketTransport(CLUSTER);
     const transportB = new WebSocketTransport(CLUSTER);
     const clientId = new GrainId("Client", "1");
@@ -112,20 +108,20 @@ describe("WebSocketTransport", () => {
         heldConnection = connection;
       },
     );
-    // The "client" listens on its own ephemeral port, exactly as `ClientNode`
-    // does, and advertises the BOUND address in its preamble.
-    const listenerA = await transportA.listen(loopback("client"), (msg) => {
-      pushed = body.deserialize<number>(msg.body);
-    });
-    openListeners.push(listenerA, listenerB);
+    openListeners.push(listenerB);
 
-    const conn = await transportA.connect(listenerB.address, {
-      ...preamble(listenerA.address),
-      clientId,
-    });
+    // TEST-ONLY address (RFC 5737): nothing listens here, and nothing ever will.
+    const unroutable = new SiloAddress("client", "uid-client", "203.0.113.1:9");
+    const conn = await transportA.connect(
+      listenerB.address,
+      { ...preamble(unroutable), clientId },
+      (msg) => {
+        pushed = body.deserialize<number>(msg.body);
+      },
+    );
 
     await expect.poll(() => heldConnection).toBeDefined();
-    expect(acceptedPreamble?.siloAddress).toEqual(listenerA.address);
+    expect(acceptedPreamble?.siloAddress).toEqual(unroutable);
     expect(acceptedPreamble?.clientId).toEqual(clientId);
 
     heldConnection?.send(request(nextCorrelationId(), "oneWay", 13));
@@ -134,16 +130,11 @@ describe("WebSocketTransport", () => {
     await conn.close();
   });
 
-  // The reverse leg is dialled lazily on first send. Memoizing the dial PROMISE would make one
-  // unlucky attempt permanent: the rejection stays cached, every later push awaits it, and the
-  // peer is unreachable for the life of the accepted socket even once its listener is back.
-  // The consumer symptom is silent -- `ClusterNode.deliverToProxy` registers a correlation and
-  // fire-and-forgets, so the caller just blocks for the full call timeout with nothing logged.
-  it("re-dials the reverse connection after a failed attempt instead of caching the failure", async () => {
+  it("completes a request/response round trip over the single dialled socket, with the dialler never listening", async () => {
     const transportA = new WebSocketTransport(CLUSTER);
     const transportB = new WebSocketTransport(CLUSTER);
+    const table = new CorrelationTable();
     let heldConnection: Connection | undefined;
-    let pushed: number | undefined;
 
     const listenerB = await transportB.listen(
       loopback("B"),
@@ -154,33 +145,59 @@ describe("WebSocketTransport", () => {
     );
     openListeners.push(listenerB);
 
-    // Bind once to claim a concrete port, then give it up: the address A advertises is real but
-    // nothing is listening on it yet, so the gateway's first dial must fail.
-    const probe = await transportA.listen(loopback("client"), () => undefined);
-    const clientAddress = probe.address;
-    await probe.close();
+    const unroutable = new SiloAddress("client", "uid-client", "203.0.113.1:9");
+    await transportA.connect(listenerB.address, preamble(unroutable), (msg) => {
+      table.complete(msg);
+    });
 
-    const conn = await transportA.connect(listenerB.address, preamble(clientAddress));
     await expect.poll(() => heldConnection).toBeDefined();
+    const corr = nextCorrelationId();
+    const pending = table.register(corr, 2000);
+    heldConnection?.send(
+      responseTo(request(corr, "request", 0), "success", body.serialize(42), listenerB.address),
+    );
 
-    heldConnection?.send(request(nextCorrelationId(), "oneWay", 1)); // dropped: nothing is listening
-    await expect.poll(() => heldConnection).toBeDefined();
+    const response = await pending;
+    expect(body.deserialize<number>(response.body)).toBe(42);
+  });
 
-    // The client comes up on the address it advertised, and a later push must reach it.
-    const listenerA = await transportA.listen(clientAddress, (msg) => {
+  // The ack handler used to be `socket.once("message")`, which would consume (or race) a push
+  // arriving in the same tick as the ack, not just the ack itself. `connect` now installs ONE
+  // persistent handler before the preamble send: frame 1 resolves the ack, every later frame goes
+  // to `onMessage`.
+  it("does not lose a push sent in the same tick as the preamble ack", async () => {
+    const transportA = new WebSocketTransport(CLUSTER);
+    const transportB = new WebSocketTransport(CLUSTER);
+    let pushed: number | undefined;
+
+    const listenerB = await transportB.listen(
+      loopback("B"),
+      () => undefined,
+      (_preambleIn, connection) => {
+        // Push immediately on accept, in the same tick the ack goes out.
+        connection.send(request(nextCorrelationId(), "oneWay", 77));
+      },
+    );
+    openListeners.push(listenerB);
+
+    await transportA.connect(listenerB.address, preamble(loopback("client")), (msg) => {
       pushed = body.deserialize<number>(msg.body);
     });
-    openListeners.push(listenerA);
 
-    await expect
-      .poll(
-        () => {
-          heldConnection?.send(request(nextCorrelationId(), "oneWay", 21));
-          return pushed;
-        },
-        { timeout: 5000 },
-      )
-      .toBe(21);
-    await conn.close();
+    await expect.poll(() => pushed, { timeout: 2000 }).toBe(77);
+  });
+
+  it("rejects a dialler whose preamble carries an old protocol version", async () => {
+    const transportA = new WebSocketTransport(CLUSTER);
+    const transportB = new WebSocketTransport(CLUSTER);
+    const listenerB = await transportB.listen(loopback("B"), () => undefined);
+    openListeners.push(listenerB);
+
+    await expect(
+      transportA.connect(listenerB.address, {
+        ...preamble(loopback("A")),
+        protocolVersion: 1,
+      }),
+    ).rejects.toBeInstanceOf(RejectionError);
   });
 });

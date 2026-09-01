@@ -56,7 +56,6 @@ describe("gateway load shedding (Orleans OverloadDetector / LoadSheddingOptions)
   it("rejects a client call with GatewayTooBusyException while the gateway's latched CPU usage is above the threshold", async () => {
     const network = new InProcessNetwork();
     const siloAddr = new SiloAddress("silo-1", "uid-1", "silo-1:11111");
-    const clientAddr = new SiloAddress("client", "uid-c", "client:22222");
     const silo = buildSilo(siloAddr, network, [siloAddr], {
       loadSheddingEnabled: true,
       cpuThreshold: 98,
@@ -65,7 +64,6 @@ describe("gateway load shedding (Orleans OverloadDetector / LoadSheddingOptions)
 
     const client = createClient({
       clusterId: CLUSTER,
-      local: clientAddr,
       transport: new InProcessTransport(network, CLUSTER),
       gateway: siloAddr,
     }).registerGrain(PingGrain, { interfaces: [IPing] });
@@ -93,13 +91,11 @@ describe("gateway load shedding (Orleans OverloadDetector / LoadSheddingOptions)
   it("never sheds when load shedding is not enabled, regardless of latched CPU usage", async () => {
     const network = new InProcessNetwork();
     const siloAddr = new SiloAddress("silo-1", "uid-1", "silo-1:11111");
-    const clientAddr = new SiloAddress("client", "uid-c", "client:22222");
     const silo = buildSilo(siloAddr, network, [siloAddr]); // loadShedding left at defaults (disabled)
     await silo.start();
 
     const client = createClient({
       clusterId: CLUSTER,
-      local: clientAddr,
       transport: new InProcessTransport(network, CLUSTER),
       gateway: siloAddr,
     }).registerGrain(PingGrain, { interfaces: [IPing] });
@@ -139,7 +135,6 @@ describe("gateway load shedding (Orleans OverloadDetector / LoadSheddingOptions)
   it("latches CPU usage and toggles overload detection via GrainRuntime (Orleans IPlacementTestGrain test hooks)", async () => {
     const network = new InProcessNetwork();
     const siloAddr = new SiloAddress("silo-1", "uid-1", "silo-1:11111");
-    const clientAddr = new SiloAddress("client", "uid-c", "client:22222");
     const silo = buildSilo(siloAddr, network, [siloAddr], {
       loadSheddingEnabled: true,
       cpuThreshold: 98,
@@ -148,7 +143,6 @@ describe("gateway load shedding (Orleans OverloadDetector / LoadSheddingOptions)
 
     const client = createClient({
       clusterId: CLUSTER,
-      local: clientAddr,
       transport: new InProcessTransport(network, CLUSTER),
       gateway: siloAddr,
     }).registerGrain(PingGrain, { interfaces: [IPing] });

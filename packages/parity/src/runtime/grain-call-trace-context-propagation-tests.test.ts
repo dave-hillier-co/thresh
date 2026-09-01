@@ -29,7 +29,6 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { SpanKind, trace } from "@opentelemetry/api";
 import { GrainId } from "@thresh/core/grain-id";
 import { getGrainMetadata } from "@thresh/core/grain-metadata";
-import { SiloAddress } from "@thresh/core/silo-address";
 import { requestContext } from "@thresh/runtime/invocation-context";
 import { ActivityNames } from "@thresh/observability/activation-tracing";
 import { tracingFilters } from "@thresh/observability/tracing";
@@ -229,12 +228,8 @@ describe("UnitTests.General.GrainCallTraceContextPropagationTests", () => {
       // `traceparent` directly, bypassing the real tracing filter (which
       // would always overwrite it with a freshly-minted valid one) — this
       // isolates the INCOMING filter's handling of a bad header on the wire.
-      // Built on a DISTINCT local address so closing it does not tear down
-      // the shared `beforeAll` client's transport listener (which uses the
-      // fixed `createClusterClient` address).
       const malformedClient = createClient({
         clusterId: cluster.clusterId,
-        local: new SiloAddress("malformed-client", "uid-malformed", "malformed-client:23232"),
         transport: new InProcessTransport(cluster.network, cluster.clusterId),
         gateway: cluster.primary.address,
         outgoingCallFilters: [

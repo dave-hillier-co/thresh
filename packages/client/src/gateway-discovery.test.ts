@@ -38,7 +38,6 @@ class EchoGrain extends Grain implements IEcho {
 }
 
 const CLUSTER = "c1";
-const clientAddr = new SiloAddress("client", "uid-c", "client:22222");
 
 describe("client gateway discovery + failover (in-process)", () => {
   it("skips an unreachable gateway and routes the call through a live one", async () => {
@@ -56,7 +55,6 @@ describe("client gateway discovery + failover (in-process)", () => {
     await silo.start();
     const client = createClient({
       clusterId: CLUSTER,
-      local: clientAddr,
       transport: new InProcessTransport(network, CLUSTER),
       // The dead gateway is tried first (round-robin); the client must fail over.
       gateways: staticGatewayProvider([dead, siloAddr]),
@@ -87,7 +85,6 @@ describe("client gateway discovery + failover (in-process)", () => {
     await silo.start();
     const client = createClient({
       clusterId: CLUSTER,
-      local: clientAddr,
       transport: new InProcessTransport(network, CLUSTER),
       gateways: membershipGatewayProvider(membership),
     }).registerGrain(EchoGrain, { interfaces: [IEcho] });
@@ -104,7 +101,6 @@ describe("client gateway discovery + failover (in-process)", () => {
 describe("client over real WebSocket sockets", () => {
   it("routes a call through a membership-discovered gateway", async () => {
     const siloPort = await freePort();
-    const clientPort = await freePort();
     const siloAddr = new SiloAddress("silo-0", "uid-0", `127.0.0.1:${siloPort}`);
     const membership = new StaticMembershipService(siloAddr, [siloAddr]);
     const silo = new ClusterNode({
@@ -118,7 +114,6 @@ describe("client over real WebSocket sockets", () => {
     await silo.start();
     const client = createClient({
       clusterId: CLUSTER,
-      local: new SiloAddress("client", "uid-c", `127.0.0.1:${clientPort}`),
       transport: new WebSocketTransport(CLUSTER),
       gateways: membershipGatewayProvider(membership),
       callTimeoutMs: 2000,
@@ -126,7 +121,7 @@ describe("client over real WebSocket sockets", () => {
     await client.connect();
     try {
       // The whole path runs over real sockets: client → gateway → activation, and
-      // the reply over a reverse connection back to the client's own listener.
+      // the reply down the very socket the client dialled — the client never listens.
       expect(await client.getGrain(IEcho, "x").echo("over-sockets")).toBe("over-sockets");
     } finally {
       await client.close();

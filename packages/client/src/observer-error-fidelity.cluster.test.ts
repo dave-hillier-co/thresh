@@ -97,7 +97,6 @@ async function withClientAndSilo(
 ): Promise<void> {
   const network = new InProcessNetwork();
   const siloAddr = new SiloAddress("silo-1", "uid-1", "silo-1:11111");
-  const clientAddr = new SiloAddress("client", "uid-c", "client:22222");
   const silo = new ClusterNode({
     local: siloAddr,
     clusterId: CLUSTER,
@@ -109,7 +108,6 @@ async function withClientAndSilo(
   await silo.start();
   const client = createClient({
     clusterId: CLUSTER,
-    local: clientAddr,
     transport: new InProcessTransport(network, CLUSTER),
     gateway: siloAddr,
   }).registerGrain(PokerGrain, { interfaces: [IPokerGrain] });

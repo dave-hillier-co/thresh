@@ -7,6 +7,14 @@ import { defineGrainInterface } from "@thresh/core/grain-interface";
 import type { GrainKey } from "@thresh/core/key-kinds";
 import { SiloAddress } from "@thresh/core/silo-address";
 import { InProcessNetwork, InProcessTransport } from "@thresh/messaging/in-process-transport";
+import type {
+  Connection,
+  ConnectionAcceptHandler,
+  ConnectionPreamble,
+  Listener,
+  MessageHandler,
+  Transport,
+} from "@thresh/messaging/transport";
 import { ClusterNode } from "@thresh/runtime/cluster-node";
 import { StaticMembershipService } from "@thresh/runtime/static-membership";
 import { staticGatewayProvider } from "@thresh/client/gateway-provider";
@@ -22,6 +30,52 @@ interface IUnregistered extends GrainKey<string> {
   ping(): Promise<void>;
 }
 const IUnregistered = defineGrainInterface<IUnregistered>("IUnregistered.client");
+
+interface IEventObserver extends GrainKey<string> {
+  onEvent(text: string): Promise<string>;
+}
+const IEventObserver = defineGrainInterface<IEventObserver>("IEventObserver.client-node-test");
+
+interface ISubscriberGrain extends GrainKey<string> {
+  subscribe(observer: IEventObserver): Promise<void>;
+  poke(text: string): Promise<string>;
+}
+const ISubscriberGrain = defineGrainInterface<ISubscriberGrain>(
+  "ISubscriberGrain.client-node-test",
+);
+
+@grain()
+class SubscriberGrain extends Grain implements ISubscriberGrain {
+  private observer: IEventObserver | undefined;
+  async subscribe(observer: IEventObserver): Promise<void> {
+    this.observer = observer;
+  }
+  async poke(text: string): Promise<string> {
+    if (this.observer === undefined) throw new Error("no observer subscribed");
+    return this.observer.onEvent(text);
+  }
+}
+
+/** Wraps a `Transport`, recording every address `listen()` is called with. */
+class ListenSpyTransport implements Transport {
+  readonly listenCalls: unknown[] = [];
+  constructor(private readonly inner: Transport) {}
+  listen(
+    address: Parameters<Transport["listen"]>[0],
+    onMessage: MessageHandler,
+    onAccept?: ConnectionAcceptHandler,
+  ): Promise<Listener> {
+    this.listenCalls.push(address);
+    return this.inner.listen(address, onMessage, onAccept);
+  }
+  connect(
+    to: Parameters<Transport["connect"]>[0],
+    preamble: ConnectionPreamble,
+    onMessage?: MessageHandler,
+  ): Promise<Connection> {
+    return this.inner.connect(to, preamble, onMessage);
+  }
+}
 
 interface IWaiter extends GrainKey<string> {
   wait(token: GrainCancellationToken): Promise<void>;
@@ -60,7 +114,6 @@ class CounterGrain extends Grain implements ICounter {
 
 const CLUSTER = "c1";
 const gatewayAddr = new SiloAddress("gateway", "uid-g", "gateway:11111");
-const clientAddr = new SiloAddress("client", "uid-c", "client:22222");
 
 function startGateway(network: InProcessNetwork): ClusterNode {
   const gateway = new ClusterNode({
@@ -81,7 +134,6 @@ describe("external client", () => {
     await gateway.start();
     const client = createClient({
       clusterId: CLUSTER,
-      local: clientAddr,
       transport: new InProcessTransport(network, CLUSTER),
       gateway: gatewayAddr,
     }).registerGrain(CounterGrain, { interfaces: [ICounter] });
@@ -103,7 +155,6 @@ describe("external client", () => {
     await gateway.start();
     const client = createClient({
       clusterId: CLUSTER,
-      local: clientAddr,
       transport: new InProcessTransport(network, CLUSTER),
       gateway: gatewayAddr,
     }).registerGrain(CounterGrain, { interfaces: [ICounter] });
@@ -127,7 +178,6 @@ describe("external client", () => {
     const delays: number[] = [];
     const client = createClient({
       clusterId: CLUSTER,
-      local: clientAddr,
       transport: new InProcessTransport(network, CLUSTER),
       gateways: staticGatewayProvider(dead),
       delay: async (ms: number) => {
@@ -168,7 +218,6 @@ describe("external client", () => {
       const callTimeoutMs = 300;
       const client = createClient({
         clusterId: CLUSTER,
-        local: clientAddr,
         transport: new InProcessTransport(network, CLUSTER),
         gateways: staticGatewayProvider(blackHoles),
         callTimeoutMs,
@@ -209,7 +258,6 @@ describe("external client", () => {
     await gateway.start();
     const client = createClient({
       clusterId: CLUSTER,
-      local: clientAddr,
       transport: new InProcessTransport(network, CLUSTER),
       gateway: gatewayAddr,
     }).registerGrain(WaiterGrain, { interfaces: [IWaiter] });
@@ -231,10 +279,48 @@ describe("external client", () => {
   it("rejects getGrain for an interface the client did not register", async () => {
     const client = createClient({
       clusterId: CLUSTER,
-      local: clientAddr,
       transport: new InProcessTransport(new InProcessNetwork(), CLUSTER),
       gateway: gatewayAddr,
     });
     expect(() => client.getGrain(IUnregistered, "z")).toThrow(/no grain registered/);
+  });
+
+  it("never listens: a grain call completes and a push to a client-hosted observer arrives, over the one connection the client dialled (issue #65)", async () => {
+    const network = new InProcessNetwork();
+    const gateway = startGateway(network);
+    gateway.registerGrain(SubscriberGrain, { interfaces: [ISubscriberGrain] });
+    await gateway.start();
+
+    const spyTransport = new ListenSpyTransport(new InProcessTransport(network, CLUSTER));
+    const client = createClient({
+      clusterId: CLUSTER,
+      transport: spyTransport,
+      gateway: gatewayAddr,
+    })
+      .registerGrain(CounterGrain, { interfaces: [ICounter] })
+      .registerGrain(SubscriberGrain, { interfaces: [ISubscriberGrain] });
+    await client.connect();
+    try {
+      // An ordinary call still completes — the reply arrives down the socket
+      // the client dialled, never on a listener.
+      expect(await client.getGrain(ICounter, "x").increment(4)).toBe(4);
+
+      const received: string[] = [];
+      const ref = client.createObjectReference(IEventObserver, {
+        onEvent: async (text: string) => {
+          received.push(text);
+          return `ack:${text}`;
+        },
+      });
+      const grain = gateway.getGrain(ISubscriberGrain, "sub");
+      await grain.subscribe(ref);
+      expect(await grain.poke("hello")).toBe("ack:hello");
+      expect(received).toEqual(["hello"]);
+
+      expect(spyTransport.listenCalls).toHaveLength(0);
+    } finally {
+      await client.close();
+      await gateway.stop();
+    }
   });
 });

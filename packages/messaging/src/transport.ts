@@ -20,7 +20,7 @@ export interface Listener {
 }
 
 export interface Connection {
-  /** Fire-and-forget; responses arrive as inbound messages on the listener. */
+  /** Fire-and-forget; a response to a dialler arrives on its `onMessage` hook, not here. */
   send(message: Message): void;
   close(reason?: string): Promise<void>;
 }
@@ -28,12 +28,17 @@ export interface Connection {
 /**
  * Fires once per accepted inbound connection, giving the listener the peer's
  * preamble and a duplex `Connection` it can hold to reach that peer later
- * (mirroring how Orleans' gateway learns a client connection on accept).
+ * (mirroring how Orleans' gateway learns a client connection on accept). The
+ * connection writes back down the ACCEPTED socket — this is the peer's own
+ * reachability, not a separate dial to an address it advertised.
  */
 export type ConnectionAcceptHandler = (
   preamble: ConnectionPreamble,
   connection: Connection,
 ) => void;
+
+/** Current preamble wire version. Bump (and validate on accept) whenever the duplex contract changes. */
+export const PROTOCOL_VERSION = 2;
 
 /** Abstracts silo-to-silo and client-to-silo message transport. */
 export interface Transport {
@@ -42,5 +47,16 @@ export interface Transport {
     onMessage: MessageHandler,
     onAccept?: ConnectionAcceptHandler,
   ): Promise<Listener>;
-  connect(to: SiloAddress, preamble: ConnectionPreamble): Promise<Connection>;
+  /**
+   * Dial `to`. When `onMessage` is supplied, every frame the peer sends back
+   * down THIS socket after the preamble ack is delivered to it — this is what
+   * makes the dialled connection duplex: a silo answering a client, or
+   * pushing to a client-hosted observer, does so over the socket the client
+   * dialled, never by dialling the client back.
+   */
+  connect(
+    to: SiloAddress,
+    preamble: ConnectionPreamble,
+    onMessage?: MessageHandler,
+  ): Promise<Connection>;
 }

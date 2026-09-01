@@ -56,7 +56,6 @@ describe("an AbortSignal nested inside an argument to a client-hosted observer",
   it("arrives at the hosted object as a real AbortSignal", async () => {
     const network = new InProcessNetwork();
     const siloAddr = new SiloAddress("silo-1", "uid-1", "silo-1:11111");
-    const clientAddr = new SiloAddress("client", "uid-c", "client:22222");
     const silo = new ClusterNode({
       local: siloAddr,
       clusterId: CLUSTER,
@@ -69,7 +68,6 @@ describe("an AbortSignal nested inside an argument to a client-hosted observer",
 
     const client = createClient({
       clusterId: CLUSTER,
-      local: clientAddr,
       transport: new InProcessTransport(network, CLUSTER),
       gateway: siloAddr,
     }).registerGrain(SubscriberGrain, { interfaces: [ISubscriberGrain] });

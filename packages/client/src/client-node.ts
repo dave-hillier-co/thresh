@@ -44,7 +44,7 @@ import type { GrainType } from "@thresh/core/grain-type";
 import type { KeyTypeOf } from "@thresh/core/key-kinds";
 import type { InvocationRequest } from "@thresh/core/request";
 import { requestContextStore, runWithRequestContext } from "@thresh/core/request-context";
-import type { SiloAddress } from "@thresh/core/silo-address";
+import { SiloAddress } from "@thresh/core/silo-address";
 import { ConnectionManager } from "@thresh/messaging/connection-manager";
 import { CorrelationTable } from "@thresh/messaging/correlation-table";
 import {
@@ -55,7 +55,7 @@ import {
 } from "@thresh/messaging/message";
 import { MessagePackSerializer } from "@thresh/messaging/msgpack-serializer";
 import type { Serializer } from "@thresh/messaging/serializer";
-import type { Listener, Transport } from "@thresh/messaging/transport";
+import type { Transport } from "@thresh/messaging/transport";
 import { BroadcastChannelProviderImpl } from "@thresh/runtime/broadcast-channel-provider";
 import { ICancellationSourcesExtension } from "@thresh/runtime/cancellation-extension";
 import type { Dispatcher } from "@thresh/runtime/dispatcher";
@@ -67,8 +67,6 @@ import { staticGatewayProvider, type GatewayListProvider } from "@thresh/client/
 
 export interface ClientConfig {
   clusterId: string;
-  /** The client's own reachable address — replies flow back over a connection to it. */
-  local: SiloAddress;
   transport: Transport;
   /**
    * A single fixed gateway silo to route every call through. Shorthand for a
@@ -141,8 +139,10 @@ interface LocalObjectEntry {
 /**
  * An external client (docs/11). It is not a silo — it hosts no grains — but it
  * uses the same `getGrain` proxy mechanism, forwarding every call to a gateway
- * silo, which routes it to the grain's activation and replies. The client must
- * be reachable (it listens) so the gateway can return responses.
+ * silo, which routes it to the grain's activation and replies. The client
+ * never listens (Orleans' duplex gateway model): a reply, and any push to a
+ * client-hosted observer, arrives on the very socket this client dialled to
+ * the gateway, delivered through the `onMessage` hook it hands `connect`.
  */
 export class ClientNode implements Dispatcher {
   private readonly interfaceToGrainType = new Map<number, GrainType>();
@@ -165,27 +165,30 @@ export class ClientNode implements Dispatcher {
    */
   private readonly cancellationControllers = new Map<string, AbortController>();
   private readonly incomingCallFilters: readonly IncomingGrainCallFilter[];
-  private listener: Listener | undefined;
   /**
-   * The address this client tells a gateway to reach it on. Starts as the
-   * configured `local` and is replaced by the listener's BOUND address in
-   * `connect()`: a client asking for an ephemeral port (endpoint `host:0`,
-   * which is how a silo provisions its embedded client leg) does not know its
-   * own address until the listener binds, and every message it sends carries
-   * that address as `sendingSilo` for the peer to reply to.
+   * This client's identity address, stamped as `sendingSilo` on every
+   * outbound message and as `siloAddress` in the preamble. It is synthetic
+   * and never dialled — this client has no listener to advertise — under the
+   * `client:` scheme, which cannot collide with a real silo endpoint
+   * (`host:port`) or be mistaken for one.
    */
-  private localAddress: SiloAddress;
+  private readonly localAddress: SiloAddress;
 
   constructor(private readonly config: ClientConfig) {
-    this.localAddress = config.local;
     this.callTimeoutMs = config.callTimeoutMs ?? 30_000;
     this.clientId = config.clientId ?? createClientId();
     this.incomingCallFilters = config.incomingCallFilters ?? [];
+    this.localAddress = new SiloAddress(
+      "client",
+      this.clientId.toString(),
+      `client:${this.clientId.toString()}`,
+    );
     this.connections = new ConnectionManager(
       config.transport,
-      config.local,
+      this.localAddress,
       config.clusterId,
       this.clientId,
+      (m) => this.onMessage(m),
     );
     this.serializer =
       config.serializer ??
@@ -235,14 +238,8 @@ export class ClientNode implements Dispatcher {
     return this;
   }
 
-  /** Begin listening for replies and learn the initial gateway set; resolves once reachable. */
+  /** Learn the initial gateway set and eagerly dial one; resolves once reachable. This client never listens. */
   async connect(): Promise<this> {
-    this.listener = await this.config.transport.listen(this.config.local, (m) => this.onMessage(m));
-    // Adopt the address the listener actually bound, before any gateway is
-    // dialled: with an ephemeral port the configured `local` is a placeholder
-    // and the peer would reply to a port nothing listens on.
-    this.localAddress = this.listener.address;
-    this.connections.setSelf(this.localAddress);
     await this.gateways.refresh();
     // Eagerly open a connection to a gateway so its `onAccept` fires and the
     // client-directory gossip runs immediately, rather than waiting for the
@@ -338,7 +335,6 @@ export class ClientNode implements Dispatcher {
   }
 
   async close(): Promise<void> {
-    await this.listener?.close();
     await this.connections.closeAll();
   }
 

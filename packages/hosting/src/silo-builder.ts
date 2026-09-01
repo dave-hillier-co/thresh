@@ -14,7 +14,7 @@ import {
 } from "@thresh/core/grain-registration";
 import type { KeyTypeOf } from "@thresh/core/key-kinds";
 import type { MembershipService } from "@thresh/core/membership";
-import { SiloAddress } from "@thresh/core/silo-address";
+import type { SiloAddress } from "@thresh/core/silo-address";
 import type { CompatibilityKind } from "@thresh/core/version-compatibility";
 import type { VersionSelectorKind } from "@thresh/core/version-selector";
 import {
@@ -260,12 +260,9 @@ export interface GrainFactoryAccess {
   /**
    * Host a client-style observer reachable from any grain call made during
    * this (or a later) startup task. Backed by an embedded `ClientNode` created
-   * lazily on first use and gatewayed through this same silo, over whichever
-   * transport the silo itself runs: in-process it takes a distinct endpoint on
-   * the shared network, over WebSocket an ephemeral port on the silo's own
-   * host. A silo that depends on the seam should declare
-   * `SiloBuilder.requireObserverHosting()`, which moves the failure for a
-   * transport that cannot back it from here to `build()`.
+   * lazily on first use and gatewayed through this same silo, reusing
+   * whichever `Transport` the silo itself was built with — dialling needs no
+   * listener, so the seam is backed on ANY transport (issue #65).
    */
   createObjectReference<T>(def: GrainInterface<T>, obj: object): T;
   deleteObjectReference(ref: object): void;
@@ -317,8 +314,6 @@ export class SiloBuilder {
   private readonly starters: Array<() => Promise<void>> = [];
   private readonly closers: Array<() => Promise<void>> = [];
   private readonly startupTasks: Array<(grains: GrainFactoryAccess) => Promise<void>> = [];
-  private inProcessNetwork: InProcessNetwork | undefined;
-  private observerHostingRequired = false;
   private readonly pullingStreams: PullingStreamProviderHost[] = [];
   private readonly memoryStreams: Array<{
     provider: MemoryStreamProvider;
@@ -331,47 +326,6 @@ export class SiloBuilder {
   private logger: Logger | undefined;
 
   constructor(private readonly config: SiloConfig) {}
-
-  /**
-   * How the embedded `ClientNode` that backs `GrainFactoryAccess.createObjectReference`
-   * gets onto this silo's own network, or `undefined` when the configured
-   * transport cannot give it one.
-   *
-   * Both shapes advertise a placeholder endpoint that the client replaces with
-   * its listener's BOUND address in `connect()`:
-   *
-   * - in-process: a distinct endpoint on the shared `InProcessNetwork`, which
-   *   is just a map key, so the `#embedded-client` suffix is the whole of it;
-   * - WebSocket: port `0` on the SAME host the silo itself binds, so the OS
-   *   picks a free port and `WebSocketTransport.listen` reports it back. The
-   *   client leg only ever has to be reachable from its gateway — this silo, in
-   *   this process — because a call for a client-hosted object is routed to the
-   *   client's gateway silo first (`ClusterNode.routeToClient`), never dialled
-   *   directly by another silo.
-   */
-  private embeddedClientLeg(): { transport: Transport; address: SiloAddress } | undefined {
-    const { local } = this.config;
-    const address = (endpoint: string) =>
-      new SiloAddress(
-        `${local.podName}-embedded-client`,
-        `${local.podUid}-embedded-client`,
-        endpoint,
-      );
-    if (this.inProcessNetwork !== undefined) {
-      return {
-        transport: new InProcessTransport(this.inProcessNetwork, this.config.clusterId),
-        address: address(`${local.endpoint}#embedded-client`),
-      };
-    }
-    if (this.transport instanceof WebSocketTransport) {
-      const host = local.endpoint.slice(0, local.endpoint.lastIndexOf(":"));
-      return {
-        transport: new WebSocketTransport(this.config.clusterId),
-        address: address(`${host}:0`),
-      };
-    }
-    return undefined;
-  }
 
   /**
    * This silo's logical service identity (Orleans `ClusterOptions.ServiceId`),
@@ -1117,7 +1071,6 @@ export class SiloBuilder {
 
   useInProcessTransport(network: InProcessNetwork): this {
     this.transport = new InProcessTransport(network, this.config.clusterId);
-    this.inProcessNetwork = network;
     return this;
   }
 
@@ -1200,40 +1153,19 @@ export class SiloBuilder {
 
   /**
    * Declare that this silo's startup tasks host observer objects
-   * (`GrainFactoryAccess.createObjectReference`), so that a transport which
-   * cannot back that seam is rejected at `build()` rather than at the first
-   * call.
-   *
-   * There is no Orleans counterpart: `IGrainFactory.CreateObjectReference`
-   * works on every Orleans silo, because an Orleans client leg is duplex over
-   * its own outbound connection. Thresh's embedded client is a real
-   * `ClientNode` that LISTENS on its own endpoint — the silo dials it back to
-   * deliver a call — so it can only be gatewayed through an in-process
-   * network today; see `docs/deviations.md`. Declaring the requirement is how
-   * a silo that needs the seam finds that out at build, instead of shipping
-   * green tests (where `TestCluster` always configures an in-process
-   * transport) and failing on the first observer call in production.
-   *
-   * Purely additive: a silo that does not declare it behaves exactly as
-   * before, including the lazy throw from `createObjectReference`.
+   * (`GrainFactoryAccess.createObjectReference`). Kept as API for existing
+   * callers (e.g. BeneDB): every transport now backs the seam (issue #65 —
+   * the embedded client dials, and dialling needs no listener), so there is
+   * nothing left for this to reject at `build()`. Purely additive; a silo
+   * that does not declare it behaves exactly the same.
    */
   requireObserverHosting(): this {
-    this.observerHostingRequired = true;
     return this;
   }
 
   build(): SiloHost {
     if (this.membership === undefined) throw new Error("silo: no membership configured");
     if (this.transport === undefined) throw new Error("silo: no transport configured");
-    if (this.observerHostingRequired && this.embeddedClientLeg() === undefined) {
-      throw new Error(
-        "silo: requireObserverHosting() was declared, but the configured transport cannot back " +
-          "the observer seam. GrainFactoryAccess.createObjectReference is hosted by an embedded " +
-          "ClientNode that needs a listening leg on this silo's own network; " +
-          "useInProcessTransport(network) and useWebSocketTransport() both provide one. Drop " +
-          "requireObserverHosting() if no startup task calls createObjectReference.",
-      );
-    }
     validateClassSpecificCollectionAges(this.config.classSpecificCollectionAgeSeconds);
     const health = new HealthCheck();
     const storage = this.storage;
@@ -1519,28 +1451,22 @@ export class SiloBuilder {
 
     // Backs `GrainFactoryAccess.createObjectReference` for startup tasks:
     // built lazily (only if a startup task actually runs), reusing this
-    // silo's own in-process network as its gateway. See `GrainFactoryAccess`.
+    // silo's own transport and gatewayed through this same silo. See
+    // `GrainFactoryAccess`.
     let embeddedClient: ClientNode | undefined;
     const local = this.config.local;
     const clusterId = this.config.clusterId;
     const registrations = this.registrations;
-    const embeddedLeg = this.embeddedClientLeg();
+    // Non-null: `build()` already rejected an undefined transport above.
+    const transport = this.transport as Transport;
     const closers = this.closers;
     const incomingCallFilters = this.incomingCallFilters;
     const outgoingCallFilters = this.outgoingCallFilters;
     const ensureEmbeddedClient = async (): Promise<void> => {
-      // Needs a transport that can give the client a listening leg on this
-      // silo's network — both of the transports the builder configures can, so
-      // this only returns early for a silo built with neither.
-      // `createObjectReference` below then throws lazily (only if actually
-      // called) rather than failing every startup task, most of which never
-      // touch the observer seam; `requireObserverHosting()` is the opt-in that
-      // turns that into a build-time failure for a silo that does depend on it.
-      if (embeddedClient !== undefined || embeddedLeg === undefined) return;
+      if (embeddedClient !== undefined) return;
       const client = createClientNode({
         clusterId,
-        local: embeddedLeg.address,
-        transport: embeddedLeg.transport,
+        transport,
         gateway: local,
         // Symmetrical with the node's own filters (`ClusterNode`'s
         // `incomingCallFilters`/`outgoingCallFilters` above): a call INTO an
@@ -1562,11 +1488,8 @@ export class SiloBuilder {
       createObjectReference: (def, obj) => {
         if (embeddedClient === undefined) {
           throw new Error(
-            "GrainFactoryAccess.createObjectReference from a startup task requires a transport " +
-              "that can give this silo's embedded client a listening leg; " +
-              "useInProcessTransport(network) and useWebSocketTransport() both do. Declare " +
-              "requireObserverHosting() on the builder to fail at build() instead of here, on " +
-              "the first observer call.",
+            "GrainFactoryAccess.createObjectReference was called before the embedded client " +
+              "connected; call it from (or after) a startup task, which awaits connect() first.",
           );
         }
         return embeddedClient.createObjectReference(def, obj);

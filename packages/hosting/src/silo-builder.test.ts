@@ -227,13 +227,12 @@ describe("SiloBuilder observer hosting (createObjectReference from a startup tas
   });
 
   it("builds a WebSocket silo that declares the observer seam", () => {
-    // This used to throw: the embedded client leg existed only over an
-    // in-process network, and the build-time refusal was how that limitation
-    // announced itself instead of a lazy throw on the first observer call.
-    // Issue #55 removed the limitation — a WebSocket-hosted silo now
-    // auto-provisions an ephemeral listening port for the leg — so the
-    // declaration is satisfied rather than rejected. The push path itself is
-    // proved over real sockets further down.
+    // This used to throw: the embedded client leg's gate accepted only the
+    // two transports the builder itself knew how to give a listening leg to.
+    // Issue #65 removed the client leg's listener entirely — the embedded
+    // client dials the silo, and dialling needs no listener — so there is
+    // nothing left to gate on, and `requireObserverHosting()` never rejects.
+    // The push path itself is proved over real sockets further down.
     expect(() =>
       createSilo({ clusterId: "c1", local })
         .useStaticMembership([local])
@@ -297,12 +296,11 @@ class NotifierGrain extends Grain implements INotifier {
 describe("SiloBuilder observer hosting over real WebSocket sockets (issue #55)", () => {
   it("pushes to an observer a startup task hosted on a WebSocket-transport silo", async () => {
     // A TestCluster cannot see this: it always configures an in-process
-    // transport, where the reverse connection the gateway holds is an
-    // address-keyed route back into the client's own listener, free of charge.
-    // Over real sockets the client identity has to earn one — an ephemeral
-    // port it binds and then ADVERTISES, since the gateway pushes by dialling
-    // that endpoint rather than writing back down the accepted socket. That is
-    // the whole of #55.
+    // transport, so the wire-level mechanism silo-builder.test.ts's own
+    // in-process tests exercise never runs over real sockets. This proves the
+    // same behaviour #55 pinned survives #65's duplex rewrite: the silo pushes
+    // to the observer down the very socket the embedded client dialled to
+    // reach it, never by dialling the client back.
     const port = await freePort();
     const address = new SiloAddress("silo-ws", "uid-ws", `127.0.0.1:${port}`);
     const received: string[] = [];

@@ -127,12 +127,6 @@ export interface TestClusterOptions {
   network?: InProcessNetwork;
 }
 
-/**
- * Distinguishes the client endpoints of clusters sharing one
- * `InProcessNetwork`, since an endpoint string is the network's map key.
- */
-let nextClientIndex = 0;
-
 export interface TestSiloHandle {
   readonly index: number;
   readonly address: SiloAddress;
@@ -253,16 +247,8 @@ export class TestCluster {
     if (membership === undefined || this.live.length === 0) {
       throw new Error("TestCluster has no live silos");
     }
-    const index = nextClientIndex;
-    nextClientIndex += 1;
-    const local = new SiloAddress(
-      `test-client-${index}`,
-      `uid-client-${index}`,
-      `test-client-${index}:22222`,
-    );
     const client = createClient({
       clusterId: this.clusterId,
-      local,
       transport: new InProcessTransport(this.network, this.clusterId),
       // Every live silo is a gateway, the way Orleans' test client shares the
       // silos' membership table: a cluster that kills or restarts its primary
@@ -359,8 +345,8 @@ export class TestCluster {
    *
    * The cluster client (if one was ever created) is closed FIRST, matching
    * Orleans' `StopAllSilosAsync`, which calls `StopClusterClientAsync` before
-   * stopping any silo: a client outliving its gateway leaves a listener on the
-   * network with nothing to serve it.
+   * stopping any silo: a client outliving its gateway would otherwise start
+   * failing every call the instant its gateway stops mid-close.
    */
   async dispose(): Promise<void> {
     if (this.disposed) return;

@@ -431,6 +431,15 @@ export class ClusterNode {
   private readonly clientDirectory = new ClientDirectory();
   /** Connections held open to clients accepted on this silo, keyed by `clientId.toString()`. */
   private readonly clientConnections = new Map<string, Connection>();
+  /**
+   * The same held connections, keyed by the client's synthetic identity
+   * endpoint (`preamble.siloAddress.endpoint`) instead of its `clientId`. This
+   * is what `reply()` consults: a client's `SiloAddress` is never dialable
+   * (issue #65 — the client leg no longer listens), so answering one means
+   * writing back down the accepted connection it is already holding open,
+   * found by the address it stamped as `sendingSilo`.
+   */
+  private readonly clientConnectionsByEndpoint = new Map<string, Connection>();
   /** This silo's (test-hooks-latched) CPU-usage source (Orleans `TestHooksEnvironmentStatisticsProvider`). */
   private readonly environmentStatistics = new TestHooksEnvironmentStatisticsProvider();
   /** Decides whether this silo is currently shedding load (Orleans `OverloadDetector`). */
@@ -539,7 +548,13 @@ export class ClusterNode {
     this.partition = new LocalDirectoryPartition((silo) =>
       activeSilos(options.membership.current()).some((s) => s.equals(silo)),
     );
-    this.connections = new ConnectionManager(options.transport, options.local, options.clusterId);
+    this.connections = new ConnectionManager(
+      options.transport,
+      options.local,
+      options.clusterId,
+      undefined,
+      (m) => this.onMessage(m),
+    );
     this.factory = new GrainFactory(
       (interfaceId) => this.resolveGrainType(interfaceId),
       time,
@@ -1575,15 +1590,19 @@ export class ClusterNode {
   /**
    * Fires when the transport accepts an inbound connection. A plain silo peer
    * carries no `clientId` in its preamble — ignore it (silo-to-silo traffic
-   * uses `onMessage` directly, not this hook). A client connection is held so
-   * this silo could reach it (Orleans' gateway learning a connected client),
-   * recorded in the local `ClientDirectory`, and gossiped to every other
-   * active silo so the whole cluster learns which gateway the client is on.
+   * uses `onMessage` directly, not this hook). A client connection is held —
+   * by `clientId` AND by its synthetic identity endpoint, since `reply()`
+   * only has the latter to look up — so this silo can answer it and push to
+   * its client-hosted observers down the SAME socket the client dialled
+   * (Orleans' duplex gateway model), recorded in the local `ClientDirectory`,
+   * and gossiped to every other active silo so the whole cluster learns which
+   * gateway the client is on.
    */
   private onClientAccept(preamble: ConnectionPreamble, connection: Connection): void {
     const clientId = preamble.clientId;
     if (clientId === undefined) return;
     this.clientConnections.set(clientId.toString(), connection);
+    this.clientConnectionsByEndpoint.set(preamble.siloAddress.endpoint, connection);
     this.clientDirectory.register(clientId, this.options.local);
     this.broadcastClientGossip({ op: "register", clientId, gateway: this.options.local });
   }
@@ -2702,8 +2721,20 @@ export class ClusterNode {
     };
   }
 
+  /**
+   * Answer `to`, preferring a held accepted connection over dialling. A
+   * client's address is never dialable (issue #65) so a reply to one always
+   * takes this path, resolved by `clientConnectionsByEndpoint`; a silo peer's
+   * address IS dialable, so a miss here just falls through to the normal
+   * dial-and-pool path unchanged.
+   */
   private async reply(to: SiloAddress, message: Message): Promise<void> {
     try {
+      const held = this.clientConnectionsByEndpoint.get(to.endpoint);
+      if (held !== undefined) {
+        held.send(message);
+        return;
+      }
       const conn = await this.connections.get(to);
       conn.send(message);
     } catch {

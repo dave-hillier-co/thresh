@@ -13,7 +13,7 @@ const A = new SiloAddress("silo-A", "ua", "a:1");
 const B = new SiloAddress("silo-B", "ub", "b:1");
 const ser = new JsonSerializer();
 const preamble = (self: SiloAddress, clusterId = CLUSTER): ConnectionPreamble => ({
-  protocolVersion: 1,
+  protocolVersion: 2,
   siloAddress: self,
   clusterId,
 });
@@ -92,6 +92,17 @@ describe("in-process transport + correlation table", () => {
     await expect(transportA.connect(B, preamble(A))).rejects.toBeInstanceOf(RejectionError);
   });
 
+  it("rejects a dialler whose preamble carries an old protocol version", async () => {
+    const net = new InProcessNetwork();
+    const transportA = new InProcessTransport(net, CLUSTER);
+    const transportB = new InProcessTransport(net, CLUSTER);
+    await transportB.listen(B, () => undefined);
+
+    await expect(
+      transportA.connect(B, { ...preamble(A), protocolVersion: 1 }),
+    ).rejects.toBeInstanceOf(RejectionError);
+  });
+
   it("times out a call whose response never arrives", async () => {
     let fire: (() => void) | undefined;
     const fakeTimer: CorrelationTimer = {
@@ -123,7 +134,7 @@ describe("in-process transport onAccept hook", () => {
     await expect(transportA.connect(B, preamble(A))).resolves.toBeDefined();
   });
 
-  it("fires onAccept with the preamble (including clientId) and the held connection can reach the connecting peer", async () => {
+  it("fires onAccept with the preamble (including clientId) and the held connection reaches the dialler's onMessage hook, never a listener", async () => {
     const net = new InProcessNetwork();
     const gatewayTransport = new InProcessTransport(net, CLUSTER);
     const clientTransport = new InProcessTransport(net, CLUSTER);
@@ -142,17 +153,99 @@ describe("in-process transport onAccept hook", () => {
         heldConnection = connection;
       },
     );
-    await clientTransport.listen(client, (msg) => {
+
+    await clientTransport.connect(B, { ...preamble(client), clientId }, (msg) => {
       clientReceived = ser.deserialize<number>(msg.body);
     });
 
-    await clientTransport.connect(B, { ...preamble(client), clientId });
-
     expect(receivedPreamble?.clientId).toEqual(clientId);
     expect(heldConnection).toBeDefined();
+    expect(net.lookup(client)).toBeUndefined(); // the dialler never listens
 
     heldConnection?.send(request(nextCorrelationId(), "oneWay", ser.serialize(99)));
     await new Promise((r) => setTimeout(r, 0));
     expect(clientReceived).toBe(99);
+  });
+});
+
+describe("in-process transport duplex connect", () => {
+  it("delivers a push down the dialled connection to the dialler's onMessage hook, with the dialler never registered on the network", async () => {
+    const net = new InProcessNetwork();
+    const gatewayTransport = new InProcessTransport(net, CLUSTER);
+    const clientTransport = new InProcessTransport(net, CLUSTER);
+    const client = new SiloAddress("client", "u-client", "client:never-registered");
+    let heldConnection: Awaited<ReturnType<InProcessTransport["connect"]>> | undefined;
+    let pushed: number | undefined;
+
+    await gatewayTransport.listen(
+      B,
+      () => undefined,
+      (_preambleIn, connection) => {
+        heldConnection = connection;
+      },
+    );
+
+    await clientTransport.connect(B, preamble(client), (msg) => {
+      pushed = ser.deserialize<number>(msg.body);
+    });
+
+    expect(heldConnection).toBeDefined();
+    expect(net.lookup(client)).toBeUndefined(); // the dialler never listens
+
+    heldConnection?.send(request(nextCorrelationId(), "oneWay", ser.serialize(55)));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(pushed).toBe(55);
+  });
+
+  it("completes a request/response round trip entirely over the dialled connection, without either side calling listen", async () => {
+    const net = new InProcessNetwork();
+    const gatewayTransport = new InProcessTransport(net, CLUSTER);
+    const clientTransport = new InProcessTransport(net, CLUSTER);
+    const client = new SiloAddress("client", "u-client", "client:round-trip");
+    const table = new CorrelationTable();
+    let heldConnection: Awaited<ReturnType<InProcessTransport["connect"]>> | undefined;
+
+    await gatewayTransport.listen(
+      B,
+      () => undefined,
+      (_preambleIn, connection) => {
+        heldConnection = connection;
+      },
+    );
+
+    await clientTransport.connect(B, preamble(client), (msg) => {
+      table.complete(msg);
+    });
+
+    const corr = nextCorrelationId();
+    const pending = table.register(corr, 2000);
+    heldConnection?.send(
+      responseTo(request(corr, "request", ser.serialize(0)), "success", ser.serialize(42), B),
+    );
+
+    const response = await pending;
+    expect(ser.deserialize<number>(response.body)).toBe(42);
+  });
+
+  it("throws a RejectionError(unknownTarget) from the accepted connection's send when the dialler passed no onMessage", async () => {
+    const net = new InProcessNetwork();
+    const gatewayTransport = new InProcessTransport(net, CLUSTER);
+    const clientTransport = new InProcessTransport(net, CLUSTER);
+    const client = new SiloAddress("client", "u-client", "client:no-hook");
+    let heldConnection: Awaited<ReturnType<InProcessTransport["connect"]>> | undefined;
+
+    await gatewayTransport.listen(
+      B,
+      () => undefined,
+      (_preambleIn, connection) => {
+        heldConnection = connection;
+      },
+    );
+
+    await clientTransport.connect(B, preamble(client)); // no onMessage passed
+
+    expect(() =>
+      heldConnection?.send(request(nextCorrelationId(), "oneWay", ser.serialize(1))),
+    ).toThrow(RejectionError);
   });
 });

@@ -239,35 +239,6 @@ sweep at or after its age elapses. Adopting Orleans' rule would reject a configu
 behaves correctly here, and would break the short ages tests legitimately configure against the
 default 60s sweep.
 
-## A client leg listens; it is not duplex over its outbound connection
-
-Orleans' client leg is **duplex over its own outbound connection**: the gateway answers a client on
-the socket the client dialled, so a client needs no reachable address of its own and
-`IGrainFactory.CreateObjectReference` costs nothing but a registration.
-
-Thresh's `ClientNode` listens instead. Every socket here carries traffic one way — `connect()`
-returns a send-only `Connection` whose only inbound read is the preamble ack — and the reply, or a
-gateway's push to a client-hosted observer, travels over a **reverse connection to the peer's
-advertised endpoint**. `InProcessTransport` has always worked that way (its reverse connection is
-`network.deliver(from, ...)`, keyed by address), and `WebSocketTransport`'s accepted connection does
-the same: it dials the endpoint the peer announced in its preamble rather than writing back down the
-accepted socket, which would land on the dialler with nothing listening.
-
-The cost of not being duplex is that a client needs an address a gateway can reach. It is not a
-restriction on WHERE the seam works: a silo whose startup task calls
-`GrainFactoryAccess.createObjectReference` provisions its embedded `ClientNode` leg on whatever
-transport the silo itself uses, asking for an **ephemeral port** (`host:0`) on the silo's own host
-and adopting the address the listener actually bound — `ClientNode.connect()` replaces its
-configured `local` with `Listener.address` before it dials anything, so the endpoint it advertises
-is the one it is really reachable on. That leg only ever has to be reachable from its gateway, which
-is this silo in this process, because a call for a client-hosted object is routed to the client's
-gateway silo first (`ClusterNode.routeToClient`) and never dialled directly by another silo.
-
-`SiloBuilder.requireObserverHosting()` remains the declaration that a silo depends on the seam, and
-still fails at `build()` rather than at first use if the configured transport cannot give the leg a
-listener. Both transports the builder configures can, so it no longer rejects a
-`WebSocketTransport`-hosted silo.
-
 ## The clock's fine reading is an epoch instant, not a stopwatch tick
 
 Orleans reads time through `System.TimeProvider`, which pairs `GetUtcNow()` with
