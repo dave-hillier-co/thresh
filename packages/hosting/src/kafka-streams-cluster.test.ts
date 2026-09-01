@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Kafka } from "kafkajs";
 import { Pool } from "pg";
+import { createClient } from "redis";
 import { afterAll, describe, expect, it } from "vitest";
 import { grain } from "@thresh/core/decorators";
 import { Grain } from "@thresh/core/grain";
@@ -52,6 +53,14 @@ async function reachablePostgres(connectionString: string): Promise<Pool | undef
 async function waitFor(predicate: () => boolean, timeoutMs = 8000): Promise<void> {
   const start = Date.now();
   while (!predicate()) {
+    if (Date.now() - start > timeoutMs) throw new Error("waitFor: timed out");
+    await new Promise((r) => setTimeout(r, 15));
+  }
+}
+
+async function waitForAsync(predicate: () => Promise<boolean>, timeoutMs = 8000): Promise<void> {
+  const start = Date.now();
+  while (!(await predicate())) {
     if (Date.now() - start > timeoutMs) throw new Error("waitFor: timed out");
     await new Promise((r) => setTimeout(r, 15));
   }
@@ -215,4 +224,153 @@ describe.skipIf(!ready)("Kafka streams across a cluster", () => {
       await Promise.all(silos.map((s) => s.stop().catch(() => undefined)));
     }
   }, 60_000);
+});
+
+// Issue #64: `addKafkaStreams` builds its metadata registry/cursor store
+// directly (not via `addPostgresStreams`/`addRedisStreams`), so it is the
+// easiest site to miss threading the silo's `serviceId` into. Both inline
+// metadata branches (Postgres and Redis) need their own coverage.
+describe.skipIf(!ready)(
+  "Kafka streams metadata service identity — Postgres branch (issue #64)",
+  () => {
+    it("threads the silo's serviceId into the Postgres metadata rows", async () => {
+      const svcTablePrefix = `thresh_test_kfcl_svc_${randomUUID().replace(/-/g, "")}`;
+      const svcTopicPrefix = `thresh_test_kfcl_svc_${randomUUID().replace(/-/g, "")}`;
+      const svcTopic = `${svcTopicPrefix}.default`;
+      const a = kafka!.admin();
+      await a.connect();
+      try {
+        await a.createTopics({
+          waitForLeaders: true,
+          topics: [{ topic: svcTopic, numPartitions: 1 }],
+        });
+      } finally {
+        await a.disconnect();
+      }
+
+      const address = new SiloAddress("silo-svc", "uid-svc", "silo-svc:11111");
+      const silo = createSilo({ clusterId: "c", serviceId: "svc-a", local: address })
+        .useStaticMembership([address])
+        .useInProcessTransport(new InProcessNetwork())
+        .addKafkaStreams("default", {
+          brokers: [KAFKA_BROKERS],
+          queueCount: 1,
+          topicPrefix: svcTopicPrefix,
+          pollIntervalMs: 5,
+          metadata: { postgres: { connectionString: PG_URL, tablePrefix: svcTablePrefix } },
+        })
+        .registerGrain(ChatRoomGrain, { interfaces: [IChatRoom] })
+        .build();
+      await silo.start();
+      try {
+        await silo.getGrain(IChatRoom, "room-svc").say("hi");
+        await waitForAsync(async () => {
+          const res = await admin!.query(
+            `SELECT 1 FROM ${svcTablePrefix}_cursors WHERE service_id = $1`,
+            ["svc-a"],
+          );
+          return (res.rowCount ?? 0) > 0;
+        }, 15_000);
+      } finally {
+        await silo.stop();
+        const cleanup = kafka!.admin();
+        await cleanup.connect();
+        try {
+          await cleanup.deleteTopics({ topics: [svcTopic] });
+        } finally {
+          await cleanup.disconnect();
+        }
+        for (const suffix of ["cursors", "subscriptions"]) {
+          await admin!.query(`DROP TABLE IF EXISTS ${svcTablePrefix}_${suffix}`);
+        }
+      }
+    }, 30_000);
+  },
+);
+
+const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
+type RedisClientT = ReturnType<typeof createClient>;
+
+async function reachableRedis(url: string): Promise<RedisClientT | undefined> {
+  const probe = createClient({ url, socket: { reconnectStrategy: false, connectTimeout: 500 } });
+  probe.on("error", () => {});
+  try {
+    await probe.connect();
+    await probe.ping();
+    return probe;
+  } catch {
+    try {
+      await probe.destroy();
+    } catch {
+      /* never connected */
+    }
+    return undefined;
+  }
+}
+
+const redisAdmin = kafka !== undefined ? await reachableRedis(REDIS_URL) : undefined;
+
+describe.skipIf(kafka === undefined || redisAdmin === undefined)(
+  "Kafka streams metadata service identity — Redis branch (issue #64)",
+  () => {
+    it("threads the silo's serviceId into the Redis metadata keys", async () => {
+      const svcTopicPrefix = `thresh_test_kfcl_svcr_${randomUUID().replace(/-/g, "")}`;
+      const svcTopic = `${svcTopicPrefix}.default`;
+      const svcKeyPrefix = `thresh-test:kfcl-svc:${randomUUID()}`;
+      const a = kafka!.admin();
+      await a.connect();
+      try {
+        await a.createTopics({
+          waitForLeaders: true,
+          topics: [{ topic: svcTopic, numPartitions: 1 }],
+        });
+      } finally {
+        await a.disconnect();
+      }
+
+      const address = new SiloAddress("silo-svc-r", "uid-svc-r", "silo-svc-r:11111");
+      const silo = createSilo({ clusterId: "c", serviceId: "svc-a", local: address })
+        .useStaticMembership([address])
+        .useInProcessTransport(new InProcessNetwork())
+        .addKafkaStreams("default", {
+          brokers: [KAFKA_BROKERS],
+          queueCount: 1,
+          topicPrefix: svcTopicPrefix,
+          pollIntervalMs: 5,
+          metadata: { redis: { url: REDIS_URL, keyPrefix: svcKeyPrefix } },
+        })
+        .registerGrain(ChatRoomGrain, { interfaces: [IChatRoom] })
+        .build();
+      await silo.start();
+      try {
+        await silo.getGrain(IChatRoom, "room-svc-r").say("hi");
+        await waitForAsync(async () => {
+          const keys: string[] = [];
+          for await (const batch of redisAdmin!.scanIterator({
+            MATCH: `${svcKeyPrefix}:svc-a:streamq:*:cursor`,
+          })) {
+            keys.push(...(Array.isArray(batch) ? batch : [batch]));
+          }
+          return keys.length > 0;
+        }, 15_000);
+      } finally {
+        await silo.stop();
+        const cleanup = kafka!.admin();
+        await cleanup.connect();
+        try {
+          await cleanup.deleteTopics({ topics: [svcTopic] });
+        } finally {
+          await cleanup.disconnect();
+        }
+        for await (const batch of redisAdmin!.scanIterator({ MATCH: `${svcKeyPrefix}*` })) {
+          const keys = Array.isArray(batch) ? batch : [batch];
+          if (keys.length > 0) await redisAdmin!.del(keys);
+        }
+      }
+    }, 30_000);
+  },
+);
+
+afterAll(async () => {
+  if (redisAdmin !== undefined) await redisAdmin.destroy();
 });

@@ -8,6 +8,7 @@ import type {
   TransactionalStorageLoadResponse,
 } from "@thresh/core/transactional-storage";
 import { deserializeValue, serializeValue } from "@thresh/core/value-codec";
+import { DEFAULT_SERVICE_ID } from "@thresh/core/default-service-id";
 import {
   applyStore,
   EMPTY_METADATA,
@@ -25,6 +26,20 @@ type RedisClient = {
 export interface RedisTransactionalStorageOptions {
   /** Namespace for keys in the shared Redis (defaults to `"thresh"`). */
   keyPrefix?: string;
+  /**
+   * Logical service identity this provider's keys belong to (Orleans'
+   * `ClusterOptions.ServiceId`). Two clusters pointed at the same Redis stay
+   * partitioned by it. Defaults to `"default"`, Orleans' own
+   * `ClusterOptions.DefaultServiceId`; `SiloBuilder` threads the silo's
+   * `serviceId ?? DEFAULT_SERVICE_ID`.
+   *
+   * Redis has no ALTER: a record written before this option existed has no
+   * `{serviceId}` segment and is invisible to a service-partitioned reader —
+   * a deliberate upgrade break, the same call #59 made for `RedisGrainStorage`
+   * (see todo.md / docs/deviations.md). A Redis-backed transactional
+   * deployment should drain in-flight transactions before upgrading.
+   */
+  serviceId?: string;
 }
 
 const CONFLICT = "THRESH_TX_ETAG_CONFLICT";
@@ -54,12 +69,14 @@ return ARGV[3]`;
  */
 export class RedisTransactionalStorage implements TransactionalStateStorage {
   private readonly keyPrefix: string;
+  private readonly serviceId: string;
 
   constructor(
     private readonly client: RedisClient,
     options: RedisTransactionalStorageOptions = {},
   ) {
     this.keyPrefix = options.keyPrefix ?? "thresh";
+    this.serviceId = options.serviceId ?? DEFAULT_SERVICE_ID;
   }
 
   async load(
@@ -131,6 +148,6 @@ export class RedisTransactionalStorage implements TransactionalStateStorage {
   }
 
   private key(stateName: string, grainId: GrainId): string {
-    return `${this.keyPrefix}:tx:${grainId.toString()}/${stateName}`;
+    return `${this.keyPrefix}:${this.serviceId}:tx:${grainId.toString()}/${stateName}`;
   }
 }

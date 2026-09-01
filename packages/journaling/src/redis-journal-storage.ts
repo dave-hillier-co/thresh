@@ -2,6 +2,7 @@ import type { createClient } from "redis";
 import { InconsistentStateError } from "@thresh/core/errors";
 import type { GrainId } from "@thresh/core/grain-id";
 import type { JournalEntry, JournalSegment, JournalStorage } from "@thresh/core/journal-storage";
+import { DEFAULT_SERVICE_ID } from "@thresh/core/default-service-id";
 
 /** A connected node-redis client (the subset this provider drives). */
 export type RedisClient = ReturnType<typeof createClient>;
@@ -9,6 +10,19 @@ export type RedisClient = ReturnType<typeof createClient>;
 export interface RedisJournalStorageOptions {
   /** Namespace for keys in the shared Redis (defaults to `"thresh"`). */
   keyPrefix?: string;
+  /**
+   * Logical service identity this provider's keys belong to (Orleans'
+   * `ClusterOptions.ServiceId`). Two clusters pointed at the same Redis stay
+   * partitioned by it. Defaults to `"default"`, Orleans' own
+   * `ClusterOptions.DefaultServiceId`; `SiloBuilder` threads the silo's
+   * `serviceId ?? DEFAULT_SERVICE_ID`.
+   *
+   * Redis has no ALTER: a log written before this option existed has no
+   * `{serviceId}` segment and is invisible to a service-partitioned reader —
+   * a deliberate upgrade break, the same call #59 made for `RedisGrainStorage`
+   * (see todo.md / docs/deviations.md).
+   */
+  serviceId?: string;
 }
 
 const CONFLICT = "THRESH_ETAG_CONFLICT";
@@ -53,12 +67,14 @@ return redis.call('INCR', KEYS[2])`;
  */
 export class RedisJournalStorage implements JournalStorage {
   private readonly keyPrefix: string;
+  private readonly serviceId: string;
 
   constructor(
     private readonly client: RedisClient,
     options: RedisJournalStorageOptions = {},
   ) {
     this.keyPrefix = options.keyPrefix ?? "thresh";
+    this.serviceId = options.serviceId ?? DEFAULT_SERVICE_ID;
   }
 
   async read(logName: string, grainId: GrainId, signal?: AbortSignal): Promise<JournalSegment> {
@@ -139,10 +155,10 @@ export class RedisJournalStorage implements JournalStorage {
   }
 
   private entriesKey(logName: string, grainId: GrainId): string {
-    return `${this.keyPrefix}:journal:${grainId.toString()}/${logName}`;
+    return `${this.keyPrefix}:${this.serviceId}:journal:${grainId.toString()}/${logName}`;
   }
 
   private versionKey(logName: string, grainId: GrainId): string {
-    return `${this.keyPrefix}:journalver:${grainId.toString()}/${logName}`;
+    return `${this.keyPrefix}:${this.serviceId}:journalver:${grainId.toString()}/${logName}`;
   }
 }

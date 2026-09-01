@@ -163,3 +163,32 @@ describe.skipIf(admin === undefined)("Postgres streams across a cluster", () => 
     }
   }, 30_000);
 });
+
+// Issue #64: `addPostgresStreams` must thread the silo's `serviceId` into the
+// events/cursors/subscriptions tables `PostgresPullingStreamProvider` builds.
+describe.skipIf(admin === undefined)("Postgres streams service identity (issue #64)", () => {
+  it("threads the silo's serviceId into the events table's rows", async () => {
+    const svcTablePrefix = `thresh_test_pgcl_svc_${randomUUID().replace(/-/g, "")}`;
+    const address = new SiloAddress("silo-svc", "uid-svc", "silo-svc:11111");
+    const silo = createSilo({ clusterId: "c", serviceId: "svc-a", local: address })
+      .useStaticMembership([address])
+      .useInProcessTransport(new InProcessNetwork())
+      .addPostgresStreams("default", { connectionString: PG_URL, tablePrefix: svcTablePrefix })
+      .registerGrain(ChatRoomGrain, { interfaces: [IChatRoom] })
+      .build();
+    await silo.start();
+    try {
+      await silo.getGrain(IChatRoom, "room-svc").say("hi");
+      const res = await admin!.query(
+        `SELECT service_id FROM ${svcTablePrefix}_events WHERE service_id = $1`,
+        ["svc-a"],
+      );
+      expect(res.rowCount).toBeGreaterThan(0);
+    } finally {
+      await silo.stop();
+      for (const suffix of ["events", "cursors", "subscriptions", "failures"]) {
+        await admin!.query(`DROP TABLE IF EXISTS ${svcTablePrefix}_${suffix}`);
+      }
+    }
+  }, 10_000);
+});

@@ -344,6 +344,26 @@ fine reading is derived from the fake's own `current`, not the machine's, so `ad
 drives it and one fake instant reads the same value twice — the fake stays authoritative, which is
 the obligation that comes with adding the reading at all.
 
+## The service dimension covers every durable store, not just grain state
+
+#59 added a `serviceId` dimension (Orleans' `ClusterOptions.ServiceId`, kept independent of
+`ClusterId` because it "should survive deployment and redeployment, where as ClusterId might not" —
+`ClusterOptions.cs:36`) to `PostgresGrainStorage` and `RedisGrainStorage` only. #64 carries the same
+dimension to every other durable store that partitions by table name or key prefix alone:
+`PostgresReminderTable`, `RedisReminderTable`, `RedisJournalStorage`, `RedisTransactionalStorage`,
+the Postgres and Redis stream registries, cursor stores **and queues** (partitioning only the
+registry/cursors and not the queue itself would still let two services sharing one queue
+cross-deliver each other's events). The default is `DEFAULT_SERVICE_ID` (`"default"`,
+`@thresh/core/default-service-id`) everywhere, never `clusterId`, for the same reason #59 settled on
+it: a cluster-id default would strand state on a redeployment that changes the cluster id.
+
+Postgres stores migrate an existing table in place (`addServiceIdColumn()`, copied from
+`PostgresGrainStorage`): the column backfills to `DEFAULT_SERVICE_ID`, which is also what a provider
+configured with no `serviceId` reads, so a single-service deployment sees no change. The events
+table's migration recreates its lookup index with `service_id` leading rather than swapping a
+primary key (it already has a surrogate `id` key). Redis stores have no `ALTER` and orphan
+pre-existing keys — see the upgrade-break note in [`todo.md`](../todo.md).
+
 ## Additions beyond Orleans
 
 A few capabilities layer on top of the faithful model without changing it: **durable journaling**

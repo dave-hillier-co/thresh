@@ -1,3 +1,4 @@
+import { DEFAULT_SERVICE_ID } from "@thresh/core/default-service-id";
 import type { RedisClient } from "@thresh/streams/redis-stream-queue";
 import type { StreamCursorStore } from "@thresh/streams/stream-cursor-store";
 
@@ -7,16 +8,20 @@ import type { StreamCursorStore } from "@thresh/streams/stream-cursor-store";
  * its own cursor — the Redis metadata option for a Kafka backing
  * (docs/stream-backings-postgres-kafka.md Phase 2), which has no cursor
  * surface of its own and needs to keep durable cursors somewhere other than
- * the transport.
+ * the transport. Partitioned by `serviceId` (issue #64, following #59's
+ * `RedisGrainStorage` pattern); Redis has no ALTER, so a cursor written
+ * before this dimension existed orphans on upgrade — a deliberate break (see
+ * todo.md / docs/deviations.md).
  */
 export class RedisStreamCursorStore implements StreamCursorStore {
   constructor(
     private readonly client: RedisClient,
     private readonly keyPrefix = "thresh",
+    private readonly serviceId: string = DEFAULT_SERVICE_ID,
   ) {}
 
   private key(provider: string, queueIdx: number): string {
-    return `${this.keyPrefix}:streamq:${provider}:${queueIdx}:cursor`;
+    return `${this.keyPrefix}:${this.serviceId}:streamq:${provider}:${queueIdx}:cursor`;
   }
 
   async getCursor(provider: string, queueIdx: number): Promise<number> {

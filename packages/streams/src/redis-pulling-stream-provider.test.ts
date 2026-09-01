@@ -109,3 +109,60 @@ describe.skipIf(client === undefined)("RedisPullingStreamProvider", () => {
     await handle.unregister();
   });
 });
+
+// Issue #64: without the service dimension, two providers of the same name
+// sharing one Redis and keyPrefix would cross-deliver — service B's agent
+// would read service A's queue events and fan them out to B's subscribers of
+// the same stream key, even if only the registry/cursors were partitioned.
+// This end-to-end case fails unless the queues themselves carry the
+// dimension too.
+describe.skipIf(client === undefined)(
+  "RedisPullingStreamProvider service partitioning (issue #64)",
+  () => {
+    it("keeps two services' same-named providers from cross-delivering", async () => {
+      const streamPrefix = `thresh-test:redis-pulling-svc:${randomUUID()}`;
+      const alphaDeliveries: unknown[] = [];
+      const betaDeliveries: unknown[] = [];
+
+      const alpha = new RedisPullingStreamProvider(client!, "shared", {
+        keyPrefix: streamPrefix,
+        queueCount: 1,
+        pollIntervalMs: 5,
+        serviceId: "alpha",
+      });
+      const beta = new RedisPullingStreamProvider(client!, "shared", {
+        keyPrefix: streamPrefix,
+        queueCount: 1,
+        pollIntervalMs: 5,
+        serviceId: "beta",
+      });
+
+      alpha.setDeliver(async (_id, _streamId, event) => {
+        alphaDeliveries.push(event);
+      });
+      beta.setDeliver(async (_id, _streamId, event) => {
+        betaDeliveries.push(event);
+      });
+      alpha.setImplicitSubscribers((namespace) => (namespace === "room" ? ["alpha-sub"] : []));
+      beta.setImplicitSubscribers((namespace) => (namespace === "room" ? ["beta-sub"] : []));
+
+      try {
+        alpha.startAgentsFor([0]);
+        beta.startAgentsFor([0]);
+
+        const alphaStream = alpha.getStream<string>("room", "shared-key");
+        await alphaStream.publish("alpha-event");
+
+        await waitFor(() => alphaDeliveries.length === 1, 2000);
+        // beta must never see alpha's event: give the (non-existent) cross
+        // delivery every chance to happen before asserting it did not.
+        await new Promise((r) => setTimeout(r, 200));
+        expect(alphaDeliveries).toEqual(["alpha-event"]);
+        expect(betaDeliveries).toEqual([]);
+      } finally {
+        alpha.stop();
+        beta.stop();
+      }
+    }, 10_000);
+  },
+);

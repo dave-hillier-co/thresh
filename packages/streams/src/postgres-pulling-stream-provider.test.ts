@@ -208,4 +208,45 @@ describe.skipIf(pool === undefined)("PostgresPullingStreamProvider", () => {
       eager.stop();
     }
   }, 10_000);
+
+  // Issue #64: two same-named providers for different services sharing one
+  // table prefix must not cross-deliver — the queues carry the service
+  // dimension too, not just the registry/cursors.
+  it("keeps two services' same-named providers from cross-delivering", async () => {
+    const alpha = new PostgresPullingStreamProvider(pool!, "svc-shared", {
+      tablePrefix: prefix,
+      queueCount: 1,
+      pollIntervalMs: 5,
+      serviceId: "alpha",
+    });
+    const beta = new PostgresPullingStreamProvider(pool!, "svc-shared", {
+      tablePrefix: prefix,
+      queueCount: 1,
+      pollIntervalMs: 5,
+      serviceId: "beta",
+    });
+    await alpha.start();
+    await beta.start();
+
+    const alphaDeliveries: unknown[] = [];
+    const betaDeliveries: unknown[] = [];
+    alpha.setDeliver(async (_s, _k, event) => void alphaDeliveries.push(event));
+    beta.setDeliver(async (_s, _k, event) => void betaDeliveries.push(event));
+    alpha.setImplicitSubscribers((ns) => (ns === "room" ? ["alpha-sub"] : []));
+    beta.setImplicitSubscribers((ns) => (ns === "room" ? ["beta-sub"] : []));
+
+    try {
+      alpha.startAgentsFor([0]);
+      beta.startAgentsFor([0]);
+
+      await alpha.getStream<string>("room", "shared-key").publish("alpha-event");
+      await waitFor(() => alphaDeliveries.length === 1);
+      await new Promise((r) => setTimeout(r, 200));
+      expect(alphaDeliveries).toEqual(["alpha-event"]);
+      expect(betaDeliveries).toEqual([]);
+    } finally {
+      alpha.stop();
+      beta.stop();
+    }
+  }, 10_000);
 });
