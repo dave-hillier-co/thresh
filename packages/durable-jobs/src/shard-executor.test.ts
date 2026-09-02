@@ -73,7 +73,7 @@ describe("ShardExecutor", () => {
     await flush();
     expect(ran).toEqual(["a"]);
     expect(await store.readJobs(0)).toEqual([]);
-    exec.stop();
+    await exec.stop();
   });
 
   it("backs off the poll loop while the silo is overloaded, then runs once clear", async () => {
@@ -100,7 +100,7 @@ describe("ShardExecutor", () => {
     time.advance(OPTIONS.overloadBackoffMs);
     await flush();
     expect(ran).toEqual(["a"]);
-    exec.stop();
+    await exec.stop();
   });
 
   it("assigns a RunId per claimed job, passes it to the handler, and persists it", async () => {
@@ -121,7 +121,7 @@ describe("ShardExecutor", () => {
 
     expect(seen).toHaveLength(1);
     expect(seen[0]).toMatch(/.+/); // a non-empty RunId
-    exec.stop();
+    await exec.stop();
   });
 
   it("skips invocation on re-claim when the persisted RunId is already completed", async () => {
@@ -154,7 +154,7 @@ describe("ShardExecutor", () => {
 
     expect(calls).toEqual([]); // skipped — RunId already marked completed
     expect(await store.readJobs(j.shardKey)).toEqual([]); // and the entry removed
-    exec.stop();
+    await exec.stop();
   });
 
   it("runs a job exactly once when silo-A completes and silo-B re-claims the shard", async () => {
@@ -193,7 +193,7 @@ describe("ShardExecutor", () => {
     await siloA.load();
     time.advance(0);
     await flush();
-    siloA.stop();
+    await siloA.stop();
 
     // Silo-B comes along, claims the same shard, loads the (still-persisted)
     // job — but the entry carries the completed RunId tombstone from silo-A.
@@ -216,7 +216,7 @@ describe("ShardExecutor", () => {
     expect(calls).toHaveLength(1); // exactly once across both silos
     expect(calls[0]?.startsWith("A:")).toBe(true);
     expect(await store.readJobs(0)).toEqual([]); // silo-B cleaned up the tombstone
-    siloB.stop();
+    await siloB.stop();
   });
 
   it("passes the dequeue count to the handler and increments it across re-polls", async () => {
@@ -239,6 +239,44 @@ describe("ShardExecutor", () => {
     // pollAfter preserves the dequeue count rather than treating it as a retry.
     expect(counts).toEqual([1, 1]);
     expect(await store.readJobs(0)).toEqual([]);
-    exec.stop();
+    await exec.stop();
+  });
+
+  it("stop() resolves only after an in-flight run settles (undrained-stop regression)", async () => {
+    // Ownership-handoff hazard: if stop() didn't await the in-flight runOne(),
+    // a rebalance could let the new shard owner re-run a job whose handler is
+    // still executing on the old owner.
+    const store = new MemoryJobShardStore();
+    const time = new FakeTimeProvider();
+    const limiter = new ConcurrencyLimiter(2);
+    let releaseRun: () => void = () => undefined;
+    let running = false;
+    const run: RunJob = async () => {
+      running = true;
+      await new Promise<void>((r) => {
+        releaseRun = r;
+      });
+      running = false;
+      return completed;
+    };
+    await store.persistAdd(job("a", 0));
+    const exec = new ShardExecutor(0, store, time, limiter, run, () => false, OPTIONS);
+    await exec.load();
+
+    time.advance(0);
+    await flush();
+    expect(running).toBe(true); // the handler is mid-flight
+
+    let stopped = false;
+    const stopping = exec.stop().then(() => {
+      stopped = true;
+    });
+    await flush();
+    expect(stopped).toBe(false); // stop() must not resolve while the run is in flight
+
+    releaseRun();
+    await stopping;
+    expect(stopped).toBe(true);
+    expect(running).toBe(false); // the handler had fully settled before stop() resolved
   });
 });

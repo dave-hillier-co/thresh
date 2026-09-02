@@ -191,15 +191,20 @@ export class LocalDurableJobManager {
         .map((s) => s.shardKey),
     );
     for (const shardKey of [...this.executors.keys()]) {
-      if (!ownedNow.has(shardKey)) this.stopExecutor(shardKey);
+      if (!ownedNow.has(shardKey)) await this.stopExecutor(shardKey);
     }
   }
 
-  /** Stop every executor (silo shutdown). Best-effort release so a successor can claim. */
+  /**
+   * Stop every executor (silo shutdown). Drains each executor's in-flight run
+   * *before* releasing its shard, so a successor claiming the shard never
+   * races a handler still executing on this silo (mirrors `ShardExecutor.stop`
+   * awaiting its in-flight work). Best-effort release so a successor can claim.
+   */
   async stop(): Promise<void> {
     for (const shardKey of [...this.executors.keys()]) {
+      await this.stopExecutor(shardKey);
       await this.store.releaseShard(shardKey, this.ownership.localRingKey).catch(() => undefined);
-      this.stopExecutor(shardKey);
     }
     this.unregisterQueueDepth();
   }
@@ -271,11 +276,12 @@ export class LocalDurableJobManager {
     return executor;
   }
 
-  private stopExecutor(shardKey: number): void {
+  /** Stop and drain the shard's executor (awaits any run already in flight). */
+  private async stopExecutor(shardKey: number): Promise<void> {
     const executor = this.executors.get(shardKey);
     if (executor === undefined) return;
-    executor.stop();
     this.executors.delete(shardKey);
+    await executor.stop();
   }
 }
 

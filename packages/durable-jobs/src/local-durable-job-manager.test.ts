@@ -178,3 +178,63 @@ describe("LocalDurableJobManager.refreshOwnership time-based claim ramp-up", () 
     expect(manager.ownedShards()).toHaveLength(3);
   });
 });
+
+async function flush(times = 8): Promise<void> {
+  for (let i = 0; i < times; i++) await new Promise((r) => setTimeout(r, 0));
+}
+
+describe("LocalDurableJobManager.stop draining", () => {
+  it("drains an in-flight run before releasing its shard (undrained-stop regression)", async () => {
+    // Ownership-handoff hazard: releasing the shard before the handler has
+    // settled would let a successor claim it and re-run the same job while
+    // the old owner's handler is still executing.
+    const store = new MemoryJobShardStore();
+    const time = new FakeTimeProvider();
+    const ownership: ShardOwnershipContext = { localRingKey: "silo1", activeRingKeys: ["silo1"] };
+
+    let releaseRun: () => void = () => undefined;
+    let running = false;
+    const events: string[] = [];
+
+    const manager = new LocalDurableJobManager(
+      store,
+      time,
+      async () => {
+        running = true;
+        await new Promise<void>((r) => {
+          releaseRun = r;
+        });
+        running = false;
+        events.push("handler-done");
+        return completed;
+      },
+      resolveOptions({}),
+      ownership,
+    );
+
+    const originalReleaseShard = store.releaseShard.bind(store);
+    store.releaseShard = async (shardKey: number, owner: string) => {
+      events.push("released");
+      return originalReleaseShard(shardKey, owner);
+    };
+
+    await manager.scheduleJob({
+      name: "job",
+      dueTime: new Date(time.now()),
+      target: new GrainId("test", "g"),
+    });
+
+    time.advance(0);
+    await flush();
+    expect(running).toBe(true); // the handler is mid-flight
+
+    const stopping = manager.stop();
+    await flush();
+    expect(events).toEqual([]); // neither the handler nor the release has happened yet
+
+    releaseRun();
+    await stopping;
+
+    expect(events).toEqual(["handler-done", "released"]);
+  });
+});

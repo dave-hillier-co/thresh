@@ -82,6 +82,8 @@ export class ShardExecutor {
   private pollHandle: TimerHandle | undefined;
   private stopped = false;
   private running = 0;
+  /** In-flight `runOne` promises, so `stop()` can drain them before resolving. */
+  private readonly inFlight = new Set<Promise<void>>();
   /** Wall-clock time (per the injected `TimeProvider`) this shard started ramping from. */
   private readonly startedAtMs: number;
 
@@ -144,9 +146,17 @@ export class ShardExecutor {
     return removed;
   }
 
-  stop(): void {
+  /**
+   * Stop polling and await any run already in flight before resolving —
+   * mirrors `QueuePullingAgent.stop()` (packages/streams/src/queue-pulling-agent.ts).
+   * Without this, a rebalance or graceful shutdown could hand the shard to a
+   * new owner while the old owner's handler is still executing, letting the
+   * new owner re-run the same job concurrently.
+   */
+  async stop(): Promise<void> {
     this.stopped = true;
     this.clearPoll();
+    await Promise.all(this.inFlight);
   }
 
   /** Clear the poll timer if one is armed and reset the handle. */
@@ -232,7 +242,10 @@ export class ShardExecutor {
         continue;
       }
       admitted += 1;
-      settled.push(this.runOne(job, now));
+      const run = this.runOne(job, now);
+      this.inFlight.add(run);
+      void run.finally(() => this.inFlight.delete(run));
+      settled.push(run);
     }
 
     // Re-arm before awaiting in-flight runs so a job due during this cycle is
