@@ -164,7 +164,7 @@ export class CustomStorageLogViewAdaptorImpl<TState, TEvent> implements LogViewA
       const batch = this.pending.slice();
       attempts++;
       const lastExpected = this.version;
-      let applied = false;
+      let applied: boolean;
       try {
         applied = await this.host.applyUpdatesToStorage(
           batch.map((entry) => entry.event),
