@@ -106,10 +106,62 @@ describe.skipIf(pool === undefined)("PostgresReminderTable", () => {
     expect(read?.etag).toBe(second);
     expect(read?.period).toEqual({ ms: 5 });
   });
+
+  it("recordFired persists lastFiredAt only when the etag still matches", async () => {
+    const table = makeTable();
+    const etag = await table.upsert({
+      grainId: billing,
+      name: "invoice",
+      startAt: new Date(0),
+      period: { hours: 1 },
+    });
+
+    expect(
+      await table.recordFired(billing, "invoice", "wrong-etag", new Date(1000)),
+    ).toBeUndefined();
+    expect((await table.read(billing, "invoice"))?.lastFiredAt).toBeUndefined();
+
+    expect(await table.recordFired(billing, "invoice", etag, new Date(1000))).toBe(etag);
+    expect((await table.read(billing, "invoice"))?.lastFiredAt).toEqual(new Date(1000));
+  });
+
+  it("upsert clears a previously recorded lastFiredAt on re-registration", async () => {
+    const table = makeTable();
+    const etag1 = await table.upsert({
+      grainId: billing,
+      name: "invoice",
+      startAt: new Date(0),
+      period: { hours: 1 },
+    });
+    await table.recordFired(billing, "invoice", etag1, new Date(1000));
+    expect((await table.read(billing, "invoice"))?.lastFiredAt).toEqual(new Date(1000));
+
+    await table.upsert({
+      grainId: billing,
+      name: "invoice",
+      startAt: new Date(500),
+      period: { hours: 2 },
+    });
+    expect((await table.read(billing, "invoice"))?.lastFiredAt).toBeUndefined();
+  });
 });
 
 describe.skipIf(pool === undefined)("LocalReminderService over PostgresReminderTable", () => {
   const flush = () => new Promise((r) => setTimeout(r, 0));
+
+  // Real DB round trips (recordFired, then reconcile's readRange) don't
+  // always settle within a single microtask flush under load; poll with
+  // real delay instead of assuming one tick suffices.
+  async function waitFor(
+    predicate: () => boolean | Promise<boolean>,
+    timeoutMs = 5000,
+  ): Promise<void> {
+    const start = Date.now();
+    while (!(await predicate())) {
+      if (Date.now() - start > timeoutMs) throw new Error("waitFor: timed out");
+      await new Promise((r) => setTimeout(r, 10));
+    }
+  }
 
   beforeEach(async () => {
     await makeTable().start();
@@ -158,6 +210,40 @@ describe.skipIf(pool === undefined)("LocalReminderService over PostgresReminderT
     time.advance(1000);
     await flush();
     expect(fired).toEqual(["invoice"]);
+    successor.stop();
+  });
+
+  it("does not double-fire when a fresh silo reconciles the range after a tick (issue: reminder double-fire on rebalance)", async () => {
+    const time = new FakeTimeProvider();
+    const fired: number[] = [];
+    const onFire = async (): Promise<void> => {
+      fired.push(time.now());
+    };
+
+    const original = new LocalReminderService(makeTable(), time, onFire, [WHOLE]);
+    await original.register(billing, "invoice", { ms: 1000 }, { ms: 1_000_000 });
+    time.advance(1000); // first tick
+    await waitFor(() => fired.length >= 1);
+    expect(fired).toEqual([1000]);
+    original.stop();
+
+    // Wait for the (real, non-fake-clock-gated) recordFired write to land
+    // before a fresh instance reconciles the same row.
+    await waitFor(
+      async () => (await makeTable().read(billing, "invoice"))?.lastFiredAt !== undefined,
+    );
+
+    // A successor takes over the same range from the durable table.
+    const successor = new LocalReminderService(makeTable(), time, onFire, []);
+    await successor.refreshOwnership([WHOLE]);
+    await flush();
+    expect(fired).toEqual([1000]); // no spurious immediate re-fire
+
+    // The real next period boundary: startAt=1000 + period=1_000_000 =
+    // t=1,001,000; the clock is currently at t=1000.
+    time.advance(1_000_000);
+    await waitFor(() => fired.length >= 2);
+    expect(fired).toEqual([1000, 1_001_000]);
     successor.stop();
   });
 });

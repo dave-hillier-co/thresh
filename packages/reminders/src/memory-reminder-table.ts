@@ -35,6 +35,19 @@ export class MemoryReminderTable implements ReminderTable {
     );
   }
 
+  async recordFired(
+    grainId: GrainId,
+    name: string,
+    etag: string,
+    firedAt: Date,
+  ): Promise<string | undefined> {
+    const key = this.key(grainId, name);
+    const existing = this.entries.get(key);
+    if (existing === undefined || existing.etag !== etag) return undefined;
+    this.entries.set(key, { ...existing, lastFiredAt: firedAt });
+    return etag;
+  }
+
   private key(grainId: GrainId, name: string): string {
     return `${grainId.toString()}${name}`;
   }

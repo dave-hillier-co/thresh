@@ -29,8 +29,11 @@ export interface RedisReminderTableOptions {
 // Upsert is unconditional (a fresh etag each time, like MemoryReminderTable):
 // write the entry hash, index it by hash for range ownership, and record the
 // name under its grain. Atomic so the three structures never diverge.
+// A fresh registration resets lastFiredAt (HDEL) — a re-registration under
+// the same key must not inherit a stale tick instant from before it changed.
 const UPSERT = `
 redis.call('HSET', KEYS[1], 'data', ARGV[3], 'etag', ARGV[4])
+redis.call('HDEL', KEYS[1], 'lastFiredAt')
 redis.call('ZADD', KEYS[2], ARGV[2], ARGV[1])
 redis.call('SADD', KEYS[3], ARGV[5])
 return ARGV[4]`;
@@ -42,6 +45,15 @@ if not cur or cur ~= ARGV[2] then return 0 end
 redis.call('DEL', KEYS[1])
 redis.call('ZREM', KEYS[2], ARGV[1])
 redis.call('SREM', KEYS[3], ARGV[3])
+return 1`;
+
+// Record a tick's fired-at instant only if the caller's etag still matches —
+// a concurrent upsert/remove wins and this update is dropped rather than
+// resurrecting a registration that moved on.
+const RECORD_FIRED = `
+local cur = redis.call('HGET', KEYS[1], 'etag')
+if not cur or cur ~= ARGV[1] then return 0 end
+redis.call('HSET', KEYS[1], 'lastFiredAt', ARGV[2])
 return 1`;
 
 /**
@@ -102,6 +114,19 @@ export class RedisReminderTable implements ReminderTable {
     return this.entriesAt(names.map((n) => this.entryKey(grainId, n)));
   }
 
+  async recordFired(
+    grainId: GrainId,
+    name: string,
+    etag: string,
+    firedAt: Date,
+  ): Promise<string | undefined> {
+    const result = await this.client.eval(RECORD_FIRED, {
+      keys: [this.entryKey(grainId, name)],
+      arguments: [etag, String(firedAt.getTime())],
+    });
+    return result === 1 ? etag : undefined;
+  }
+
   async readRange(hashBegin: number, hashEnd: number): Promise<ReminderEntry[]> {
     const members =
       hashBegin <= hashEnd
@@ -124,7 +149,9 @@ export class RedisReminderTable implements ReminderTable {
     const record = await this.client.hGetAll(key);
     if (record.etag === undefined) return undefined;
     const data = deserializeValue<ReminderData>(record.data ?? "null");
-    return { ...data, etag: record.etag };
+    const lastFiredAt =
+      record.lastFiredAt === undefined ? undefined : new Date(Number(record.lastFiredAt));
+    return { ...data, etag: record.etag, ...(lastFiredAt !== undefined ? { lastFiredAt } : {}) };
   }
 
   private member(grainId: GrainId, name: string): string {

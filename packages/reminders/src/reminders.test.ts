@@ -180,7 +180,7 @@ describe("LocalReminderService — multi-silo ownership", () => {
     expect(b.fired).toHaveLength(0);
   });
 
-  it("hands the reminder to the new owner when ranges change", async () => {
+  it("hands the reminder to the new owner when ranges change, without a spurious immediate re-fire", async () => {
     const time = new FakeTimeProvider();
     const table = new MemoryReminderTable();
     const a = recorder();
@@ -199,13 +199,24 @@ describe("LocalReminderService — multi-silo ownership", () => {
     await flush();
     expect(a.fired).toHaveLength(1);
 
-    // Ownership of the hash moves from A to B (e.g. A left the view).
+    // Ownership of the hash moves from A to B (e.g. A left the view). Issue:
+    // reminder double-fire on rebalance — B's reconcile() must resume from
+    // the persisted last-fired instant, not recompute dueMs=0 from startAt
+    // and fire again immediately.
     await a1.refreshOwnership([ownsRest]);
     await b1.refreshOwnership([ownsHash]);
     time.advance(1000);
     await flush();
 
     expect(a.fired).toHaveLength(1); // A stopped firing it
-    expect(b.fired).toHaveLength(1); // B took over from the table
+    expect(b.fired).toHaveLength(0); // B did not spuriously re-fire it right away
+
+    // B fires it at the real next period boundary (startAt=1000 + period=1_000_000
+    // = t=1,001,000; the clock is currently at t=2000).
+    time.advance(1_001_000 - 2000);
+    await flush();
+
+    expect(a.fired).toHaveLength(1);
+    expect(b.fired).toHaveLength(1); // B took over the schedule from the table
   });
 });

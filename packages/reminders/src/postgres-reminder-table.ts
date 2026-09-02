@@ -75,6 +75,23 @@ export class PostgresReminderTable implements ReminderTable {
       if (!isDuplicate(err)) throw err;
     }
     await this.addServiceIdColumn();
+    await this.addLastFiredAtColumn();
+  }
+
+  /**
+   * Bring a table created before the reminder double-fire fix up to carry
+   * `last_fired_at` — nullable, so an existing row (never fired since the
+   * upgrade) reads as `lastFiredAt: undefined` and schedules from `startAt`,
+   * unchanged from before this column existed.
+   */
+  private async addLastFiredAtColumn(): Promise<void> {
+    try {
+      await this.pool.query(
+        `ALTER TABLE ${this.table} ADD COLUMN IF NOT EXISTS last_fired_at bigint`,
+      );
+    } catch (err) {
+      if (!isDuplicate(err)) throw err;
+    }
   }
 
   /**
@@ -126,7 +143,8 @@ export class PostgresReminderTable implements ReminderTable {
       `INSERT INTO ${this.table} (grain_id, name, service_id, hash, data, etag)
        VALUES ($1, $2, $3, $4, $5, $6)
        ON CONFLICT (service_id, grain_id, name) DO UPDATE
-         SET hash = EXCLUDED.hash, data = EXCLUDED.data, etag = EXCLUDED.etag`,
+         SET hash = EXCLUDED.hash, data = EXCLUDED.data, etag = EXCLUDED.etag,
+             last_fired_at = NULL`,
       // bigint is bound as a string so values above 2^31 round-trip safely.
       [
         grainId.toString(),
@@ -149,9 +167,23 @@ export class PostgresReminderTable implements ReminderTable {
     return res.rowCount === 1;
   }
 
+  async recordFired(
+    grainId: GrainId,
+    name: string,
+    etag: string,
+    firedAt: Date,
+  ): Promise<string | undefined> {
+    const res = await this.pool.query(
+      `UPDATE ${this.table} SET last_fired_at = $5
+       WHERE service_id = $1 AND grain_id = $2 AND name = $3 AND etag = $4`,
+      [this.serviceId, grainId.toString(), name, etag, firedAt.getTime()],
+    );
+    return res.rowCount === 1 ? etag : undefined;
+  }
+
   async read(grainId: GrainId, name: string): Promise<ReminderEntry | undefined> {
-    const res = await this.pool.query<{ data: string; etag: string }>(
-      `SELECT data, etag FROM ${this.table}
+    const res = await this.pool.query<ReminderRow>(
+      `SELECT data, etag, last_fired_at FROM ${this.table}
        WHERE service_id = $1 AND grain_id = $2 AND name = $3`,
       [this.serviceId, grainId.toString(), name],
     );
@@ -159,8 +191,8 @@ export class PostgresReminderTable implements ReminderTable {
   }
 
   async readForGrain(grainId: GrainId): Promise<ReminderEntry[]> {
-    const res = await this.pool.query<{ data: string; etag: string }>(
-      `SELECT data, etag FROM ${this.table} WHERE service_id = $1 AND grain_id = $2`,
+    const res = await this.pool.query<ReminderRow>(
+      `SELECT data, etag, last_fired_at FROM ${this.table} WHERE service_id = $1 AND grain_id = $2`,
       [this.serviceId, grainId.toString()],
     );
     return res.rows.map((r) => this.toEntry(r)!);
@@ -170,8 +202,8 @@ export class PostgresReminderTable implements ReminderTable {
     // Half-open mirror of MemoryReminderTable.inRange, server-side: non-wrap
     // (begin <= end) is [begin, end); wrap (begin > end) is hash >= begin OR
     // hash < end. bigint bounds are bound as strings.
-    const res = await this.pool.query<{ data: string; etag: string }>(
-      `SELECT data, etag FROM ${this.table}
+    const res = await this.pool.query<ReminderRow>(
+      `SELECT data, etag, last_fired_at FROM ${this.table}
        WHERE service_id = $3 AND CASE WHEN $1::bigint <= $2::bigint
          THEN hash >= $1::bigint AND hash < $2::bigint
          ELSE hash >= $1::bigint OR  hash < $2::bigint
@@ -181,9 +213,17 @@ export class PostgresReminderTable implements ReminderTable {
     return res.rows.map((r) => this.toEntry(r)!);
   }
 
-  private toEntry(row: { data: string; etag: string } | undefined): ReminderEntry | undefined {
+  private toEntry(row: ReminderRow | undefined): ReminderEntry | undefined {
     if (row === undefined) return undefined;
     const data = deserializeValue<ReminderData>(row.data);
-    return { ...data, etag: row.etag };
+    const lastFiredAt =
+      row.last_fired_at === null ? undefined : new Date(Number(row.last_fired_at));
+    return { ...data, etag: row.etag, ...(lastFiredAt !== undefined ? { lastFiredAt } : {}) };
   }
+}
+
+interface ReminderRow {
+  data: string;
+  etag: string;
+  last_fired_at: string | null;
 }

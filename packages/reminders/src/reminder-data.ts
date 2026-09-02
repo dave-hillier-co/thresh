@@ -7,4 +7,6 @@ export interface ReminderData {
   name: string;
   startAt: Date;
   period: Duration;
+  /** Last-tick instant, if any — see `ReminderEntry.lastFiredAt` (issue: reminder double-fire on rebalance). */
+  lastFiredAt?: Date;
 }

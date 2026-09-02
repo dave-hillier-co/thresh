@@ -156,10 +156,27 @@ export class LocalReminderService implements ReminderRegistry {
     return isHashInRanges(grainId.getUniformHashCode(), this.ranges);
   }
 
+  /**
+   * The next due instant for `entry`: `startAt` if it has never fired (first
+   * tick, unchanged behaviour); otherwise the next period boundary after
+   * `max(lastFiredAt, startAt)` (issue: reminder double-fire on rebalance) —
+   * so a new owner's `reconcile()` resumes the schedule instead of firing
+   * immediately for every reminder in a range that just moved.
+   */
+  private nextDueAt(entry: ReminderEntry): Date {
+    if (entry.lastFiredAt === undefined) return entry.startAt;
+    const periodMs = durationToMs(entry.period);
+    if (periodMs <= 0) return entry.startAt; // one-shot: never reconciled after firing
+    const startMs = entry.startAt.getTime();
+    const base = Math.max(entry.lastFiredAt.getTime(), startMs);
+    const periodsElapsed = Math.floor((base - startMs) / periodMs) + 1;
+    return new Date(startMs + periodsElapsed * periodMs);
+  }
+
   private scheduleEntry(entry: ReminderEntry): void {
     const key = this.key(entry.grainId, entry.name);
     this.cancel(key);
-    const dueMs = Math.max(0, entry.startAt.getTime() - this.time.now());
+    const dueMs = Math.max(0, this.nextDueAt(entry).getTime() - this.time.now());
     this.scheduled.set(key, { entry, handle: this.time.setTimer(() => this.fire(entry), dueMs) });
   }
 
@@ -167,12 +184,25 @@ export class LocalReminderService implements ReminderRegistry {
     const key = this.key(entry.grainId, entry.name);
     if (!this.scheduled.has(key)) return;
     const periodMs = durationToMs(entry.period);
+    const firedAt = new Date(this.time.now());
     if (periodMs > 0) {
-      // Reschedule first (fixed-rate) before delivering the tick.
+      // Reschedule first (fixed-rate) before delivering the tick. Persist the
+      // tick instant so a future owner (rebalance/restart) resumes from it
+      // rather than refiring from the original startAt.
+      const tickedEntry: ReminderEntry = { ...entry, lastFiredAt: firedAt };
       this.scheduled.set(key, {
-        entry,
-        handle: this.time.setTimer(() => this.fire(entry), periodMs),
+        entry: tickedEntry,
+        handle: this.time.setTimer(() => this.fire(tickedEntry), periodMs),
       });
+      void this.table
+        .recordFired(entry.grainId, entry.name, entry.etag, firedAt)
+        .catch((error: unknown) => {
+          this.logger.error("reminder recordFired failed", {
+            error,
+            grainId: entry.grainId.toString(),
+            name: entry.name,
+          });
+        });
     } else {
       // One-shot: done. Remove it from the table so a refresh can't re-fire it.
       this.scheduled.delete(key);

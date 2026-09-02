@@ -41,6 +41,7 @@ describe("LocalReminderService — error logging (no silent swallow)", () => {
       readRange: async () => {
         throw new Error("boom-readRange");
       },
+      recordFired: async (_g, _n, etag) => etag,
     };
     const { logger, errors } = recordingLogger();
     const refresh = 1000;
@@ -92,6 +93,7 @@ describe("LocalReminderService — error logging (no silent swallow)", () => {
       read: (g, n) => memory.read(g, n),
       readForGrain: (g) => memory.readForGrain(g),
       readRange: (a, b) => memory.readRange(a, b),
+      recordFired: (g, n, etag, at) => memory.recordFired(g, n, etag, at),
     };
     const { logger, errors } = recordingLogger();
     const service = new LocalReminderService(table, time, async () => undefined, [WHOLE], 0, {
@@ -182,5 +184,44 @@ describe("LocalReminderService — GetReminder(s)", () => {
     const entries = await service.getReminders(billing);
     const names = entries.map((e: ReminderEntry) => e.name).sort();
     expect(names).toEqual(["invoice", "report"]);
+  });
+});
+
+describe("LocalReminderService — double-fire on rebalance", () => {
+  it("does not fire immediately when a fresh instance reconciles the same table after a tick", async () => {
+    // Ownership-handoff hazard: without a persisted last-fired instant, a new
+    // owner's reconcile() would recompute dueMs=0 from the original startAt
+    // and fire immediately — a spurious fire for every reminder in the moved
+    // range. It must instead resume at the correct next period boundary.
+    const time = new FakeTimeProvider();
+    const table = new MemoryReminderTable();
+    const fires: number[] = [];
+    const onFire = async (): Promise<void> => {
+      fires.push(time.now());
+    };
+
+    const serviceA = new LocalReminderService(table, time, onFire, [WHOLE], 0, {
+      minimumPeriod: { ms: 0 },
+    });
+    await serviceA.register(billing, "tick", { ms: 1000 }, { ms: 1000 });
+
+    time.advance(1000); // first tick at startAt (t=1000)
+    await flush();
+    expect(fires).toEqual([1000]);
+    serviceA.stop();
+
+    // Ownership moves to a fresh service instance over the same durable table.
+    const serviceB = new LocalReminderService(table, time, onFire, [WHOLE], 0, {
+      minimumPeriod: { ms: 0 },
+    });
+    await serviceB.refreshOwnership([WHOLE]);
+    await flush();
+    expect(fires).toEqual([1000]); // no spurious immediate fire
+
+    time.advance(1000); // the correct next period boundary (t=2000)
+    await flush();
+    expect(fires).toEqual([1000, 2000]);
+
+    serviceB.stop();
   });
 });
