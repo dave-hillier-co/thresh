@@ -83,6 +83,34 @@ describe("value-codec", () => {
     });
   });
 
+  describe("prototype pollution", () => {
+    // A wire payload is attacker-controlled data, not trusted JS source. `JSON.parse` hands back
+    // "__proto__" as an ordinary OWN string key (it does not touch the prototype link), but the
+    // generic-object decode branch used to copy every key across with `out[key] = value` — and
+    // bracket assignment of the literal key "__proto__" onto a plain object invokes the inherited
+    // setter, replacing `out`'s prototype instead of adding a property. `constructor.prototype` is
+    // the same hazard one level down. Both must be neutralised on decode.
+    it("does not pollute Object.prototype via a __proto__ key in the payload", () => {
+      const payload = '{"__proto__":{"polluted":true}}';
+      const decoded = deserializeValue<Record<string, unknown>>(payload);
+      expect(Object.getPrototypeOf(decoded)).toBe(Object.prototype);
+      expect((decoded as { polluted?: boolean }).polluted).toBeUndefined();
+      expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
+    });
+
+    it("does not pollute Object.prototype via a constructor.prototype key", () => {
+      const payload = '{"constructor":{"prototype":{"polluted":true}}}';
+      deserializeValue(payload);
+      expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
+    });
+
+    it("drops __proto__/constructor/prototype keys rather than exposing them as data", () => {
+      const payload = '{"a":1,"__proto__":{"polluted":true}}';
+      const decoded = deserializeValue<Record<string, unknown>>(payload);
+      expect(decoded).toEqual({ a: 1 });
+    });
+  });
+
   describe("binary", () => {
     // `encodeValue` passes a `Uint8Array` through untouched, which is right for the MessagePack
     // path (msgpack has a native binary type) and for the in-memory clone. The JSON path has no

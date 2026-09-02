@@ -314,6 +314,20 @@ function tagged(tag: string, fields: Record<string, unknown>): Record<string, un
   return { [T]: tag, [V]: CURRENT_VERSION, ...fields };
 }
 
+// A wire payload's object keys are attacker-controlled data, not trusted JS source. `JSON.parse`
+// (and msgpack's map decode) hand "__proto__" back as an ordinary OWN string key — they never
+// touch the prototype LINK — but copying that key across with plain bracket assignment
+// (`out[key] = value`) invokes the inherited `Object.prototype.__proto__` setter and replaces the
+// target's prototype instead of adding a property. `constructor`/`prototype` are the same hazard
+// one property hop away (`out.constructor.prototype.x = y` reaches every object of that
+// constructor). Every decode branch that copies wire keys onto a plain object literal must skip
+// these three rather than assign them.
+const DANGEROUS_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
+function isDangerousKey(key: string): boolean {
+  return DANGEROUS_KEYS.has(key);
+}
+
 /**
  * How a `Uint8Array` is carried.
  *
@@ -502,6 +516,7 @@ function encodeInner(
         // silently. Let it travel as an ordinary property instead.
         if (k === "name" || k === "message" || k === "stack" || k === "cause") continue;
         if (k === "errors" && value instanceof AggregateError) continue;
+        if (isDangerousKey(k)) continue;
         properties[k] = encodeInner(v, seen, `${path}.${k}`, options);
       }
       const name = typeof value.name === "string" ? value.name : "Error";
@@ -536,8 +551,10 @@ function encodeInner(
     seen.add(value);
     try {
       const out: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(value))
+      for (const [k, v] of Object.entries(value)) {
+        if (isDangerousKey(k)) continue;
         out[k] = encodeInner(v, seen, `${path}.${k}`, options);
+      }
       return out;
     } finally {
       seen.delete(value);
@@ -588,6 +605,7 @@ export function decodeValue(value: unknown, ctx: CodecContext = {}): unknown {
         const properties: Record<string, unknown> = {};
         if (raw !== null && typeof raw === "object") {
           for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+            if (isDangerousKey(k)) continue;
             properties[k] = decodeValue(v, ctx);
           }
         }
@@ -643,7 +661,7 @@ export function decodeValue(value: unknown, ctx: CodecContext = {}): unknown {
         if (surrogate !== undefined) {
           const fields: Record<string, unknown> = {};
           for (const [k, v] of Object.entries(obj)) {
-            if (k === T || k === V) continue;
+            if (k === T || k === V || isDangerousKey(k)) continue;
             fields[k] = decodeValue(v, ctx);
           }
           return surrogate.decode(fields, ctx);
@@ -658,7 +676,10 @@ export function decodeValue(value: unknown, ctx: CodecContext = {}): unknown {
   }
 
   const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(obj)) out[k] = decodeValue(v, ctx);
+  for (const [k, v] of Object.entries(obj)) {
+    if (isDangerousKey(k)) continue;
+    out[k] = decodeValue(v, ctx);
+  }
   return out;
 }
 
