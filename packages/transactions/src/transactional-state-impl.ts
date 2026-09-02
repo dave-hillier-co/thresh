@@ -214,25 +214,35 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
   }
 
   async commit(transactionId: string): Promise<void> {
-    const tentative = this.tentative;
-    if (tentative?.transactionId === transactionId) {
-      await this.storeState([], tentative.sequenceId);
-      this.committed = tentative.value;
-      this.committedSequenceId = tentative.sequenceId;
-      this.tentative = undefined;
+    try {
+      const tentative = this.tentative;
+      if (tentative?.transactionId === transactionId) {
+        await this.storeState([], tentative.sequenceId);
+        this.committed = tentative.value;
+        this.committedSequenceId = tentative.sequenceId;
+        this.tentative = undefined;
+      }
+    } finally {
+      // Always release, even if the durable write threw: an unreleased lock
+      // would deadlock this grain state's ReaderWriterLock permanently.
+      this.lock.release(transactionId);
     }
-    this.lock.release(transactionId);
   }
 
   async abort(transactionId: string): Promise<void> {
-    const tentative = this.tentative;
-    if (tentative?.transactionId === transactionId) {
-      if (tentative.prepared) {
-        await this.storeState([], undefined, this.committedSequenceId);
+    try {
+      const tentative = this.tentative;
+      if (tentative?.transactionId === transactionId) {
+        if (tentative.prepared) {
+          await this.storeState([], undefined, this.committedSequenceId);
+        }
+        this.tentative = undefined;
       }
-      this.tentative = undefined;
+    } finally {
+      // Always release, even if the durable write threw: an unreleased lock
+      // would deadlock this grain state's ReaderWriterLock permanently.
+      this.lock.release(transactionId);
     }
-    this.lock.release(transactionId);
   }
 
   /**

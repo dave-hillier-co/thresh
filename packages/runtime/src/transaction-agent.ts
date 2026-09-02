@@ -83,7 +83,19 @@ export class TransactionAgent {
       // The TM durably records the commit before any participant commits — the
       // atomic commit point. A crash after this leaves participants in-doubt,
       // and recovery resolves them to commit by querying the TM.
-      if (manager !== undefined) await this.recordCommit(manager, info, writeParticipants);
+      if (manager !== undefined) {
+        try {
+          await this.recordCommit(manager, info, writeParticipants);
+        } catch (error) {
+          // We cannot tell whether the record actually persisted before this
+          // failed (e.g. the write landed but the ack was lost) — so this is
+          // exactly the "unknown" case `TransactionInDoubtError` exists for,
+          // not an abort: every participant here is already prepared, and
+          // aborting them now could contradict a commit that DID land.
+          // Recovery resolves the truth later by querying the TM directly.
+          throw new TransactionInDoubtError(info.id, { cause: error });
+        }
+      }
       // Past this point the commit is durably decided: every participant's
       // write *will* eventually apply. A participant whose own commit step
       // throws here (e.g. an external, non-grain resource enlisted via

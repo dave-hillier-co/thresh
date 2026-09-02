@@ -11,7 +11,10 @@ class FakeParticipant implements TransactionParticipant {
   committed = false;
   aborted = false;
 
-  constructor(private readonly onCommit?: () => void | Promise<void>) {}
+  constructor(
+    private readonly onCommit?: () => void | Promise<void>,
+    private readonly onRecordCommit?: () => void | Promise<void>,
+  ) {}
 
   prepare(): boolean {
     return true;
@@ -26,8 +29,8 @@ class FakeParticipant implements TransactionParticipant {
     this.aborted = true;
   }
 
-  recordCommit(): void {
-    // not elected manager in these tests
+  async recordCommit(): Promise<void> {
+    if (this.onRecordCommit !== undefined) await this.onRecordCommit();
   }
 }
 
@@ -82,6 +85,39 @@ describe("TransactionAgent.resolve", () => {
       // The other participant's write still lands: the commit decision was
       // already durable, so an in-doubt failure elsewhere does not roll it back.
       expect(ok.committed).toBe(true);
+    },
+  );
+
+  it(
+    "raises TransactionInDoubtError — never aborting a prepared participant — when the elected " +
+      "manager's own recordCommit fails: whether the durable record landed before the failure " +
+      "is unknowable, so recovery (querying the TM) is the only safe way to resolve it",
+    async () => {
+      const agent = new TransactionAgent(new FakeTimeProvider());
+      const info = agent.startTransaction();
+      const manager = new FakeParticipant(undefined, () => {
+        throw new Error("TM write timed out — ack lost");
+      });
+      const other = new FakeParticipant();
+      info.participants.set(
+        participantKey(enlist("manager", "s", manager).id),
+        enlist("manager", "s", manager),
+      );
+      info.participants.set(
+        participantKey(enlist("other", "s", other).id),
+        enlist("other", "s", other),
+      );
+
+      const failure = agent.resolve(info);
+
+      await expect(failure).rejects.toBeInstanceOf(TransactionInDoubtError);
+      await expect(failure).rejects.not.toBeInstanceOf(TransactionAbortedError);
+      // Every participant was already prepared and the commit may or may not
+      // have been durably recorded — neither may be rolled back.
+      expect(manager.aborted).toBe(false);
+      expect(other.aborted).toBe(false);
+      expect(manager.committed).toBe(false);
+      expect(other.committed).toBe(false);
     },
   );
 });

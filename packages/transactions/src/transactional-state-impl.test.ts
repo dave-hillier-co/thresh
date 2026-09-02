@@ -13,6 +13,7 @@ import {
 } from "@thresh/core/errors";
 import { MemoryTransactionalStorage } from "@thresh/transactions/memory-transactional-storage";
 import { TransactionalStateImpl } from "@thresh/transactions/transactional-state-impl";
+import type { TransactionalStateStorage } from "@thresh/core/transactional-storage";
 
 interface Balance {
   cents: number;
@@ -64,6 +65,58 @@ describe("TransactionalStateImpl (Slice 2)", () => {
     const t2 = agent.startTransaction();
     const value = await inTransaction(t2, () => state.performRead((s) => s.cents));
     expect(value).toBe(100);
+  });
+
+  it("releases the write lock even when the durable commit-phase write fails, so a later transaction is not deadlocked", async () => {
+    // A storage whose `store` throws exactly on the commit-phase write
+    // (identified by `commitUpTo` being set) — standing in for a durable
+    // write that fails after prepare, e.g. a dropped connection.
+    const inner = new MemoryTransactionalStorage();
+    let failNextCommit = false;
+    const flaky: TransactionalStateStorage = {
+      load: (stateName, id) => inner.load(stateName, id),
+      store: (stateName, id, expectedETag, metadata, statesToPrepare, commitUpTo, abortAfter) => {
+        if (failNextCommit && commitUpTo !== undefined) {
+          throw new Error("durable write failed");
+        }
+        return inner.store(
+          stateName,
+          id,
+          expectedETag,
+          metadata,
+          statesToPrepare,
+          commitUpTo,
+          abortAfter,
+        );
+      },
+    };
+    const state = new TransactionalStateImpl<Balance>(
+      "balance",
+      grainId("lock-safety"),
+      () => ({ cents: 100 }),
+      flaky,
+    );
+    await state.load();
+
+    const t1 = agent.startTransaction();
+    await inTransaction(t1, () => state.performUpdate((s) => (s.cents = 250)));
+    failNextCommit = true;
+    // The agent surfaces the failed commit-phase write as in-doubt (the TM
+    // already durably recorded the commit at this point) — what matters for
+    // this test is that the participant's own lock is still released despite
+    // its commit() call rejecting.
+    await expect(agent.resolve(t1)).rejects.toThrow();
+
+    // The write lock must have been released despite commit() rejecting —
+    // otherwise this next transaction would hang/deadlock forever.
+    failNextCommit = false;
+    const t2 = agent.startTransaction();
+    await inTransaction(t2, () => state.performUpdate((s) => (s.cents = 300)));
+    await agent.resolve(t2);
+
+    const check = agent.startTransaction();
+    expect(await inTransaction(check, () => state.performRead((s) => s.cents))).toBe(300);
+    await agent.resolve(check);
   });
 
   it("a transaction sees its own tentative writes within the transaction", async () => {
