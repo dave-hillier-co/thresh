@@ -117,6 +117,8 @@ import { GrainServiceRegistry, type GrainService } from "@thresh/runtime/grain-s
 import type { LoadSheddingOptions } from "@thresh/runtime/load-shedding";
 import { StaticMembershipService } from "@thresh/runtime/static-membership";
 import { ActivationRebalancerWorker } from "@thresh/runtime/placement/rebalancing/rebalancer-worker";
+import { ISiloProbe } from "@thresh/core/silo-probe-grain";
+import { SelfProbeWorker } from "@thresh/hosting/self-probe";
 import type { ImbalanceToleranceRule } from "@thresh/runtime/placement/repartitioning/activation-repartitioner";
 import {
   defaultActivationRepartitionerOptions,
@@ -237,6 +239,29 @@ export interface SiloConfig {
    * no external routing plane to wait for.
    */
   gracefulShutdownMs?: number;
+  /**
+   * Self-probe liveness (docs/design-notes-parity-gaps.md item 9, option A):
+   * periodically call a no-op system grain on THIS silo and flip readiness
+   * false after `missedThreshold` consecutive misses, catching a hung grain
+   * dispatcher that k8s' own readiness probe can't see (it only checks that
+   * the HTTP endpoint answers, not that the dispatcher behind it still
+   * completes calls). Defaults to enabled — with no config at all — because
+   * it is cheap (one no-op local call every `intervalMs`, 10s by default),
+   * fully self-contained (no peer probing, no new RBAC, K8s stays the sole
+   * membership authority), and closes a real observability gap that would
+   * otherwise need a human to notice a stuck silo serving 200s to nothing.
+   * Pass `{ enabled: false }` to opt out entirely.
+   */
+  selfProbe?: {
+    /** How often to probe. Defaults to 10s (Orleans `ProbeTimeout`). */
+    intervalMs?: number;
+    /** How long one probe may take before it counts as a miss. Defaults to 5s. */
+    timeoutMs?: number;
+    /** Consecutive misses before readiness flips false. Defaults to 3 (Orleans `NumMissedProbesLimit`). */
+    missedThreshold?: number;
+    /** Set `false` to disable the worker entirely. Defaults to `true`. */
+    enabled?: boolean;
+  };
 }
 
 /**
@@ -1396,6 +1421,31 @@ export class SiloBuilder {
       });
     }
 
+    // Self-probe liveness (docs/design-notes-parity-gaps.md item 9, option
+    // A): defaults to enabled, so this only skips construction when the
+    // caller opted out via `{ enabled: false }`. `node.getGrain(ISiloProbe,
+    // local.ringKey)` is what makes this a SELF-probe rather than an
+    // ordinary placed call — `local.ringKey` is this silo's own identity, so
+    // even though placement is `preferLocal` (which would land here anyway),
+    // the key itself pins the call to this silo's own activation.
+    let selfProbeWorker: SelfProbeWorker | undefined;
+    if (this.config.selfProbe?.enabled !== false) {
+      selfProbeWorker = new SelfProbeWorker({
+        probe: () => node.getGrain(ISiloProbe, this.config.local.ringKey).ping(),
+        health,
+        time: time ?? systemTimeProvider,
+        ...(this.config.selfProbe?.intervalMs !== undefined
+          ? { intervalMs: this.config.selfProbe.intervalMs }
+          : {}),
+        ...(this.config.selfProbe?.timeoutMs !== undefined
+          ? { timeoutMs: this.config.selfProbe.timeoutMs }
+          : {}),
+        ...(this.config.selfProbe?.missedThreshold !== undefined
+          ? { missedThreshold: this.config.selfProbe.missedThreshold }
+          : {}),
+      });
+    }
+
     // Pulling-agent stream providers deliver through the dispatcher to subscriber
     // activations, so they need the started node; the host runs the ownership hook
     // on start and on every membership change, so each silo runs agents only for
@@ -1533,6 +1583,7 @@ export class SiloBuilder {
       membership: this.membership,
       reminderService,
       rebalancerWorker,
+      selfProbeWorker,
       onStart: this.starters,
       onOwnershipChange,
       onStop: this.closers,

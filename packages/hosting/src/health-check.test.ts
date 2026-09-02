@@ -7,6 +7,7 @@ const healthy = {
   membershipHealthy: true,
   draining: false,
   overloaded: false,
+  dispatcherResponsive: true,
 };
 
 describe("HealthCheck", () => {
@@ -46,5 +47,26 @@ describe("HealthCheck", () => {
     const health = new HealthCheck();
     health.update({ ...healthy, membershipHealthy: false });
     expect(health.ready().ok).toBe(false);
+  });
+
+  it("starts dispatcher-responsive (optimistic, before the first self-probe cycle runs)", () => {
+    const health = new HealthCheck();
+    health.update({ ...healthy });
+    expect(health.ready().ok).toBe(true);
+  });
+
+  it("is not ready when the self-probe worker reports a hung dispatcher", () => {
+    const health = new HealthCheck();
+    health.update({ ...healthy, dispatcherResponsive: false });
+    const probe = health.ready();
+    expect(probe.ok).toBe(false);
+    expect(probe.checks.dispatcherResponsive).toBe(false);
+  });
+
+  it("exposes draining so SelfProbeWorker can gate its readiness flip on it", () => {
+    const health = new HealthCheck();
+    expect(health.isDraining()).toBe(false);
+    health.update({ draining: true });
+    expect(health.isDraining()).toBe(true);
   });
 });

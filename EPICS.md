@@ -13,7 +13,8 @@ for how the design differs from Orleans.
 - **Placement** — random / prefer-local / activation-count / stateless-worker / silo-role /
   resource-optimized strategies, metadata placement filters, and version-aware placement.
 - **Kubernetes hosting** — EndpointSlice-watch membership, health probes, graceful drain, the
-  `createSilo()` builder, and a real-cluster e2e.
+  `createSilo()` builder, a self-probe that fails readiness when the silo's own dispatcher hangs
+  (the `ISiloProbe` grain + `SelfProbeWorker`), and a real-cluster e2e.
 - **Persistence** — `PersistentState` facet with etag concurrency; memory + Redis + Postgres providers.
 - **Timers & reminders** — in-memory timers; durable reminders with hash-range ownership and
   rebalancing; memory + Redis + Postgres tables.

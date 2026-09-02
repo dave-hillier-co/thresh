@@ -67,6 +67,7 @@ import {
   type DetailedGrainStatistic,
   type SimpleGrainStatistic,
 } from "@thresh/core/management-grain";
+import { ISiloProbe } from "@thresh/core/silo-probe-grain";
 import type { SiloAddress } from "@thresh/core/silo-address";
 import {
   participantKey,
@@ -110,6 +111,7 @@ import { BroadcastChannelProviderImpl } from "@thresh/runtime/broadcast-channel-
 import { GrainFactory } from "@thresh/runtime/grain-factory";
 import type { GrainServiceRegistry } from "@thresh/runtime/grain-service";
 import { createManagementGrainType } from "@thresh/runtime/management-grain";
+import { createSiloProbeGrainType } from "@thresh/runtime/silo-probe-grain";
 import { chooseMigrationTarget } from "@thresh/runtime/placement/choose-migration-target";
 import {
   placementFiltersFor,
@@ -699,6 +701,15 @@ export class ClusterNode {
       }),
       { interfaces: [IManagementGrain] },
     );
+    // Built-in system grain (docs/design-notes-parity-gaps.md item 9, option
+    // A): a no-op self-probe every silo registers on itself so
+    // `SelfProbeWorker` (`@thresh/hosting`) can call `getGrain(ISiloProbe,
+    // local.ringKey).ping()` and time a real round trip through this silo's
+    // OWN dispatcher. `preferLocal` placement (set on the class itself, see
+    // `createSiloProbeGrainType`) is what makes "on itself" true — without
+    // it, placement could land the activation on any candidate silo and the
+    // probe would say nothing about whether THIS silo's dispatcher is stuck.
+    this.registerGrain(createSiloProbeGrainType(), { interfaces: [ISiloProbe] });
   }
 
   /**
@@ -2435,7 +2446,12 @@ export class ClusterNode {
   async migrateRandomActivations(target: SiloAddress, count: number): Promise<number> {
     if (count <= 0 || target.equals(this.options.local)) return 0;
     const random = this.options.random ?? Math.random;
-    const candidates = this.catalog.liveActivations();
+    // Immovable-by-rebalancer types (Orleans `[Immovable(Rebalancer)]`) never
+    // enter the pool — including the built-in self-probe grain, which must
+    // stay on its own silo or the probe would silently exercise a peer.
+    const candidates = this.catalog
+      .liveActivations()
+      .filter((a) => this.isMigratableBy(a.id, "rebalancer"));
     // Fisher–Yates over a copy, deterministic under an injected RNG.
     for (let i = candidates.length - 1; i > 0; i--) {
       const j = Math.floor(random() * (i + 1));

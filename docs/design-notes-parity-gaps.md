@@ -185,6 +185,11 @@ Routing is faithful to Orleans rather than shortcutting on this codebase's direc
 
 ## 9. K8s active peer probing
 
+> **Option (A) shipped 2026-09-02**: the built-in `ISiloProbe` grain (prefer-local, immovable) plus
+> `SelfProbeWorker` in `@thresh/hosting` — a `dispatcherResponsive` readiness signal that flips
+> after 3 consecutive missed self-probes and recovers on success. Option (C), the dispatch-level
+> dead-peer fallback, remains open.
+
 **Problem.** `@thresh/clustering-k8s` relies entirely on the kubelet's readiness probe. A silo whose readiness endpoint still returns 200 but whose grain dispatcher hangs (deadlock, exhausted thread pool equivalent, GC stall) is undetectable.
 
 **Orleans.** Probe-graph: every silo actively probes a subset of peers and gossips suspicions; majority agreement marks a silo dead.

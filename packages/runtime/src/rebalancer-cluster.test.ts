@@ -103,4 +103,38 @@ describe("activation rebalancer — load gathering + directed migration (slice 2
       await Promise.all(nodes.map((n) => n.stop()));
     }
   });
+
+  it("never picks an immovable grain, even when asked to move every activation", async () => {
+    const { nodes, addresses } = buildCluster(2);
+    for (const node of nodes) {
+      node.registerGrain(PinnedGrain, { interfaces: [IPinned] });
+    }
+    await Promise.all(nodes.map((n) => n.start()));
+    try {
+      await activateOn(nodes[0]!, keys("g", 3));
+      await nodes[0]!.getGrain(IPinned, "pinned-0").ping();
+      expect(nodes[0]!.activationCount()).toBe(4);
+
+      // Ask for more than the movable population: only the 3 workers may go.
+      const moved = await nodes[0]!.migrateRandomActivations(addresses[1]!, 4);
+      expect(moved).toBe(3);
+      expect(nodes[0]!.activationCount()).toBe(1); // the pinned grain stayed
+      expect(await nodes[0]!.getGrain(IPinned, "pinned-0").ping()).toBe("pinned");
+      expect(nodes[1]!.activationCount()).toBe(3);
+    } finally {
+      await Promise.all(nodes.map((n) => n.stop()));
+    }
+  });
 });
+
+interface IPinned extends GrainKey<string> {
+  ping(): Promise<string>;
+}
+const IPinned = defineGrainInterface<IPinned>("IPinned.rebalance");
+
+@grain({ immovable: "rebalancer" })
+class PinnedGrain extends Grain implements IPinned {
+  async ping(): Promise<string> {
+    return "pinned";
+  }
+}

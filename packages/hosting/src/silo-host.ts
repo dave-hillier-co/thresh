@@ -16,6 +16,7 @@ import type { Edge } from "@thresh/runtime/placement/repartitioning/edge";
 import { GracefulShutdown } from "@thresh/hosting/graceful-shutdown";
 import type { HealthCheck } from "@thresh/hosting/health-check";
 import type { HealthServer } from "@thresh/hosting/health-server";
+import type { SelfProbeWorker } from "@thresh/hosting/self-probe";
 
 /** The reminder service the host drives (a `LocalReminderService`). */
 export interface ReminderService {
@@ -45,6 +46,14 @@ export interface SiloHostParts {
   reminderService?: ReminderService | undefined;
   /** The elected activation-rebalancer worker, started/stopped with the host. */
   rebalancerWorker?: ActivationRebalancerWorker | undefined;
+  /**
+   * The self-probe liveness worker (docs/design-notes-parity-gaps.md item 9,
+   * option A), started/stopped with the host. `undefined` when
+   * `SiloConfig.selfProbe.enabled` is `false`. Started AFTER `node.start()`
+   * (like `rebalancerWorker`) — probing before the node is even accepting
+   * calls would just record spurious misses.
+   */
+  selfProbeWorker?: SelfProbeWorker | undefined;
   /** Run before the node starts — e.g. connect durable provider clients. */
   onStart?: ReadonlyArray<() => Promise<void>>;
   /**
@@ -207,6 +216,7 @@ export class SiloHost {
       membership,
       reminderService,
       rebalancerWorker,
+      selfProbeWorker,
       onStart,
       onOwnershipChange,
       startupTasks,
@@ -222,6 +232,7 @@ export class SiloHost {
     await this.runHooks(onOwnershipChange, ranges);
     await reminderService?.refreshOwnership(ranges);
     rebalancerWorker?.start();
+    selfProbeWorker?.start();
     this.watchMembership();
     health.update({
       membershipHealthy: membership.current().silos.length > 0,
@@ -230,11 +241,20 @@ export class SiloHost {
   }
 
   async stop(): Promise<void> {
-    const { rebalancerWorker, reminderService, shutdown, healthServer, onStop } = this.parts;
+    const { rebalancerWorker, selfProbeWorker, reminderService, shutdown, healthServer, onStop } =
+      this.parts;
     this.membershipWatch?.abort();
     rebalancerWorker?.stop();
     reminderService?.stop();
+    // `selfProbeWorker` keeps ticking through `shutdown.drain()`'s grace
+    // period rather than stopping here alongside the other workers: it reads
+    // `HealthCheck.isDraining()` to no-op its own flip once `drain()` sets
+    // `draining` true, so a probe miss during the grace window (turns being
+    // drained, connections closing) is correctly attributed to the drain
+    // rather than misreported as a hung dispatcher. Only stopped once the
+    // node itself is fully down.
     await shutdown.drain();
+    selfProbeWorker?.stop();
     await healthServer?.close();
     await this.runHooks(onStop);
   }

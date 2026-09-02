@@ -39,8 +39,11 @@ describe("activation rebalancer converges across a cluster (slice 2b e2e)", () =
 
     // Build three silos; keep a handle to each host and seed all activations on silo-0
     // (random -> first candidate places every grain there), creating a [N,0,0] skew.
+    // The self-probe is off: the fake clock that drives rebalance cycles would
+    // also fire probe ticks, and each silo's probe-grain activation would skew
+    // the exact activation counts this test asserts on.
     const silos = addrs.map((local) =>
-      createSilo({ clusterId: "c", local, time, random: () => 0 })
+      createSilo({ clusterId: "c", local, time, random: () => 0, selfProbe: { enabled: false } })
         .useMembership(membership)
         .useInProcessTransport(net)
         .useActivationRebalancing({

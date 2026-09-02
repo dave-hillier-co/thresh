@@ -9,6 +9,8 @@ import { GrainId } from "@thresh/core/grain-id";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
 import type { GrainKey, GrainWithStringKey } from "@thresh/core/key-kinds";
 import { SiloAddress } from "@thresh/core/silo-address";
+import { ISiloProbe } from "@thresh/core/silo-probe-grain";
+import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
 import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
 import { MemoryGrainStorage } from "@thresh/persistence/memory-grain-storage";
 import { PostgresGrainStorage } from "@thresh/persistence/postgres-grain-storage";
@@ -614,6 +616,111 @@ describe.skipIf(!redisUp)("SiloBuilder service identity in Redis storage (issue 
       await cleanup.quit();
     }
   }, 20_000);
+});
+
+// ---------------------------------------------------------------------------
+// Self-probe liveness (docs/design-notes-parity-gaps.md item 9, option A)
+// ---------------------------------------------------------------------------
+
+/** Module-scoped so the wedged probe grain's single turn can be released before `host.stop()`. */
+let probeGate: { resolve: () => void; promise: Promise<void> };
+function resetProbeGate(): void {
+  let resolve!: () => void;
+  const promise = new Promise<void>((res) => {
+    resolve = res;
+  });
+  probeGate = { resolve, promise };
+}
+
+/**
+ * Overrides the built-in `ISiloProbe` activation with one whose `ping()`
+ * never resolves on its own — the closest a single-process test harness can
+ * get to a genuinely deadlocked turn scheduler: a REAL activation, REAL
+ * `preferLocal` placement, REAL dispatch through the catalog and turn
+ * scheduler, whose one exclusive turn simply never settles until the test
+ * releases `probeGate`. Every self-probe call queued behind it while wedged
+ * sits admitted-never turns in the same activation's queue rather than being
+ * answered — exactly the failure mode `SelfProbeWorker` exists to catch.
+ */
+@grain()
+class WedgedProbeGrain extends Grain implements ISiloProbe {
+  async ping(): Promise<void> {
+    await probeGate.promise;
+  }
+}
+
+const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
+
+describe("SiloBuilder self-probe liveness", () => {
+  it("keeps readiness true while the real ISiloProbe grain answers (real placement, real dispatch)", async () => {
+    const time = new FakeTimeProvider();
+    const probeLocal = new SiloAddress("silo-probe-a", "uid-probe-a", "silo-probe-a:1");
+    const host = createSilo({
+      clusterId: "c-self-probe-a",
+      local: probeLocal,
+      time,
+      selfProbe: { intervalMs: 10, timeoutMs: 5, missedThreshold: 2 },
+    })
+      .useStaticMembership([probeLocal])
+      .useInProcessTransport(new InProcessNetwork())
+      .useMessagePackSerialization()
+      .build();
+    await host.start();
+    try {
+      expect(host.health.ready().ok).toBe(true);
+      // A few real probe cycles against the built-in ISiloProbe grain — no
+      // seam is injected here at all.
+      for (let i = 0; i < 3; i += 1) {
+        time.advance(10);
+        await flush();
+      }
+      expect(host.health.ready().ok).toBe(true);
+      expect(host.health.ready().checks.dispatcherResponsive).toBe(true);
+    } finally {
+      await host.stop();
+    }
+  });
+
+  it("flips readiness false when the self-probe grain's own activation is wedged", async () => {
+    resetProbeGate();
+    const time = new FakeTimeProvider();
+    const probeLocal = new SiloAddress("silo-probe-b", "uid-probe-b", "silo-probe-b:1");
+    const host = createSilo({
+      clusterId: "c-self-probe-b",
+      local: probeLocal,
+      time,
+      selfProbe: { intervalMs: 10, timeoutMs: 5, missedThreshold: 2 },
+    })
+      .useStaticMembership([probeLocal])
+      .useInProcessTransport(new InProcessNetwork())
+      .useMessagePackSerialization()
+      // Swaps the built-in ISiloProbe activation for the wedged one above —
+      // registered after the constructor's own built-in registration, so
+      // this interface now resolves to WedgedProbeGrain's grain type.
+      .registerGrain(WedgedProbeGrain, { interfaces: [ISiloProbe] })
+      .build();
+    await host.start();
+    try {
+      expect(host.health.ready().ok).toBe(true);
+      // Two probe cycles, each interval followed by its own timeout — the
+      // wedged grain never answers within `timeoutMs`, so both are misses.
+      for (let i = 0; i < 2; i += 1) {
+        time.advance(10);
+        await flush();
+        time.advance(5);
+        await flush();
+      }
+      expect(host.health.ready().ok).toBe(false);
+      expect(host.health.ready().checks.dispatcherResponsive).toBe(false);
+    } finally {
+      // Release the wedged turn before stopping: `node.stop()` deactivates
+      // every activation, which would otherwise wait forever behind this
+      // one's still-running exclusive turn.
+      probeGate.resolve();
+      await flush();
+      await host.stop();
+    }
+  });
 });
 
 afterAll(async () => {
