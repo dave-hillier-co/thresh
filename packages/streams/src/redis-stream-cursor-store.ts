@@ -2,6 +2,16 @@ import { DEFAULT_SERVICE_ID } from "@thresh/core/default-service-id";
 import type { RedisClient } from "@thresh/streams/redis-stream-queue";
 import type { StreamCursorStore } from "@thresh/streams/stream-cursor-store";
 
+// Monotonic compare-and-set: only write `cursor` when it advances the
+// existing value, so a stale commit racing in from a de-owned pulling agent
+// (ownership handoff) can never rewind a newer commit from the new owner.
+const COMMIT_IF_GREATER = `
+local current = redis.call('GET', KEYS[1])
+if current == false or tonumber(ARGV[1]) > tonumber(current) then
+  redis.call('SET', KEYS[1], ARGV[1])
+end
+return 1`;
+
 /**
  * `StreamCursorStore` backed by a plain Redis key per `(provider, queueIdx)`,
  * following the same `<queueKey>:cursor` idiom `RedisStreamQueue` uses for
@@ -30,6 +40,13 @@ export class RedisStreamCursorStore implements StreamCursorStore {
   }
 
   async commit(provider: string, queueIdx: number, cursor: number): Promise<void> {
+    await this.client.eval(COMMIT_IF_GREATER, {
+      keys: [this.key(provider, queueIdx)],
+      arguments: [String(cursor)],
+    });
+  }
+
+  async seek(provider: string, queueIdx: number, cursor: number): Promise<void> {
     await this.client.set(this.key(provider, queueIdx), String(cursor));
   }
 }

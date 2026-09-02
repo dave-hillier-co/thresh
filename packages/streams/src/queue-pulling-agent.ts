@@ -22,7 +22,21 @@ export type DeliverEvent = (streamKey: string, event: unknown, token: number) =>
 export interface PullableQueue {
   getCursor(): Promise<number>;
   readAfter(cursor: number, count?: number): Promise<QueueEntry[]>;
+  /**
+   * Advance the committed cursor after at-least-once delivery. Backings make
+   * this monotonic (only ever advances) so a stale commit racing in from a
+   * de-owned pulling agent during ownership handoff cannot rewind a newer
+   * commit already made by the new owner and cause a whole batch to be
+   * redelivered.
+   */
   commit(cursor: number): Promise<void>;
+  /**
+   * Unconditionally set the committed cursor, bypassing `commit`'s monotonic
+   * guard. Used only for an intentional rewind to an earlier checkpoint
+   * (`RecoverableStreamDeliveryError`) — never for ordinary at-least-once
+   * advancement, which must go through `commit`.
+   */
+  seek(cursor: number): Promise<void>;
 }
 
 /**
@@ -203,7 +217,7 @@ export class QueuePullingAgent {
           // checkpoint and forget the cached cursor, so the next poll
           // re-reads from there and redelivers everything the reactivated
           // consumer needs — not just this one event.
-          await this.queue.commit(err.resumeToken);
+          await this.queue.seek(err.resumeToken);
           this.resetCursor();
           return false; // leave the cursor; caller stops this batch, no advance
         }

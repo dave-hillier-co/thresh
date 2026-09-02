@@ -71,4 +71,8 @@ export class GeneratorStreamQueue implements PullableQueue {
   async commit(cursor: number): Promise<void> {
     this.committed = cursor;
   }
+
+  async seek(cursor: number): Promise<void> {
+    this.committed = cursor;
+  }
 }

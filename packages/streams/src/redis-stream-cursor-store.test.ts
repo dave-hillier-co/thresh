@@ -52,6 +52,25 @@ describe.skipIf(client === undefined)("RedisStreamCursorStore", () => {
     await store.commit("p", 0, 5);
     expect(await store.getCursor("p", 0)).toBe(5);
   });
+
+  // Ownership-handoff regression: a stale commit from a de-owned pulling
+  // agent racing the new owner's fresher commit must not rewind the cursor
+  // and cause a whole batch to be redelivered.
+  it("does not regress the cursor on a stale, smaller commit (ownership handoff)", async () => {
+    const store = new RedisStreamCursorStore(client!, prefix);
+    await store.commit("p", 0, 10);
+    await store.commit("p", 0, 4);
+    expect(await store.getCursor("p", 0)).toBe(10);
+  });
+
+  // seek() is the deliberate escape hatch for RecoverableStreamDeliveryError's
+  // checkpoint rewind — unlike commit(), it must go backwards on request.
+  it("seek unconditionally rewinds the cursor", async () => {
+    const store = new RedisStreamCursorStore(client!, prefix);
+    await store.commit("p", 0, 10);
+    await store.seek("p", 0, 3);
+    expect(await store.getCursor("p", 0)).toBe(3);
+  });
 });
 
 // Issue #64: RedisStreamCursorStore partitions only by keyPrefix, so two

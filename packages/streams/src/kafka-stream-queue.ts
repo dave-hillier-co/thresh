@@ -267,6 +267,10 @@ export class KafkaTopicQueues {
   commit(idx: number, cursor: number, signal?: AbortSignal): Promise<void> {
     return this.cursorStore.commit(this.providerName, idx, cursor, signal);
   }
+
+  seek(idx: number, cursor: number, signal?: AbortSignal): Promise<void> {
+    return this.cursorStore.seek(this.providerName, idx, cursor, signal);
+  }
 }
 
 /** One partition of a `KafkaTopicQueues` topic, viewed as an `AppendableQueue`. */
@@ -290,5 +294,9 @@ export class KafkaStreamQueue implements AppendableQueue {
 
   async commit(cursor: number): Promise<void> {
     await this.client.commit(this.idx, cursor);
+  }
+
+  async seek(cursor: number): Promise<void> {
+    await this.client.seek(this.idx, cursor);
   }
 }

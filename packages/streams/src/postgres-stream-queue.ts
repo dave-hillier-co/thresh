@@ -169,6 +169,17 @@ export class PostgresStreamQueue implements AppendableQueue {
     }
   }
 
+  /**
+   * Unconditionally set the cursor, bypassing `commit`'s monotonic guard —
+   * for an intentional rewind to an earlier checkpoint
+   * (`RecoverableStreamDeliveryError`), never for ordinary advancement.
+   * Deliberately does not trim: rows below the pre-rewind cursor may already
+   * have been trimmed by a prior, further-ahead commit.
+   */
+  async seek(cursor: number, signal?: AbortSignal): Promise<void> {
+    await this.cursors.seek(this.providerName, this.queueIdx, cursor, signal);
+  }
+
   private async trim(cursor: number): Promise<void> {
     if (this.retainForMs === undefined) {
       await this.pool.query(

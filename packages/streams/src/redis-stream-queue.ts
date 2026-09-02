@@ -21,6 +21,17 @@ local n = redis.call('INCR', KEYS[2])
 redis.call('XADD', KEYS[1], n .. '-0', 'stream', ARGV[1], 'data', ARGV[2])
 return n`;
 
+// Monotonic compare-and-set: only write `cursor` when it advances the
+// existing committed value, so a stale commit racing in from a de-owned
+// pulling agent (ownership handoff) can never rewind a newer commit from the
+// new owner and cause a whole batch to be redelivered.
+const COMMIT_IF_GREATER = `
+local current = redis.call('GET', KEYS[1])
+if current == false or tonumber(ARGV[1]) > tonumber(current) then
+  redis.call('SET', KEYS[1], ARGV[1])
+end
+return 1`;
+
 /**
  * One physical queue (a Redis Stream) onto which many logical streams are
  * multiplexed. Holds a durable, committed cursor so a pulling agent — or a
@@ -65,6 +76,18 @@ export class RedisStreamQueue {
   }
 
   async commit(cursor: number): Promise<void> {
+    await this.client.eval(COMMIT_IF_GREATER, {
+      keys: [this.cursorKey],
+      arguments: [String(cursor)],
+    });
+  }
+
+  /**
+   * Unconditionally set the cursor, bypassing `commit`'s monotonic guard —
+   * for an intentional rewind to an earlier checkpoint
+   * (`RecoverableStreamDeliveryError`), never for ordinary advancement.
+   */
+  async seek(cursor: number): Promise<void> {
     await this.client.set(this.cursorKey, String(cursor));
   }
 }

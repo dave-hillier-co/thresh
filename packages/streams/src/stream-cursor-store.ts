@@ -11,7 +11,19 @@
 export interface StreamCursorStore {
   /** The committed cursor for `(provider, queueIdx)` (0 if never committed). */
   getCursor(provider: string, queueIdx: number, signal?: AbortSignal): Promise<number>;
+  /**
+   * Advance the committed cursor after at-least-once delivery — monotonic:
+   * only ever advances. A stale commit racing in from a de-owned pulling
+   * agent during ownership handoff must not rewind a newer commit the new
+   * owner already made (which would redeliver a whole batch).
+   */
   commit(provider: string, queueIdx: number, cursor: number, signal?: AbortSignal): Promise<void>;
+  /**
+   * Unconditionally set the committed cursor, bypassing `commit`'s monotonic
+   * guard. Used only for an intentional rewind to an earlier checkpoint
+   * (`RecoverableStreamDeliveryError`).
+   */
+  seek(provider: string, queueIdx: number, cursor: number, signal?: AbortSignal): Promise<void>;
 }
 
 /** In-memory `StreamCursorStore` — the default for tests and single-process silos. */
@@ -26,7 +38,16 @@ export class MemoryStreamCursorStore implements StreamCursorStore {
     return this.cursors.get(this.key(provider, queueIdx)) ?? 0;
   }
 
+  // Monotonic: a stale commit racing in from a de-owned agent after the new
+  // owner has already committed further ahead must not rewind the cursor and
+  // redeliver a whole batch (ownership-handoff regression).
   async commit(provider: string, queueIdx: number, cursor: number): Promise<void> {
+    const key = this.key(provider, queueIdx);
+    const current = this.cursors.get(key) ?? 0;
+    if (cursor > current) this.cursors.set(key, cursor);
+  }
+
+  async seek(provider: string, queueIdx: number, cursor: number): Promise<void> {
     this.cursors.set(this.key(provider, queueIdx), cursor);
   }
 }

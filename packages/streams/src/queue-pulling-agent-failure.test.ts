@@ -30,6 +30,10 @@ class FakeQueue {
   async commit(cursor: number): Promise<void> {
     this.cursor = cursor;
   }
+
+  async seek(cursor: number): Promise<void> {
+    this.cursor = cursor;
+  }
 }
 
 interface Delivered {

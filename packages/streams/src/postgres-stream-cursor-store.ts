@@ -100,7 +100,35 @@ export class PostgresStreamCursorStore implements StreamCursorStore {
     return res.rows[0] === undefined ? 0 : Number(res.rows[0].cursor);
   }
 
+  // Monotonic: the WHERE guard on the upsert only lets `cursor` advance, so a
+  // stale commit racing in from a de-owned pulling agent (ownership handoff)
+  // can never rewind a newer commit from the new owner and cause a whole
+  // batch to be redelivered.
   async commit(
+    provider: string,
+    queueIdx: number,
+    cursor: number,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    await raceSignal(
+      this.pool.query(
+        `INSERT INTO ${this.table} (provider, queue_idx, cursor, service_id)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (service_id, provider, queue_idx) DO UPDATE
+           SET cursor = EXCLUDED.cursor
+           WHERE ${this.table}.cursor < EXCLUDED.cursor`,
+        [provider, queueIdx, cursor, this.serviceId],
+      ),
+      signal,
+    );
+  }
+
+  /**
+   * Unconditionally set the cursor, bypassing `commit`'s monotonic guard —
+   * for an intentional rewind to an earlier checkpoint
+   * (`RecoverableStreamDeliveryError`), never for ordinary advancement.
+   */
+  async seek(
     provider: string,
     queueIdx: number,
     cursor: number,

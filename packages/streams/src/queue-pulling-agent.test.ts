@@ -170,6 +170,7 @@ describe("QueuePullingAgent shutdown", () => {
         });
       },
       commit: async () => undefined,
+      seek: async () => undefined,
     };
     const agent = new QueuePullingAgent(queue, async () => undefined, { pollIntervalMs: 5 });
     agent.start();
@@ -200,6 +201,7 @@ describe("QueuePullingAgent shutdown", () => {
         return [];
       },
       commit: async () => undefined,
+      seek: async () => undefined,
     };
     const errors: unknown[] = [];
     const agent = new QueuePullingAgent(queue, async () => undefined, {
