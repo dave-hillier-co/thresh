@@ -1,5 +1,6 @@
 import { CoreV1Api, DiscoveryV1Api, KubeConfig, Watch } from "@kubernetes/client-node";
 import type {
+  EndpointSliceListResult,
   EndpointSliceSource,
   RawEndpointSlice,
 } from "@thresh/clustering-k8s/kubernetes-endpoint-watch";
@@ -69,22 +70,24 @@ export function createKubernetesClientSource(
   }
 
   return {
-    async list(): Promise<RawEndpointSlice[]> {
+    async list(): Promise<EndpointSliceListResult> {
       const result = await api.listNamespacedEndpointSlice({
         namespace: options.namespace,
         labelSelector,
       });
-      return ((result.items ?? []) as RawEndpointSlice[]).map(withPodLabels);
+      const items = ((result.items ?? []) as RawEndpointSlice[]).map(withPodLabels);
+      const resourceVersion = result.metadata?.resourceVersion;
+      return resourceVersion !== undefined ? { items, resourceVersion } : { items };
     },
 
-    watch(onEvent, onClose): () => void {
+    watch(resourceVersion, onEvent, onClose): () => void {
       const watch = new Watch(kc);
       let aborted = false;
       let controller: AbortController | undefined;
       void watch
         .watch(
           watchPath,
-          { labelSelector },
+          resourceVersion !== undefined ? { labelSelector, resourceVersion } : { labelSelector },
           (phase: string, apiObj: unknown) =>
             onEvent(phase as WatchEventType, withPodLabels(apiObj as RawEndpointSlice)),
           (err: unknown) => onClose(err ?? undefined),

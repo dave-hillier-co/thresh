@@ -22,21 +22,29 @@ function rawSlice(name: string, uid: string, ip: string, ready = true): RawEndpo
  * drive watch events and watch closure by hand. */
 class FakeSource implements EndpointSliceSource {
   items: RawEndpointSlice[] = [];
+  /** The resourceVersion the next list() reports; bump it as the fake's world moves on. */
+  resourceVersion: string | undefined = "1";
   listCount = 0;
   watchCount = 0;
+  /** Every resourceVersion each watch() call was started from, in order. */
+  watchedFromVersions: (string | undefined)[] = [];
   private onEvent: ((type: WatchEventType, slice: RawEndpointSlice) => void) | undefined;
   private onClose: ((err?: unknown) => void) | undefined;
 
-  async list(): Promise<RawEndpointSlice[]> {
+  async list(): ReturnType<EndpointSliceSource["list"]> {
     this.listCount += 1;
-    return this.items;
+    return this.resourceVersion !== undefined
+      ? { items: this.items, resourceVersion: this.resourceVersion }
+      : { items: this.items };
   }
 
   watch(
+    resourceVersion: string | undefined,
     onEvent: (type: WatchEventType, slice: RawEndpointSlice) => void,
     onClose: (err?: unknown) => void,
   ): () => void {
     this.watchCount += 1;
+    this.watchedFromVersions.push(resourceVersion);
     this.onEvent = onEvent;
     this.onClose = onClose;
     return () => {
@@ -161,11 +169,54 @@ describe("KubernetesEndpointWatch", () => {
 
       // The server dropped the watch; a new pod was added while we were blind.
       source.items = [rawSlice("silo-0", "u0", "10.0.0.1"), rawSlice("silo-1", "u1", "10.0.0.2")];
+      source.resourceVersion = "2";
       source.endWatch();
       await vi.advanceTimersByTimeAsync(20);
 
       expect(source.listCount).toBe(2);
       expect(source.watchCount).toBe(2);
+      expect(ringKeys(membership)).toEqual(["silo-0", "silo-1"]);
+      // Reconnecting re-lists first (getting a fresh resourceVersion) and starts the new
+      // watch from exactly that snapshot, not from "now" — the second watch is a fresh
+      // relist's resourceVersion, never the first list's stale one.
+      expect(source.watchedFromVersions).toEqual(["1", "2"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("starts the watch from the list's resourceVersion, so no event between list and watch is missed", async () => {
+    const source = new FakeSource();
+    source.items = [rawSlice("silo-0", "u0", "10.0.0.1")];
+    source.resourceVersion = "42";
+    const watch = new KubernetesEndpointWatch(source);
+    await watch.start();
+
+    expect(source.watchedFromVersions).toEqual(["42"]);
+  });
+
+  it("falls back to a fresh relist when the watch closes with a 410 Gone (resourceVersion too old)", async () => {
+    vi.useFakeTimers();
+    try {
+      const source = new FakeSource();
+      source.items = [rawSlice("silo-0", "u0", "10.0.0.1")];
+      source.resourceVersion = "1";
+      const watch = new KubernetesEndpointWatch(source, { reconnectMs: 10 });
+      const membership = new KubernetesMembership(
+        new SiloAddress("silo-0", "u0", "10.0.0.1:11111"),
+        watch,
+        { portName: "silo" },
+      );
+      await watch.start();
+      expect(source.watchedFromVersions).toEqual(["1"]);
+
+      source.items = [rawSlice("silo-0", "u0", "10.0.0.1"), rawSlice("silo-1", "u1", "10.0.0.2")];
+      source.resourceVersion = "99";
+      source.endWatch({ code: 410, reason: "Gone" });
+      await vi.advanceTimersByTimeAsync(20);
+
+      expect(source.listCount).toBe(2);
+      expect(source.watchedFromVersions).toEqual(["1", "99"]);
       expect(ringKeys(membership)).toEqual(["silo-0", "silo-1"]);
     } finally {
       vi.useRealTimers();

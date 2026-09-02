@@ -15,6 +15,18 @@ export interface RawEndpointSlice {
   ports?: Array<{ name?: string; port?: number }>;
 }
 
+/** A `list()` snapshot: the current slices plus the resourceVersion it was read at. */
+export interface EndpointSliceListResult {
+  readonly items: RawEndpointSlice[];
+  /**
+   * The list's resourceVersion (the Kubernetes API's `metadata.resourceVersion`), when the
+   * source can report one. Pass it to `watch()` so the watch picks up from EXACTLY this
+   * snapshot — otherwise a watch that starts from "now" misses any change the API server
+   * applied between the list call returning and the watch call being established.
+   */
+  readonly resourceVersion?: string;
+}
+
 /**
  * The true boundary: a source of EndpointSlice list+watch events. The production
  * implementation wraps `@kubernetes/client-node` (see `kubernetes-client-source`);
@@ -22,13 +34,18 @@ export interface RawEndpointSlice {
  * without a cluster.
  */
 export interface EndpointSliceSource {
-  /** The current full set of slices for the service. */
-  list(): Promise<RawEndpointSlice[]>;
+  /** The current full set of slices for the service, and the resourceVersion it was read at. */
+  list(): Promise<EndpointSliceListResult>;
   /**
-   * Start a watch. `onEvent` receives each change; `onClose` is called when the
-   * watch ends (cleanly or on error). Returns a function that stops the watch.
+   * Start a watch from `resourceVersion` (typically a preceding `list()`'s, so no event in
+   * between is missed; `undefined` starts from "now"). `onEvent` receives each change;
+   * `onClose` is called when the watch ends (cleanly, on error, or on a 410 Gone once
+   * `resourceVersion` has aged out of the API server's history — the caller reacts to any of
+   * these the same way: re-list for a fresh snapshot and resourceVersion, then re-watch).
+   * Returns a function that stops the watch.
    */
   watch(
+    resourceVersion: string | undefined,
     onEvent: (type: WatchEventType, slice: RawEndpointSlice) => void,
     onClose: (err?: unknown) => void,
   ): () => void;
@@ -93,14 +110,18 @@ export class KubernetesEndpointWatch implements EndpointWatch {
 
   private async relistAndWatch(): Promise<void> {
     const slices = new Map<string, EndpointSlice>();
-    for (const raw of await this.source.list()) {
+    const { items, resourceVersion } = await this.source.list();
+    for (const raw of items) {
       const name = raw.metadata?.name;
       if (name !== undefined) slices.set(name, toEndpointSlice(raw));
     }
     this.endpoints.reset(slices);
     if (!this.running) return;
 
+    // Watch from this list's resourceVersion, not "now" — otherwise any change the API server
+    // applies between the list returning and the watch being established is silently missed.
     this.stopWatch = this.source.watch(
+      resourceVersion,
       (type, raw) => {
         const name = raw.metadata?.name;
         if (name === undefined) return;
@@ -108,6 +129,9 @@ export class KubernetesEndpointWatch implements EndpointWatch {
       },
       () => {
         this.stopWatch = undefined;
+        // Any close — clean, an error, or a 410 Gone once `resourceVersion` aged out of the API
+        // server's history — is handled the same way: relist for a fresh snapshot and
+        // resourceVersion, then rewatch from there.
         if (this.running) setTimeout(() => void this.relistAndWatch(), this.reconnectMs);
       },
     );
