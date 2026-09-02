@@ -18,6 +18,8 @@ function newTimer(time: FakeTimeProvider, due: Duration = { ms: 1000 }) {
   );
 }
 
+const flush = () => new Promise((r) => setTimeout(r, 0));
+
 describe("GrainTimerImpl", () => {
   it("accepts zero and sub-millisecond due times and periods", () => {
     const time = new FakeTimeProvider();
@@ -87,6 +89,59 @@ describe("GrainTimerImpl", () => {
     const time = new FakeTimeProvider();
 
     expect(() => newTimer(time, { seconds: -5 })).toThrow(/due/i);
+  });
+
+  it("does not produce an unhandled rejection and keeps ticking when the callback throws", async () => {
+    const time = new FakeTimeProvider();
+    const unhandled: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandledRejection);
+    let ticks = 0;
+    const timer = new GrainTimerImpl(
+      time,
+      (cb) => cb(),
+      async () => {
+        ticks++;
+        throw new Error("boom");
+      },
+      { ms: 1000 },
+      { ms: 1000 },
+    );
+    try {
+      time.advance(1000);
+      await flush();
+      time.advance(1000);
+      await flush();
+
+      expect(ticks).toBe(2);
+      expect(unhandled).toHaveLength(0);
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+      timer.dispose();
+    }
+  });
+
+  it("reports a callback error to onError instead of throwing it back through fire", async () => {
+    const time = new FakeTimeProvider();
+    const errors: unknown[] = [];
+    const timer = new GrainTimerImpl(
+      time,
+      (cb) => cb(),
+      async () => {
+        throw new Error("boom");
+      },
+      { ms: 1000 },
+      undefined,
+      (error) => errors.push(error),
+    );
+
+    time.advance(1000);
+    await flush();
+
+    expect(errors).toHaveLength(1);
+    expect((errors[0] as Error).message).toBe("boom");
+
+    timer.dispose();
   });
 
   it("leaves prior scheduling untouched when change() rejects an invalid value", () => {

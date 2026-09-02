@@ -502,6 +502,15 @@ export class ActivationData implements GrainContext {
       callback,
       due,
       period,
+      // Mirrors Orleans' `TimerQueueTimer.TimerTick` catch-and-log: a timer
+      // callback throw (or a scheduler admission rejection) is logged and
+      // the timer keeps ticking rather than crashing the silo or going
+      // silent, matching how `onDeactivate` failures are handled below.
+      (error) =>
+        this.logger.warn("grain timer callback failed", {
+          grainId: this.id.toString(),
+          error,
+        }),
     );
     this.timers.add(timer);
     return timer;
@@ -543,7 +552,18 @@ export class ActivationData implements GrainContext {
             () => this.instance.onDeactivate(reason, signal),
           ),
       })
-      .catch(() => undefined);
+      .catch((error) => {
+        // Log rather than silently discard: an `onDeactivate` hook that
+        // throws must not stop deactivation (the caller still needs to
+        // finalize and free the activation), but a swallowed error here was
+        // previously invisible — see the DeactivationTimeout warn just below
+        // for the sibling failure mode this mirrors.
+        this.logger.warn("onDeactivate hook failed", {
+          grainId: this.id.toString(),
+          error,
+        });
+        return undefined;
+      });
     await this.awaitWithDeactivationTimeout(hookPromise);
   }
 

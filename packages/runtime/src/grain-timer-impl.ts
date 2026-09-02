@@ -41,6 +41,7 @@ export class GrainTimerImpl implements GrainTimer {
     private readonly callback: () => Promise<void>,
     due: Duration,
     period?: Duration,
+    private readonly onError: (error: unknown) => void = () => {},
   ) {
     this.dueMs = validateTimeoutMs(durationToMs(due), "due");
     this.periodMs =
@@ -73,6 +74,11 @@ export class GrainTimerImpl implements GrainTimer {
     if (this.disposed) return;
     // Reschedule first (fixed-rate) so periodic ticks don't drift with turn time.
     if (this.periodMs !== undefined) this.schedule(this.periodMs);
-    void this.runTurn(this.callback);
+    // Mirrors Orleans' `TimerQueueTimer.TimerTick`, which catches and logs a
+    // per-tick exception (scheduler admission rejection or a callback throw)
+    // rather than letting it propagate — an unhandled rejection here would
+    // otherwise crash the process (Node's default) and, for a periodic timer,
+    // there'd be nothing left to log it since `fire` isn't awaited by anyone.
+    this.runTurn(this.callback).catch((error) => this.onError(error));
   }
 }
