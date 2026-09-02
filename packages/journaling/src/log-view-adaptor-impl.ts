@@ -1,4 +1,5 @@
 import type { DurableStateMachine, StateMachineManager } from "@thresh/core/durable-state-machine";
+import { InconsistentStateError } from "@thresh/core/errors";
 import type { LogViewAdaptor } from "@thresh/core/journaled-grain";
 
 /** A framed log record for a `JournaledGrain`'s single log: either a raised event, or a confirmed-state snapshot (compaction). */
@@ -67,6 +68,26 @@ export class LogViewAdaptorImpl<TState, TEvent>
 
   submitRange(events: readonly TEvent[]): void {
     for (const event of events) this.submit(event);
+  }
+
+  /**
+   * Orleans' `TryAppend` over the journal substrate. This adaptor's grain is the log's single
+   * writer through its `StateMachineManager`, so the raise cannot lose a race to another log
+   * writer the way the custom-storage adaptor's version CAS can; the one conflict left is the
+   * substrate's own storage CAS (a duplicate activation), which surfaces as an
+   * `InconsistentStateError` from the append. That conflict reports `false` -- and the swapped-out
+   * batch is not requeued by `runConfirmLoop`, so the event is dropped, never applied by a later
+   * confirm. Anything else is a genuine storage failure and propagates.
+   */
+  async tryAppend(event: TEvent): Promise<boolean> {
+    this.submit(event);
+    try {
+      await this.confirmSubmittedEntries();
+      return true;
+    } catch (error) {
+      if (error instanceof InconsistentStateError) return false;
+      throw error;
+    }
   }
 
   /**

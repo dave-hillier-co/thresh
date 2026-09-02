@@ -19,6 +19,13 @@ export interface LogViewAdaptor<TState, TEvent> {
   submit(event: TEvent): void;
   /** Append several events atomically, as `submit` would for each in order. */
   submitRange(events: readonly TEvent[]): void;
+  /**
+   * Conditionally append one event, mirroring Orleans' `ILogViewAdaptor.TryAppend`: the entry is
+   * conditional on the version it was raised at. Resolves `true` once the event is confirmed, or
+   * `false` when the confirmed version moved under it - in which case the event is DROPPED on the
+   * first conflict (never retried on the moved base, never left pending).
+   */
+  tryAppend(event: TEvent): Promise<boolean>;
   /** Persist every currently-pending event, promoting it into the confirmed view. */
   confirmSubmittedEntries(): Promise<void>;
   /** Read a slice of the confirmed event sequence. */
@@ -118,6 +125,17 @@ export abstract class JournaledGrain<TState, TEvent> extends Grain {
   /** Raises multiple events as an atomic sequence. */
   protected raiseEvents(events: readonly TEvent[]): void {
     this.logViewAdaptor.submitRange(events);
+  }
+
+  /**
+   * Raises an event conditionally, mirroring Orleans' `RaiseConditionalEvent`: the append holds
+   * only if no other event was confirmed concurrently (the adaptor's version check at the position
+   * the event was raised at). Returns whether it was appended and confirmed; on `false` the event
+   * has been dropped - it is NOT retried and will never be persisted, so the caller decides what a
+   * lost race means. Unlike `raiseEvent`, no separate `confirmEvents` call is needed.
+   */
+  protected raiseConditionalEvent(event: TEvent): Promise<boolean> {
+    return this.logViewAdaptor.tryAppend(event);
   }
 
   /** Persists all previously-raised, still-pending events and confirms them. */

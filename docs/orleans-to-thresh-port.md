@@ -83,12 +83,21 @@ the grain to the custom-storage adaptor automatically, leaving the journal subst
 this is the fork Orleans makes by configuring the CustomStorage log-consistency provider.
 
 `RaiseConditionalEvent(event)` — the Orleans conditional append that returns `false` when the
-confirmed version moved under it — has **no Thresh counterpart**. `raiseEvent(event)` followed by
-`await confirmEvents()` is the pair, and the adaptor's own compare-and-set on the version plays the
-role of the condition: a lost race surfaces as an `InconsistentStateError` out of `confirmEvents`,
-so the C#'s `if (!raised)` branch becomes a `catch` narrowed to that class. Anything else thrown is
-a genuine storage failure and must propagate — a bare `catch` here silently converts a failed write
-into "someone else won the race", which callers retry against a base that never received the write.
+confirmed version moved under it — maps to `raiseConditionalEvent(event)` on Thresh's
+`JournaledGrain` (the adaptor-level engine is `tryAppend`, mirroring Orleans'
+`PrimaryBasedLogViewAdaptor.TryAppend`). The substitution is mechanical: `var raised = await
+RaiseConditionalEvent(ev)` becomes `const raised = await this.raiseConditionalEvent(ev)`, with no
+separate `confirmEvents()` call. The semantics are Orleans' first-conflict-drop: on a version
+conflict the stale conditional entry is REMOVED from the pending queue and reported `false`
+(`RemoveStaleConditionalUpdates`), never retried against the moved base and never left pending.
+**Do not substitute `raiseEvent` + `confirmEvents` with a `catch` for this** — that translation is
+unsound and was retired: the adaptor's confirm loop retries the same event against a re-read base
+(re-applying it without the caller's own CAS/preconditions re-running), and after the bounded
+attempt budget the event stayed pending, so the NEXT confirm appended an event whose caller had
+already been told it failed. One deliberate deviation from Orleans remains: when the bounded
+budget exhausts with the position NOT stale (flaky storage, version unmoved), the conditional
+entry is also dropped and reported `false` rather than retried forever, for the same
+told-failed-then-applied reason.
 
 Supply `readStateFromStorage()` (returning `{ version, state }`),
 `applyUpdatesToStorage(updates, expectedVersion)` (returning whether the CAS held) and

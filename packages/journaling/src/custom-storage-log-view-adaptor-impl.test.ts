@@ -212,6 +212,79 @@ describe("CustomStorageLogViewAdaptorImpl", () => {
     expect(adaptor.pendingCount).toBe(0);
   });
 
+  // Orleans' `TryAppend` (the engine under `RaiseConditionalEvent`): the entry is CONDITIONAL on
+  // the version it was raised at. On a version conflict the entry is DROPPED and reported false --
+  // `RemoveStaleConditionalUpdates` -- never retried on the moved base, and never left pending.
+  describe("tryAppend", () => {
+    it("appends and reports true when the version has not moved", async () => {
+      const host = new FakeHost();
+      const adaptor = await adaptorOn(host);
+
+      await expect(adaptor.tryAppend({ add: 5 })).resolves.toBe(true);
+
+      expect(host.log).toEqual([{ add: 5 }]);
+      expect(adaptor.confirmedVersion).toBe(1);
+      expect(adaptor.confirmedView).toEqual({ total: 5 });
+      expect(adaptor.pendingCount).toBe(0);
+    });
+
+    it("drops the event and reports false when a concurrent writer moved the version", async () => {
+      const host = new FakeHost();
+      const adaptor = await adaptorOn(host);
+      // Shape (a): a duplicate activation appended behind our back, so the CAS at version 0 loses.
+      host.log = [{ add: 100 }];
+
+      await expect(adaptor.tryAppend({ add: 5 })).resolves.toBe(false);
+
+      // The conditional entry must NOT be re-applied on the moved base: one CAS attempt, then out.
+      expect(host.applyCalls.map((c) => c.expectedVersion)).toEqual([0]);
+      expect(host.log).toEqual([{ add: 100 }]);
+      expect(adaptor.pendingCount).toBe(0);
+      // The re-read resynced the view to what actually won.
+      expect(adaptor.confirmedVersion).toBe(1);
+      expect(adaptor.confirmedView).toEqual({ total: 100 });
+      expect(adaptor.tentativeView).toEqual({ total: 100 });
+    });
+
+    it("does not resurrect a rejected conditional event on a later confirm", async () => {
+      const host = new FakeHost();
+      const adaptor = await adaptorOn(host, { maxAttempts: 2 });
+      // Shape (b): storage refuses every CAS (flaky), so the attempt budget exhausts.
+      host.failNextApply = 99;
+
+      await expect(adaptor.tryAppend({ add: 5 })).resolves.toBe(false);
+      expect(adaptor.pendingCount).toBe(0);
+
+      // Storage heals; a LATER unconditional raise+confirm must apply ONLY its own event -- the
+      // caller was told the conditional append failed, so it must never land afterwards.
+      host.failNextApply = 0;
+      adaptor.submit({ add: 1 });
+      await adaptor.confirmSubmittedEntries();
+
+      expect(host.log).toEqual([{ add: 1 }]);
+      expect(adaptor.confirmedVersion).toBe(1);
+      expect(adaptor.confirmedView).toEqual({ total: 1 });
+    });
+
+    it("retries an unconditional entry but drops only the stale conditional one", async () => {
+      const host = new FakeHost();
+      const adaptor = await adaptorOn(host);
+      adaptor.submit({ add: 1 });
+      // A concurrent writer lands before the batch's CAS (tryAppend starts the confirm loop).
+      host.log = [{ add: 100 }];
+      const conditional = adaptor.tryAppend({ add: 2 });
+
+      await adaptor.confirmSubmittedEntries();
+
+      await expect(conditional).resolves.toBe(false);
+      // The unconditional event retried on the new base; the conditional one is gone.
+      expect(host.log).toEqual([{ add: 100 }, { add: 1 }]);
+      expect(adaptor.confirmedVersion).toBe(2);
+      expect(adaptor.confirmedView).toEqual({ total: 101 });
+      expect(adaptor.pendingCount).toBe(0);
+    });
+  });
+
   it("does not support retrieveLogSegment - storage owns the log, not the adaptor", async () => {
     const adaptor = await adaptorOn(new FakeHost());
 
