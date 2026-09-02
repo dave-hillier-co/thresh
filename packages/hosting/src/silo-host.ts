@@ -35,6 +35,12 @@ export interface SiloHostParts {
   healthServer: HealthServer | undefined;
   healthPort: number | undefined;
   shutdown: GracefulShutdown;
+  /**
+   * `GracefulShutdown`'s grace period, used only when `buildSiloHost` constructs the default
+   * `GracefulShutdown` itself (a caller supplying its own `shutdown` configures the grace
+   * directly and this is ignored). Unset falls back to `GracefulShutdown`'s own default.
+   */
+  gracefulShutdownMs?: number;
   membership: MembershipService;
   reminderService?: ReminderService | undefined;
   /** The elected activation-rebalancer worker, started/stopped with the host. */
@@ -256,6 +262,12 @@ export class SiloHost {
 export function buildSiloHost(
   parts: Omit<SiloHostParts, "shutdown"> & { shutdown?: GracefulShutdown },
 ): SiloHost {
-  const shutdown = parts.shutdown ?? new GracefulShutdown(parts.health, parts.node);
+  const shutdown =
+    parts.shutdown ??
+    new GracefulShutdown(
+      parts.health,
+      parts.node,
+      parts.gracefulShutdownMs !== undefined ? { graceMs: parts.gracefulShutdownMs } : {},
+    );
   return new SiloHost({ ...parts, shutdown });
 }

@@ -22,6 +22,7 @@ import {
   type EndpointWatch,
   type KubernetesMembershipOptions,
 } from "@thresh/clustering-k8s/kubernetes-membership";
+import { DEFAULT_GRACE_MS } from "@thresh/hosting/graceful-shutdown";
 import type { GrainStorage } from "@thresh/core/grain-storage";
 import { InProcessTransport, type InProcessNetwork } from "@thresh/messaging/in-process-transport";
 import type { Transport } from "@thresh/messaging/transport";
@@ -227,6 +228,15 @@ export interface SiloConfig {
    * mistaken write in dev/test where `@readOnly` is otherwise only advisory.
    */
   readOnlyStateGuard?: boolean;
+  /**
+   * `GracefulShutdown`'s grace period between flipping readiness to not-ready and stopping the
+   * node — long enough for a Kubernetes Service's EndpointSlice controller to notice and for a
+   * peer's own readiness probe to poll at least once. Unset defaults to `DEFAULT_GRACE_MS`
+   * (`graceful-shutdown.ts`) under Kubernetes membership, and to `0` under static/injected
+   * membership, where peers observe the drain through the membership view directly and there is
+   * no external routing plane to wait for.
+   */
+  gracefulShutdownMs?: number;
 }
 
 /**
@@ -1514,6 +1524,12 @@ export class SiloBuilder {
       health,
       healthServer: this.healthPort !== undefined ? new HealthServer(health) : undefined,
       healthPort: this.healthPort,
+      // The grace period exists for an external routing plane (EndpointSlice
+      // propagation + probe intervals) to observe the readiness flip; with
+      // static/injected membership there is none, so don't hold up stop().
+      gracefulShutdownMs:
+        this.config.gracefulShutdownMs ??
+        (this.membership instanceof KubernetesMembership ? DEFAULT_GRACE_MS : 0),
       membership: this.membership,
       reminderService,
       rebalancerWorker,
