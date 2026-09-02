@@ -30,6 +30,14 @@ export class ConnectionManager {
      * this node — the duplex half of the connection this manager pools.
      */
     private readonly onMessage?: MessageHandler,
+    /**
+     * Fired when the transport reports a pooled connection was lost on its
+     * own (peer closed it, or a socket error) rather than via `drop`/
+     * `closeAll`. The cache entry is already invalidated by the time this
+     * fires; callers use it to fail outstanding calls to that peer fast
+     * (e.g. a correlation table's `rejectAll`) instead of waiting on a timeout.
+     */
+    private readonly onConnectionLost?: (to: SiloAddress, err?: unknown) => void,
   ) {}
 
   get(to: SiloAddress): Promise<Connection> {
@@ -50,6 +58,15 @@ export class ConnectionManager {
         )
         .then((connection) => {
           recordQueueLatency(Date.now() - dialStart, { "thresh.peer": key });
+          // The transport may drop this connection on its own (the peer closed
+          // it, or the underlying socket errored). Only invalidate the cache
+          // when this is still the pooled connection for `key` — a stale
+          // callback from a connection already superseded by `drop`+re-dial
+          // must not evict the fresh one.
+          connection.onClose?.((err) => {
+            if (this.connections.get(key) === conn) this.connections.delete(key);
+            this.onConnectionLost?.(to, err);
+          });
           return instrumented(connection, key);
         })
         .catch((err: unknown) => {

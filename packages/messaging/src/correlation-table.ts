@@ -16,6 +16,7 @@ interface Pending {
   resolve: (message: Message) => void;
   reject: (err: unknown) => void;
   timer: unknown;
+  peer?: string;
 }
 
 /**
@@ -29,7 +30,8 @@ export class CorrelationTable {
 
   constructor(private readonly timer: CorrelationTimer = realTimer) {}
 
-  register(correlationId: bigint, timeoutMs?: number): Promise<Message> {
+  /** `peer` tags the call with the connection it went out on, for `rejectFor`. */
+  register(correlationId: bigint, timeoutMs?: number, peer?: string): Promise<Message> {
     const key = correlationId.toString();
     return new Promise<Message>((resolve, reject) => {
       let handle: unknown;
@@ -39,7 +41,12 @@ export class CorrelationTable {
           reject(new GrainCallTimeoutError(`grain call ${key} timed out after ${timeoutMs}ms`));
         }, timeoutMs);
       }
-      this.pending.set(key, { resolve, reject, timer: handle });
+      this.pending.set(key, {
+        resolve,
+        reject,
+        timer: handle,
+        ...(peer !== undefined ? { peer } : {}),
+      });
     });
   }
 
@@ -54,13 +61,23 @@ export class CorrelationTable {
     return true;
   }
 
-  /** Fail all outstanding calls, e.g. when a connection is lost. */
+  /** Fail all outstanding calls, e.g. on shutdown. */
   rejectAll(err: unknown): void {
     for (const entry of this.pending.values()) {
       this.clearTimer(entry);
       entry.reject(err);
     }
     this.pending.clear();
+  }
+
+  /** Fail the outstanding calls tagged with this peer, e.g. when its connection is lost. */
+  rejectFor(peer: string, err: unknown): void {
+    for (const [key, entry] of this.pending) {
+      if (entry.peer !== peer) continue;
+      this.pending.delete(key);
+      this.clearTimer(entry);
+      entry.reject(err);
+    }
   }
 
   private clearTimer(entry: Pending): void {

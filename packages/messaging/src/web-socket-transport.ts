@@ -49,6 +49,11 @@ export class WebSocketTransport implements Transport {
   ): Promise<Listener> {
     const { host, port } = splitHostPort(address.endpoint);
     const server = new WebSocketServer({ host, port });
+    server.on("error", () => {
+      // ws requires an 'error' listener on the server itself or an
+      // unusual server-level fault (e.g. the underlying http server) would
+      // throw and crash the whole silo.
+    });
     await once(server, "listening");
     const info = server.address();
     const boundPort = typeof info === "object" && info !== null ? info.port : port;
@@ -57,6 +62,13 @@ export class WebSocketTransport implements Transport {
     server.on("connection", (socket) => {
       socket.binaryType = "arraybuffer";
       let from: SiloAddress | undefined;
+      let notifyClosed: ((err?: unknown) => void) | undefined;
+      socket.on("error", () => {
+        // Swallow: ws follows an established connection's 'error' (ECONNRESET,
+        // a malformed frame, ...) with a 'close', where teardown happens below.
+        // Without this listener Node's EventEmitter throws and crashes the silo.
+      });
+      socket.once("close", () => notifyClosed?.());
       socket.on("message", (data: ArrayBuffer) => {
         const bytes = toBytes(data);
         if (from === undefined) {
@@ -85,6 +97,9 @@ export class WebSocketTransport implements Transport {
                   socket.once("close", () => resolve());
                   socket.close();
                 }),
+              onClose: (callback) => {
+                notifyClosed = callback;
+              },
             };
             onAccept(preamble, connection);
           }
@@ -127,6 +142,11 @@ export class WebSocketTransport implements Transport {
     const { host, port } = splitHostPort(to.endpoint);
     const socket = new WebSocket(`ws://${host}:${port}`);
     socket.binaryType = "arraybuffer";
+    socket.on("error", () => {
+      // Swallow: ws follows an established connection's 'error' (ECONNRESET,
+      // a malformed frame, ...) with a 'close', where teardown happens below.
+      // Without this listener Node's EventEmitter throws and crashes the silo.
+    });
     await once(socket, "open");
 
     let ackReceived = false;
@@ -151,9 +171,11 @@ export class WebSocketTransport implements Transport {
       });
       void onMessage(message, to);
     });
+    let notifyClosed: ((err?: unknown) => void) | undefined;
     socket.once("close", (code: number) => {
       if (!ackReceived)
         rejectAck?.(new RejectionError(`connection rejected (code ${code})`, "unknownTarget"));
+      notifyClosed?.();
     });
 
     socket.send(this.serializer.serialize(preamble));
@@ -173,6 +195,9 @@ export class WebSocketTransport implements Transport {
           socket.once("close", () => resolve());
           socket.close();
         }),
+      onClose: (callback) => {
+        notifyClosed = callback;
+      },
     };
   }
 

@@ -10,6 +10,7 @@ class CountingTransport implements Transport {
   connects = 0;
   closes = 0;
   failNext = false;
+  private readonly closeCallbacks: Array<(err?: unknown) => void> = [];
 
   async listen(_address: SiloAddress, _onMessage: MessageHandler): Promise<Listener> {
     throw new Error("not used");
@@ -21,7 +22,16 @@ class CountingTransport implements Transport {
       this.failNext = false;
       throw new Error("connect failed");
     }
-    return { send: () => undefined, close: async () => void this.closes++ };
+    return {
+      send: () => undefined,
+      close: async () => void this.closes++,
+      onClose: (callback) => this.closeCallbacks.push(callback),
+    };
+  }
+
+  /** Simulates the transport losing the most-recently-dialled connection on its own. */
+  dropUnderneath(err?: unknown): void {
+    for (const callback of this.closeCallbacks.splice(0)) callback(err);
   }
 }
 
@@ -70,5 +80,30 @@ describe("ConnectionManager", () => {
     await cm.get(peer(2));
     await cm.closeAll();
     expect(transport.closes).toBe(2);
+  });
+
+  it("re-dials the next time the peer is asked for after the transport drops the connection on its own", async () => {
+    const transport = new CountingTransport();
+    const cm = new ConnectionManager(transport, self, "c1");
+    await cm.get(peer(1));
+    expect(transport.connects).toBe(1);
+
+    transport.dropUnderneath(new Error("ECONNRESET"));
+
+    await cm.get(peer(1));
+    expect(transport.connects).toBe(2);
+  });
+
+  it("notifies onConnectionLost with the peer when the transport drops the connection on its own", async () => {
+    const transport = new CountingTransport();
+    const lost: SiloAddress[] = [];
+    const cm = new ConnectionManager(transport, self, "c1", undefined, undefined, (peerAddress) =>
+      lost.push(peerAddress),
+    );
+    await cm.get(peer(1));
+
+    transport.dropUnderneath(new Error("ECONNRESET"));
+
+    expect(lost).toEqual([peer(1)]);
   });
 });

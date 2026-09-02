@@ -1,4 +1,6 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { once } from "node:events";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { WebSocket, WebSocketServer } from "ws";
 import { RejectionError } from "@thresh/core/errors";
 import { GrainId } from "@thresh/core/grain-id";
 import { SiloAddress } from "@thresh/core/silo-address";
@@ -16,6 +18,22 @@ const preamble = (self: SiloAddress, clusterId = CLUSTER): ConnectionPreamble =>
   siloAddress: self,
   clusterId,
 });
+const splitHostPort = (endpoint: string): { host: string; port: number } => {
+  const i = endpoint.lastIndexOf(":");
+  return { host: endpoint.slice(0, i), port: Number(endpoint.slice(i + 1)) };
+};
+/**
+ * Writes a frame with a reserved bit set straight onto the raw TCP socket
+ * underneath a `ws` connection, bypassing ws's own framing. The peer parsing
+ * it rejects the frame and emits a genuine 'error' event — this is how these
+ * tests force the socket-level errors bug 1 covers, without needing a real
+ * network fault like an ECONNRESET.
+ */
+const corruptFrame = (socket: WebSocket): void => {
+  (socket as unknown as { _socket: { write(buf: Buffer): void } })._socket.write(
+    Buffer.from([0xff, 0xff, 0xff, 0xff]),
+  );
+};
 const request = (
   correlationId: bigint,
   direction: "request" | "oneWay",
@@ -199,5 +217,92 @@ describe("WebSocketTransport", () => {
         protocolVersion: 1,
       }),
     ).rejects.toBeInstanceOf(RejectionError);
+  });
+
+  // `ws` emits 'error' on an established socket for things like a corrupted
+  // frame or a peer's abrupt reset (ECONNRESET). Node's EventEmitter throws an
+  // 'error' event with no listener attached, which used to crash the whole
+  // process. These force a real socket-level error (writing a corrupt frame
+  // straight onto the underlying TCP socket, bypassing ws framing) and assert
+  // the process survives.
+  describe("socket errors on established connections", () => {
+    let uncaught: unknown[];
+    let onUncaught: (err: unknown) => void;
+
+    beforeEach(() => {
+      uncaught = [];
+      onUncaught = (err) => uncaught.push(err);
+      process.on("uncaughtException", onUncaught);
+    });
+
+    afterEach(() => {
+      process.off("uncaughtException", onUncaught);
+    });
+
+    it("survives an error on an accepted server-side socket", async () => {
+      const transportB = new WebSocketTransport(CLUSTER);
+      const listenerB = await transportB.listen(loopback("B"), () => undefined);
+      openListeners.push(listenerB);
+
+      const { host, port } = splitHostPort(listenerB.address.endpoint);
+      const raw = new WebSocket(`ws://${host}:${port}`);
+      await once(raw, "open");
+      await new Promise((r) => setTimeout(r, 20)); // let the server accept it
+
+      // Bypass ws framing and write a corrupt frame straight onto the
+      // underlying TCP socket, forcing a genuine 'error' event server-side.
+      corruptFrame(raw);
+
+      await new Promise((r) => setTimeout(r, 200));
+      expect(uncaught).toEqual([]);
+      raw.terminate();
+    });
+
+    it("survives an error on the dialled client-side socket after the preamble ack", async () => {
+      const transportA = new WebSocketTransport(CLUSTER);
+
+      // A hand-rolled "peer" that acks any preamble, so we can reach in and
+      // corrupt the ACCEPTED side of the connection transportA dialled — the
+      // corrupt frame is parsed (and errors) on transportA's own socket,
+      // which is exactly the code path under test.
+      const evilServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+      await once(evilServer, "listening");
+      const evilAddress = evilServer.address();
+      const evilPort =
+        typeof evilAddress === "object" && evilAddress !== null ? evilAddress.port : 0;
+      evilServer.on("connection", (socket) => {
+        socket.once("message", () => socket.send(Uint8Array.of(1)));
+      });
+
+      const target = new SiloAddress("B", "uid-B", `127.0.0.1:${evilPort}`);
+      const conn = await transportA.connect(target, preamble(loopback("A")));
+
+      const [acceptedSocket] = evilServer.clients;
+      corruptFrame(acceptedSocket as WebSocket);
+
+      await new Promise((r) => setTimeout(r, 200));
+      expect(uncaught).toEqual([]);
+      await conn.close();
+      await new Promise<void>((resolve) => evilServer.close(() => resolve()));
+    });
+
+    it("does not crash when the WebSocketServer itself emits an error", async () => {
+      const transportB = new WebSocketTransport(CLUSTER);
+      const listenerB = await transportB.listen(loopback("B"), () => undefined);
+      openListeners.push(listenerB);
+
+      // Trigger an EADDRINUSE-style server error by starting a second
+      // WebSocketServer on the same already-bound port.
+      const { host, port } = splitHostPort(listenerB.address.endpoint);
+      await expect(
+        new WebSocketTransport(CLUSTER).listen(
+          new SiloAddress("C", "uid-C", `${host}:${port}`),
+          () => undefined,
+        ),
+      ).rejects.toBeDefined();
+
+      await new Promise((r) => setTimeout(r, 50));
+      expect(uncaught).toEqual([]);
+    });
   });
 });

@@ -23,6 +23,14 @@ export interface Connection {
   /** Fire-and-forget; a response to a dialler arrives on its `onMessage` hook, not here. */
   send(message: Message): void;
   close(reason?: string): Promise<void>;
+  /**
+   * Registers a callback fired once if the transport drops this connection on
+   * its own — the peer closing the socket, or a socket error (ECONNRESET, a
+   * malformed frame) — as opposed to a close this side initiated by calling
+   * `close()`. Optional: a transport (or test double) that never loses a
+   * connection out from under its caller need not implement it.
+   */
+  onClose?(callback: (err?: unknown) => void): void;
 }
 
 /**

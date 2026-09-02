@@ -554,6 +554,13 @@ export class ClusterNode {
       options.clusterId,
       undefined,
       (m) => this.onMessage(m),
+      // A pooled connection dying underneath a pending call would otherwise
+      // hang it until the call timeout; fail just that peer's calls fast.
+      (peer) =>
+        this.correlation.rejectFor(
+          peer.toString(),
+          new RejectionError(`connection to ${peer.toString()} was lost`, "unknownTarget"),
+        ),
     );
     this.factory = new GrainFactory(
       (interfaceId) => this.resolveGrainType(interfaceId),
@@ -1494,7 +1501,7 @@ export class ClusterNode {
       method: "",
       body,
     };
-    const pending = this.correlation.register(correlationId, this.callTimeoutMs);
+    const pending = this.correlation.register(correlationId, this.callTimeoutMs, target.toString());
     conn.send(message);
     return this.interpretResponse(await pending);
   }
@@ -1776,7 +1783,7 @@ export class ClusterNode {
       conn.send(message);
       return undefined;
     }
-    const pending = this.correlation.register(correlationId, this.callTimeoutMs);
+    const pending = this.correlation.register(correlationId, this.callTimeoutMs, silo.toString());
     conn.send(message);
     const response = await pending;
     // Merge the participants the callee (and its sub-calls) enlisted back into
