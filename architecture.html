@@ -1,0 +1,383 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Thresh — Architecture</title>
+    <style>
+      :root {
+        --bg: #ffffff;
+        --fg: #1a1d23;
+        --muted: #5c6470;
+        --band: #f4f6f9;
+        --band-border: #e2e6ec;
+        --box: #ffffff;
+        --box-border: #9aa5b1;
+        --accent: #2563eb;
+        --accent-soft: #dbeafe;
+        --facet: #ecfdf5;
+        --facet-border: #34d399;
+        --infra: #fff7ed;
+        --infra-border: #fb923c;
+        --external-border: #a78bfa;
+        --arrow: #64748b;
+        --arrow-strong: #2563eb;
+      }
+      :root[data-theme="light"] {
+        --bg: #ffffff;
+        --fg: #1a1d23;
+        --muted: #5c6470;
+        --band: #f4f6f9;
+        --band-border: #e2e6ec;
+        --box: #ffffff;
+        --box-border: #9aa5b1;
+        --accent: #2563eb;
+        --accent-soft: #dbeafe;
+        --facet: #ecfdf5;
+        --facet-border: #34d399;
+        --infra: #fff7ed;
+        --infra-border: #fb923c;
+        --external-border: #a78bfa;
+        --arrow: #64748b;
+        --arrow-strong: #2563eb;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #14171c;
+          --fg: #e6e9ee;
+          --muted: #9aa3af;
+          --band: #1c2129;
+          --band-border: #2b323d;
+          --box: #232a34;
+          --box-border: #4b5563;
+          --accent: #60a5fa;
+          --accent-soft: #1e3a5f;
+          --facet: #12312a;
+          --facet-border: #10b981;
+          --infra: #33261a;
+          --infra-border: #f59e0b;
+          --external-border: #a78bfa;
+          --arrow: #8b96a5;
+          --arrow-strong: #60a5fa;
+        }
+      }
+      :root[data-theme="dark"] {
+        --bg: #14171c;
+        --fg: #e6e9ee;
+        --muted: #9aa3af;
+        --band: #1c2129;
+        --band-border: #2b323d;
+        --box: #232a34;
+        --box-border: #4b5563;
+        --accent: #60a5fa;
+        --accent-soft: #1e3a5f;
+        --facet: #12312a;
+        --facet-border: #10b981;
+        --infra: #33261a;
+        --infra-border: #f59e0b;
+        --external-border: #a78bfa;
+        --arrow: #8b96a5;
+        --arrow-strong: #60a5fa;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      }
+      main {
+        max-width: 1160px;
+        margin: 0 auto;
+        padding: 2rem 1.5rem 3rem;
+      }
+      h1 {
+        font-size: 1.5rem;
+        margin: 0 0 0.25rem;
+      }
+      p.subtitle {
+        color: var(--muted);
+        margin: 0 0 1.5rem;
+      }
+      figure {
+        margin: 0;
+        overflow-x: auto;
+      }
+      svg {
+        display: block;
+        min-width: 900px;
+        width: 100%;
+        height: auto;
+      }
+      .band {
+        fill: var(--band);
+        stroke: var(--band-border);
+        rx: 10;
+      }
+      .band-label {
+        fill: var(--muted);
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      .pkg {
+        fill: var(--box);
+        stroke: var(--box-border);
+        stroke-width: 1.25;
+        rx: 8;
+      }
+      .pkg-accent {
+        fill: var(--accent-soft);
+        stroke: var(--accent);
+      }
+      .pkg-facet {
+        fill: var(--facet);
+        stroke: var(--facet-border);
+      }
+      .pkg-infra {
+        fill: var(--infra);
+        stroke: var(--infra-border);
+      }
+      .pkg-external {
+        fill: none;
+        stroke: var(--external-border);
+        stroke-dasharray: 6 4;
+      }
+      .name {
+        fill: var(--fg);
+        font-size: 14px;
+        font-weight: 650;
+        text-anchor: middle;
+      }
+      .desc {
+        fill: var(--muted);
+        font-size: 11.5px;
+        text-anchor: middle;
+      }
+      .edge {
+        stroke: var(--arrow);
+        stroke-width: 1.5;
+        fill: none;
+      }
+      .edge-strong {
+        stroke: var(--arrow-strong);
+        stroke-width: 2;
+      }
+      .edge-label {
+        fill: var(--muted);
+        font-size: 11px;
+        text-anchor: middle;
+      }
+      .note {
+        fill: var(--muted);
+        font-size: 12px;
+      }
+      footer {
+        color: var(--muted);
+        font-size: 0.85rem;
+        margin-top: 1rem;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Thresh — Architecture</h1>
+      <p class="subtitle">
+        A TypeScript virtual-actor (Orleans-style “grain”) runtime that delegates cluster membership
+        to Kubernetes and backs state, reminders and streams onto Redis, Postgres or Kafka. Arrows
+        point from a package to what it depends on.
+      </p>
+      <figure>
+        <svg
+          viewBox="0 0 1100 900"
+          role="img"
+          aria-label="Layered architecture diagram of the Thresh monorepo"
+        >
+          <defs>
+            <marker
+              id="arrow"
+              viewBox="0 0 10 10"
+              refX="9"
+              refY="5"
+              markerWidth="7"
+              markerHeight="7"
+              orient="auto-start-reverse"
+            >
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--arrow)" />
+            </marker>
+            <marker
+              id="arrow-strong"
+              viewBox="0 0 10 10"
+              refX="9"
+              refY="5"
+              markerWidth="7"
+              markerHeight="7"
+              orient="auto-start-reverse"
+            >
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--arrow-strong)" />
+            </marker>
+          </defs>
+
+          <!-- ===================== Layer bands ===================== -->
+          <rect class="band" x="20" y="20" width="880" height="120" rx="10" />
+          <text class="band-label" x="36" y="42">Application</text>
+
+          <rect class="band" x="20" y="180" width="880" height="100" rx="10" />
+          <text class="band-label" x="36" y="202">Hosting / composition root</text>
+
+          <rect class="band" x="20" y="320" width="880" height="130" rx="10" />
+          <text class="band-label" x="36" y="342">Grain facilities</text>
+
+          <rect class="band" x="20" y="490" width="880" height="120" rx="10" />
+          <text class="band-label" x="36" y="512">Runtime core</text>
+
+          <rect class="band" x="20" y="650" width="880" height="110" rx="10" />
+          <text class="band-label" x="36" y="672">Cluster infrastructure</text>
+
+          <rect class="band" x="20" y="800" width="1060" height="80" rx="10" />
+          <text class="band-label" x="36" y="822">Foundation</text>
+
+          <!-- Cross-cutting observability column -->
+          <rect class="pkg pkg-infra" x="930" y="320" width="150" height="290" rx="8" />
+          <text class="name" x="1005" y="450">@thresh/</text>
+          <text class="name" x="1005" y="468">observability</text>
+          <text class="desc" x="1005" y="490">OpenTelemetry</text>
+          <text class="desc" x="1005" y="505">traces &amp; metrics</text>
+          <text class="desc" x="1005" y="527">(cross-cutting)</text>
+
+          <!-- ===================== Application layer ===================== -->
+          <rect class="pkg" x="70" y="55" width="380" height="70" rx="8" />
+          <text class="name" x="260" y="85">examples/</text>
+          <text class="desc" x="260" y="105">
+            greeter · bank · chat · thermostat · broadcast · k8s-silo · migration
+          </text>
+
+          <rect class="pkg pkg-accent" x="520" y="55" width="340" height="70" rx="8" />
+          <text class="name" x="690" y="85">@thresh/client</text>
+          <text class="desc" x="690" y="105">external caller — typed grain proxies (getGrain)</text>
+
+          <!-- ===================== Hosting layer ===================== -->
+          <rect class="pkg pkg-accent" x="70" y="212" width="790" height="52" rx="8" />
+          <text class="name" x="465" y="234">@thresh/hosting</text>
+          <text class="desc" x="465" y="252">
+            silo builder — wires runtime, facilities and clustering into one process
+          </text>
+
+          <!-- ===================== Grain facilities ===================== -->
+          <rect class="pkg pkg-facet" x="60" y="355" width="125" height="66" rx="8" />
+          <text class="name" x="122" y="382">persistence</text>
+          <text class="desc" x="122" y="402">durable grain state</text>
+
+          <rect class="pkg pkg-facet" x="197" y="355" width="125" height="66" rx="8" />
+          <text class="name" x="259" y="382">reminders</text>
+          <text class="desc" x="259" y="402">durable timers</text>
+
+          <rect class="pkg pkg-facet" x="334" y="355" width="125" height="66" rx="8" />
+          <text class="name" x="396" y="382">streams</text>
+          <text class="desc" x="396" y="402">pub/sub streams</text>
+
+          <rect class="pkg pkg-facet" x="471" y="355" width="130" height="66" rx="8" />
+          <text class="name" x="536" y="382">transactions</text>
+          <text class="desc" x="536" y="402">cross-grain ACID</text>
+
+          <rect class="pkg pkg-facet" x="613" y="355" width="125" height="66" rx="8" />
+          <text class="name" x="675" y="382">journaling</text>
+          <text class="desc" x="675" y="396">event sourcing,</text>
+          <text class="desc" x="675" y="410">DurableQueue/Set</text>
+
+          <rect class="pkg pkg-facet" x="750" y="355" width="125" height="66" rx="8" />
+          <text class="name" x="812" y="382">durable-jobs</text>
+          <text class="desc" x="812" y="402">background jobs</text>
+
+          <!-- ===================== Runtime core ===================== -->
+          <rect class="pkg pkg-accent" x="90" y="522" width="240" height="66" rx="8" />
+          <text class="name" x="210" y="549">@thresh/runtime</text>
+          <text class="desc" x="210" y="569">activation, lifecycle, one turn at a time</text>
+
+          <rect class="pkg" x="380" y="522" width="220" height="66" rx="8" />
+          <text class="name" x="490" y="549">@thresh/directory</text>
+          <text class="desc" x="490" y="569">grain placement &amp; lookup</text>
+
+          <rect class="pkg" x="650" y="522" width="210" height="66" rx="8" />
+          <text class="name" x="755" y="549">@thresh/messaging</text>
+          <text class="desc" x="755" y="569">msgpack RPC transport</text>
+
+          <!-- ===================== Cluster infrastructure ===================== -->
+          <rect class="pkg pkg-infra" x="60" y="682" width="250" height="60" rx="8" />
+          <text class="name" x="185" y="707">@thresh/clustering-k8s</text>
+          <text class="desc" x="185" y="726">membership from K8s primitives</text>
+
+          <rect class="pkg pkg-external" x="340" y="682" width="230" height="60" rx="8" />
+          <text class="name" x="455" y="707">Kubernetes API</text>
+          <text class="desc" x="455" y="726">pods, endpoints, leases (external)</text>
+
+          <rect class="pkg pkg-external" x="600" y="682" width="240" height="60" rx="8" />
+          <text class="name" x="720" y="707">Redis · Postgres · Kafka</text>
+          <text class="desc" x="720" y="726">state, reminders, streams (external)</text>
+
+          <!-- ===================== Foundation ===================== -->
+          <rect class="pkg pkg-accent" x="70" y="828" width="1010" height="40" rx="8" />
+          <text class="name" x="480" y="853">@thresh/core</text>
+          <text class="desc" x="820" y="853">
+            shared contracts: grain identity, interfaces, abstractions — every package depends on it
+          </text>
+
+          <!-- ===================== Edges ===================== -->
+          <!-- examples -> hosting -->
+          <path class="edge edge-strong" d="M 260 125 L 260 205" marker-end="url(#arrow-strong)" />
+          <!-- client -> messaging (skips hosting: talks straight to the transport/runtime) -->
+          <path class="edge" d="M 872 90 C 960 130, 900 400, 800 515" marker-end="url(#arrow)" />
+
+          <!-- hosting -> facilities band -->
+          <path class="edge edge-strong" d="M 465 264 L 465 348" marker-end="url(#arrow-strong)" />
+          <!-- hosting -> runtime core (left drop) -->
+          <path
+            class="edge edge-strong"
+            d="M 110 264 C 28 300, 28 340, 28 400 L 28 540 C 28 556, 42 562, 82 562"
+            marker-end="url(#arrow-strong)"
+          />
+          <!-- hosting -> clustering (left drop) -->
+          <path
+            class="edge edge-strong"
+            d="M 85 264 C 8 305, 8 345, 8 400 L 8 682 C 8 702, 22 712, 52 712"
+            marker-end="url(#arrow-strong)"
+          />
+          <!-- hosting -> observability -->
+          <path
+            class="edge"
+            d="M 862 238 C 1000 250, 1005 280, 1005 313"
+            marker-end="url(#arrow)"
+          />
+
+          <!-- transactions -> runtime -->
+          <path class="edge" d="M 500 423 C 400 470, 300 490, 240 515" marker-end="url(#arrow)" />
+
+          <!-- runtime -> directory, runtime -> messaging -->
+          <path class="edge" d="M 332 545 L 372 545" marker-end="url(#arrow)" />
+          <path class="edge" d="M 320 588 C 420 640, 560 620, 700 594" marker-end="url(#arrow)" />
+
+          <!-- clustering -> kubernetes -->
+          <path class="edge" d="M 310 712 L 332 712" marker-end="url(#arrow)" />
+
+          <!-- facilities (persistence, reminders, streams, journaling, durable-jobs) -> backing stores -->
+          <path class="edge" d="M 875 400 C 915 470, 910 600, 748 678" marker-end="url(#arrow)" />
+
+          <!-- everything -> core -->
+          <path class="edge" d="M 210 590 L 210 822" marker-end="url(#arrow)" />
+          <path class="edge" d="M 185 744 L 185 822" marker-end="url(#arrow)" />
+          <path class="edge" d="M 755 590 C 620 660, 590 750, 600 822" marker-end="url(#arrow)" />
+          <path
+            class="edge"
+            d="M 1005 612 C 1005 700, 1005 760, 1005 822"
+            marker-end="url(#arrow)"
+          />
+        </svg>
+      </figure>
+      <footer>
+        Generated from the pnpm workspace dependency graph (<code>packages/*/package.json</code>).
+        Blue = runtime spine, green = grain facilities layered on the runtime, orange =
+        infrastructure &amp; cross-cutting, dashed = external system.
+      </footer>
+    </main>
+  </body>
+</html>
