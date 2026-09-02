@@ -46,6 +46,28 @@ stores above. Worth a service dimension eventually for tidiness, not urgently.
 ## Review
 
 - [Project review — 2026-08-04](docs/project-review-2026-08-04.md) confirms the current stated aims are met, with only the explicitly beyond-parity browser work and deferred stream-backing polish left open.
+- The 2026-09-02 correctness review's findings were fixed in-tree (transaction lock release /
+  in-doubt `recordCommit`, transport `'error'` handling and per-peer fast-fail, monotonic stream
+  cursors, drained durable-job stop, reminder `lastFiredAt`, codec prototype-pollution guard,
+  non-zero drain grace, EndpointSlice list→watch `resourceVersion`, CI workflow). Still open from
+  that review:
+  - [ ] `oneWay` calls to a **local** activation await the whole callee turn while remote ones
+        resolve on send (`packages/runtime/src/local-dispatcher.ts`, `distributed-dispatcher.ts` vs
+        `cluster-node.ts`) — a location-transparency break; make local one-way calls detach.
+  - [ ] Call-filter short-circuit with a legitimately `undefined` result is misreported as
+        "filter did not call `context.invoke()`" (`packages/core/src/grain-call-filter.ts:100`).
+  - [ ] Directory range recovery closes over the ring captured at `beginRecovery`
+        (`packages/runtime/src/cluster-node.ts` `beginRecovery`); overlapping membership changes
+        can register entries under a stale ring — re-check ownership against the live ring.
+  - [ ] EndpointSlice watch reconnect uses a flat interval — add backoff + jitter
+        (`packages/clustering-k8s/src/kubernetes-endpoint-watch.ts`).
+  - [ ] The per-call recovery-version gate in `LocalDirectoryPartition` is dead under the current
+        full-barrier `awaitRecovered` wiring — remove it or restore fine-grained gating.
+  - [ ] Wait-die timestamp tie-break: equal-timestamp transactions from different silos both die
+        (`packages/transactions/src/reader-writer-lock.ts:111`); consider a cross-silo clock merge
+        or a deterministic tie-break.
+  - [ ] Pre-existing flake: `postgres-reminder-table.test.ts` "two instances racing the migration"
+        — `DROP CONSTRAINT` race surfaces error `42704`, not covered by `isDuplicate()`.
 
 ## Beyond parity
 
