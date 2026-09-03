@@ -49,17 +49,42 @@ stores above. Worth a service dimension eventually for tidiness, not urgently.
 - The 2026-09-02 correctness review's findings were fixed in-tree (transaction lock release /
   in-doubt `recordCommit`, transport `'error'` handling and per-peer fast-fail, monotonic stream
   cursors, drained durable-job stop, reminder `lastFiredAt`, codec prototype-pollution guard,
-  non-zero drain grace, EndpointSlice list→watch `resourceVersion`, CI workflow). Still open from
-  that review:
-  - [ ] `oneWay` calls to a **local** activation await the whole callee turn while remote ones
-        resolve on send (`packages/runtime/src/local-dispatcher.ts`, `distributed-dispatcher.ts` vs
-        `cluster-node.ts`) — a location-transparency break; make local one-way calls detach.
-  - [ ] Directory range recovery closes over the ring captured at `beginRecovery`
-        (`packages/runtime/src/cluster-node.ts` `beginRecovery`); overlapping membership changes
-        can register entries under a stale ring — re-check ownership against the live ring.
-  - [x] Call-filter `undefined` short-circuit false positive, EndpointSlice reconnect
-        backoff+jitter, dead recovery-version gate removal, wait-die (timestamp, id) tie-break,
-        and the Postgres migration-race flake (`42704`/`42P16`) — fixed 2026-09-03.
+  non-zero drain grace, EndpointSlice list→watch `resourceVersion`, CI workflow). The rest closed
+  on 2026-09-03: call-filter `undefined` short-circuit, EndpointSlice reconnect backoff+jitter,
+  dead recovery-version gate removal, wait-die (timestamp, id) tie-break, the Postgres
+  migration-race flake (`42704`/`42P16`), the stale captured ring in `beginRecovery`, and `oneWay`
+  locality. The review backlog is empty.
+
+### Follow-ups surfaced while closing it
+
+- [ ] **An incumbent that gains a range never pulls it.** `beginRecovery` runs only on JOIN
+      (`start()` and `updateView`'s `!wasActive` gate), so a silo that gains a range because
+      another silo *left* never pulls: the previous owner's retained `handoffSnapshot` entries sit
+      unpulled until `recoveryRetentionMs` expiry and then degrade to lazy rebuild. Orleans runs
+      `AcquireRangeAsync` for the added range on every partition on every view change. Same family
+      as the stale-ring bug and the largest remaining directory gap.
+- [ ] A transactional writer that waits for a lock does so **inside an exclusive turn**, blocking
+      the abort turns that would release the conflicting holders.
+      `packages/parity/src/transactions/exclusive-lock-transaction-memory-tests.test.ts` only
+      passes because cold-grain CAS losers currently jump ahead of the winner, so the youngest
+      (immediately dying) transaction happens to run first. Any change that makes cold-grain
+      admission order match call order for *awaited* calls will deadlock it.
+- [ ] `ClusterNode.receiveRequest` awaits `dispatcher.deliverLocal` for inbound wire messages and
+      discards a one-way failure silently — route it through the same catch-and-log as
+      `dispatchDetachingOneWay`.
+- [ ] `LocalDispatcher`'s logger is not wired from `SiloOptions` (there is no logger option there),
+      so a `Silo`-hosted (non-`createSilo`) host logs detached one-way failures to `noopLogger`.
+- [ ] `serveRecover()` is unfiltered by requester: it serves the whole `handoffSnapshot` to any
+      puller. With the precise ACK this is merely wasteful, not incorrect; filtering needs
+      `message.sendingSilo` threaded into `applyDirectoryOp`.
+- [ ] Per-silo override of a **decorator-declared** `collectionAgeSeconds` is still impossible
+      (only the process-wide grain metadata can change it, which by construction cannot differ
+      between two silos in one process). Out of scope for #66, which is closed; needs its own issue
+      if BeneDB's grain classes declare their own ages.
+- [ ] `docs/deviations.md` needs the one-line note that local peer suspicion (option C, item 9) is
+      placement-only and never a membership status.
+- [ ] Option C is designed but not built — land it as the two slices the design note names
+      (stage 1: sensor + metrics; stage 2: fail-fast + placement suppression).
 
 ## Beyond parity
 
