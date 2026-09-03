@@ -155,12 +155,17 @@ export interface SiloConfig {
   collectionAgeSeconds?: number;
   /**
    * Per-silo idle-deactivation ages keyed by GRAIN TYPE (Orleans'
-   * `GrainCollectionOptions.ClassSpecificCollectionAge`). An entry overrides that
-   * grain type's own `@grain({ collectionAgeSeconds })` — which remains the
-   * default, and remains in sole charge for a type this map does not name — so
-   * two silos in one process can hold different ages for the same grain class.
-   * Key by the registered grain type (`getGrainMetadata(Ctor).grainType`), never
-   * `Ctor.name`, which a bundler may rename.
+   * `GrainCollectionOptions.ClassSpecificCollectionAge`). An entry overrides
+   * `collectionAgeSeconds` — this silo's default — and applies ONLY to a grain
+   * type that declares no `collectionAgeSeconds` of its own: Orleans'
+   * `GrainTypeSharedContext.GetCollectionAgeLimit` reads the class attribute
+   * first and returns, so a decorator age wins over this map and a class that
+   * declares one is unreachable through it. A type this map does not name keeps
+   * its decorator age, or the silo default if it has none. So two silos in one
+   * process can hold different ages for the same grain class — provided that
+   * class leaves its age undeclared. Key by the registered grain type
+   * (`getGrainMetadata(Ctor).grainType`), never `Ctor.name`, which a bundler may
+   * rename.
    */
   classSpecificCollectionAgeSeconds?: Readonly<Record<string, number>>;
   /**
@@ -359,6 +364,12 @@ export class SiloBuilder {
   private readonly broadcastProviders = new Map<string, BroadcastChannelOptions>();
   private transactionsDisabled = false;
   private logger: Logger | undefined;
+  /**
+   * Builder-time additions to `SiloConfig.classSpecificCollectionAgeSeconds` (#66). Held apart
+   * from `config` — which is `readonly`, as is the map inside it — and composed at `build()`, so
+   * the constructor's entries stay observable as the caller passed them.
+   */
+  private readonly classSpecificCollectionAges = new Map<string, number>();
 
   constructor(private readonly config: SiloConfig) {}
 
@@ -1209,10 +1220,74 @@ export class SiloBuilder {
     return this;
   }
 
+  /**
+   * Set one grain type's idle-deactivation age on THIS silo after construction (#66), feeding the
+   * same per-silo map as `SiloConfig.classSpecificCollectionAgeSeconds` (Orleans
+   * `GrainCollectionOptions.ClassSpecificCollectionAge`, which is likewise a mutable dictionary on
+   * an options object that a registration-time `Configure<GrainCollectionOptions>` callback can
+   * add to). It exists because a registration helper only ever receives an already-constructed
+   * builder, by which time `config` is closed; without it such a helper has to rewrite the
+   * process-wide grain metadata instead, and two silos in one process can then no longer hold
+   * different ages for the same grain class — the very separation the per-silo map added.
+   *
+   * MERGES rather than replaces: an entry lands alongside the constructor's and any earlier
+   * builder-time entry for a different type. For the SAME grain type the LAST write wins — a
+   * builder-time call overrides the constructor's entry, and a later call overrides an earlier
+   * one — so a helper can refine an age a host configured broadly.
+   *
+   * `grainType` is the registered grain type (`getGrainMetadata(Ctor).grainType`), never
+   * `Ctor.name`, which a bundler may rename.
+   *
+   * LIMIT, inherited from the constructor map: a grain class's own
+   * `@grain({ collectionAgeSeconds })` wins over the entry (Orleans'
+   * `GrainTypeSharedContext.GetCollectionAgeLimit` reads the class attribute first and returns),
+   * so this call is a silent NO-OP for any class that declares an age. A class that wants per-silo
+   * control must therefore declare none — that is the escape hatch, and it lives on the grain
+   * class, not here. Nothing on this builder overrides a decorator-declared age; a caller needing
+   * that still has only the process-wide grain metadata, which by construction cannot differ
+   * between two silos in one process, and closing that gap is a separate change from #66.
+   *
+   * Validation is deferred to `build()`, the point at which the constructor map is checked, so
+   * both routes reject the same bad age with the same error.
+   */
+  useClassSpecificCollectionAge(grainType: string, seconds: number): this {
+    this.classSpecificCollectionAges.set(grainType, seconds);
+    return this;
+  }
+
+  /**
+   * `useClassSpecificCollectionAge` for a whole map at once (#66), for a registration helper that
+   * resolves several grain types' ages together. Merges every entry under the same last-write-wins
+   * rule per grain type; grain types absent from `ages` keep whatever age they already have, so
+   * this extends the per-silo map rather than replacing it.
+   */
+  useClassSpecificCollectionAges(ages: Readonly<Record<string, number>>): this {
+    for (const [grainType, seconds] of Object.entries(ages)) {
+      this.classSpecificCollectionAges.set(grainType, seconds);
+    }
+    return this;
+  }
+
+  /**
+   * The per-silo collection-age map as the node should see it: the constructor's entries with the
+   * builder-time ones (#66) layered over the top, so a later write wins for a given grain type.
+   * `undefined` when neither route configured anything, keeping `ClusterNode` on its own default.
+   */
+  private get resolvedClassSpecificCollectionAges(): Readonly<Record<string, number>> | undefined {
+    if (this.classSpecificCollectionAges.size === 0) {
+      return this.config.classSpecificCollectionAgeSeconds;
+    }
+    return {
+      ...this.config.classSpecificCollectionAgeSeconds,
+      ...Object.fromEntries(this.classSpecificCollectionAges),
+    };
+  }
+
   build(): SiloHost {
     if (this.membership === undefined) throw new Error("silo: no membership configured");
     if (this.transport === undefined) throw new Error("silo: no transport configured");
-    validateClassSpecificCollectionAges(this.config.classSpecificCollectionAgeSeconds);
+    const classSpecificCollectionAgeSeconds = this.resolvedClassSpecificCollectionAges;
+    validateClassSpecificCollectionAges(classSpecificCollectionAgeSeconds);
     const health = new HealthCheck();
     const storage = this.storage;
     // Transactional facets default to a per-silo in-memory provider
@@ -1278,8 +1353,8 @@ export class SiloBuilder {
       ...(this.config.collectionAgeSeconds !== undefined
         ? { defaultCollectionAgeSeconds: this.config.collectionAgeSeconds }
         : {}),
-      ...(this.config.classSpecificCollectionAgeSeconds !== undefined
-        ? { classSpecificCollectionAgeSeconds: this.config.classSpecificCollectionAgeSeconds }
+      ...(classSpecificCollectionAgeSeconds !== undefined
+        ? { classSpecificCollectionAgeSeconds }
         : {}),
       ...(this.config.defaultPlacementStrategy !== undefined
         ? { defaultPlacementStrategy: this.config.defaultPlacementStrategy }
