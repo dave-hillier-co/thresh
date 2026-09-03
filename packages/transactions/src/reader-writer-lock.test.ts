@@ -152,6 +152,43 @@ describe("ReaderWriterLock (wait-die)", () => {
     expect(rejection).not.toBeInstanceOf(TransactionLockUpgradeError);
   });
 
+  it("breaks a timestamp tie by transaction id so exactly one of two equal-priority transactions dies, in both id orderings", async () => {
+    // CausalClock is only per-silo monotonic, so two transactions from
+    // different silos can carry the *same* timestamp. Strict priority
+    // comparison (priority < h.priority) then makes both sides conclude
+    // "not older than the other" and both die — a liveness/perf bug, not a
+    // correctness one, but it defeats wait-die's purpose of letting exactly
+    // one side proceed. Breaking the tie by transaction id restores a total
+    // order, and both silos see the same id string, so they agree on the
+    // winner regardless of which one evaluates first.
+    const SAME = 7;
+
+    {
+      const lock = new ReaderWriterLock();
+      await lock.enter("a", SAME, "write");
+      // "a" < "b" lexicographically, so "a" is older under the tie-break and
+      // "b" must die.
+      await expect(lock.enter("b", SAME, "write")).rejects.toBeInstanceOf(TransactionAbortedError);
+    }
+
+    {
+      const lock = new ReaderWriterLock();
+      await lock.enter("b", SAME, "write");
+      // Same tie-break, opposite arrival order: "a" is still older by id, so
+      // it must wait (not die) for the younger-by-id holder "b".
+      let granted = false;
+      const waiting = lock.enter("a", SAME, "write").then(() => {
+        granted = true;
+      });
+      await Promise.resolve();
+      expect(granted).toBe(false);
+
+      lock.release("b");
+      await waiting;
+      expect(granted).toBe(true);
+    }
+  });
+
   it("aborts a waiter whose lock-acquisition deadline elapses", async () => {
     const clock = fakeClock();
     const lock = new ReaderWriterLock(clock);

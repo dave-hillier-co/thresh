@@ -8,8 +8,24 @@ import {
 type LockMode = "read" | "write";
 
 interface Holder {
+  transactionId: string;
   priority: number;
   mode: LockMode;
+}
+
+/**
+ * True if `a` is strictly older (higher wait-die priority) than `b`. Lower
+ * timestamp wins; a tie — possible across silos, since {@link CausalClock}
+ * is only per-silo monotonic — is broken by lexicographic transaction id so
+ * the order is total. Both silos see the same id string, so they agree on
+ * the winner regardless of which side evaluates the comparison first.
+ */
+function isOlder(
+  a: { priority: number; transactionId: string },
+  b: { priority: number; transactionId: string },
+): boolean {
+  if (a.priority !== b.priority) return a.priority < b.priority;
+  return a.transactionId < b.transactionId;
 }
 
 interface Waiter {
@@ -30,12 +46,18 @@ export interface AcquireDeadline {
 /**
  * A timestamp-ordered reader-writer lock with **wait-die** deadlock avoidance,
  * ported from Orleans' `Orleans.Transactions/State/ReaderWriterLock.cs`. A
- * transaction's lower timestamp means older / higher priority. Reads share;
- * a write is exclusive. On a conflict the **older** requester waits and the
- * **younger** one dies (aborts) — because the wound direction follows the total
- * timestamp order, no wait cycle can form. A transaction holds the lock from its
- * first access until it commits or aborts (across turns), which is what keeps a
- * second transaction from observing tentative state.
+ * transaction's lower timestamp means older / higher priority; ties (possible
+ * across silos, since `CausalClock` is only per-silo monotonic) break on
+ * lexicographic transaction id, so priority is really the pair `(timestamp,
+ * id)` compared lexicographically — a total order both silos agree on, since
+ * both see the same id string regardless of which side evaluates first.
+ * Reads share; a write is exclusive. On a conflict the **older** requester
+ * waits and the **younger** one dies (aborts) — because the wound direction
+ * follows the total order, no wait cycle can form and, unlike a strict
+ * timestamp-only comparison, an exact tie no longer makes both sides die. A
+ * transaction holds the lock from its first access until it commits or
+ * aborts (across turns), which is what keeps a second transaction from
+ * observing tentative state.
  *
  * Callers may pass an {@link AcquireDeadline} to bound how long a wait-die
  * waiter blocks; when the deadline elapses the waiter is removed and the
@@ -79,7 +101,7 @@ export class ReaderWriterLock {
       return Promise.resolve();
     }
     if (this.conflictingHolders(transactionId, mode).length === 0) {
-      this.holders.set(transactionId, { priority, mode });
+      this.holders.set(transactionId, { transactionId, priority, mode });
       return Promise.resolve();
     }
     return this.blockOrDie(transactionId, priority, mode, deadline);
@@ -106,9 +128,10 @@ export class ReaderWriterLock {
     isUpgrade = false,
   ): Promise<void> {
     const conflicts = this.conflictingHolders(transactionId, mode);
-    // Wait-die: wait only if older (strictly lower timestamp) than every
-    // conflicting holder; otherwise die.
-    const olderThanAll = conflicts.every((h) => priority < h.priority);
+    // Wait-die: wait only if older — by the total (timestamp, id) order —
+    // than every conflicting holder; otherwise die.
+    const requester = { priority, transactionId };
+    const olderThanAll = conflicts.every((h) => isOlder(requester, h));
     if (!olderThanAll) {
       // A read-to-write upgrade that dies gets the upgrade-specific typed
       // error (Orleans OrleansTransactionLockUpgradeException); an ordinary
@@ -140,10 +163,11 @@ export class ReaderWriterLock {
     let progressed = true;
     while (progressed) {
       progressed = false;
-      const queued = [...this.waiters].sort((a, b) => a.priority - b.priority);
+      const queued = [...this.waiters].sort((a, b) => (isOlder(a, b) ? -1 : isOlder(b, a) ? 1 : 0));
       for (const waiter of queued) {
         if (this.conflictingHolders(waiter.transactionId, waiter.mode).length === 0) {
           this.holders.set(waiter.transactionId, {
+            transactionId: waiter.transactionId,
             priority: waiter.priority,
             mode: waiter.mode,
           });
