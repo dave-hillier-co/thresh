@@ -121,5 +121,40 @@ describe.skipIf(pool === undefined)(
         await pool!.query(`DROP TABLE IF EXISTS ${legacy}_cursors`);
       }
     });
+
+    it("survives several instances racing the migration concurrently", async () => {
+      // Several concurrent starts (not just two) widen the window so the
+      // run reliably lands instances between the winner's DROP CONSTRAINT
+      // and its ADD PRIMARY KEY, exercising isAlreadyAbsent() (42704) and
+      // isAlreadyPresent() (42P16) — the two benign codes addServiceIdColumn()
+      // can see when it loses either half of that race.
+      const legacy = `${prefix}_race`;
+      await pool!.query(
+        `CREATE TABLE ${legacy}_cursors (
+           provider TEXT NOT NULL,
+           queue_idx INT NOT NULL,
+           cursor BIGINT NOT NULL,
+           PRIMARY KEY (provider, queue_idx)
+         )`,
+      );
+      try {
+        await pool!.query(
+          `INSERT INTO ${legacy}_cursors (provider, queue_idx, cursor) VALUES ('p', 0, 42)`,
+        );
+
+        const instances = Array.from(
+          { length: 5 },
+          () => new PostgresStreamCursorStore(pool!, legacy),
+        );
+        await Promise.all(instances.map((instance) => instance.start()));
+
+        expect(await instances[0]!.getCursor("p", 0)).toBe(42);
+      } finally {
+        await pool!.query(`DROP TABLE IF EXISTS ${legacy}_cursors`);
+      }
+      // Five concurrent Postgres round-trips can occasionally run past
+      // vitest's default 5s timeout under host load; the longer timeout is
+      // a test-harness margin, not a correctness bound.
+    }, 15000);
   },
 );

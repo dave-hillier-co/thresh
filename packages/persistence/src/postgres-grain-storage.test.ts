@@ -239,4 +239,45 @@ describe.skipIf(pool === undefined)("PostgresGrainStorage service partitioning (
       await pool!.query(`DROP TABLE IF EXISTS ${legacy}`);
     }
   });
+
+  it("survives several silos racing the migration concurrently", async () => {
+    // Several concurrent starts (not just two) widen the window so the run
+    // reliably lands both instances between the winner's DROP CONSTRAINT and
+    // its ADD PRIMARY KEY, exercising isAlreadyAbsent() (42704) and
+    // isAlreadyPresent() (42P16) — the two benign codes addServiceIdColumn()
+    // can see when it loses either half of that race.
+    const legacy = `${table}_race`;
+    await pool!.query(
+      `CREATE TABLE ${legacy} (
+         grain_id text NOT NULL,
+         state_name text NOT NULL,
+         data text NOT NULL,
+         etag text NOT NULL,
+         PRIMARY KEY (grain_id, state_name)
+       )`,
+    );
+    try {
+      await pool!.query(
+        `INSERT INTO ${legacy} (grain_id, state_name, data, etag) VALUES ($1, $2, $3, $4)`,
+        [id.toString(), "balance", serializeValue({ cents: 77 }), "legacy-etag"],
+      );
+
+      const silos = Array.from(
+        { length: 5 },
+        () => new PostgresGrainStorage(pool!, { tableName: legacy }),
+      );
+      await Promise.all(silos.map((silo) => silo.start()));
+
+      const state = makeState(new PostgresGrainStorage(pool!, { tableName: legacy }));
+      await state.read();
+      expect(state.exists).toBe(true);
+      expect(state.value.cents).toBe(77);
+      expect(state.etag).toBe("legacy-etag");
+    } finally {
+      await pool!.query(`DROP TABLE IF EXISTS ${legacy}`);
+    }
+    // Five concurrent Postgres round-trips can occasionally run past
+    // vitest's default 5s timeout under host load; the longer timeout is a
+    // test-harness margin, not a correctness bound.
+  }, 15000);
 });

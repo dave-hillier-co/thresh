@@ -346,7 +346,12 @@ describe.skipIf(pool === undefined)(
       }
     });
 
-    it("survives two instances racing the migration concurrently", async () => {
+    it("survives several instances racing the migration concurrently", async () => {
+      // Several concurrent starts (not just two) widen the window so the
+      // run reliably lands instances between the winner's DROP CONSTRAINT
+      // and its ADD PRIMARY KEY, exercising isAlreadyAbsent() (42704) and
+      // isAlreadyPresent() (42P16) — the two benign codes addServiceIdColumn()
+      // can see when it loses either half of that race.
       const legacy = `${table}_race`;
       await pool!.query(
         `CREATE TABLE ${legacy} (
@@ -375,15 +380,20 @@ describe.skipIf(pool === undefined)(
           ],
         );
 
-        const a = new PostgresReminderTable(pool!, { tableName: legacy });
-        const b = new PostgresReminderTable(pool!, { tableName: legacy });
-        await Promise.all([a.start(), b.start()]);
+        const instances = Array.from(
+          { length: 5 },
+          () => new PostgresReminderTable(pool!, { tableName: legacy }),
+        );
+        await Promise.all(instances.map((instance) => instance.start()));
 
-        const read = await a.read(billing, "invoice");
+        const read = await instances[0]!.read(billing, "invoice");
         expect(read?.etag).toBe("legacy-etag");
       } finally {
         await pool!.query(`DROP TABLE IF EXISTS ${legacy}`);
       }
-    });
+      // Five concurrent Postgres round-trips can occasionally run past
+      // vitest's default 5s timeout under host load; the longer timeout is
+      // a test-harness margin, not a correctness bound.
+    }, 15000);
   },
 );

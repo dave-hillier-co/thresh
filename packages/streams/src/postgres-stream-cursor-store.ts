@@ -10,6 +10,31 @@ function isDuplicate(err: unknown): boolean {
   return code === "23505" || code === "42P07" || code === "42710" || code === "42701";
 }
 
+// The mirror image of isDuplicate() above: two instances racing
+// addServiceIdColumn() can both read the same old primary-key constraint
+// name from pg_constraint before either has dropped it, so the loser's
+// `DROP CONSTRAINT` targets a name the winner already removed. Postgres
+// reports that as 42704 undefined_object — "already absent", not
+// "already created" — which is a distinct benign outcome from isDuplicate().
+function isAlreadyAbsent(err: unknown): boolean {
+  const code = (err as { code?: string }).code;
+  return code === "42704";
+}
+
+// The next link in the same race isAlreadyAbsent() covers: once the winner
+// has dropped the old primary key, both instances proceed to `ADD PRIMARY
+// KEY` (the loser's DROP having failed benignly, or having raced past the
+// `oldKey === undefined` check because the winner had already dropped it
+// before the loser's own `pg_constraint` SELECT). Whichever instance loses
+// that second race is adding a primary key the other has already added.
+// Postgres reports that as 42P16 invalid_table_definition ("multiple
+// primary keys for table ... are not allowed") — the loser's desired end
+// state is already in place, so it's benign too.
+function isAlreadyPresent(err: unknown): boolean {
+  const code = (err as { code?: string }).code;
+  return code === "42P16";
+}
+
 /**
  * `StreamCursorStore` backed by `<prefix>_cursors`, the same table shape
  * `PostgresStreamQueue` provisions for Phase 1 — `PostgresStreamQueue`
@@ -79,11 +104,24 @@ export class PostgresStreamCursorStore implements StreamCursorStore {
       );
       const oldKey = pk.rows[0]?.conname;
       if (oldKey !== undefined) {
-        await this.pool.query(`ALTER TABLE ${this.table} DROP CONSTRAINT "${oldKey}"`);
+        try {
+          await this.pool.query(`ALTER TABLE ${this.table} DROP CONSTRAINT "${oldKey}"`);
+        } catch (err) {
+          // See isAlreadyAbsent(): a concurrent instance can have already
+          // dropped this exact constraint between our SELECT and this
+          // statement.
+          if (!isAlreadyAbsent(err)) throw err;
+        }
       }
-      await this.pool.query(
-        `ALTER TABLE ${this.table} ADD PRIMARY KEY (service_id, provider, queue_idx)`,
-      );
+      try {
+        await this.pool.query(
+          `ALTER TABLE ${this.table} ADD PRIMARY KEY (service_id, provider, queue_idx)`,
+        );
+      } catch (err) {
+        // See isAlreadyPresent(): a concurrent instance can have already
+        // added this exact primary key.
+        if (!isAlreadyPresent(err)) throw err;
+      }
     } catch (err) {
       if (!isDuplicate(err)) throw err;
     }

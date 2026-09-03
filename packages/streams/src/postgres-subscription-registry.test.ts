@@ -155,5 +155,42 @@ describe.skipIf(pool === undefined)(
         await pool!.query(`DROP TABLE IF EXISTS ${legacy}_subscriptions`);
       }
     });
+
+    it("survives several instances racing the migration concurrently", async () => {
+      // Several concurrent starts (not just two) widen the window so the
+      // run reliably lands instances between the winner's DROP CONSTRAINT
+      // and its ADD PRIMARY KEY, exercising isAlreadyAbsent() (42704) and
+      // isAlreadyPresent() (42P16) — the two benign codes addServiceIdColumn()
+      // can see when it loses either half of that race.
+      const legacy = `${prefix}_race`;
+      await pool!.query(
+        `CREATE TABLE ${legacy}_subscriptions (
+           provider TEXT NOT NULL,
+           stream_key TEXT NOT NULL,
+           subscriber TEXT NOT NULL,
+           PRIMARY KEY (provider, stream_key, subscriber)
+         )`,
+      );
+      try {
+        const alice = new GrainId("ChatUser", "alice");
+        await pool!.query(
+          `INSERT INTO ${legacy}_subscriptions (provider, stream_key, subscriber) VALUES ($1, $2, $3)`,
+          ["default", "room/general", serializeValue(alice)],
+        );
+
+        const instances = Array.from(
+          { length: 5 },
+          () => new PostgresSubscriptionRegistry(pool!, legacy, "default"),
+        );
+        await Promise.all(instances.map((instance) => instance.start()));
+
+        expect(ids(await instances[0]!.subscribers("room/general"))).toEqual(["ChatUser/alice"]);
+      } finally {
+        await pool!.query(`DROP TABLE IF EXISTS ${legacy}_subscriptions`);
+      }
+      // Five concurrent Postgres round-trips can occasionally run past
+      // vitest's default 5s timeout under host load; the longer timeout is
+      // a test-harness margin, not a correctness bound.
+    }, 15000);
   },
 );
