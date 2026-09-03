@@ -26,6 +26,11 @@ class FakeSource implements EndpointSliceSource {
   resourceVersion: string | undefined = "1";
   listCount = 0;
   watchCount = 0;
+  /**
+   * When set, the next list() rejects with this instead of succeeding — simulating the API
+   * server still being down (e.g. mid-restart) when a reconnect attempt relists.
+   */
+  listError: unknown;
   /** Every resourceVersion each watch() call was started from, in order. */
   watchedFromVersions: (string | undefined)[] = [];
   private onEvent: ((type: WatchEventType, slice: RawEndpointSlice) => void) | undefined;
@@ -33,6 +38,7 @@ class FakeSource implements EndpointSliceSource {
 
   async list(): ReturnType<EndpointSliceSource["list"]> {
     this.listCount += 1;
+    if (this.listError !== undefined) throw this.listError;
     return this.resourceVersion !== undefined
       ? { items: this.items, resourceVersion: this.resourceVersion }
       : { items: this.items };
@@ -218,6 +224,149 @@ describe("KubernetesEndpointWatch", () => {
       expect(source.listCount).toBe(2);
       expect(source.watchedFromVersions).toEqual(["1", "99"]);
       expect(ringKeys(membership)).toEqual(["silo-0", "silo-1"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("backs off exponentially with jitter across consecutive failed reconnect attempts, then resets once one succeeds", async () => {
+    vi.useFakeTimers();
+    try {
+      const source = new FakeSource();
+      source.items = [rawSlice("silo-0", "u0", "10.0.0.1")];
+      const apiServerDown = { code: 500, reason: "connection refused" };
+      // Deterministic jitter: draws feed back predictably (0 => no jitter added, 1 => full jitter).
+      const draws = [0, 0, 1, 0];
+      const random = vi.fn(() => draws.shift() ?? 0);
+      const watch = new KubernetesEndpointWatch(source, { reconnectMs: 10, random });
+      await watch.start();
+      expect(source.watchCount).toBe(1);
+
+      // The watch drops, and the API server stays down for the next couple of reconnect
+      // attempts too (the relist itself keeps failing) — the scenario the backoff exists for.
+      source.listError = apiServerDown;
+      source.endWatch(apiServerDown);
+
+      // First retry: base delay (no backoff yet), draw 0 => no jitter. It fails too (relist
+      // rejects), so a second retry is scheduled.
+      await vi.advanceTimersByTimeAsync(9);
+      expect(source.listCount).toBe(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(source.listCount).toBe(2);
+
+      // Second consecutive failed retry: delay doubles to 20ms, draw 0 => no jitter.
+      await vi.advanceTimersByTimeAsync(19);
+      expect(source.listCount).toBe(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(source.listCount).toBe(3);
+
+      // The API server comes back before the third retry. Delay doubles again to 40ms, draw 1
+      // => full jitter added, so the actual wait is double the base delay for that attempt
+      // (80ms). This retry's relist succeeds and re-establishes the watch.
+      source.listError = undefined;
+      await vi.advanceTimersByTimeAsync(79);
+      expect(source.watchCount).toBe(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(source.watchCount).toBe(2);
+
+      // That successful reconnection reset the backoff: the next failure — whether a clean
+      // close or an error — waits the base delay again, not a continuation of the prior
+      // exponential growth.
+      source.endWatch(apiServerDown);
+      await vi.advanceTimersByTimeAsync(9);
+      expect(source.watchCount).toBe(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(source.watchCount).toBe(3);
+
+      expect(random).toHaveBeenCalledTimes(4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("caps the backoff delay at a maximum instead of growing without bound", async () => {
+    vi.useFakeTimers();
+    try {
+      const source = new FakeSource();
+      const random = vi.fn(() => 0);
+      const watch = new KubernetesEndpointWatch(source, {
+        reconnectMs: 10_000,
+        maxReconnectMs: 30_000,
+        random,
+      });
+      await watch.start();
+
+      // Failures keep doubling (10s, 20s) until the cap (30s) is reached and held.
+      for (const expectedWatchCount of [2, 3, 4]) {
+        source.endWatch({ code: 500, reason: "connection refused" });
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(source.watchCount).toBe(expectedWatchCount);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("resets the backoff after a successful reconnect, not only on a clean close", async () => {
+    vi.useFakeTimers();
+    try {
+      const source = new FakeSource();
+      source.items = [rawSlice("silo-0", "u0", "10.0.0.1")];
+      const apiServerDown = { code: 500, reason: "connection refused" };
+      const random = vi.fn(() => 0);
+      const watch = new KubernetesEndpointWatch(source, { reconnectMs: 10, random });
+      await watch.start();
+      expect(source.watchCount).toBe(1);
+
+      // First failure: base delay (10ms).
+      source.endWatch(apiServerDown);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(source.watchCount).toBe(2);
+
+      // The relist+rewatch above succeeded — a healthy reconnection, not a clean close of the
+      // *watch* itself. That should reset consecutiveFailures just as a clean close would, so
+      // an unrelated failure later doesn't inherit the prior incident's doubled delay.
+      source.endWatch(apiServerDown);
+      await vi.advanceTimersByTimeAsync(9);
+      expect(source.watchCount).toBe(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(source.watchCount).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps retrying with backoff when the reconnect's relist itself fails (API server still down)", async () => {
+    vi.useFakeTimers();
+    try {
+      const source = new FakeSource();
+      source.items = [rawSlice("silo-0", "u0", "10.0.0.1")];
+      const random = vi.fn(() => 0);
+      const watch = new KubernetesEndpointWatch(source, { reconnectMs: 10, random });
+      await watch.start();
+      expect(source.watchCount).toBe(1);
+
+      // The watch drops and the API server is still down when we try to relist.
+      source.listError = { code: 500, reason: "connection refused" };
+      source.endWatch({ code: 500, reason: "connection refused" });
+      await vi.advanceTimersByTimeAsync(10);
+      // The relist rejected — no watch re-established yet, but the failure must still be
+      // scheduled to retry (with backoff), not silently abandoned.
+      expect(source.listCount).toBe(2);
+      expect(source.watchCount).toBe(1);
+
+      // Second consecutive failure (the rejected relist counts as one): delay doubles to 20ms.
+      await vi.advanceTimersByTimeAsync(19);
+      expect(source.listCount).toBe(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(source.listCount).toBe(3);
+      expect(source.watchCount).toBe(1);
+
+      // The API server comes back: the next scheduled relist succeeds and re-establishes
+      // the watch (third attempt: delay doubles again to 40ms).
+      source.listError = undefined;
+      await vi.advanceTimersByTimeAsync(40);
+      expect(source.watchCount).toBe(2);
     } finally {
       vi.useRealTimers();
     }

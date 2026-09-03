@@ -68,8 +68,19 @@ export function toEndpointSlice(raw: RawEndpointSlice): EndpointSlice {
 }
 
 export interface KubernetesEndpointWatchOptions {
-  /** Delay before re-listing and re-watching after the watch drops (defaults to 1s). */
+  /**
+   * Base delay before re-listing and re-watching after the watch drops (defaults to 1s).
+   * Doubles on each consecutive failed close, up to {@link maxReconnectMs}; see the class
+   * doc comment for why.
+   */
   reconnectMs?: number;
+  /** Ceiling for the exponential backoff delay (defaults to 30s). */
+  maxReconnectMs?: number;
+  /**
+   * Source of randomness for jitter, injected so tests can make the delay deterministic
+   * (the codebase pattern — see e.g. `RandomPlacement`). Defaults to `Math.random`.
+   */
+  random?: () => number;
 }
 
 /**
@@ -83,14 +94,24 @@ export interface KubernetesEndpointWatchOptions {
 export class KubernetesEndpointWatch implements EndpointWatch {
   private readonly endpoints = new WatchedEndpoints();
   private readonly reconnectMs: number;
+  private readonly maxReconnectMs: number;
+  private readonly random: () => number;
   private stopWatch: (() => void) | undefined;
   private running = false;
+  /**
+   * Consecutive failed closes (a truthy `onClose(err)`) since the last clean close. Drives
+   * the exponential backoff below — a clean close (the API server ending the watch normally,
+   * not a failure) resets it, so steady-state reconnects stay at the base delay.
+   */
+  private consecutiveFailures = 0;
 
   constructor(
     private readonly source: EndpointSliceSource,
     options: KubernetesEndpointWatchOptions = {},
   ) {
     this.reconnectMs = options.reconnectMs ?? 1000;
+    this.maxReconnectMs = options.maxReconnectMs ?? 30_000;
+    this.random = options.random ?? Math.random;
   }
 
   subscribe(onSlices: (slices: EndpointSlice[]) => void): () => void {
@@ -109,31 +130,68 @@ export class KubernetesEndpointWatch implements EndpointWatch {
   }
 
   private async relistAndWatch(): Promise<void> {
-    const slices = new Map<string, EndpointSlice>();
-    const { items, resourceVersion } = await this.source.list();
-    for (const raw of items) {
-      const name = raw.metadata?.name;
-      if (name !== undefined) slices.set(name, toEndpointSlice(raw));
-    }
-    this.endpoints.reset(slices);
-    if (!this.running) return;
-
-    // Watch from this list's resourceVersion, not "now" — otherwise any change the API server
-    // applies between the list returning and the watch being established is silently missed.
-    this.stopWatch = this.source.watch(
-      resourceVersion,
-      (type, raw) => {
+    try {
+      const slices = new Map<string, EndpointSlice>();
+      const { items, resourceVersion } = await this.source.list();
+      for (const raw of items) {
         const name = raw.metadata?.name;
-        if (name === undefined) return;
-        this.endpoints.apply(type, name, type === "DELETED" ? undefined : toEndpointSlice(raw));
-      },
-      () => {
-        this.stopWatch = undefined;
-        // Any close — clean, an error, or a 410 Gone once `resourceVersion` aged out of the API
-        // server's history — is handled the same way: relist for a fresh snapshot and
-        // resourceVersion, then rewatch from there.
-        if (this.running) setTimeout(() => void this.relistAndWatch(), this.reconnectMs);
-      },
-    );
+        if (name !== undefined) slices.set(name, toEndpointSlice(raw));
+      }
+      this.endpoints.reset(slices);
+      if (!this.running) return;
+
+      // Watch from this list's resourceVersion, not "now" — otherwise any change the API server
+      // applies between the list returning and the watch being established is silently missed.
+      this.stopWatch = this.source.watch(
+        resourceVersion,
+        (type, raw) => {
+          const name = raw.metadata?.name;
+          if (name === undefined) return;
+          this.endpoints.apply(type, name, type === "DELETED" ? undefined : toEndpointSlice(raw));
+        },
+        (err) => {
+          this.stopWatch = undefined;
+          // Any close — clean, an error, or a 410 Gone once `resourceVersion` aged out of the
+          // API server's history — is handled the same way: relist for a fresh snapshot and
+          // resourceVersion, then rewatch from there. The delay before doing so backs off
+          // exponentially across consecutive *failed* closes (an error or 410 Gone), with
+          // jitter: when the API server itself restarts, every silo's watch drops at once, and
+          // a flat delay would have them all relist and rewatch in lockstep, hammering the API
+          // server the moment it comes back. A clean close — the API server ending the watch
+          // normally, which it does periodically by design — resets the backoff, so
+          // steady-state reconnects stay at the base delay.
+          this.consecutiveFailures = err !== undefined ? this.consecutiveFailures + 1 : 0;
+          if (this.running) setTimeout(() => void this.relistAndWatch(), this.nextReconnectDelay());
+        },
+      );
+
+      // We got here because the relist and rewatch above both succeeded — a healthy
+      // (re)connection, not just a clean close of the *previous* watch. Reset the backoff here
+      // too (in addition to the clean-close reset above) so a failure followed by a long,
+      // healthy run doesn't have its next unrelated failure inherit an old incident's doubled
+      // delay: the exponent is meant to track one continuous outage, not accumulate forever.
+      this.consecutiveFailures = 0;
+    } catch {
+      // The relist itself failed — most likely the same outage that dropped the watch (e.g. the
+      // API server is still restarting) rather than a fresh, unrelated problem. Left unhandled,
+      // this rejection would be silently swallowed by the `void this.relistAndWatch()` caller
+      // and the watch loop would die permanently on the very outage the backoff exists to
+      // survive. Count it as a failure and reschedule through the same backoff as a dropped
+      // watch, so relist retries also spread out instead of hammering the API server.
+      this.stopWatch = undefined;
+      this.consecutiveFailures += 1;
+      if (this.running) setTimeout(() => void this.relistAndWatch(), this.nextReconnectDelay());
+    }
+  }
+
+  /**
+   * Base delay doubled once per consecutive failure beyond the first (capped at
+   * `maxReconnectMs`), plus full jitter — a random extra 0x-1x of that delay — so silos that
+   * failed in the same tick don't all retry at the exact same instant either.
+   */
+  private nextReconnectDelay(): number {
+    const exponent = Math.max(0, this.consecutiveFailures - 1);
+    const delay = Math.min(this.reconnectMs * 2 ** exponent, this.maxReconnectMs);
+    return delay + this.random() * delay;
   }
 }
