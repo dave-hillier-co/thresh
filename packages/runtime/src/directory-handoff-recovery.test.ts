@@ -62,6 +62,71 @@ function counterKeyOwnedBy(ring: ConsistentHashRing, owner: SiloAddress): string
   }
 }
 
+/** First `Counter/*` key every `(ring, owner)` pair agrees on — arranges a chain of moves. */
+function counterKeyMovingThrough(
+  moves: ReadonlyArray<{ ring: ConsistentHashRing; owner: SiloAddress }>,
+): string {
+  for (let i = 0; ; i++) {
+    const grainId = new GrainId("Counter", `k-${i}`);
+    if (moves.every(({ ring, owner }) => ring.ownerOf(grainId).equals(owner))) return `k-${i}`;
+  }
+}
+
+/**
+ * Wraps an `InProcessTransport` so inbound directory requests from `holdFrom`
+ * are parked instead of delivered, until `release()` hands them to the real
+ * handler. This is the seam that makes the "membership changes while a
+ * recovery pull is in flight" interleaving deterministic: parking the pull
+ * REQUEST at the source keeps the puller's `beginRecovery` continuation
+ * pending across as many `updateView()` calls as the test wants to drive,
+ * with no timers and no sleeping.
+ */
+class GatedTransport implements Transport {
+  private readonly parked: Array<() => void> = [];
+  private open = false;
+  constructor(
+    private readonly inner: Transport,
+    private readonly holdFrom: SiloAddress,
+  ) {}
+  async listen(
+    address: SiloAddress,
+    onMessage: MessageHandler,
+    onAccept?: ConnectionAcceptHandler,
+  ): Promise<Listener> {
+    const gated: MessageHandler = (message, from) => {
+      const isHeldPull =
+        !this.open &&
+        message.direction === "request" &&
+        message.system === "directory" &&
+        message.targetGrain.type === "$directory" &&
+        from.equals(this.holdFrom);
+      if (!isHeldPull) return onMessage(message, from);
+      this.parked.push(() => void onMessage(message, from));
+      return undefined;
+    };
+    return this.inner.listen(address, gated, onAccept);
+  }
+  connect(
+    to: SiloAddress,
+    preamble: ConnectionPreamble,
+    onMessage?: MessageHandler,
+  ): Promise<Connection> {
+    return this.inner.connect(to, preamble, onMessage);
+  }
+  /** Deliver every parked request and stop parking. */
+  release(): void {
+    this.open = true;
+    for (const deliver of this.parked.splice(0)) deliver();
+  }
+}
+
+/** Drain the microtask queue (and one macrotask turn) so in-process delivery settles. */
+async function settle(): Promise<void> {
+  for (let i = 0; i < 20; i++) await Promise.resolve();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  for (let i = 0; i < 20; i++) await Promise.resolve();
+}
+
 /**
  * Wraps an `InProcessTransport` so `connect()` to a chosen target fails the
  * first `failures` times it's attempted, then behaves normally — simulating a
@@ -264,6 +329,96 @@ describe("directory handoff recovery (ACK-delete, retry, expiry)", () => {
     } finally {
       await node0.stop();
       await node1.stop();
+    }
+  });
+
+  it("does not adopt (or ACK-delete) entries whose range moved again while the pull was in flight", async () => {
+    // Interleaving under test: silo-2 joins and pulls the range it owns under
+    // the 3-silo ring; while that pull is parked at the source, silo-3 joins
+    // and the range moves on to silo-3. Orleans orders the newer view's
+    // eviction after the older acquire (`WaitForRange`) so the entry is
+    // re-snapshotted for the newer owner; this port has no such lock, so the
+    // pull's adopt decision must be taken against the ring in force at
+    // registration time, and only what was adopted may be ACK-deleted.
+    const network = new InProcessNetwork();
+    const membership = new StaticMembershipService(silo(0), [silo(0), silo(1)]);
+    // Park silo-2's directory pulls at silo-1, the source that retains the entry.
+    const gate = new GatedTransport(new InProcessTransport(network, CLUSTER), silo(2));
+    const makeNode = (
+      local: SiloAddress,
+      transport: Transport = new InProcessTransport(network, CLUSTER),
+    ) => {
+      const node = new ClusterNode({
+        local,
+        clusterId: CLUSTER,
+        membership: new MembershipView(membership, local),
+        transport,
+        random: () => 0.99,
+      });
+      node.registerGrain(CounterGrain, { interfaces: [ICounter] });
+      return node;
+    };
+
+    const node0 = makeNode(silo(0));
+    const node1 = makeNode(silo(1), gate);
+    await node0.start();
+    await node1.start();
+
+    // A key silo-1 owns at two silos, silo-2 owns at three, silo-3 at four:
+    // silo-1 is the handoff source, silo-2 the stale puller, silo-3 the true owner.
+    const key = counterKeyMovingThrough([
+      { ring: new ConsistentHashRing([silo(0), silo(1)]), owner: silo(1) },
+      { ring: new ConsistentHashRing([silo(0), silo(1), silo(2)]), owner: silo(2) },
+      { ring: new ConsistentHashRing([silo(0), silo(1), silo(2), silo(3)]), owner: silo(3) },
+    ]);
+    const grainId = new GrainId("Counter", key);
+    let node2: ClusterNode | undefined;
+    let node3: ClusterNode | undefined;
+
+    try {
+      expect(await node0.getGrain(ICounter, key).increment(5)).toBe(5);
+      expect(node1.pendingHandoffCount()).toBe(0);
+
+      // silo-2 joins: silo-1 hands the range off, silo-2 pulls — and the pull
+      // sits parked at silo-1 for the rest of the interleaving.
+      membership.addSilo(silo(2));
+      node2 = makeNode(silo(2));
+      await node2.start();
+      node0.updateView();
+      node1.updateView();
+      await settle();
+      expect(node1.pendingHandoffCount()).toBe(1);
+
+      // silo-3 joins while silo-2's pull is still in flight: the range is now
+      // silo-3's, and every silo (silo-2 included) has already applied the view.
+      membership.addSilo(silo(3));
+      node0.updateView();
+      node1.updateView();
+      node2.updateView();
+      await settle();
+
+      gate.release();
+      await settle();
+
+      // The served entry belongs to silo-3 now, so silo-2 must neither register
+      // it into its own partition (an orphan the current ring says is not its
+      // range) nor ACK it away at the source (which would strand silo-3).
+      expect(node2.partition.lookup(grainId)).toBeUndefined();
+      expect(node1.pendingHandoffCount()).toBe(1);
+
+      // The true owner's own pull therefore still finds the entry: the call
+      // reaches the original activation with its state intact (5 + 2), rather
+      // than lazily rebuilding a fresh grain (which would answer 2).
+      node3 = makeNode(silo(3));
+      await node3.start();
+      await settle();
+      expect(await node3.getGrain(ICounter, key).increment(2)).toBe(7);
+      expect(node1.isActive(grainId)).toBe(true);
+    } finally {
+      await node3?.stop();
+      await node2?.stop();
+      await node1.stop();
+      await node0.stop();
     }
   });
 });

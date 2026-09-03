@@ -1220,10 +1220,27 @@ export class ClusterNode {
    * Every directory operation on the recovering range is serialized behind
    * `awaitRecovered` gating on `this.recovery`, so no concurrent register can
    * reach the partition ahead of the pull.
+   *
+   * Ownership is decided against the LIVE `this.ring`, read inside the adopt
+   * pass rather than captured when the pull was issued: `updateView` replaces
+   * the ring wholesale and `acceptHandoff`'s loop is synchronous, so a live
+   * read makes the whole pass atomic with respect to any view change. A pull
+   * whose response lands after a further membership change therefore cannot
+   * register an entry the current ring assigns elsewhere — which would leave
+   * an orphan in this partition, on the far side of the `drain()` pass that
+   * already decided the range had moved on.
+   *
+   * Only the entries actually adopted are ACKed. The source's `serveRecover`
+   * is unfiltered by requester, so ACKing the whole served batch would delete
+   * entries this silo declined — stranding the range's true owner, whose own
+   * pull then comes back empty and degrades a live grain to lazy rebuild.
+   * Orleans scopes acknowledgement the same way, per transfer partner and
+   * range version (`RemoveSnapshotTransferPartner`); declining to ACK leaves
+   * the entry retained at the source for the real owner's pull, bounded by
+   * `recoveryRetentionMs`.
    */
   private beginRecovery(sources: readonly SiloAddress[], version: number): void {
     if (sources.length === 0) return;
-    const newRing = this.ring;
     const done = Promise.all(
       sources.map(async (owner) => {
         try {
@@ -1240,16 +1257,27 @@ export class ClusterNode {
             },
           );
           if (entries !== undefined && entries.length > 0) {
-            this.partition.acceptHandoff(entries, (e) =>
-              newRing.ownerOf(e.grainId).equals(this.options.local),
-            );
-            // ACK-delete: tell the source it can drop exactly what it just served.
+            // The predicate doubles as the record of what was taken: it runs
+            // once per entry, synchronously, immediately before `register`, so
+            // `adopted` is exactly the set this partition took custody of —
+            // including an entry whose CAS lost to a concurrent reactivation,
+            // which is resolved here and must not linger at the source to be
+            // re-served later as a stale pointer.
+            const adopted: GrainAddress[] = [];
+            this.partition.acceptHandoff(entries, (e) => {
+              if (this.ring.isEmpty || !this.ownsNow(e.grainId)) return false;
+              adopted.push(e);
+              return true;
+            });
+            // ACK-delete: tell the source it can drop exactly what we adopted.
             // Best-effort — a lost ACK just means the entries expire there instead.
-            void this.sendDirectory(owner, {
-              kind: "recoverAck",
-              grainIds: entries.map((e) => e.grainId),
-              version,
-            }).catch(() => undefined);
+            if (adopted.length > 0) {
+              void this.sendDirectory(owner, {
+                kind: "recoverAck",
+                grainIds: adopted.map((e) => e.grainId),
+                version,
+              }).catch(() => undefined);
+            }
           }
         } catch {
           // retries exhausted: this source's ranges degrade to lazy rebuild
