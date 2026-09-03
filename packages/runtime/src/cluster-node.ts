@@ -1217,14 +1217,13 @@ export class ClusterNode {
    * Each source is retried (bounded, backed off) independently, so one slow or
    * flaky peer doesn't stall recovery from the others. A source that exhausts
    * its retry budget degrades to lazy rebuild for that source's ranges only.
-   * Concurrent registers for the recovering range are gated on
-   * `LocalDirectoryPartition`'s own `recoveryMembershipVersion` for the
-   * duration, in addition to `awaitRecovered` gating reads on `this.recovery`.
+   * Every directory operation on the recovering range is serialized behind
+   * `awaitRecovered` gating on `this.recovery`, so no concurrent register can
+   * reach the partition ahead of the pull.
    */
   private beginRecovery(sources: readonly SiloAddress[], version: number): void {
     if (sources.length === 0) return;
     const newRing = this.ring;
-    this.partition.beginRecovery(version);
     const done = Promise.all(
       sources.map(async (owner) => {
         try {
@@ -1260,7 +1259,6 @@ export class ClusterNode {
     this.recovery = done;
     void done.finally(() => {
       if (this.recovery === done) this.recovery = undefined;
-      this.partition.endRecovery(version);
     });
   }
 
@@ -2623,7 +2621,7 @@ export class ClusterNode {
         return this.partition.lookup(op.grainId);
       case "register":
         await this.awaitRecovered(op.addr.grainId);
-        return this.partition.register(op.addr, op.previous, op.version);
+        return this.partition.register(op.addr, op.previous);
       case "unregister":
         await this.awaitRecovered(op.addr.grainId);
         this.partition.unregister(op.addr);

@@ -1,4 +1,3 @@
-import { RejectionError } from "@thresh/core/errors";
 import { grainAddressEquals, type GrainAddress } from "@thresh/core/grain-address";
 import type { GrainId } from "@thresh/core/grain-id";
 import type { SiloAddress } from "@thresh/core/silo-address";
@@ -8,20 +7,19 @@ import type { SiloAddress } from "@thresh/core/silo-address";
  * silo's ring range. Holds the compare-and-set registration logic; the
  * distributed directory routes owned-elsewhere operations here over the
  * transport.
+ *
+ * Serializing registration against an in-flight join/handoff recovery pull is
+ * the caller's job, not this class's: `ClusterNode` gates every directory
+ * operation on its own recovery barrier (`awaitRecovered`, which awaits the
+ * whole in-flight recovery promise before the operation reaches this
+ * partition), so by the time `register` ever runs here recovery has already
+ * either finished or not started. This partition used to also carry a
+ * per-call recovery-version gate for the same purpose; it was removed as dead
+ * code once every caller was confirmed to funnel through that barrier first.
  */
 export class LocalDirectoryPartition {
   private readonly entries = new Map<string, GrainAddress>();
   private readonly isSiloLive: (silo: SiloAddress) => boolean;
-  /**
-   * Set while this silo has an in-flight join/handoff recovery pull for a
-   * membership version, cleared once it settles. Gates `register`: a caller
-   * still on an older view than the recovery must not originate a brand-new
-   * entry for a range that is actively being repopulated from a previous
-   * owner — it would risk a duplicate activation racing the recovered
-   * (authoritative) entry in from under it. Consulted only for brand-new
-   * entries; CAS replacement of an existing entry is unaffected.
-   */
-  private _recoveryMembershipVersion: number | undefined;
 
   /**
    * `isSiloLive` is consulted on lookup to mirror Orleans' `LookupCore` /
@@ -39,52 +37,28 @@ export class LocalDirectoryPartition {
     return this.entries.size;
   }
 
-  get recoveryMembershipVersion(): number | undefined {
-    return this._recoveryMembershipVersion;
-  }
-
-  /** Mark a recovery pull in flight for `version` (see `_recoveryMembershipVersion`). */
-  beginRecovery(version: number): void {
-    this._recoveryMembershipVersion = version;
-  }
-
-  /** Clear the in-flight marker, only if it still matches (an older call can't clobber a newer one). */
-  endRecovery(version: number): void {
-    if (this._recoveryMembershipVersion === version) this._recoveryMembershipVersion = undefined;
-  }
-
   lookup(grainId: GrainId): GrainAddress | undefined {
     const existing = this.entries.get(grainId.toString());
     return existing && this.isSiloLive(existing.silo) ? existing : undefined;
   }
 
   /**
-   * Register `addr`. If no entry exists, `addr` wins — unless a recovery pull
-   * is in flight for a membership version this caller's `callerVersion` is
-   * behind (`recoveryMembershipVersion` gate, see the field doc): the caller
-   * must catch up and retry rather than originate an entry that a still-inbound
-   * recovered one would otherwise win. If an entry exists but its host silo has
-   * fallen out of the live membership view, it is a dangling pointer to a silo
-   * that will never come back — `addr` wins outright, mirroring Orleans
+   * Register `addr`. If no entry exists, `addr` wins outright — a caller
+   * racing an in-flight join/handoff recovery for this range is never in
+   * play here: `ClusterNode` awaits its recovery barrier before any register
+   * reaches this partition, so recovery has always already settled by this
+   * point (see the class doc comment). If an entry exists but its host silo
+   * has fallen out of the live membership view, it is a dangling pointer to a
+   * silo that will never come back — `addr` wins outright, mirroring Orleans
    * `RegisterCore`'s dead-silo overwrite. Otherwise the caller only wins by
    * passing the exact `previous` entry it expected to replace (a known-stale
    * entry after a move); the existing winner is returned and the caller must
    * defer to it.
    */
-  register(addr: GrainAddress, previous?: GrainAddress, callerVersion?: number): GrainAddress {
+  register(addr: GrainAddress, previous?: GrainAddress): GrainAddress {
     const key = addr.grainId.toString();
     const existing = this.entries.get(key);
     if (existing === undefined) {
-      if (
-        callerVersion !== undefined &&
-        this._recoveryMembershipVersion !== undefined &&
-        callerVersion < this._recoveryMembershipVersion
-      ) {
-        throw new RejectionError(
-          "directory range recovering: retry against a fresher view",
-          "staleView",
-        );
-      }
       this.entries.set(key, addr);
       return addr;
     }
