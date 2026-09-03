@@ -640,6 +640,13 @@ export class ClusterNode {
       filtersFor: (grainType) => this.filtersFor(grainType),
       placementContext: () => this.placementContext(),
       versionFilter: (req, candidates) => this.applyVersionFilter(req, candidates),
+      // A detached `oneWay` delivery's failure has no caller to surface to, so
+      // it is logged instead (see `dispatchDetachingOneWay`); reuse whatever
+      // logger the host configured for activations rather than inventing a
+      // second knob for it.
+      ...(options.activationOptions?.logger !== undefined
+        ? { logger: options.activationOptions.logger }
+        : {}),
       clientRouter: {
         isClientTarget: (t) => isClient(t),
         route: (req) => this.routeToClient(req),

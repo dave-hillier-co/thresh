@@ -352,6 +352,29 @@ export class GrainFactory {
     options: InvokeMethodOptions,
     ambient: TransactionInfo | undefined,
   ): { transaction: TransactionInfo | undefined; beginsHere: boolean } {
+    // A `oneWay` call has no response by definition — Orleans' `[OneWay]`
+    // registers no callback and completes the caller's task at the messaging
+    // layer (`InsideRuntimeClient.SendRequest`), and `dispatchDetachingOneWay`
+    // does the same here — so it cannot carry a transaction outcome, and the
+    // callee's turn is not part of the caller's happens-before chain. Combined
+    // with a boundary that opens a transaction (`create`/`createOrJoin`) the
+    // root would resolve it as soon as the detached call returned, committing
+    // before the callee had contributed anything; combined with `join` the
+    // caller's commit would race the callee's writes into the same
+    // transaction. Neither can mean what it says, so reject the declaration
+    // rather than silently committing an empty (or partial) transaction.
+    // `suppress`/`supported`/no attribute are unaffected: they never make this
+    // call a transaction boundary.
+    if (
+      options.oneWay === true &&
+      (options.transaction === "create" ||
+        options.transaction === "createOrJoin" ||
+        options.transaction === "join")
+    ) {
+      throw new Error(
+        `method ${method} is oneWay and cannot take part in a transaction (${options.transaction}): a oneWay call has no response to carry the transaction's outcome`,
+      );
+    }
     switch (options.transaction) {
       case "create":
         return {
