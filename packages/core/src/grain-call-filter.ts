@@ -86,6 +86,24 @@ export async function runCallFilters<C extends GrainCallContext>(
 ): Promise<unknown> {
   let index = 0;
   let reachedTerminal = false;
+  // Track whether *any* filter (or the terminal) actually assigned `result`,
+  // rather than inferring it from `result === undefined` — a filter may
+  // legitimately short-circuit with `undefined` (a void-returning method, or
+  // a cached `undefined`), and that must not be mistaken for a broken chain.
+  // `result` is turned into an accessor on the context itself so every write
+  // to it — through the public `GrainCallContext` shape filters already use —
+  // is observed, without adding a member to that interface.
+  let resultSet = false;
+  let resultValue: unknown = context.result;
+  Object.defineProperty(context, "result", {
+    configurable: true,
+    enumerable: true,
+    get: () => resultValue,
+    set: (value: unknown) => {
+      resultValue = value;
+      resultSet = true;
+    },
+  });
   const invoke = async (): Promise<void> => {
     if (index < filters.length) {
       const filter = filters[index++]!;
@@ -97,7 +115,7 @@ export async function runCallFilters<C extends GrainCallContext>(
   };
   context.invoke = invoke;
   await invoke();
-  if (!reachedTerminal && context.result === undefined) {
+  if (!reachedTerminal && !resultSet) {
     throw new Error(
       `Filter for '${context.interfaceName}.${context.methodName}' did not call context.invoke()`,
     );

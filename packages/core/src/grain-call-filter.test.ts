@@ -65,6 +65,22 @@ describe("call-filter pipeline", () => {
     expect(methodRan).toBe(false);
   });
 
+  it("short-circuits cleanly when a filter sets result to undefined without calling invoke()", async () => {
+    // A void-returning method (or a legitimately cached `undefined`) is a valid
+    // short-circuit value — it must not be mistaken for "no result was set".
+    let methodRan = false;
+    const voidCache: GrainCallFilter = async (ctx) => {
+      ctx.result = undefined; // intentional short-circuit, not a broken chain
+    };
+    const ctx = context([]);
+    const result = await runCallFilters([voidCache], ctx, async () => {
+      methodRan = true;
+      return "fresh";
+    });
+    expect(result).toBeUndefined();
+    expect(methodRan).toBe(false);
+  });
+
   it("rejects when a filter neither calls invoke() nor sets a result", async () => {
     let methodRan = false;
     const broken: GrainCallFilter = async () => {
