@@ -7,6 +7,7 @@ import {
   encodeValue,
   registerSurrogate,
   serializeValue,
+  UnsupportedSchemaVersionError,
   unregisterSurrogate,
   type SurrogateDescriptor,
 } from "@thresh/core/value-codec";
@@ -182,9 +183,48 @@ describe("value-codec", () => {
       expect(decodeValue(encodeValue(date))).toEqual(date);
     });
 
+    // The version gate is deliberately scoped to tags whose shape THIS build knows. A tag nobody
+    // here has a shape for cannot be "misread" — the custom branch below hands back its fields
+    // verbatim — so it keeps degrading whether or not the payload is stamped with a newer version.
     it("decodes an unknown tag as a plain object instead of throwing", () => {
       const fromTheFuture = { $thresh: "some-future-type", $tsvv: 2, value: 1 };
       expect(decodeValue(fromTheFuture)).toEqual(fromTheFuture);
+    });
+
+    // A version this build cannot decode on a tag whose shape it thinks it knows is the other
+    // case entirely: applying today's field layout to a payload laid out for a different one
+    // yields a wrong value with nothing to signal it. Refusing is what the stamp is for.
+    it("rejects an envelope whose tag is known but whose schema version is not", () => {
+      const fromTheFuture = { $thresh: "date", $tsvv: 2, value: 0 };
+
+      expect(() => decodeValue(fromTheFuture)).toThrow(UnsupportedSchemaVersionError);
+      // The message has to name what could not be read: which tag, which version, which build.
+      expect(() => decodeValue(fromTheFuture)).toThrow(
+        /"date" envelope is stamped schema version 2, but this build decodes version 1/,
+      );
+    });
+
+    it("rejects a newer version on a registered surrogate's tag too", () => {
+      interface VersionedMoney {
+        cents: number;
+      }
+      registerSurrogate<VersionedMoney>({
+        tag: "versioned-money",
+        test: (v): v is VersionedMoney =>
+          typeof v === "object" && v !== null && "cents" in (v as object),
+        encode: (v) => ({ cents: v.cents }),
+        decode: (fields) => ({ cents: fields.cents as number }),
+      });
+
+      expect(() => decodeValue({ $thresh: "versioned-money", $tsvv: 2, cents: 5 })).toThrow(
+        UnsupportedSchemaVersionError,
+      );
+    });
+
+    it("treats a version field that is not a version at all as the pre-field shape", () => {
+      // The stamp selects a shape; it is not something a payload can use to opt out of being read.
+      expect(decodeValue({ $thresh: "date", $tsvv: "2", value: 0 })).toEqual(new Date(0));
+      expect(decodeValue({ $thresh: "date", $tsvv: 0, value: 0 })).toEqual(new Date(0));
     });
   });
 
