@@ -92,6 +92,67 @@ describe("ReaderWriterLock (wait-die)", () => {
     expect(granted).toBe(true);
   });
 
+  it("rejects a queued upgrade when the same transaction's hold is released", async () => {
+    // A transaction that holds a read lock *and* is queued for an upgrade on
+    // the same resource is the one reachable state where a waiter and a holder
+    // share a transaction id. Releasing it — the abort path a dying sibling
+    // participant, a caller deadline or a rejected `Promise.all` takes — can
+    // never grant that queued upgrade, so the waiter's promise must be settled.
+    // Dropping the entry alone (what `release` used to do) leaves the awaiting
+    // `performUpdate` suspended forever, so the grain's exclusive turn never
+    // completes and the activation stops serving calls entirely.
+    const lock = new ReaderWriterLock();
+    await lock.enter("older", OLDER, "read");
+    await lock.enter("younger", YOUNGER, "read");
+
+    let settled: unknown;
+    const upgrade = lock.enter("older", OLDER, "write").then(
+      () => {
+        settled = "granted";
+      },
+      (err: unknown) => {
+        settled = err;
+      },
+    );
+    await Promise.resolve();
+    expect(settled).toBeUndefined(); // still queued behind the younger reader
+
+    lock.release("older");
+    await upgrade;
+    expect(settled).toBeInstanceOf(TransactionAbortedError);
+    expect(settled).toMatchObject({ message: expect.stringContaining("released") });
+  });
+
+  it("rejects a released waiter that never held the lock, leaving the holder untouched", async () => {
+    // The same orphan is reachable without an upgrade: a transaction that is
+    // merely *queued* (a first write acquisition that had to wait) is aborted
+    // elsewhere, and `release` splices its entry out. The conflicting holder
+    // must keep its lock — only the released transaction's own entry goes.
+    const lock = new ReaderWriterLock();
+    await lock.enter("younger", YOUNGER, "write");
+
+    let settled: unknown;
+    const waiting = lock.enter("older", OLDER, "write").then(
+      () => {
+        settled = "granted";
+      },
+      (err: unknown) => {
+        settled = err;
+      },
+    );
+    await Promise.resolve();
+    expect(settled).toBeUndefined();
+
+    lock.release("older");
+    await waiting;
+    expect(settled).toBeInstanceOf(TransactionAbortedError);
+
+    // The younger holder was never disturbed, and the lock still serves once
+    // it releases.
+    lock.release("younger");
+    await expect(lock.enter("other", OLDER, "write")).resolves.toBeUndefined();
+  });
+
   it("upgrades a read to a write when no other holder conflicts", async () => {
     const lock = new ReaderWriterLock();
     await lock.enter("t1", OLDER, "read");

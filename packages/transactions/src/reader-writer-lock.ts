@@ -115,6 +115,17 @@ export class ReaderWriterLock {
       if (waiter.transactionId === transactionId) {
         if (waiter.timer !== undefined) this.time.clearTimer(waiter.timer);
         this.waiters.splice(i, 1);
+        // Settle the orphaned promise, exactly as the deadline path does. A
+        // released transaction's own queued request can never be granted now —
+        // there is nothing left to grant it on behalf of — and merely splicing
+        // the entry out leaves the awaiting `performUpdate` suspended forever:
+        // the grain's exclusive turn never completes, so the activation stops
+        // serving calls entirely, not just for that transaction. Reachable
+        // whenever a transaction holds a read lock and is queued for an
+        // upgrade on the same resource and is then aborted elsewhere (a dying
+        // sibling participant, a caller deadline, a rejected `Promise.all`) —
+        // the same abort path that leads here.
+        waiter.reject(new TransactionAbortedError(transactionId, "lock released while waiting"));
       }
     }
     this.pump();
