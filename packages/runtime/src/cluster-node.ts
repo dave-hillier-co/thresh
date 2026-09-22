@@ -1115,6 +1115,14 @@ export class ClusterNode {
     await this.catalog.deactivateAll({ code: "shutting-down", description: "node stopping" });
     await this.listener?.close();
     await this.connections.closeAll();
+    // Only now is nothing left that could answer a call: the listener is closed and every pooled
+    // connection is gone, so an entry still outstanding (a one-way fire-and-forget sent just
+    // before, a call whose caller stopped awaiting it) can only sit until its deadline and, on a
+    // caller that stopped awaiting, reject into nothing. Settle them here instead, as the
+    // correlation table's own `rejectAll` is written for.
+    this.correlation.rejectAll(
+      new RejectionError(`silo ${this.options.local.toString()} is shutting down`, "siloDraining"),
+    );
   }
 
   /**
@@ -1545,9 +1553,30 @@ export class ClusterNode {
       method: "",
       body,
     };
-    const pending = this.correlation.register(correlationId, this.callTimeoutMs, target.toString());
-    conn.send(message);
+    const pending = this.sendAndAwait(conn, message, target.toString());
     return this.interpretResponse(await pending);
+  }
+
+  /**
+   * Register the call's correlation entry, put the request on the wire, and hand
+   * back the promise its reply will complete — the one shape every awaitable send
+   * in this node takes, so no site can arm an entry a failed send would strand.
+   *
+   * A `send` that throws (a peer that has stopped listening, a socket already
+   * closed) is the one failure that lands after the entry exists and before
+   * anything awaits it, and a request that never left can never be answered: the
+   * entry is released here, failing the call with the send's own error, rather
+   * than left in the table to fire its deadline on nobody's call.
+   */
+  private sendAndAwait(conn: Connection, message: Message, peer?: string): Promise<Message> {
+    const pending = this.correlation.register(message.correlationId, this.callTimeoutMs, peer);
+    try {
+      conn.send(message);
+    } catch (err) {
+      this.correlation.fail(message.correlationId, err);
+      throw err;
+    }
+    return pending;
   }
 
   private async sendMigration(target: SiloAddress, payload: MigrationPayload): Promise<boolean> {
@@ -1736,8 +1765,7 @@ export class ClusterNode {
       conn.send(message);
       return undefined;
     }
-    const pending = this.correlation.register(correlationId, this.callTimeoutMs);
-    conn.send(message);
+    const pending = this.sendAndAwait(conn, message);
     return this.interpretResponse(await pending);
   }
 
@@ -1775,8 +1803,7 @@ export class ClusterNode {
       return;
     }
     try {
-      const pending = this.correlation.register(forward.correlationId, this.callTimeoutMs);
-      conn.send(forward);
+      const pending = this.sendAndAwait(conn, forward);
       const clientResponse = await pending;
       if (replyTo === undefined) return;
       const relayed = responseTo(
@@ -1827,8 +1854,7 @@ export class ClusterNode {
       conn.send(message);
       return undefined;
     }
-    const pending = this.correlation.register(correlationId, this.callTimeoutMs, silo.toString());
-    conn.send(message);
+    const pending = this.sendAndAwait(conn, message, silo.toString());
     const response = await pending;
     // Merge the participants the callee (and its sub-calls) enlisted back into
     // the ambient transaction, so the root agent commits/aborts them too. Done
