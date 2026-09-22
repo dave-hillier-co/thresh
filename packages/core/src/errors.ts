@@ -1,3 +1,5 @@
+import type { ResolvedStatus } from "./transaction-info";
+
 /**
  * The catch-all base beneath the grain-call failure family — Thresh's answer to
  * Orleans' `OrleansException`, which is the base of `SiloUnavailableException`,
@@ -293,6 +295,33 @@ export class TransactionAbortedError extends Error {
   ) {
     super(`transaction ${transactionId} aborted: ${reason}`, options);
     this.name = "TransactionAbortedError";
+  }
+}
+
+/**
+ * Raised when a transactional resource tries to enlist in a transaction whose
+ * boundary has already resolved it — committed, aborted, or still resolving —
+ * rather than enlisting into a live one. The agent resolves from a snapshot of
+ * the participant set taken when the round begins, so a resource that joined
+ * afterwards would never be prepared, committed or aborted: its lock would be
+ * held until the activation deactivated (wedging the resource for every other
+ * transaction) and its write silently discarded. Refusing before it takes
+ * anything keeps the resource usable and tells the caller its work is lost
+ * instead. Orleans has no exact analogue — the closest is the
+ * `TransactionInfo.MustAbort` check the agent applies to orphaned calls. A
+ * subtype of {@link TransactionAbortedError} because the late work can never
+ * commit: the boundary has already decided, or is deciding, without it.
+ */
+export class TransactionAlreadyResolvedError extends TransactionAbortedError {
+  constructor(
+    transactionId: string,
+    readonly status: ResolvedStatus,
+  ) {
+    super(
+      transactionId,
+      `cannot enlist in a transaction that is already ${status === "resolving" ? "being resolved" : status}`,
+    );
+    this.name = "TransactionAlreadyResolvedError";
   }
 }
 
