@@ -69,6 +69,9 @@ export function participantKey(id: ParticipantId): string {
  *
  * A read-only participant may skip staging in `prepare` (validate-only). Commit
  * application must be idempotent: recovery may re-apply a prepared record.
+ *
+ * This alone makes a resource participant and nothing more: it can never be
+ * elected transaction manager — see {@link TransactionManager}.
  */
 export interface TransactionParticipant {
   prepare(
@@ -78,19 +81,57 @@ export interface TransactionParticipant {
   ): boolean | Promise<boolean>;
   commit(transactionId: string): void | Promise<void>;
   abort(transactionId: string): void | Promise<void>;
-  /** TM only: durably record the transaction's commit before participants commit. */
+}
+
+/**
+ * A participant that can also act as the transaction's manager (Orleans
+ * `ITransactionManager` — a separate interface upstream, which does not extend
+ * `ITransactionalResource` either). Beyond driving its own state, a manager
+ * durably records the transaction's commit before any participant commits —
+ * the protocol's atomic commit point — and answers a recovering participant's
+ * `status` query about it. Both halves are required of the same participant:
+ * recording without answering leaves a sibling's in-doubt record unresolvable,
+ * and answering without recording reports a commit that was never durable.
+ *
+ * Not every resource can serve: `TransactionalStateImpl` does (its commit
+ * records are WAL-backed), while `TransactionCommitter` deliberately does not.
+ * `TransactionAgent` elects the manager from the write participants that
+ * implement this — so a transaction whose writers are all resource-only commits
+ * without a durable commit point, rather than routing the commit point at a
+ * manager that cannot record one. See `electManager`.
+ */
+export interface TransactionManager extends TransactionParticipant {
+  /** Durable commit record: the transaction has committed, whatever happens next. */
   recordCommit(
     transactionId: string,
     timeStamp: number,
     writeParticipants: ParticipantId[],
   ): void | Promise<void>;
+  /** Whether `transactionId` committed — the query a recovering participant makes. */
+  status(transactionId: string): boolean | Promise<boolean>;
+}
+
+/**
+ * Whether `participant` implements the manager half of the contract as well as
+ * the resource half. This is the port's stand-in for Orleans'
+ * `ParticipantId.IsManager()` role check, which a participant here has no field
+ * to declare (`ParticipantId` is just a grain id and a state name): the methods
+ * themselves are the declaration.
+ */
+export function isTransactionManager(
+  participant: TransactionParticipant,
+): participant is TransactionManager {
+  const candidate = participant as Partial<TransactionManager>;
+  return typeof candidate.recordCommit === "function" && typeof candidate.status === "function";
 }
 
 /**
  * A participant enlisted in a transaction, with the access it has accrued. A
  * participant enlisted on the local silo carries its live `participant` object
- * (the agent drives it directly); one merged back from another silo via a reply
- * carries only `id`, and the agent routes to it over the dispatcher.
+ * (the agent drives it directly, and can tell from that object whether it may
+ * serve as the transaction manager — see {@link isTransactionManager}); one
+ * merged back from another silo via a reply carries only `id`, and the agent
+ * routes to it over the dispatcher.
  */
 export interface EnlistedParticipant {
   readonly id: ParticipantId;

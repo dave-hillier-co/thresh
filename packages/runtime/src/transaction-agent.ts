@@ -8,11 +8,24 @@ import type {
   EnlistedParticipant,
   ParticipantId,
   TransactionInfo,
+  TransactionManager,
 } from "@thresh/core/transaction-info";
+import { isTransactionManager } from "@thresh/core/transaction-info";
 import { TransactionResourceInterface } from "@thresh/core/transaction-resource";
 import { CausalClock } from "@thresh/runtime/causal-clock";
 import type { Dispatcher } from "@thresh/runtime/dispatcher";
 import type { TimeProvider } from "@thresh/runtime/time-provider";
+
+/**
+ * The participant elected to manage the transaction. `local` carries its live
+ * object when it is enlisted on this silo (the agent drives the manager methods
+ * directly); absent when the manager was merged back from another silo and is
+ * reached over the dispatcher instead.
+ */
+interface ElectedManager {
+  readonly id: ParticipantId;
+  readonly local?: TransactionManager | undefined;
+}
 
 /**
  * The per-silo transaction agent (Orleans `TransactionAgent`). It begins a
@@ -78,7 +91,8 @@ export class TransactionAgent {
     }
 
     // Elect the transaction manager from the writers (Orleans: the first write
-    // participant). In-process the agent coordinates the rounds directly.
+    // participant that supports the Manager role). In-process the agent
+    // coordinates the rounds directly.
     const manager = this.electManager(enlisted);
     const writeParticipants = enlisted.filter((e) => e.access.writes > 0).map((e) => e.id);
 
@@ -95,7 +109,11 @@ export class TransactionAgent {
     if (prepared.every((ok) => ok)) {
       // The TM durably records the commit before any participant commits — the
       // atomic commit point. A crash after this leaves participants in-doubt,
-      // and recovery resolves them to commit by querying the TM.
+      // and recovery resolves them to commit by querying the TM. A transaction
+      // whose writers are all resource-only has no such point to record: its
+      // participants still commit (the port's `TransactionCommitter` is
+      // memory-only, with no durable prepare record to recover either), but
+      // nothing is left claiming a commit record exists.
       if (manager !== undefined) {
         try {
           await this.recordCommit(manager, info, writeParticipants);
@@ -159,12 +177,12 @@ export class TransactionAgent {
 
   /** Have the elected TM durably record the commit (locally or over the dispatcher). */
   private async recordCommit(
-    manager: EnlistedParticipant,
+    manager: ElectedManager,
     info: TransactionInfo,
     writeParticipants: ParticipantId[],
   ): Promise<void> {
-    if (manager.participant !== undefined) {
-      await manager.participant.recordCommit(info.id, info.timeStamp, writeParticipants);
+    if (manager.local !== undefined) {
+      await manager.local.recordCommit(info.id, info.timeStamp, writeParticipants);
       return;
     }
     await this.route(manager.id, "recordCommit", [
@@ -203,8 +221,27 @@ export class TransactionAgent {
     });
   }
 
-  /** The elected manager (first writer), or undefined for a read-only transaction. */
-  private electManager(enlisted: readonly EnlistedParticipant[]): EnlistedParticipant | undefined {
-    return enlisted.find((e) => e.access.writes > 0);
+  /**
+   * The elected manager (Orleans' first write participant that supports the
+   * Manager role), or undefined when no writer can manage the transaction.
+   *
+   * A locally-enlisted participant must implement the manager half of the
+   * contract to be elected: electing one that cannot record a commit — a
+   * `TransactionCommitter`, say — would leave the transaction with no durable
+   * commit point at all, and `recordCommit` would route the recovery `status`
+   * query to a resource that has no answer for it. A participant merged back
+   * from another silo carries no role of its own (the reply's
+   * `SerializedParticipant` is just `{id, access}`), so it is taken at its
+   * word: it is reached through `TransactionResource`, whose contract covers
+   * the manager methods too.
+   */
+  private electManager(enlisted: readonly EnlistedParticipant[]): ElectedManager | undefined {
+    for (const e of enlisted) {
+      if (e.access.writes === 0) continue;
+      const local = e.participant;
+      if (local === undefined) return { id: e.id };
+      if (isTransactionManager(local)) return { id: e.id, local };
+    }
+    return undefined;
   }
 }
