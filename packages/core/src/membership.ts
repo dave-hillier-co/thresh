@@ -9,7 +9,21 @@ export interface SiloMember {
   metadata?: Readonly<Record<string, string>>;
 }
 
-/** A versioned snapshot of the live silo set; `version` is the view number. */
+/**
+ * A versioned snapshot of the live silo set.
+ *
+ * `version` numbers the views of ONE membership service: it is comparable only
+ * between snapshots of that same service, and is otherwise opaque. In production
+ * every silo has its own (each watching Kubernetes for itself), so equal versions
+ * on two silos denote unrelated views; only the test/dev `StaticMembershipService`,
+ * shared across an in-process cluster, is a single authority whose version means
+ * the same view everywhere.
+ *
+ * `DistributedGrainDirectory` and `ClusterNode` nevertheless compare these
+ * versions across silos — a `staleView` rejection, and `awaitView` waiting for a
+ * caller's version — which asks for exactly the cluster-wide view identity this
+ * interface does not promise. See issue #72.
+ */
 export interface MembershipSnapshot {
   version: number;
   silos: ReadonlyArray<SiloMember>;
