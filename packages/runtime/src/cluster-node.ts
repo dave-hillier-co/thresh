@@ -2736,18 +2736,26 @@ export class ClusterNode {
     // rejection it re-resolves), so we never serve under two ring topologies.
     if (op.version > this.appliedVersion) await this.awaitView(op.version);
     if (op.kind !== "recover" && op.kind !== "recoverAck" && op.version < this.appliedVersion) {
-      const grainId = op.kind === "lookup" ? op.grainId : op.addr.grainId;
-      if (!this.ownsNow(grainId)) throw new RejectionError("stale directory view", "staleView");
+      this.requireOwned(op.kind === "lookup" ? op.grainId : op.addr.grainId);
     }
     switch (op.kind) {
       case "lookup":
         await this.awaitRecovered(op.grainId);
+        // The version check above is not enough on its own: it is decided before
+        // this wait, and a view change landing IN the wait moves the range out
+        // from under a caller whose version never looked stale. Re-check against
+        // the ring in force now, and reject so the caller re-resolves — rather
+        // than serving, or worse registering, an entry in a partition the ring no
+        // longer assigns (which nothing re-drains until the next view change).
+        this.requireOwnedAfterWait(op.grainId, op.version);
         return this.partition.lookup(op.grainId);
       case "register":
         await this.awaitRecovered(op.addr.grainId);
+        this.requireOwnedAfterWait(op.addr.grainId, op.version);
         return this.partition.register(op.addr, op.previous);
       case "unregister":
         await this.awaitRecovered(op.addr.grainId);
+        this.requireOwnedAfterWait(op.addr.grainId, op.version);
         this.partition.unregister(op.addr);
         return undefined;
       case "recover":
@@ -2756,6 +2764,24 @@ export class ClusterNode {
         this.ackServedRecovery(op.addrs);
         return undefined;
     }
+  }
+
+  /** Reject a directory op whose grain this silo does not own (an empty ring owns nothing). */
+  private requireOwned(grainId: GrainId): void {
+    if (this.ring.isEmpty || !this.ownsNow(grainId)) {
+      throw new RejectionError("stale directory view", "staleView");
+    }
+  }
+
+  /**
+   * The same check, made after the op has waited: ownership is only meaningful
+   * against the view in force when the partition is touched. Skipped when our view
+   * has not moved since the check above decided it (the common case, and the only
+   * case where the earlier decision can still be trusted).
+   */
+  private requireOwnedAfterWait(grainId: GrainId, opVersion: number): void {
+    if (opVersion >= this.appliedVersion) return;
+    this.requireOwned(grainId);
   }
 
   private async receiveRequest(message: Message): Promise<void> {
