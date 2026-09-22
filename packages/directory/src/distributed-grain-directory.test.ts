@@ -102,6 +102,36 @@ describe("DistributedGrainDirectory", () => {
     await dirA.unregisterSilo(siloB);
     expect(partitions.get(siloA.ringKey)!.size).toBe(0);
   });
+
+  it("rejects an unresolvable owner as a stale view, not a programming fault", async () => {
+    const peer: DirectoryPeer = {
+      lookup: async () => {
+        throw new Error("nothing should route on an empty ring");
+      },
+      register: async () => {
+        throw new Error("nothing should route on an empty ring");
+      },
+      unregister: async () => {
+        throw new Error("nothing should route on an empty ring");
+      },
+    };
+    const dir = new DistributedGrainDirectory(
+      siloA,
+      new LocalDirectoryPartition(),
+      () => new ConsistentHashRing([]),
+      peer,
+    );
+
+    const failure = await dir.lookup(new GrainId("Counter", "k")).then(
+      () => undefined,
+      (err: unknown) => err,
+    );
+    // A membership state — no active silos in this silo's view — rather than the
+    // invariant `ConsistentHashRing.ownerOf` reports it as. The caller's stale-view
+    // path can act on the rejection; a plain Error reads as a bug worth surfacing.
+    expect(failure).toBeInstanceOf(RejectionError);
+    expect(failure).toMatchObject({ kind: "staleView" });
+  });
 });
 
 function grainKeysOwnedBy(silo: SiloAddress, count: number): string[] {

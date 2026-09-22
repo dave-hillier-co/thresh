@@ -181,6 +181,55 @@ describe("KubernetesMembership", () => {
     expect(silo2?.podUid).toBe("uid-new");
   });
 
+  describe("the local silo's own membership", () => {
+    const ringKeys = (membership: KubernetesMembership): string[] =>
+      activeSilos(membership.current())
+        .map((s) => s.ringKey)
+        .sort();
+
+    it("keeps itself in the view while the watch does not report it at all", () => {
+      const watch = new FakeWatch();
+      const membership = new KubernetesMembership(local, watch, { portName: "silo" });
+
+      // Joining: the watch shows a peer but not this silo's own endpoint yet. It
+      // must still be a member of its own view, or it would never consider itself
+      // active — and readiness, which gates its endpoint, waits on membership.
+      watch.emit([slice([{ ip: "10.0.0.2", name: "silo-1", uid: "uid-1", ready: true }])]);
+      expect(ringKeys(membership)).toEqual(["silo-0", "silo-1"]);
+
+      // A transient empty watch must not read as "the whole cluster vanished".
+      watch.emit([]);
+      expect(ringKeys(membership)).toEqual(["silo-0"]);
+
+      // Nor may it, once back, need the watch to vouch for it before it counts
+      // itself as a member again.
+      watch.emit([slice([{ ip: "10.0.0.2", name: "silo-1", uid: "uid-1", ready: true }])]);
+      expect(ringKeys(membership)).toEqual(["silo-0", "silo-1"]);
+    });
+
+    it("keeps itself in the view once the watch has dropped it (issue #72)", () => {
+      const watch = new FakeWatch();
+      const membership = new KubernetesMembership(local, watch, { portName: "silo" });
+      watch.emit([
+        slice([
+          { ip: "10.0.0.1", name: "silo-0", uid: "uid-0", ready: true },
+          { ip: "10.0.0.2", name: "silo-1", uid: "uid-1", ready: true },
+        ]),
+      ]);
+      expect(ringKeys(membership)).toEqual(["silo-0", "silo-1"]);
+
+      // PINNED GAP, not desired behaviour: this silo drains (readiness off) or is
+      // removed from the service, so every peer drops it — while it goes on
+      // considering itself a member, a ring divergence the directory's
+      // `staleView` guard cannot detect. The unconditional self-injection is
+      // deliberate for now; see caveat 2 in `KubernetesMembership`'s class doc
+      // for what a fix has to settle first (placement candidates and the
+      // self-probe both ride on this view). Change it there, not here.
+      watch.emit([slice([{ ip: "10.0.0.2", name: "silo-1", uid: "uid-1", ready: true }])]);
+      expect(ringKeys(membership)).toEqual(["silo-0", "silo-1"]);
+    });
+  });
+
   describe("metadata from pod labels", () => {
     const member = (m: KubernetesMembership, ringKey: string) =>
       m.current().silos.find((s) => s.address.ringKey === ringKey);
