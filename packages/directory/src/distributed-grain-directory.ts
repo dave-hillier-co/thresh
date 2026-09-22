@@ -75,9 +75,10 @@ export class DistributedGrainDirectory implements GrainDirectory {
   }
 
   /**
-   * Resolve the owner of `grainId` and run the operation there. Owned-here reads
-   * wait for any in-flight range recovery first; remote calls re-resolve and
-   * retry (bounded) when the owner reports our view is stale.
+   * Resolve the owner of `grainId` and run the operation there. Owned-here
+   * operations wait for any in-flight range recovery first, then re-check that
+   * the range is still ours before touching the partition; remote calls
+   * re-resolve and retry (bounded) when the owner reports our view is stale.
    */
   private async route<T>(
     grainId: GrainId,
@@ -102,9 +103,24 @@ export class DistributedGrainDirectory implements GrainDirectory {
       }
       const owner = ring.ownerOf(grainId);
       if (owner.equals(this.local)) {
-        record("local");
         await this.onOwnedAccess(grainId);
-        return onOwned();
+        // That await yields — a microtask at the very least, with no recovery to
+        // wait for — and `updateView` runs on exactly such a microtask (the
+        // membership watch's own continuation). So the ring can move this range
+        // elsewhere inside it: writing here regardless would leave an entry in a
+        // partition the ring no longer assigns, which nothing re-drains until the
+        // next view change, and the grain's true owner would then find no entry
+        // and build a second activation. Re-resolve instead, the way `awaitView`
+        // advances and then re-checks.
+        if (this.ownsHere(grainId)) {
+          record("local");
+          return onOwned();
+        }
+        if (attempt >= MAX_STALE_RETRIES) {
+          throw new RejectionError("directory ownership moved during the wait", "staleView");
+        }
+        this.refresh(); // advance our view, then recompute the owner and retry
+        continue;
       }
       record("remote");
       try {
@@ -114,6 +130,12 @@ export class DistributedGrainDirectory implements GrainDirectory {
         this.refresh(); // advance our view, then recompute the owner and retry
       }
     }
+  }
+
+  /** Whether the range is this silo's under the CURRENT ring (an empty ring owns nothing). */
+  private ownsHere(grainId: GrainId): boolean {
+    const ring = this.ring();
+    return !ring.isEmpty && ring.ownerOf(grainId).equals(this.local);
   }
 }
 

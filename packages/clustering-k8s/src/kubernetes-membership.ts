@@ -2,7 +2,7 @@ import type { MembershipService, MembershipSnapshot, SiloMember } from "@thresh/
 import type { SiloAddress } from "@thresh/core/silo-address";
 import {
   metadataFromSlices,
-  readySilosFromSlices,
+  siloMembersFromSlices,
   type EndpointSlice,
 } from "@thresh/clustering-k8s/endpoint-slice";
 
@@ -97,20 +97,18 @@ export class KubernetesMembership implements MembershipService {
   }
 
   private onSlices(slices: EndpointSlice[]): void {
-    // Always include the local silo: a silo is a member of its own cluster view
-    // even before its endpoint shows ready (it isn't ready until it can serve,
-    // which the readiness probe gates on membership being healthy — including
-    // self breaks that bootstrap cycle), and a transient empty watch must not
-    // make a silo believe the whole cluster vanished. That the injection is
-    // unconditional is caveat 2 in the class doc (issue #72): a silo the watch
-    // has dropped keeps itself in its own ring.
-    const ready = dedupe([this.local, ...readySilosFromSlices(slices, this.options.portName)]);
+    // Always include the local silo, forced `active` whatever its own endpoint
+    // reports — `dedupeMembers` carries the bootstrap rationale. That the
+    // injection is unconditional is caveat 2 in the class doc (issue #72): a
+    // silo the watch has dropped keeps itself in its own ring.
+    const members = dedupeMembers(this.local, [
+      { address: this.local, status: "active" },
+      ...siloMembersFromSlices(slices, this.options.portName),
+    ]);
     const metadataByUid = metadataFromSlices(slices, this.options.metadataLabelPrefix);
-    const silos: SiloMember[] = ready.map((address) => {
-      const metadata = metadataByUid.get(address.podUid);
-      return metadata !== undefined
-        ? { address, status: "active", metadata }
-        : { address, status: "active" };
+    const silos: SiloMember[] = members.map((member) => {
+      const metadata = metadataByUid.get(member.address.podUid);
+      return metadata !== undefined ? { ...member, metadata } : member;
     });
     this.snapshot = { version: this.snapshot.version + 1, silos };
     const waiters = this.waiters;
@@ -119,8 +117,22 @@ export class KubernetesMembership implements MembershipService {
   }
 }
 
-function dedupe(silos: SiloAddress[]): SiloAddress[] {
-  const seen = new Map<string, SiloAddress>();
-  for (const silo of silos) seen.set(`${silo.podName}#${silo.podUid}`, silo);
-  return [...seen.values()];
+/**
+ * One member per pod incarnation (`podName#podUid`). The local silo is always
+ * included and always `active`, whatever its own endpoint reports: it is a
+ * member of its own cluster view even before that endpoint shows ready (it
+ * isn't ready until it can serve, and the readiness probe gates on membership
+ * being healthy — including self breaks that bootstrap cycle), and a membership
+ * view that told a silo it was draining would take it out of its own ring while
+ * it was still serving. A transient empty watch is covered by the same rule:
+ * the local silo never believes the whole cluster — itself included — vanished.
+ */
+function dedupeMembers(local: SiloAddress, members: readonly SiloMember[]): SiloMember[] {
+  const seen = new Map<string, SiloMember>();
+  for (const member of members) {
+    seen.set(`${member.address.podName}#${member.address.podUid}`, member);
+  }
+  return [...seen.values()].map((member) =>
+    member.address.equals(local) ? { ...member, status: "active" } : member,
+  );
 }

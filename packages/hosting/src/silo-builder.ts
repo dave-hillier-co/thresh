@@ -1466,6 +1466,7 @@ export class SiloBuilder {
       const unregister = registerRuntimeMetrics({
         activationCount: () => node.activationCount(),
         directoryCache: () => node.directoryCacheStats(),
+        directoryRecovery: () => node.directoryRecoveryStats(),
       });
       this.closers.push(async () => unregister());
     }
