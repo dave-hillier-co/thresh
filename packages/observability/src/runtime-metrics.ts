@@ -6,6 +6,13 @@ export interface RuntimeMetricSources {
   activationCount: () => number;
   /** Cumulative location-cache hits/misses, for the directory hit-rate metric. */
   directoryCache?: () => { hits: number; misses: number };
+  /**
+   * Cumulative directory range-recovery outcomes: entries adopted by a recovery
+   * pull, and source pulls whose retry budget ran out (those ranges run on lazy
+   * reactivation until the re-armed pull gets through, so a non-zero rate is the
+   * signal that the directory is working harder than it should).
+   */
+  directoryRecovery?: () => { recovered: number; exhausted: number };
 }
 
 /**
@@ -53,6 +60,24 @@ export function registerRuntimeMetrics(sources: RuntimeMetricSources): () => voi
         result.observe(directoryCache()[field]);
     registerObservableInstrument(hits, makeObservableCb("hits"));
     registerObservableInstrument(misses, makeObservableCb("misses"));
+  }
+
+  const { directoryRecovery } = sources;
+  if (directoryRecovery !== undefined) {
+    const recovered = meter.createObservableCounter("thresh.directory.recovery.recovered", {
+      description: "Directory entries adopted by a range recovery",
+      unit: "{entry}",
+    });
+    const exhausted = meter.createObservableCounter("thresh.directory.recovery.exhausted", {
+      description: "Directory range-recovery sources whose retry budget ran out",
+      unit: "{source}",
+    });
+    registerObservableInstrument(recovered, (result) =>
+      result.observe(directoryRecovery().recovered),
+    );
+    registerObservableInstrument(exhausted, (result) =>
+      result.observe(directoryRecovery().exhausted),
+    );
   }
 
   return () => unregister.forEach((fn) => fn());

@@ -69,8 +69,11 @@ stores above. Worth a service dimension eventually for tidiness, not urgently.
 - [ ] `LocalDispatcher`'s logger is not wired from `SiloOptions` (there is no logger option there),
       so a `Silo`-hosted (non-`createSilo`) host logs detached one-way failures to `noopLogger`.
 - [ ] `serveRecover()` is unfiltered by requester: it serves the whole `handoffSnapshot` to any
-      puller. With the precise ACK this is merely wasteful, not incorrect; filtering needs
-      `message.sendingSilo` threaded into `applyDirectoryOp`.
+      puller. With the precise ACK this is merely wasteful for the puller — but it also means a
+      pull can return an entry the source did not own when the pull was issued, which is the one
+      case `awaitRecovered`'s per-source gate cannot wait for (costing a miss that lazy activation
+      rebuilds rather than a wrong answer). Filtering needs `message.sendingSilo` threaded into
+      `applyDirectoryOp`.
 - [ ] Per-silo override of a **decorator-declared** `collectionAgeSeconds` is still impossible
       (only the process-wide grain metadata can change it, which by construction cannot differ
       between two silos in one process). Out of scope for #66, which is closed; needs its own issue
