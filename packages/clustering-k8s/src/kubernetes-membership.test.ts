@@ -3,7 +3,7 @@ import { activeSilos } from "@thresh/core/membership";
 import { SiloAddress } from "@thresh/core/silo-address";
 import {
   metadataFromSlices,
-  readySilosFromSlices,
+  siloMembersFromSlices,
   type EndpointSlice,
 } from "@thresh/clustering-k8s/endpoint-slice";
 import {
@@ -43,18 +43,28 @@ class FakeWatch implements EndpointWatch {
   }
 }
 
-describe("readySilosFromSlices", () => {
-  it("includes only ready endpoints, with pod name and uid from targetRef", () => {
-    const silos = readySilosFromSlices([
+describe("siloMembersFromSlices", () => {
+  it("keeps every endpoint as a member, with pod name and uid from targetRef", () => {
+    const silos = siloMembersFromSlices([
       slice([
         { ip: "10.0.0.1", name: "silo-0", uid: "uid-0", ready: true },
         { ip: "10.0.0.2", name: "silo-1", uid: "uid-1", ready: false },
       ]),
     ]);
-    expect(silos).toHaveLength(1);
-    expect(silos[0]!.podName).toBe("silo-0");
-    expect(silos[0]!.podUid).toBe("uid-0");
-    expect(silos[0]!.endpoint).toBe("10.0.0.1:11111");
+    expect(silos).toHaveLength(2);
+    expect(silos[0]!.address.podName).toBe("silo-0");
+    expect(silos[0]!.address.podUid).toBe("uid-0");
+    expect(silos[0]!.address.endpoint).toBe("10.0.0.1:11111");
+  });
+
+  it("marks a ready endpoint active and a present-but-not-ready one draining", () => {
+    const silos = siloMembersFromSlices([
+      slice([
+        { ip: "10.0.0.1", name: "silo-0", uid: "uid-0", ready: true },
+        { ip: "10.0.0.2", name: "silo-1", uid: "uid-1", ready: false },
+      ]),
+    ]);
+    expect(silos.map((s) => s.status)).toEqual(["active", "draining"]);
   });
 
   it("prefers the named service port when present", () => {
@@ -71,7 +81,7 @@ describe("readySilosFromSlices", () => {
         },
       ],
     };
-    expect(readySilosFromSlices([s], "silo")[0]!.endpoint).toBe("10.0.0.1:11111");
+    expect(siloMembersFromSlices([s], "silo")[0]!.address.endpoint).toBe("10.0.0.1:11111");
   });
 });
 
@@ -153,7 +163,7 @@ describe("KubernetesMembership", () => {
     expect(activeSilos(value)).toHaveLength(1);
   });
 
-  it("drops a silo when its endpoint is no longer ready", () => {
+  it("takes a not-ready silo out of the ring but keeps it in the view as draining", () => {
     const watch = new FakeWatch();
     const membership = new KubernetesMembership(local, watch, { portName: "silo" });
     watch.emit([
@@ -168,8 +178,30 @@ describe("KubernetesMembership", () => {
         { ip: "10.0.0.2", name: "silo-1", uid: "uid-1", ready: false },
       ]),
     ]);
+    // Out of the ring: it must take no new placements and own no new ranges.
     expect(activeSilos(membership.current()).map((s) => s.ringKey)).toEqual(["silo-0"]);
+    // Still a member: its grains are still running there, so peers must not
+    // treat its directory entries as pointers to a silo that will never answer.
+    expect(
+      membership
+        .current()
+        .silos.map((s) => `${s.address.ringKey}:${s.status}`)
+        .sort(),
+    ).toEqual(["silo-0:active", "silo-1:draining"]);
     expect(membership.current().version).toBe(2);
+  });
+
+  it("drops a silo once its endpoint is removed, not merely not ready", () => {
+    const watch = new FakeWatch();
+    const membership = new KubernetesMembership(local, watch, { portName: "silo" });
+    watch.emit([
+      slice([
+        { ip: "10.0.0.1", name: "silo-0", uid: "uid-0", ready: true },
+        { ip: "10.0.0.2", name: "silo-1", uid: "uid-1", ready: false },
+      ]),
+    ]);
+    watch.emit([slice([{ ip: "10.0.0.1", name: "silo-0", uid: "uid-0", ready: true }])]);
+    expect(membership.current().silos.map((s) => s.address.ringKey)).toEqual(["silo-0"]);
   });
 
   it("recognises a restarted pod by its new uid", () => {

@@ -28,7 +28,7 @@ import {
   type VersionSelectorStrategy,
 } from "@thresh/core/version-selector";
 import type { KeyTypeOf } from "@thresh/core/key-kinds";
-import { activeSilos, type MembershipService } from "@thresh/core/membership";
+import { activeSilos, memberSilos, type MembershipService } from "@thresh/core/membership";
 import type {
   IncomingGrainCallFilter,
   OutgoingGrainCallFilter,
@@ -544,11 +544,15 @@ export class ClusterNode {
     this.ring = this.buildRing();
     this.appliedVersion = options.membership.current().version;
     // Orleans IsSiloDead: a directory entry whose host has fallen out of the
-    // live membership view is treated as a miss on lookup, not returned as a
-    // stale pointer. The partition consults the snapshot each call so it tracks
-    // membership changes without needing explicit reconciliation just for reads.
+    // membership view entirely is treated as a miss on lookup, not returned as a
+    // stale pointer. Membership PRESENCE, not readiness, is the test: a silo that
+    // is merely draining or not-ready is still serving the activations it hosts
+    // (see `memberSilos`), and returning its entry is what keeps a call from
+    // building a duplicate activation during a drain. The partition consults the
+    // snapshot each call so it tracks membership changes without needing explicit
+    // reconciliation just for reads.
     this.partition = new LocalDirectoryPartition((silo) =>
-      activeSilos(options.membership.current()).some((s) => s.equals(silo)),
+      memberSilos(options.membership.current()).some((s) => s.equals(silo)),
     );
     this.connections = new ConnectionManager(
       options.transport,
@@ -1119,10 +1123,13 @@ export class ClusterNode {
 
   /**
    * Reconcile the directory with a membership view change (versioned, lossless).
-   * Drop cache/connections for departed silos; in one partition pass drop entries
-   * whose host silo has left (the grain is gone) and set aside entries whose range
-   * the new ring assigns to another live silo (retained for that successor to pull).
-   * If this silo has just joined the active set, recover the ranges it now owns
+   * Drop cache/connections/client registrations for silos that have left the
+   * view; in one partition pass drop entries whose host silo has left the view
+   * (the grain is gone) and set aside entries whose range the new ring assigns to
+   * another live silo (retained for that successor to pull). A silo that is only
+   * `draining` has left the RING — it takes no new placements — but it is still in
+   * the view and still serving, so its entries are kept rather than dropped. If
+   * this silo has just joined the active set, recover the ranges it now owns
    * from the incumbents so their grains are not needlessly reactivated.
    */
   updateView(): void {
@@ -1131,9 +1138,10 @@ export class ClusterNode {
     const oldRing = this.ring;
     const newRing = this.buildRing();
     const live = new Set(activeSilos(snapshot).map((s) => s.ringKey));
+    const present = new Set(memberSilos(snapshot).map((s) => s.ringKey));
 
     for (const member of oldRing.silos()) {
-      if (!live.has(member.ringKey)) {
+      if (!present.has(member.ringKey)) {
         this.cache.invalidateSilo(member);
         void this.connections.drop(member);
         this.clientDirectory.unregisterSilo(member);
@@ -1145,7 +1153,10 @@ export class ClusterNode {
     this.manifestInflight.clear();
 
     const handedOff = this.partition.drain((entry) => {
-      if (!live.has(entry.silo.ringKey)) return "drop"; // host gone — grain reactivates
+      // Only the host's endpoint going away means the grain is gone and
+      // reactivates elsewhere; a host that is merely not ready is still running
+      // it, so its entry follows the range like any other.
+      if (!present.has(entry.silo.ringKey)) return "drop";
       return newRing.ownerOf(entry.grainId).equals(local) ? "keep" : "handoff";
     });
     // Merge, don't replace: an entry already retained from a PRIOR handoff whose
@@ -1155,7 +1166,7 @@ export class ClusterNode {
     for (const entry of handedOff) {
       this.handoffSnapshot.set(entry.grainId.toString(), { entry, producedAt });
     }
-    this.pruneHandoffSnapshot(live);
+    this.pruneHandoffSnapshot(present);
 
     const wasActive = oldRing.silos().some((s) => s.equals(local));
     this.ring = newRing;
@@ -1299,8 +1310,8 @@ export class ClusterNode {
 
   /** Serve a successor's recovery pull: the entries we handed off whose host is still live. */
   private serveRecover(): GrainAddress[] {
-    const live = new Set(activeSilos(this.options.membership.current()).map((s) => s.ringKey));
-    this.pruneHandoffSnapshot(live);
+    const present = new Set(memberSilos(this.options.membership.current()).map((s) => s.ringKey));
+    this.pruneHandoffSnapshot(present);
     return [...this.handoffSnapshot.values()].map((v) => v.entry);
   }
 
@@ -1313,15 +1324,20 @@ export class ClusterNode {
 
   /**
    * Drop handed-off entries that can no longer be usefully served: the host
-   * they point at fell out of the live view (the grain reactivates elsewhere
+   * they point at left the membership view (the grain reactivates elsewhere
    * regardless), or they've sat unpulled past `recoveryRetentionMs` — a
    * successor that will never pull them (crashed, or never existed) must not
    * pin this memory forever.
+   *
+   * `present` is the set of silos still *in* the view, not the `active` ring
+   * set: an entry whose host is draining is still the only pointer to a live
+   * activation, and dropping it here is exactly the loss this retention exists
+   * to prevent.
    */
-  private pruneHandoffSnapshot(live: ReadonlySet<string>): void {
+  private pruneHandoffSnapshot(present: ReadonlySet<string>): void {
     const now = this.time.now();
     for (const [key, { entry, producedAt }] of this.handoffSnapshot) {
-      if (!live.has(entry.silo.ringKey) || now - producedAt > this.recoveryRetentionMs) {
+      if (!present.has(entry.silo.ringKey) || now - producedAt > this.recoveryRetentionMs) {
         this.handoffSnapshot.delete(key);
       }
     }
