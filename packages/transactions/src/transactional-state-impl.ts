@@ -323,7 +323,17 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
 
   /** Re-query the TM for every still in-doubt record; reschedule while any remain unresolved. */
   private async runConfirmationPass(): Promise<void> {
-    for (const pending of [...this.inDoubt.values()]) await this.resolveOne(pending);
+    try {
+      for (const pending of [...this.inDoubt.values()]) await this.resolveOne(pending);
+    } catch {
+      // A resolution's durable write can fail (an etag conflict with a live
+      // activation, or any provider error). Letting it escape would make it an
+      // unhandled rejection and, worse, skip the reschedule below — leaving
+      // every still in-doubt record with no timer behind it for the life of
+      // the activation. Swallow it and retry on the backoff instead: the
+      // record that failed is still queued in `inDoubt`, so the next pass
+      // resolves it as soon as the store recovers.
+    }
     if (this.inDoubt.size > 0) {
       this.scheduleConfirmationWorker();
     } else {

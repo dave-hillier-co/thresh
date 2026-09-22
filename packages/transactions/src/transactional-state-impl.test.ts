@@ -501,4 +501,99 @@ describe("TransactionalStateImpl (Slice 2)", () => {
     expect(await inTransaction(check, () => reloaded.performRead((s) => s.cents))).toBe(250);
     await agent.resolve(check);
   });
+
+  it("re-arms the confirmation worker when a resolution write fails", async () => {
+    // The record is left in doubt by an unreachable TM; the worker then gets
+    // an answer but its own durable write fails (an etag conflict with a live
+    // activation, or any provider error). The failure must not escape the
+    // pass: escaping is an unhandled rejection, and worse, it skips the
+    // reschedule — permanently disabling the one mechanism that resolves
+    // in-doubt records, while the record still looks pending.
+    const clock = fakeClock();
+    const storage = new MemoryTransactionalStorage();
+    const manager = { grainId: grainId("tm"), stateName: "balance" };
+
+    const seed = new TransactionalStateImpl<Balance>(
+      "balance",
+      grainId("a"),
+      () => ({ cents: 100 }),
+      storage,
+      undefined,
+      undefined,
+      clock,
+    );
+    await seed.load();
+    const tx = agent.startTransaction();
+    await inTransaction(tx, () => seed.performUpdate((s) => (s.cents = 250)));
+    await seed.prepare(tx.id, tx.timeStamp, manager);
+    // Crash: never commits/aborts, leaving the prepared record in-doubt.
+
+    // Resolution writes (the ones carrying a commit or abort delta) fail until
+    // `failResolutions` is cleared.
+    let failResolutions = true;
+    const flaky: TransactionalStateStorage = {
+      load: (stateName, id) => storage.load(stateName, id),
+      store: (stateName, id, expectedETag, metadata, statesToPrepare, commitUpTo, abortAfter) => {
+        if (failResolutions && (commitUpTo !== undefined || abortAfter !== undefined)) {
+          throw new Error("transactional store etag conflict");
+        }
+        return storage.store(
+          stateName,
+          id,
+          expectedETag,
+          metadata,
+          statesToPrepare,
+          commitUpTo,
+          abortAfter,
+        );
+      },
+    };
+
+    // Unreachable on the activation-time attempt (so the record stays in doubt
+    // and the worker is scheduled), reachable on every later attempt.
+    let calls = 0;
+    const resolveStatus = async (): Promise<boolean> => {
+      calls += 1;
+      if (calls === 1) throw new Error("TM unreachable");
+      return true;
+    };
+
+    const recovered = new TransactionalStateImpl<Balance>(
+      "balance",
+      grainId("a"),
+      () => ({ cents: 100 }),
+      flaky,
+      resolveStatus,
+      { confirmationIntervalMs: 1_000, confirmationMaxIntervalMs: 5_000 },
+      clock,
+    );
+    await recovered.load();
+    expect(calls).toBe(1);
+
+    // The worker's first pass does query the TM, then dies on the write.
+    await clock.advance(1_000);
+    expect(calls).toBe(2);
+
+    // It re-armed on its (doubled) backoff: one more pass, whose write now
+    // succeeds, resolves the record and commits the staged write.
+    failResolutions = false;
+    await clock.advance(2_000);
+    expect(calls).toBe(3);
+
+    const after = agent.startTransaction();
+    expect(await inTransaction(after, () => recovered.performRead((s) => s.cents))).toBe(250);
+    await agent.resolve(after);
+
+    recovered.unload();
+    const reloaded = new TransactionalStateImpl<Balance>(
+      "balance",
+      grainId("a"),
+      () => ({ cents: 100 }),
+      storage,
+    );
+    await reloaded.load();
+    const check = agent.startTransaction();
+    expect(await inTransaction(check, () => reloaded.performRead((s) => s.cents))).toBe(250);
+    await agent.resolve(check);
+  });
 });
