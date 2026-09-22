@@ -119,6 +119,74 @@ describe("TransactionalStateImpl (Slice 2)", () => {
     await agent.resolve(check);
   });
 
+  it("does not report a commit as durable when the commit-record write fails", async () => {
+    // A storage whose `store` throws on the TM's commit-record write — the one
+    // call with no pending states and no commit/abort deltas.
+    const inner = new MemoryTransactionalStorage();
+    let failRecordCommit = false;
+    const flaky: TransactionalStateStorage = {
+      load: (stateName, id) => inner.load(stateName, id),
+      store: (stateName, id, expectedETag, metadata, statesToPrepare, commitUpTo, abortAfter) => {
+        if (
+          failRecordCommit &&
+          statesToPrepare.length === 0 &&
+          commitUpTo === undefined &&
+          abortAfter === undefined
+        ) {
+          throw new Error("durable write failed");
+        }
+        return inner.store(
+          stateName,
+          id,
+          expectedETag,
+          metadata,
+          statesToPrepare,
+          commitUpTo,
+          abortAfter,
+        );
+      },
+    };
+    const manager = new TransactionalStateImpl<Balance>(
+      "ledger",
+      grainId("tm"),
+      () => ({ cents: 0 }),
+      flaky,
+    );
+    await manager.load();
+
+    failRecordCommit = true;
+    await expect(manager.recordCommit("T1", 1, [])).rejects.toThrow("durable write failed");
+
+    // `status` is what a participant's recovery query reads, so the live
+    // manager must never answer "committed" for a record that is not durable:
+    // a participant would commit on that answer, while the TM's own pending
+    // record resolves to abort once the TM reactivates over the same storage —
+    // one transaction, two outcomes, decided by which activation answers.
+    expect(manager.status("T1")).toBe(false);
+    const reloaded = new TransactionalStateImpl<Balance>(
+      "ledger",
+      grainId("tm"),
+      () => ({ cents: 0 }),
+      inner,
+    );
+    await reloaded.load();
+    expect(reloaded.status("T1")).toBe(false);
+
+    // The normal path is unchanged: once the write lands, both the live
+    // manager and a fresh activation over the same storage report committed.
+    failRecordCommit = false;
+    await manager.recordCommit("T2", 2, []);
+    expect(manager.status("T2")).toBe(true);
+    const afterCommit = new TransactionalStateImpl<Balance>(
+      "ledger",
+      grainId("tm"),
+      () => ({ cents: 0 }),
+      inner,
+    );
+    await afterCommit.load();
+    expect(afterCommit.status("T2")).toBe(true);
+  });
+
   it("a transaction sees its own tentative writes within the transaction", async () => {
     const state = await newState();
     const t1 = agent.startTransaction();

@@ -89,17 +89,21 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
     return { grainId: this.grainId, stateName: this.stateName };
   }
 
-  /** Persist the current metadata with the given pending/commit/abort deltas, updating the etag. */
+  /**
+   * Persist `metadata` (the current one unless a caller has a newer one to
+   * write) with the given pending/commit/abort deltas, updating the etag.
+   */
   private async storeState(
     statesToPrepare: PendingTransactionState<T>[],
     commitUpTo?: number,
     abortAfter?: number,
+    metadata: TransactionalStateMetadata = this.metadata,
   ): Promise<void> {
     this.etag = await this.storage.store(
       this.stateName,
       this.grainId,
       this.etag,
-      this.metadata,
+      metadata,
       statesToPrepare,
       commitUpTo,
       abortAfter,
@@ -195,7 +199,7 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
     timeStamp: number,
     writeParticipants: ParticipantId[],
   ): Promise<void> {
-    this.metadata = {
+    const metadata: TransactionalStateMetadata = {
       timeStamp: Math.max(this.metadata.timeStamp, timeStamp),
       commitRecords: {
         ...this.metadata.commitRecords,
@@ -205,7 +209,15 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
         },
       },
     };
-    await this.storeState([]);
+    // Durable first, in-memory after. {@link status} reads `this.metadata`, and
+    // that is what a participant's recovery query is answered from — so
+    // adopting the record before the write lands would have the live manager
+    // answer "committed" for a commit that is not durable, while the same
+    // record resolves to abort once the TM reactivates over that storage. The
+    // agent converts this rejection to `TransactionInDoubtError` and leaves
+    // participants prepared precisely so that recovery can resolve the truth.
+    await this.storeState([], undefined, undefined, metadata);
+    this.metadata = metadata;
   }
 
   /** TM only: whether the transaction committed (recovery query). */
