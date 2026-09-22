@@ -43,7 +43,7 @@ export type ResolveStatus = (manager: ParticipantId, transactionId: string) => P
 
 /**
  * A transactional-state resource (Orleans `TransactionalState`) for one named
- * state on a grain. It keeps a committed version with a dense sequence id and a
+ * state on a grain. It keeps a committed version with a sequence id and a
  * single per-transaction tentative copy (single because the wait-die lock admits
  * one writer at a time), enlists itself as a participant on first access, and
  * runs the two-phase protocol against a durable {@link TransactionalStateStorage}:
@@ -54,6 +54,13 @@ export type ResolveStatus = (manager: ParticipantId, transactionId: string) => P
  * confirmation worker keeps retrying the recovery query with backoff — rather
  * than leaving the record in-doubt until the next activation — until it
  * resolves or {@link unload} stops it.
+ *
+ * Because the resource keeps serving while a record is in doubt (which is what
+ * that worker is for), a sequence id identifies a record for as long as it is
+ * staged: new ones are minted above every pending record this activation knows
+ * of, never reusing an id, and each of `commit`/`abort`/resolution only ever
+ * promotes or drops the record it was raised for. See
+ * {@link nextSequenceId} and {@link resolveOne}.
  */
 export class TransactionalStateImpl<T> implements TransactionalState<T>, TransactionParticipant {
   private readonly key: string;
@@ -62,6 +69,19 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
   private readonly time: TimeProvider;
   private committed!: T;
   private committedSequenceId = 0;
+  /**
+   * The highest sequence id this activation knows to exist in the durable
+   * record for a prepared (pending) transaction — the ones `load()` brought in
+   * (including any left in doubt and still unresolved) plus our own staged
+   * writes. New tentative versions are numbered strictly above it, never reusing
+   * a pending record's id: `store` replaces a pending state *by sequence id*,
+   * so handing a live transaction an id an unresolved record already owns would
+   * overwrite that record, and recovery would then promote whatever record
+   * happened to sit at the id it was resolving. Ids may be skipped (a record
+   * resolved and dropped frees nothing), which costs nothing: they only have to
+   * order promotions.
+   */
+  private pendingSequenceIdHighWater = 0;
   private etag: string | undefined;
   private metadata: TransactionalStateMetadata = EMPTY_METADATA;
   private tentative: Tentative<T> | undefined;
@@ -119,10 +139,26 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
     this.etag = response.etag;
     this.committedSequenceId = response.committedSequenceId;
     this.metadata = response.metadata;
+    for (const pending of response.pendingStates) {
+      this.pendingSequenceIdHighWater = Math.max(
+        this.pendingSequenceIdHighWater,
+        pending.sequenceId,
+      );
+    }
     // No committed transaction yet (a fresh record, or one with only pending
     // states) means the initial value; otherwise the loaded committed snapshot.
     this.committed = response.committedSequenceId === 0 ? this.initial() : response.committedState;
     if (response.pendingStates.length > 0) await this.recover(response.pendingStates);
+  }
+
+  /**
+   * The next sequence id for a new tentative version: above the last committed
+   * version *and* above every pending record this activation knows of, so a live
+   * transaction can never take the id of a record that still sits unresolved in
+   * the durable record.
+   */
+  private nextSequenceId(): number {
+    return Math.max(this.committedSequenceId, this.pendingSequenceIdHighWater) + 1;
   }
 
   /**
@@ -163,10 +199,14 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
     });
     this.enlist(tx, 0, 1);
     if (this.tentative?.transactionId !== tx.id) {
+      const sequenceId = this.nextSequenceId();
+      // Claimed the moment it is minted, whether or not this transaction ends
+      // up preparing: an id is never handed out twice.
+      this.pendingSequenceIdHighWater = sequenceId;
       this.tentative = {
         transactionId: tx.id,
         value: clone(this.committed),
-        sequenceId: this.committedSequenceId + 1,
+        sequenceId,
         timeStamp: tx.timeStamp,
         prepared: false,
       };
@@ -246,7 +286,13 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
       const tentative = this.tentative;
       if (tentative?.transactionId === transactionId) {
         if (tentative.prepared) {
-          await this.storeState([], undefined, this.committedSequenceId);
+          // Drop this transaction's staged record and nothing else: an abort
+          // discards its own write, never one belonging to a transaction whose
+          // fate is still open — an unresolved record below this id must stay
+          // for recovery to resolve, and dropping it would lose that write even
+          // if its TM reports it committed. (`abortAfter` drops everything with
+          // a *strictly larger* id, so our own id is the threshold.)
+          await this.storeState([], undefined, tentative.sequenceId - 1);
         }
         this.tentative = undefined;
       }
@@ -296,11 +342,23 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
       committed = this.status(pending.transactionId);
     }
     if (committed) {
-      await this.storeState([], pending.sequenceId);
-      this.committed = pending.state;
-      this.committedSequenceId = pending.sequenceId;
+      // Promote only a record that is still above the committed version. One at
+      // or below it has already been superseded — a later transaction's commit
+      // promoted past it and took its place, or dropped it — so promoting it
+      // would roll the committed version back to an older write and leave this
+      // activation reporting a state the durable record does not hold.
+      if (pending.sequenceId > this.committedSequenceId) {
+        await this.storeState([], pending.sequenceId);
+        this.committed = pending.state;
+        this.committedSequenceId = pending.sequenceId;
+      }
     } else {
-      await this.storeState([], undefined, this.committedSequenceId);
+      // Drop the record this resolution was raised for, and nothing below it:
+      // lower ids belong to other transactions whose fates are still open, and
+      // dropping one would lose its write even if its TM reports it committed.
+      // (`abortAfter` drops everything with a *strictly larger* id, so this
+      // record's own id is the threshold.)
+      await this.storeState([], undefined, pending.sequenceId - 1);
     }
     this.inDoubt.delete(pending.transactionId);
     return true;
