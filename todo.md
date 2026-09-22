@@ -111,8 +111,18 @@ stores above. Worth a service dimension eventually for tidiness, not urgently.
 ## Orleans test-suite port (parity suite)
 
 The functional test suites of Orleans `v10.1.0` are ported 1:1 into `packages/parity`;
-`pnpm parity:scorecard [--run]` reports the standing. The gap backlog is closed — the scorecard
-shows 0 gap-tagged tests across all ten in-scope suites; every upstream test is ported (passing)
-or excluded with a documented reason. Notes: Orleans has no separate Reminders test project at
-v10.1.0, and upstream itself skips its golden-path transaction runner (dotnet/orleans#9553), so
-transaction behaviour here remains covered by `packages/hosting`'s transactions-cluster tests.
+`pnpm parity:scorecard [--run]` reports the standing: **570 ported / 0 gap / 742 excluded** over
+ten in-scope suites (1312 declarations, every one accounted for). Earlier citations of
+502 / 0 / 475 — including the 2026-08-04 review's parity row — came from the scorecard's old
+regex parser, which could only see declarations whose first argument was an inline literal;
+267 exclusions written as `orleansTest.excluded(REASON, …)` and 43 ports named by template
+literal were counted in no column at all. The parser now reads the TypeScript AST and fails the
+run when the accounted total does not reconcile with the call sites it found. Notes: Orleans has
+no separate Reminders test project at v10.1.0, and upstream itself skips its golden-path
+transaction runner (dotnet/orleans#9553), so transaction behaviour here remains covered by
+`packages/hosting`'s transactions-cluster tests.
+
+- [ ] 21 ported declarations take their id from a runtime value (`for (const testClass of [...])` in
+      the two cancellation-token suites), so the scorecard counts them but cannot match them to a
+      vitest title — `--run` now fails on exactly that. Give each an id it can resolve (name the
+      fixture classes literally, or teach the parser to enumerate a loop over string literals).
