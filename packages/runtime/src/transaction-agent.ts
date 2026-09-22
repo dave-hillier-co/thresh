@@ -46,12 +46,22 @@ export class TransactionAgent {
       timeStamp: this.clock.utcNow(),
       readOnly,
       participants: new Map(),
+      status: "active",
       pendingCalls: 0,
     };
   }
 
   /** Commit the transaction across its participants, or abort all and throw. */
   async resolve(info: TransactionInfo): Promise<void> {
+    // Close the participant set *before* the snapshot below, not after the
+    // round: preparing and committing await durable writes, so there is a
+    // window in which a detached caller — a `oneWay` `supported` call whose
+    // originator resolved the moment its call returned — is still running and
+    // would otherwise enlist into the set this round is already working from.
+    // Such a resource would never be prepared, committed or aborted, and the
+    // lock it took would be held until deactivation; `requireTransaction`
+    // refuses it instead (`TransactionAlreadyResolvedError`).
+    info.status = "resolving";
     // Orleans `TransactionInfo.MustAbort`: a call forked off this transaction
     // (see `forkTransaction`, `@thresh/core/transaction-info`) that never
     // completed leaves the transaction's true read/write set unknowable, so it
@@ -62,7 +72,10 @@ export class TransactionAgent {
       throw new TransactionOrphanCallError(info.id, info.pendingCalls);
     }
     const enlisted = [...info.participants.values()];
-    if (enlisted.length === 0) return;
+    if (enlisted.length === 0) {
+      info.status = "committed";
+      return;
+    }
 
     // Elect the transaction manager from the writers (Orleans: the first write
     // participant). In-process the agent coordinates the rounds directly.
@@ -96,6 +109,9 @@ export class TransactionAgent {
           throw new TransactionInDoubtError(info.id, { cause: error });
         }
       }
+      // The commit is now decided (the TM has recorded it, or there was no
+      // writer to record it) — participants only have to apply it.
+      info.status = "committed";
       // Past this point the commit is durably decided: every participant's
       // write *will* eventually apply. A participant whose own commit step
       // throws here (e.g. an external, non-grain resource enlisted via
@@ -118,6 +134,10 @@ export class TransactionAgent {
 
   /** Abort: discard every enlisted participant's tentative writes and release locks. */
   async abort(info: TransactionInfo): Promise<void> {
+    // Closed before the round runs, for the same reason as `resolve`: an abort
+    // releases the locks held for the participants it knows about, so a
+    // resource that slipped in behind the snapshot would keep its own.
+    info.status = "aborted";
     await Promise.all([...info.participants.values()].map((e) => this.abortOne(e, info)));
   }
 

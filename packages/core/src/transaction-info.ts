@@ -27,6 +27,21 @@ export interface AccessCounter {
   writes: number;
 }
 
+/** A transaction's status once resolution has begun: its participant set is closed. */
+export type ResolvedStatus = "resolving" | "committed" | "aborted";
+
+/**
+ * Where a transaction stands (Orleans `TransactionStatus`). `active` while it
+ * may still take on participants; `resolving` from the moment its boundary
+ * begins the commit round — which is when the participant set is snapshotted —
+ * through until the outcome is decided; then `committed` or `aborted` for good.
+ * Anything past `active` ({@link ResolvedStatus}) means a resource enlisting
+ * now would never be prepared, committed or aborted, so it must not be allowed
+ * to take state (see {@link isResolved} and `requireTransaction`,
+ * `@thresh/runtime/invocation-context`).
+ */
+export type TransactionStatus = "active" | ResolvedStatus;
+
 /**
  * Serializable identity of a transactional resource: the grain that hosts it and
  * the named state on that grain (Orleans `ParticipantId`). Lets the agent route
@@ -99,6 +114,13 @@ export interface TransactionInfo {
   /** Live participant set, keyed by a stable per-resource key. */
   readonly participants: Map<string, EnlistedParticipant>;
   /**
+   * Where this transaction stands, set by the agent's boundary as it resolves
+   * it. Absent means `active`: a context rebuilt from a remote hop's wire
+   * header (`ClusterNode`) carries no status of its own — that silo cannot know
+   * the originator has since resolved the transaction.
+   */
+  status?: TransactionStatus;
+  /**
    * Count of calls forked off this transaction (via {@link forkTransaction})
    * that have not yet been matched by a completion, mirroring Orleans
    * `TransactionInfo.PendingCalls`. The root boundary must see this at zero
@@ -106,6 +128,20 @@ export interface TransactionInfo {
    * `TransactionOrphanCallError` (`@thresh/core/errors`).
    */
   pendingCalls: number;
+}
+
+/**
+ * Whether the transaction's boundary has resolved it (or begun to). Once it
+ * has, the participant set is closed: the agent resolves from a snapshot, so a
+ * resource enlisting now would never be prepared, committed or aborted, and
+ * the state lock it took would be held until deactivation — so
+ * `requireTransaction` (`@thresh/runtime/invocation-context`) refuses the
+ * enlistment outright instead.
+ */
+export function isResolved(
+  info: TransactionInfo,
+): info is TransactionInfo & { status: ResolvedStatus } {
+  return info.status !== undefined && info.status !== "active";
 }
 
 /**

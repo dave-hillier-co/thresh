@@ -1,9 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { combineSignals } from "@thresh/core/abort";
+import { TransactionAlreadyResolvedError } from "@thresh/core/errors";
 import type { GrainId } from "@thresh/core/grain-id";
 import { Guid } from "@thresh/core/guid";
 import { RequestContext, requestContextStore } from "@thresh/core/request-context";
-import type { TransactionInfo } from "@thresh/core/transaction-info";
+import { isResolved, type TransactionInfo } from "@thresh/core/transaction-info";
 
 /**
  * Ambient context for the turn currently executing on an activation. A grain
@@ -99,12 +100,23 @@ export function currentTransaction(): TransactionInfo | undefined {
   return invocationContext.getStore()?.transaction;
 }
 
-/** The current transaction, or throw — used by transactional state on write. */
+/**
+ * The current transaction to enlist in, or throw: throws when no transaction is
+ * in scope, and when the one that is has already been resolved at its boundary.
+ * A resource that enlists into a resolved transaction would never be prepared,
+ * committed or aborted — the agent resolves from a snapshot of the participant
+ * set — so it would hold its state lock until deactivation, wedging the resource
+ * for every other transaction, while the write itself was silently discarded.
+ * Reachable whenever a caller's turn outlives the transaction it started: a
+ * detached `oneWay` call, a call forked with `GrainRuntime.forkTransaction`, or
+ * a `Promise.all` branch whose siblings died and aborted the root.
+ */
 export function requireTransaction(): TransactionInfo {
   const tx = currentTransaction();
   if (tx === undefined) {
     throw new Error("operation requires a transaction but none is in scope");
   }
+  if (isResolved(tx)) throw new TransactionAlreadyResolvedError(tx.id, tx.status);
   return tx;
 }
 

@@ -1,9 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { TransactionAbortedError, TransactionInDoubtError } from "@thresh/core/errors";
-import type { EnlistedParticipant, TransactionParticipant } from "@thresh/core/transaction-info";
+import {
+  TransactionAbortedError,
+  TransactionAlreadyResolvedError,
+  TransactionInDoubtError,
+} from "@thresh/core/errors";
+import type {
+  EnlistedParticipant,
+  TransactionInfo,
+  TransactionParticipant,
+} from "@thresh/core/transaction-info";
 import { participantKey } from "@thresh/core/transaction-info";
 import { GrainId } from "@thresh/core/grain-id";
 import { FakeTimeProvider } from "@thresh/runtime/test-support/fake-time-provider";
+import { invocationContext, requireTransaction } from "@thresh/runtime/invocation-context";
 import { TransactionAgent } from "@thresh/runtime/transaction-agent";
 
 /** A trivial in-memory participant recording prepare/commit/abort calls. */
@@ -120,4 +129,98 @@ describe("TransactionAgent.resolve", () => {
       expect(other.committed).toBe(false);
     },
   );
+});
+
+/** Run `fn` as if it were a turn executing inside `tx`. */
+function inTurn<R>(tx: TransactionInfo, fn: () => R): R {
+  return invocationContext.run(
+    { senderId: undefined, ownerId: undefined, reentrancyId: tx.id, transaction: tx },
+    fn,
+  );
+}
+
+/** A promise plus its resolve, so a test can hold a participant mid-round. */
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
+describe("TransactionAgent resolution status", () => {
+  // The participant set is snapshotted once, when the boundary resolves the
+  // transaction, so a resource enlisting afterwards is never prepared, never
+  // committed and never aborted — and the only release points for the state
+  // locks are commit/abort. The agent therefore records where the transaction
+  // stands, and `requireTransaction` refuses a late enlistment outright rather
+  // than letting it take a lock nothing will release.
+  it("marks the transaction committed once its boundary has committed it", async () => {
+    const agent = new TransactionAgent(new FakeTimeProvider());
+    const info = agent.startTransaction();
+    const a = new FakeParticipant();
+    info.participants.set(participantKey(enlist("a", "s", a).id), enlist("a", "s", a));
+
+    await agent.resolve(info);
+
+    expect(info.status).toBe("committed");
+    expect(a.committed).toBe(true);
+  });
+
+  it("marks the transaction aborted when its boundary aborts it", async () => {
+    const agent = new TransactionAgent(new FakeTimeProvider());
+    const info = agent.startTransaction();
+    const a = new FakeParticipant();
+    info.participants.set(participantKey(enlist("a", "s", a).id), enlist("a", "s", a));
+
+    await agent.abort(info);
+
+    expect(info.status).toBe("aborted");
+    expect(a.aborted).toBe(true);
+  });
+
+  it("refuses an enlistment once the transaction has resolved, before any lock is taken", async () => {
+    const agent = new TransactionAgent(new FakeTimeProvider());
+    const info = agent.startTransaction();
+    await agent.resolve(info);
+
+    expect(() => inTurn(info, () => requireTransaction())).toThrow(TransactionAlreadyResolvedError);
+  });
+
+  it("seals the participant set as soon as resolution begins, not only once it has decided", async () => {
+    // The window matters: resolving is asynchronous (prepare stages durably),
+    // and a detached callee's turn — a `oneWay` + `transaction: "supported"`
+    // call, whose caller resolved the moment its call returned — can land in
+    // it. Enlisting then would still be too late for the participant snapshot
+    // the round is already working from, so the set must close at the start.
+    const agent = new TransactionAgent(new FakeTimeProvider());
+    const info = agent.startTransaction();
+    const prepare = deferred<boolean>();
+    const blocking: TransactionParticipant = {
+      prepare: () => prepare.promise,
+      commit: () => {},
+      abort: () => {},
+      recordCommit: () => {},
+    };
+    info.participants.set(
+      participantKey(enlist("a", "s", blocking).id),
+      enlist("a", "s", blocking),
+    );
+
+    const resolving = agent.resolve(info);
+    expect(info.status).toBe("resolving");
+    expect(() => inTurn(info, () => requireTransaction())).toThrow(TransactionAlreadyResolvedError);
+
+    prepare.resolve(true);
+    await resolving;
+    expect(info.status).toBe("committed");
+  });
+
+  it("leaves an active transaction's status alone for a resource to enlist normally", async () => {
+    const agent = new TransactionAgent(new FakeTimeProvider());
+    const info = agent.startTransaction();
+
+    expect(info.status).toBe("active");
+    expect(inTurn(info, () => requireTransaction())).toBe(info);
+  });
 });
