@@ -57,12 +57,6 @@ stores above. Worth a service dimension eventually for tidiness, not urgently.
 
 ### Follow-ups surfaced while closing it
 
-- [ ] **An incumbent that gains a range never pulls it.** `beginRecovery` runs only on JOIN
-      (`start()` and `updateView`'s `!wasActive` gate), so a silo that gains a range because
-      another silo *left* never pulls: the previous owner's retained `handoffSnapshot` entries sit
-      unpulled until `recoveryRetentionMs` expiry and then degrade to lazy rebuild. Orleans runs
-      `AcquireRangeAsync` for the added range on every partition on every view change. Same family
-      as the stale-ring bug and the largest remaining directory gap.
 - [ ] A transactional writer that waits for a lock does so **inside an exclusive turn**, blocking
       the abort turns that would release the conflicting holders.
       `packages/parity/src/transactions/exclusive-lock-transaction-memory-tests.test.ts` only

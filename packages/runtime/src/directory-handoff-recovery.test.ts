@@ -422,3 +422,141 @@ describe("directory handoff recovery (ACK-delete, retry, expiry)", () => {
     }
   });
 });
+
+describe("range recovery on a view change (a range that comes back)", () => {
+  beforeEach(() => undefined);
+
+  it("adopts back a range it re-acquires from its own retained snapshot instead of stranding the entry", async () => {
+    // Interleaving under test: a silo whose range is taken away keeps the entry
+    // in its own handoffSnapshot, and the range then comes back to it. Orleans
+    // runs AcquireRangeAsync for the added range on every partition on every
+    // view change; here recovery ran only on the JOIN transition, so an
+    // incumbent that regained a range never looked — not even at the entry it
+    // was still holding itself — and the next call built a second activation
+    // while the retained copy quietly expired.
+    const network = new InProcessNetwork();
+    const addresses = [silo(0), silo(1)];
+    const membership = new StaticMembershipService(addresses[0]!, addresses);
+    // silo-0 places locally (first candidate); silo-1's own placement would land
+    // on itself (last candidate), which is what makes a missed lookup diverge
+    // into a second activation rather than a forward to the original one.
+    const makeNode = (local: SiloAddress, random: () => number) => {
+      const node = new ClusterNode({
+        local,
+        clusterId: CLUSTER,
+        membership: new MembershipView(membership, local),
+        transport: new InProcessTransport(network, CLUSTER),
+        random,
+      });
+      node.registerGrain(CounterGrain, { interfaces: [ICounter] });
+      return node;
+    };
+    const node0 = makeNode(silo(0), () => 0);
+    const node1 = makeNode(silo(1), () => 0.99);
+    await node0.start();
+    await node1.start();
+
+    // silo-1 owns the entry; silo-2 owns the range once it appears in the view.
+    const key = counterKeyMovingThrough([
+      { ring: new ConsistentHashRing(addresses), owner: silo(1) },
+      { ring: new ConsistentHashRing([...addresses, silo(2)]), owner: silo(2) },
+    ]);
+    const grainId = new GrainId("Counter", key);
+
+    try {
+      expect(await node0.getGrain(ICounter, key).increment(5)).toBe(5);
+      expect(node1.partition.lookup(grainId)?.silo.equals(silo(0))).toBe(true);
+
+      // silo-2 joins the view but never starts: silo-1 hands the range off into
+      // its snapshot and nobody is there to pull it.
+      membership.addSilo(silo(2));
+      node0.updateView();
+      node1.updateView();
+      expect(node1.pendingHandoffCount()).toBe(1);
+
+      // silo-2 leaves again and the range returns to silo-1, which is already
+      // active — and still holding the entry in its own snapshot.
+      membership.removeSilo(silo(2));
+      node0.updateView();
+      node1.updateView();
+
+      // The entry is back in the live partition, and no longer retained as a
+      // handoff for a successor that will never come.
+      expect(node1.partition.lookup(grainId)?.silo.equals(silo(0))).toBe(true);
+      expect(node1.pendingHandoffCount()).toBe(0);
+
+      // A call reaches the original activation with its state intact, rather
+      // than building a second activation of a grain that never stopped running.
+      expect(await node1.getGrain(ICounter, key).increment(2)).toBe(7);
+      expect(node0.isActive(grainId)).toBe(true);
+      expect(node1.isActive(grainId)).toBe(false);
+    } finally {
+      await node0.stop();
+      await node1.stop();
+    }
+  });
+
+  it("pulls a range it gains when a peer leaves the ring, from the peer still holding the entries", async () => {
+    // The same gap on the other side, and the one a rolling update hits: nobody
+    // joins, so no join recovery runs — a peer leaves the ring instead (here by
+    // starting to drain, which is how a readiness flip presents), the range it
+    // gives up lands on a silo that was already active, and that incumbent never
+    // went looking for the entries. The departing peer keeps them for a
+    // successor that will never ask, and they expire where they sit.
+    const network = new InProcessNetwork();
+    const addresses = [silo(0), silo(1), silo(2)];
+    const membership = new StaticMembershipService(addresses[0]!, addresses);
+    // silo-0 places locally (first candidate); silo-1's own placement would land
+    // on the last candidate, so a lookup that misses ends in a fresh activation
+    // rather than a forward to the original one.
+    const makeNode = (local: SiloAddress, random: () => number) => {
+      const node = new ClusterNode({
+        local,
+        clusterId: CLUSTER,
+        membership: new MembershipView(membership, local),
+        transport: new InProcessTransport(network, CLUSTER),
+        random,
+      });
+      node.registerGrain(CounterGrain, { interfaces: [ICounter] });
+      return node;
+    };
+    const node0 = makeNode(silo(0), () => 0);
+    const node1 = makeNode(silo(1), () => 0.99);
+    const node2 = makeNode(silo(2), () => 0);
+    await node0.start();
+    await node1.start();
+    await node2.start();
+
+    // silo-2 owns the entry at three silos; silo-1 inherits its range when
+    // silo-2 leaves the ring.
+    const key = counterKeyMovingThrough([
+      { ring: new ConsistentHashRing(addresses), owner: silo(2) },
+      { ring: new ConsistentHashRing([silo(0), silo(1)]), owner: silo(1) },
+    ]);
+    const grainId = new GrainId("Counter", key);
+
+    try {
+      expect(await node0.getGrain(ICounter, key).increment(5)).toBe(5);
+      expect(node2.partition.lookup(grainId)?.silo.equals(silo(0))).toBe(true);
+
+      // silo-2 starts to drain: out of the ring, still in the view and still
+      // holding the entry — which its successor now has to come and get.
+      membership.setStatus(silo(2), "draining");
+      node0.updateView();
+      node1.updateView();
+      node2.updateView();
+      await settle();
+
+      expect(node1.partition.lookup(grainId)?.silo.equals(silo(0))).toBe(true);
+      expect(node2.pendingHandoffCount()).toBe(0);
+
+      expect(await node1.getGrain(ICounter, key).increment(2)).toBe(7);
+      expect(node0.isActive(grainId)).toBe(true);
+      expect(node1.isActive(grainId)).toBe(false);
+    } finally {
+      await node0.stop();
+      await node1.stop();
+      await node2.stop();
+    }
+  });
+});

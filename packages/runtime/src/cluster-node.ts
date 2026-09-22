@@ -1105,7 +1105,7 @@ export class ClusterNode {
     // lazily reactivate. Only past the initial formation (version 1): at cold start
     // the peers in the view may still be coming up, there is nothing to recover yet,
     // and connecting to a not-yet-listening peer would just churn the connection pool.
-    const others = this.otherActiveSilos();
+    const others = this.recoverySources();
     if (others.length > 0 && this.isLocalActive() && this.appliedVersion > 1) {
       this.beginRecovery(others, this.appliedVersion);
     }
@@ -1128,9 +1128,11 @@ export class ClusterNode {
    * (the grain is gone) and set aside entries whose range the new ring assigns to
    * another live silo (retained for that successor to pull). A silo that is only
    * `draining` has left the RING — it takes no new placements — but it is still in
-   * the view and still serving, so its entries are kept rather than dropped. If
-   * this silo has just joined the active set, recover the ranges it now owns
-   * from the incumbents so their grains are not needlessly reactivated.
+   * the view and still serving, so its entries are kept rather than dropped.
+   * A silo that has just joined the active set, or that stayed active while a peer
+   * left the ring, recovers the ranges it now owns from whoever is holding their
+   * entries (see the gate at the end of this method) so their grains are not
+   * needlessly reactivated.
    */
   updateView(): void {
     const snapshot = this.options.membership.current();
@@ -1173,9 +1175,48 @@ export class ClusterNode {
     this.appliedVersion = snapshot.version;
     this.resolveViewWaiters();
 
-    if (!wasActive && live.has(local.ringKey)) {
-      this.beginRecovery(this.otherActiveSilos(), snapshot.version);
+    // Done against the ring just installed, and synchronously, so no lookup can
+    // slip between the ring change and the entries coming back.
+    if (live.has(local.ringKey)) this.reclaimOwnedHandoffs();
+
+    // Recovery runs for a silo that has just joined the active set AND for one
+    // that stayed in it while a peer left the ring — the incumbent that inherits
+    // a departed peer's ranges is in exactly the same position (it owns entries
+    // it has never seen, and the previous owner is holding them for it), and
+    // gating on the join transition alone left it never asking: the retained
+    // entries expired out from under a range that had already moved. Orleans
+    // acquires the added ranges on every partition on every view change.
+    const peerLeftRing = oldRing.silos().some((s) => !live.has(s.ringKey));
+    if (live.has(local.ringKey) && (!wasActive || peerLeftRing)) {
+      this.beginRecovery(this.recoverySources(), snapshot.version);
     }
+  }
+
+  /**
+   * Take back the handed-off entries the current ring assigns to this silo again.
+   *
+   * A range that leaves this partition and later comes back — the successor
+   * crashed mid-join, or a joiner left again — would otherwise stay stranded in
+   * this silo's own `handoffSnapshot`: there is no successor left to pull it, the
+   * live partition no longer holds it, so a lookup misses and builds a second
+   * activation of a grain that never stopped running, and the retained copy is
+   * deleted for good once the retention window passes. This silo is the owner
+   * again, so it is the one that has to take it back.
+   *
+   * The registration is the same CAS as any handoff adoption: it never
+   * overwrites a fresher entry a concurrent reactivation put there.
+   */
+  private reclaimOwnedHandoffs(): void {
+    if (this.ring.isEmpty) return;
+    const reclaimed = [...this.handoffSnapshot.values()].filter(({ entry }) =>
+      this.ownsNow(entry.grainId),
+    );
+    if (reclaimed.length === 0) return;
+    this.partition.acceptHandoff(
+      reclaimed.map(({ entry }) => entry),
+      (entry) => this.ownsNow(entry.grainId),
+    );
+    for (const { entry } of reclaimed) this.handoffSnapshot.delete(entry.grainId.toString());
   }
 
   private buildRing(): ConsistentHashRing {
@@ -1192,6 +1233,20 @@ export class ClusterNode {
 
   private otherActiveSilos(): SiloAddress[] {
     return activeSilos(this.options.membership.current()).filter(
+      (s) => !s.equals(this.options.local),
+    );
+  }
+
+  /**
+   * The silos to pull recovered ranges from: every other silo still in the view,
+   * `active` or not. A draining peer is deliberately included — it is exactly
+   * where a rolling update's entries are parked: it has left the ring, so it
+   * handed its ranges off, but it is still up long enough to serve a pull, and
+   * the successor's only copy of those entries is the one it is holding.
+   * Excluding it would leave the entries unclaimed until they expire.
+   */
+  private recoverySources(): SiloAddress[] {
+    return memberSilos(this.options.membership.current()).filter(
       (s) => !s.equals(this.options.local),
     );
   }
