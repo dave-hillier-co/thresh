@@ -86,7 +86,21 @@ export class DistributedGrainDirectory implements GrainDirectory {
     record: (locality: DirectoryLocality) => void = () => undefined,
   ): Promise<T> {
     for (let attempt = 0; ; attempt++) {
-      const owner = this.ring().ownerOf(grainId);
+      const ring = this.ring();
+      // An empty ring has no owner to resolve, and `ConsistentHashRing.ownerOf`
+      // reports that as an invariant violation — a plain `Error`. Reached through
+      // here it is not one: an empty ring means this silo's membership view has no
+      // active silos at all (a static/dev view emptied by `setSilos([])`; the
+      // Kubernetes watch keeps itself in its own view, so it never empties — see
+      // issue #72). Refusing to route on it is a membership refusal the caller can
+      // retry once its view advances, so reject with the kind that says so,
+      // `staleView` — the kind the dispatcher's stale-rejection predicate and the
+      // bounded remote retry below act on — rather than a plain `Error` that every
+      // classifier reads as a programming fault (issue #70).
+      if (ring.isEmpty) {
+        throw new RejectionError("no active silos to resolve a directory owner", "staleView");
+      }
+      const owner = ring.ownerOf(grainId);
       if (owner.equals(this.local)) {
         record("local");
         await this.onOwnedAccess(grainId);
