@@ -46,6 +46,11 @@ stores above. Worth a service dimension eventually for tidiness, not urgently.
 ## Review
 
 - [Project review — 2026-08-04](docs/project-review-2026-08-04.md) confirms the current stated aims are met, with only the explicitly beyond-parity browser work and deferred stream-backing polish left open.
+- [Project review — 2026-09-22](docs/project-review-2026-09-22.md) — the first review to actually run
+  the suites, the scorecard and the examples. It confirms the runtime and the test suite hold up
+  (the suite is genuinely sociable: zero `vi.mock` across 221 files), and registers 22 open findings
+  F1–F22 across the directory failure paths, placement input, transactions, the parity metric and
+  documentation accuracy. The packaging/release question is out of scope by request.
 - The 2026-09-02 correctness review's findings were fixed in-tree (transaction lock release /
   in-doubt `recordCommit`, transport `'error'` handling and per-peer fast-fail, monotonic stream
   cursors, drained durable-job stop, reminder `lastFiredAt`, codec prototype-pollution guard,
@@ -53,7 +58,7 @@ stores above. Worth a service dimension eventually for tidiness, not urgently.
   on 2026-09-03: call-filter `undefined` short-circuit, EndpointSlice reconnect backoff+jitter,
   dead recovery-version gate removal, wait-die (timestamp, id) tie-break, the Postgres
   migration-race flake (`42704`/`42P16`), the stale captured ring in `beginRecovery`, and `oneWay`
-  locality. The review backlog is empty.
+  locality. That backlog was empty; the 2026-09-22 review reopened it — see the findings index below.
 
 ### Follow-ups surfaced while closing it
 
@@ -85,6 +90,60 @@ stores above. Worth a service dimension eventually for tidiness, not urgently.
       placement-only and never a membership status.
 - [ ] Option C is designed but not built — land it as the two slices the design note names
       (stage 1: sensor + metrics; stage 2: fail-fast + placement suppression).
+
+### Findings from the 2026-09-22 review
+
+Bugs are filed as issues #67–#84. The rest — the parity metric and CI wiring, test hygiene, and the
+documentation corrections — are still inline below. Every finding's evidence, repro and severity is
+in [`docs/project-review-2026-09-22.md`](docs/project-review-2026-09-22.md).
+
+- [ ] [#67](https://github.com/dave-hillier-co/thresh/issues/67) **F1** — a readiness flip during
+      graceful drain deletes directory entries for a silo that is still serving.
+- [ ] [#68](https://github.com/dave-hillier-co/thresh/issues/68) **F2** — a silo that regains a range
+      never pulls it, so the entry is stranded and expires. Supersedes the first follow-up above.
+- [ ] [#69](https://github.com/dave-hillier-co/thresh/issues/69) **F3** — the recovery ACK is
+      identity-blind, so a late ACK deletes a newer entry for the same grain.
+- [ ] [#70](https://github.com/dave-hillier-co/thresh/issues/70) **F4** — `updateView()` throwing kills
+      the membership watch loop permanently, leaving a frozen ring.
+- [ ] [#71](https://github.com/dave-hillier-co/thresh/issues/71) **F5** — a directory op can register
+      into a partition that no longer owns the range (check-then-write across a yield).
+- [ ] [#72](https://github.com/dave-hillier-co/thresh/issues/72) **F6** — production membership
+      versions are per-silo counters, so the `staleView` guard cannot mean what it claims.
+- [ ] [#73](https://github.com/dave-hillier-co/thresh/issues/73) **F7** — recovery is one-shot,
+      `catch {}`-swallowed, and gates every owned directory op for up to ~90s.
+- [ ] [#74](https://github.com/dave-hillier-co/thresh/issues/74) **F8** — cross-silo placement load is
+      degenerate: peers report `activationCount` 0, inverting two placement strategies.
+- [ ] [#75](https://github.com/dave-hillier-co/thresh/issues/75) **F9** — stateless-worker calls that
+      arrive over the wire bypass the worker pool.
+- [ ] [#76](https://github.com/dave-hillier-co/thresh/issues/76) **F10** — `ReaderWriterLock.release()`
+      orphans a queued waiter, so the awaiting turn never settles and the grain stops serving.
+- [ ] [#77](https://github.com/dave-hillier-co/thresh/issues/77) **F11** — a participant that enlists
+      after `resolve`/`abort` keeps its lock forever.
+- [ ] [#78](https://github.com/dave-hillier-co/thresh/issues/78) **F12** — in-doubt resolution can
+      promote a live transaction's tentative state: abort reported, commit durable.
+- [ ] [#79](https://github.com/dave-hillier-co/thresh/issues/79) **F13** — `recordCommit` mutates in
+      memory before the durable write, so `status` disagrees between activations.
+- [ ] [#80](https://github.com/dave-hillier-co/thresh/issues/80) **F14** — TM election can name a
+      `TransactionCommitter`, which has no durable commit point and no `status`.
+- [ ] [#81](https://github.com/dave-hillier-co/thresh/issues/81) **F15** — the confirmation worker dies
+      silently on a store error and is never re-armed.
+- [ ] [#82](https://github.com/dave-hillier-co/thresh/issues/82) **F16** — a dangling call's timeout
+      rejection is unhandled and can kill the process; `examples/migration` exits non-zero.
+- [ ] [#83](https://github.com/dave-hillier-co/thresh/issues/83) **F17** — `$tsvv` is written but never
+      read, so the schema version is inert.
+- [ ] [#84](https://github.com/dave-hillier-co/thresh/issues/84) **F18** — the parity scorecard cannot
+      see 267 of its own exclusions, so its headline numbers are undercounts.
+
+Not filed — test infrastructure and documentation rather than bugs:
+
+- [ ] **F19** "0 gap" was reached partly by reclassifying 67 gap-tagged tests as excluded; `excluded`
+      is a no-op and `--run` never asserts `pass + fail === ported`.
+- [ ] **F20** The parity suite never runs in CI (67s to add).
+- [ ] **F21** `runtime/grain-directory-tests.test.ts` asserts against an in-file shim and counts as 5
+      ported tests, on a justification that is now stale.
+- [ ] **F22** Redis- and Kafka-backed tests vanish silently when the service is absent (~176 skipped locally).
+- [ ] The 16 documentation corrections tabled in the review — docs contradicting the code in
+      `deviations.md`, `orleans-to-thresh-port.md`, `EPICS.md` and `README.md`.
 
 ## Beyond parity
 
