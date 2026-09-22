@@ -1406,8 +1406,14 @@ export class ClusterNode {
   /**
    * Placement context for the current view: activation counts, advertised silo
    * metadata, and resource stats. The local silo's metadata and load are known
-   * directly; a peer's come from its membership entry (`resourceStats` is left
-   * undefined unless membership carries it — there is no cross-silo load gossip yet).
+   * directly; a peer's come from its membership entry and from the load
+   * snapshot it last pushed (`remoteLoadStats`, the same source `isOverloaded`
+   * reads). That snapshot is the only cross-silo load signal that exists, so a
+   * peer which has never pushed one still reports zero activations — the
+   * pre-existing "unknown load" default, not a claim that it is idle. There is
+   * still no periodic gossip timer; a push happens when the peer's own
+   * load-shedding test hooks force one. `resourceStats` stays local-only for
+   * the same reason: it carries nothing the activation count does not already.
    */
   private placementContext(): Omit<PlacementContext, "localSilo"> {
     const snapshot = this.options.membership.current();
@@ -1415,7 +1421,10 @@ export class ClusterNode {
     const localMeta = this.options.metadata;
     const isLocal = (silo: SiloAddress) => silo.equals(this.options.local);
     return {
-      activationCount: (silo) => (isLocal(silo) ? this.catalog.count() : 0),
+      activationCount: (silo) =>
+        isLocal(silo)
+          ? this.catalog.count()
+          : (this.remoteLoadStats.get(silo.ringKey)?.activationCount ?? 0),
       siloMetadata: (silo) => (isLocal(silo) ? localMeta : byKey.get(silo.ringKey)?.metadata),
       resourceStats: (silo) =>
         isLocal(silo) ? { activationCount: this.catalog.count() } : undefined,
