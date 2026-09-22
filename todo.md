@@ -90,46 +90,74 @@ stores above. Worth a service dimension eventually for tidiness, not urgently.
 
 ### Findings from the 2026-09-22 review
 
-Bugs are filed as issues #67–#84. The rest — the parity metric and CI wiring, test hygiene, and the
-documentation corrections — are still inline below. Every finding's evidence, repro and severity is
+All filed as issues #67–#84 and fixed on `integration/2026-09-22-review-fixes` (**not yet on `main`**).
+Every fix carries a test that was run and observed failing first; the full suite, typecheck, lint and
+all six runnable examples pass on the merged branch. Every finding's evidence, repro and severity is
 in [`docs/project-review-2026-09-22.md`](docs/project-review-2026-09-22.md).
 
-- [ ] [#67](https://github.com/dave-hillier-co/thresh/issues/67) **F1** — a readiness flip during
-      graceful drain deletes directory entries for a silo that is still serving.
-- [ ] [#68](https://github.com/dave-hillier-co/thresh/issues/68) **F2** — a silo that regains a range
-      never pulls it, so the entry is stranded and expires. Supersedes the first follow-up above.
-- [ ] [#69](https://github.com/dave-hillier-co/thresh/issues/69) **F3** — the recovery ACK is
-      identity-blind, so a late ACK deletes a newer entry for the same grain.
-- [ ] [#70](https://github.com/dave-hillier-co/thresh/issues/70) **F4** — `updateView()` throwing kills
-      the membership watch loop permanently, leaving a frozen ring.
-- [ ] [#71](https://github.com/dave-hillier-co/thresh/issues/71) **F5** — a directory op can register
-      into a partition that no longer owns the range (check-then-write across a yield).
-- [ ] [#72](https://github.com/dave-hillier-co/thresh/issues/72) **F6** — production membership
-      versions are per-silo counters, so the `staleView` guard cannot mean what it claims.
-- [ ] [#73](https://github.com/dave-hillier-co/thresh/issues/73) **F7** — recovery is one-shot,
-      `catch {}`-swallowed, and gates every owned directory op for up to ~90s.
-- [ ] [#74](https://github.com/dave-hillier-co/thresh/issues/74) **F8** — cross-silo placement load is
-      degenerate: peers report `activationCount` 0, inverting two placement strategies.
-- [ ] [#75](https://github.com/dave-hillier-co/thresh/issues/75) **F9** — stateless-worker calls that
-      arrive over the wire bypass the worker pool.
-- [ ] [#76](https://github.com/dave-hillier-co/thresh/issues/76) **F10** — `ReaderWriterLock.release()`
-      orphans a queued waiter, so the awaiting turn never settles and the grain stops serving.
-- [ ] [#77](https://github.com/dave-hillier-co/thresh/issues/77) **F11** — a participant that enlists
-      after `resolve`/`abort` keeps its lock forever.
-- [ ] [#78](https://github.com/dave-hillier-co/thresh/issues/78) **F12** — in-doubt resolution can
-      promote a live transaction's tentative state: abort reported, commit durable.
-- [ ] [#79](https://github.com/dave-hillier-co/thresh/issues/79) **F13** — `recordCommit` mutates in
-      memory before the durable write, so `status` disagrees between activations.
-- [ ] [#80](https://github.com/dave-hillier-co/thresh/issues/80) **F14** — TM election can name a
-      `TransactionCommitter`, which has no durable commit point and no `status`.
-- [ ] [#81](https://github.com/dave-hillier-co/thresh/issues/81) **F15** — the confirmation worker dies
-      silently on a store error and is never re-armed.
-- [ ] [#82](https://github.com/dave-hillier-co/thresh/issues/82) **F16** — a dangling call's timeout
-      rejection is unhandled and can kill the process; `examples/migration` exits non-zero.
-- [ ] [#83](https://github.com/dave-hillier-co/thresh/issues/83) **F17** — `$tsvv` is written but never
-      read, so the schema version is inert.
-- [ ] [#84](https://github.com/dave-hillier-co/thresh/issues/84) **F18** — the parity scorecard cannot
-      see 267 of its own exclusions, so its headline numbers are undercounts.
+- [x] [#67](https://github.com/dave-hillier-co/thresh/issues/67) **F1** — a draining silo's directory
+      entries were deleted while it was still serving. Fixed by separating readiness from liveness:
+      `KubernetesMembership` now yields `active`/`draining`, and only endpoint *removal* drops entries.
+- [x] [#68](https://github.com/dave-hillier-co/thresh/issues/68) **F2** — recovery runs on every view
+      change that grants a range, and a re-acquired range is adopted back from the silo's own retained
+      snapshot. Supersedes the first follow-up above.
+- [x] [#69](https://github.com/dave-hillier-co/thresh/issues/69) **F3** — the recovery ACK now carries
+      the full `GrainAddress` and deletes only on an exact match. A narrower case remains (a
+      re-retained identical address can still be deleted by a very late ACK); closing it needs a
+      per-entry version through the pull payload.
+- [x] [#70](https://github.com/dave-hillier-co/thresh/issues/70) **F4** — the membership watch logs and
+      continues instead of dying. The trigger in the original report was **wrong** and is corrected in
+      the review doc and on the issue.
+- [x] [#71](https://github.com/dave-hillier-co/thresh/issues/71) **F5** — ownership is re-checked after
+      the wait on both the local and remote paths.
+- [ ] [#72](https://github.com/dave-hillier-co/thresh/issues/72) **F6** — **open, needs a design
+      decision.** Documented and pinned, not fixed: a cluster-wide version needs a shared ordered view
+      identity plus a rolling-upgrade story, and "stop injecting self" would defeat the self-probe and
+      break local placement. Coupled to #67. See the issue's decision comment.
+- [x] [#73](https://github.com/dave-hillier-co/thresh/issues/73) **F7** — exhausted recovery is logged,
+      counted (`thresh.directory.recovery.*`), re-armed on a jittered backoff, and gated per source
+      rather than globally. The per-source gate is an approximation: `serveRecover` is still unfiltered
+      by requester, so a source can return an entry it did not own, costing a miss that lazy activation
+      rebuilds (never a wrong answer).
+- [ ] [#74](https://github.com/dave-hillier-co/thresh/issues/74) **F8** — **partly fixed.** Placement
+      now reads a peer's pushed count, but `publishLoadStats` is only ever called from the test-only
+      load-shedding hooks, so nothing publishes in production and the inversion persists. Needs a
+      periodic publisher. `ResourceOptimizedPlacement` still ignores its weights — there is no CPU or
+      memory signal to score with. See the issue's comment.
+- [x] [#75](https://github.com/dave-hillier-co/thresh/issues/75) **F9** — a wire-arrived stateless-worker
+      call now joins the receiving silo's local pool instead of being directory-registered.
+- [x] [#76](https://github.com/dave-hillier-co/thresh/issues/76) **F10** — `release` settles the
+      waiters it removes, exactly as the deadline path already did.
+- [x] [#77](https://github.com/dave-hillier-co/thresh/issues/77) **F11** — a late enlistment is now
+      refused with `TransactionAlreadyResolvedError`, before it takes a lock. **Behaviour change:** a
+      detached `oneWay` + `supported` callee that previously lost its write silently now throws into
+      application code. BeneDB should know before this lands.
+- [ ] [#78](https://github.com/dave-hillier-co/thresh/issues/78) **F12** — **partly fixed** (`Refs`,
+      not `Closes`). The sequence-id allocation and three neighbouring paths are fixed. Two residuals
+      need a design decision: a live `commit` still promotes up to its id and can sweep in an
+      unresolved record below it, and a resolution's abort still drops everything above its own id.
+      Both are inexpressible with `store`'s range deltas — dropping one record while keeping a newer
+      one is one non-atomic call apart.
+- [x] [#79](https://github.com/dave-hillier-co/thresh/issues/79) **F13** — the commit record is written
+      durably before `this.metadata` adopts it.
+- [ ] [#80](https://github.com/dave-hillier-co/thresh/issues/80) **F14** — **fixed locally, one hole
+      remains.** `TransactionParticipant`/`TransactionManager` are now split so a committer can never
+      be elected — but `SerializedParticipant` carries no role, so a participant merged back from
+      another silo is taken as manager-capable and a *remote* committer could still be elected.
+      Closing it needs a role or status field on the transaction header.
+- [x] [#81](https://github.com/dave-hillier-co/thresh/issues/81) **F15** — a failed resolution no longer
+      kills the worker; the record stays queued and is retried on the backoff.
+- [x] [#82](https://github.com/dave-hillier-co/thresh/issues/82) **F16** — an abandoned call's deadline
+      no longer escalates to an unhandled rejection, sends that throw release their entry, and
+      shutdown settles outstanding calls. `examples/migration` exits 0.
+- [x] [#83](https://github.com/dave-hillier-co/thresh/issues/83) **F17** — `decodeValue` now reads the
+      stamp and refuses a version this build cannot decode, on tags whose shape it knows. This makes
+      `EPICS.md`'s "versioned serializer" claim true. Note the tradeoff: a future wire-shape bump will
+      be *refused* by older readers rather than silently degraded.
+- [x] [#84](https://github.com/dave-hillier-co/thresh/issues/84) **F18** — the scorecard walks the
+      TypeScript AST, counts every call site, and fails the run when they do not reconcile. Corrected
+      totals: **570 ported / 0 gap / 742 excluded** (was 502/0/475 — the parser could only see inline
+      literals). One new follow-up below.
 
 Not filed — test infrastructure and documentation rather than bugs:
 
