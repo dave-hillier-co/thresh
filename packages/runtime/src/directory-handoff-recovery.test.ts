@@ -10,6 +10,7 @@ import { RejectionError } from "@thresh/core/errors";
 import { ConsistentHashRing } from "@thresh/directory/consistent-hash-ring";
 import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
 import { InProcessNetwork, InProcessTransport } from "@thresh/messaging/in-process-transport";
+import type { Message } from "@thresh/messaging/message";
 import type {
   Connection,
   ConnectionAcceptHandler,
@@ -73,13 +74,14 @@ function counterKeyMovingThrough(
 }
 
 /**
- * Wraps an `InProcessTransport` so inbound directory requests from `holdFrom`
- * are parked instead of delivered, until `release()` hands them to the real
- * handler. This is the seam that makes the "membership changes while a
- * recovery pull is in flight" interleaving deterministic: parking the pull
- * REQUEST at the source keeps the puller's `beginRecovery` continuation
- * pending across as many `updateView()` calls as the test wants to drive,
- * with no timers and no sleeping.
+ * Wraps an `InProcessTransport` so inbound messages from `holdFrom` that `holds`
+ * accepts are parked instead of delivered, until `release()` hands them to the
+ * real handler. This is the seam that makes an interleaving around a recovery
+ * pull deterministic, with no timers and no sleeping. Two are driven with it:
+ * parking the pull REQUEST at the source (default) keeps the puller's
+ * `beginRecovery` continuation pending across as many `updateView()` calls as the
+ * test wants to drive; parking the pull's RESPONSE at the puller keeps it from
+ * adopting — and from ACKing what it adopted — for just as long.
  */
 class GatedTransport implements Transport {
   private readonly parked: Array<() => void> = [];
@@ -87,6 +89,10 @@ class GatedTransport implements Transport {
   constructor(
     private readonly inner: Transport,
     private readonly holdFrom: SiloAddress,
+    private readonly holds: (message: Message) => boolean = (message) =>
+      message.direction === "request" &&
+      message.system === "directory" &&
+      message.targetGrain.type === "$directory",
   ) {}
   async listen(
     address: SiloAddress,
@@ -94,13 +100,8 @@ class GatedTransport implements Transport {
     onAccept?: ConnectionAcceptHandler,
   ): Promise<Listener> {
     const gated: MessageHandler = (message, from) => {
-      const isHeldPull =
-        !this.open &&
-        message.direction === "request" &&
-        message.system === "directory" &&
-        message.targetGrain.type === "$directory" &&
-        from.equals(this.holdFrom);
-      if (!isHeldPull) return onMessage(message, from);
+      const isHeld = !this.open && from.equals(this.holdFrom) && this.holds(message);
+      if (!isHeld) return onMessage(message, from);
       this.parked.push(() => void onMessage(message, from));
       return undefined;
     };
@@ -557,6 +558,89 @@ describe("range recovery on a view change (a range that comes back)", () => {
       await node0.stop();
       await node1.stop();
       await node2.stop();
+    }
+  });
+});
+
+describe("recovery ACK identity (a late ACK for an entry that has been replaced)", () => {
+  beforeEach(() => undefined);
+
+  it("does not delete a newer entry registered for the same grain in the meantime", async () => {
+    // The ACK names what the puller adopted, but the source deleted BY GRAIN ID:
+    // a delayed ACK deleted whatever currently sat under that key — including an
+    // entry registered since, which the puller never saw and which exists nowhere
+    // else once it is gone.
+    const network = new InProcessNetwork();
+    const membership = new StaticMembershipService(silo(0), [silo(0), silo(1)]);
+    // Hold the pull's RESPONSE at the puller: silo-2 has been served silo-1's
+    // entry, but has neither adopted nor ACKed it yet.
+    const gate = new GatedTransport(
+      new InProcessTransport(network, CLUSTER),
+      silo(1),
+      (message) => message.direction === "response",
+    );
+    const makeNode = (
+      local: SiloAddress,
+      transport: Transport = new InProcessTransport(network, CLUSTER),
+    ) => {
+      const node = new ClusterNode({
+        local,
+        clusterId: CLUSTER,
+        membership: new MembershipView(membership, local),
+        transport,
+        random: () => 0,
+      });
+      node.registerGrain(CounterGrain, { interfaces: [ICounter] });
+      return node;
+    };
+
+    const node0 = makeNode(silo(0));
+    const node1 = makeNode(silo(1));
+    await node0.start();
+    await node1.start();
+
+    // silo-1 owns K's entry at two silos; silo-2 owns the range once it joins.
+    const ring3 = new ConsistentHashRing([silo(0), silo(1), silo(2)]);
+    const key = counterKeyOwnedBy(ring3, silo(2));
+    const grainId = new GrainId("Counter", key);
+    let node2: ClusterNode | undefined;
+
+    try {
+      expect(await node0.getGrain(ICounter, key).increment(5)).toBe(5);
+      expect(node1.partition.lookup(grainId)?.silo.equals(silo(0))).toBe(true);
+
+      // silo-2 joins: silo-1 hands its entry off to the snapshot, and answers
+      // silo-2's join pull with it — into the parked response.
+      membership.addSilo(silo(2));
+      node2 = makeNode(silo(2), gate);
+      const started = node2.start();
+      node0.updateView();
+      node1.updateView();
+      await started;
+      await settle();
+      expect(node1.pendingHandoffCount()).toBe(1);
+
+      // A fresh registration for the same grain reaches silo-1's partition (a
+      // registration that raced the view change), and the next view change hands
+      // it off too — the newer entry replaces the served one under the same key.
+      node1.partition.register({ grainId, silo: silo(0), activationId: "activation-2" });
+      node1.updateView();
+      expect(node1.pendingHandoffCount()).toBe(1);
+
+      // The response is finally delivered: silo-2 adopts the entry it was served
+      // and ACKs exactly that one.
+      gate.release();
+      await settle();
+
+      // That ACK names an entry silo-1 no longer holds, so it must leave the newer
+      // one alone — the newer entry is the only copy of that pointer left. (That
+      // an ACK which DOES still match deletes is the first test in this file.)
+      expect(node1.pendingHandoffCount()).toBe(1);
+      expect(node2.isActive(grainId)).toBe(false);
+    } finally {
+      await node2?.stop();
+      await node1.stop();
+      await node0.stop();
     }
   });
 });

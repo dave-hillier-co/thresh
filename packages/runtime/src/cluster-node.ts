@@ -331,15 +331,22 @@ interface RejectionPayload {
  * A directory partition operation routed to the owning silo over the transport.
  * Every op carries the sender's applied membership view `version` so the owner
  * can linearise it against its own view (catch up if behind, redirect a stale
- * caller). `recover` pulls a previous owner's handed-off entries on a join.
+ * caller). `recover` pulls a previous owner's handed-off entries whenever this
+ * silo acquires one of its ranges (on a join, and on a view change that hands it
+ * a range a peer gave up).
  */
 type DirectoryOp =
   | { kind: "lookup"; grainId: GrainId; version: number }
   | { kind: "register"; addr: GrainAddress; previous?: GrainAddress | undefined; version: number }
   | { kind: "unregister"; addr: GrainAddress; version: number }
   | { kind: "recover"; version: number }
-  /** Puller's ACK that it applied a recovery batch: the source deletes exactly those served entries. */
-  | { kind: "recoverAck"; grainIds: GrainId[]; version: number };
+  /**
+   * Puller's ACK that it applied a recovery batch: the source deletes exactly
+   * those served entries. Carries the full `GrainAddress` of each, not just the
+   * grain id — the source deletes by identity, so a late ACK cannot destroy an
+   * entry registered under the same id since (see `ackServedRecovery`).
+   */
+  | { kind: "recoverAck"; addrs: GrainAddress[]; version: number };
 
 /** Stand-in target grain for batch ops with no single grain (fills the envelope only). */
 const DIRECTORY_OP_TARGET = new GrainId("$directory", "op");
@@ -1347,7 +1354,7 @@ export class ClusterNode {
             if (adopted.length > 0) {
               void this.sendDirectory(owner, {
                 kind: "recoverAck",
-                grainIds: adopted.map((e) => e.grainId),
+                addrs: adopted,
                 version,
               }).catch(() => undefined);
             }
@@ -1370,10 +1377,21 @@ export class ClusterNode {
     return [...this.handoffSnapshot.values()].map((v) => v.entry);
   }
 
-  /** A puller's ACK for a completed pull: drop exactly the entries it confirmed applying. */
-  private ackServedRecovery(grainIds: readonly GrainId[]): void {
-    for (const grainId of grainIds) {
-      this.handoffSnapshot.delete(grainId.toString());
+  /**
+   * A puller's ACK for a completed pull: drop exactly the entries it confirmed
+   * applying — the ones it names, by identity. Deleting by grain id alone is not
+   * enough: the entry under that key can have been replaced since the pull was
+   * served (the range came back and departed again, or a fresh activation
+   * registered and was handed off), and a delayed ACK would then delete the newer
+   * entry, which the puller never saw and which may be the only copy left.
+   */
+  private ackServedRecovery(addrs: readonly GrainAddress[]): void {
+    for (const addr of addrs) {
+      const key = addr.grainId.toString();
+      const held = this.handoffSnapshot.get(key);
+      if (held !== undefined && grainAddressEquals(held.entry, addr)) {
+        this.handoffSnapshot.delete(key);
+      }
     }
   }
 
@@ -2735,7 +2753,7 @@ export class ClusterNode {
       case "recover":
         return this.serveRecover();
       case "recoverAck":
-        this.ackServedRecovery(op.grainIds);
+        this.ackServedRecovery(op.addrs);
         return undefined;
     }
   }
