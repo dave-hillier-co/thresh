@@ -2,6 +2,7 @@ import type { GrainId } from "@thresh/core/grain-id";
 import type { GrainInterface } from "@thresh/core/grain-interface";
 import type { GrainKeyKind } from "@thresh/core/grain-key";
 import type { KeyTypeOf } from "@thresh/core/key-kinds";
+import { type Logger, noopLogger } from "@thresh/core/logger";
 import type { MembershipService } from "@thresh/core/membership";
 import type { StreamProvider } from "@thresh/core/stream";
 import type { GrainDirectory } from "@thresh/directory/grain-directory";
@@ -70,6 +71,12 @@ export interface SiloHostParts {
    * grains from application startup code (Orleans `IStartupTask`).
    */
   startupTasks?: ReadonlyArray<() => Promise<void>>;
+  /**
+   * Where the host reports its own failures — the membership watch's failed view
+   * updates. Unset is a no-op, like every other optional logger seam here; the
+   * builder passes its `useLogging` logger through.
+   */
+  logger?: Logger | undefined;
 }
 
 /**
@@ -262,17 +269,36 @@ export class SiloHost {
   /** React to membership view changes: rebuild the ring and refresh health. */
   private watchMembership(): void {
     const { node, health, membership, reminderService, onOwnershipChange } = this.parts;
+    const logger = this.parts.logger ?? noopLogger;
     const abort = new AbortController();
     this.membershipWatch = abort;
     void (async () => {
       for await (const snapshot of membership.updates()) {
         if (abort.signal.aborted) return;
-        node.updateView();
-        // Ring changed: take over (or release) reminder ranges and stream queues.
-        const updated = node.ownedHashRanges();
-        await this.runHooks(onOwnershipChange, updated);
-        await reminderService?.refreshOwnership(updated);
-        health.update({ membershipHealthy: snapshot.silos.length > 0 });
+        try {
+          node.updateView();
+          // Ring changed: take over (or release) reminder ranges and stream queues.
+          const updated = node.ownedHashRanges();
+          await this.runHooks(onOwnershipChange, updated);
+          await reminderService?.refreshOwnership(updated);
+          health.update({ membershipHealthy: snapshot.silos.length > 0 });
+        } catch (error) {
+          // Never let a failed view change END the watch. `updates()` yields
+          // forever, so a rejection here would take this silo off membership for
+          // the rest of the process's life: no further ring rebuild, no
+          // reminder/stream-queue re-adoption, and health left reporting whatever
+          // the last view it managed to apply said (issue #70). `updateView()`
+          // applies the view before any hook below runs, so a failure here costs
+          // this view's adoption work, which the next view change retries — and
+          // the hooks do real I/O against Postgres/Redis/Kafka (durable-job
+          // shard claims, pulling-stream queue ownership), so a store blip is
+          // the expected trigger. Deliberately NOT flipping `membershipHealthy`:
+          // the watch is connected and the view is current, and flipping
+          // readiness would pull a serving silo out of the service over a
+          // transient store error. (`LocalReminderService.refreshOwnership`
+          // already swallows its own store errors and logs them.)
+          logger.error("membership view update failed", { version: snapshot.version, error });
+        }
       }
     })();
   }
