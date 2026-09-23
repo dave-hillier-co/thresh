@@ -51,6 +51,26 @@ stores above. Worth a service dimension eventually for tidiness, not urgently.
   (the suite is genuinely sociable: zero `vi.mock` across 221 files), and registers 22 open findings
   F1–F22 across the directory failure paths, placement input, transactions, the parity metric and
   documentation accuracy. The packaging/release question is out of scope by request.
+- Orleans comparison review, 2026-09-23 — subsystem-by-subsystem read of Thresh against the
+  `dotnet/orleans` source, excluding deliberate deviations and everything above. Filed as
+  [#88–#120](https://github.com/dave-hillier-co/thresh/issues?q=is%3Aissue+88..120):
+  - **Messaging/client:** duplicate execution on connection loss (#88), stale client gateways (#89),
+    deadline not carried cross-silo (#90), no cache invalidation or hop limit on forward (#110),
+    silent serializer corruption (#119).
+  - **Activation lifecycle:** calls to deactivating/migrating activations fail rather than reroute
+    (#91), timer ambient-context leak (#92), scheduler admission vs `MayInvokeRequest` (#104),
+    fixed-rate timers (#105), idle-collection race (#106), stuck turns not recycled (#107),
+    call-chain reentrancy default (#118), minor items (#120).
+  - **Migration/shutdown:** failed migration wedges the grain (#93), journaled/durable state lost on
+    migration (#94), shutdown orphans and ordering (#108), call-filter re-invoke (#116).
+  - **Persistence/journaling:** `confirmEvents` loss (#95), version reset after compaction (#96),
+    stale etag on a missing record (#109), JournaledGrain + `@durable*` sharing a log (#117).
+  - **Streams:** fan-out stops at the first failing subscriber (#97), ~300ms retry budget (#98),
+    Postgres visibility gap (#99), Kafka batch loss/no-op rewind (#100), no delivery deadline
+    (#111), `startToken`/multi-subscription (#112), Kafka ownership race (#113).
+  - **Reminders/durable jobs:** `setTimeout` overflow past ~24.8 days (#101), non-owner reminder
+    update (#102), stranded job shards (#103), backoff from poll start (#114), reminder catch-up
+    drift (#115).
 - The 2026-09-02 correctness review's findings were fixed in-tree (transaction lock release /
   in-doubt `recordCommit`, transport `'error'` handling and per-peer fast-fail, monotonic stream
   cursors, drained durable-job stop, reminder `lastFiredAt`, codec prototype-pollution guard,

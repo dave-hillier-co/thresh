@@ -13,6 +13,11 @@ Guidance for working in this repository. See [`README.md`](README.md) for what t
   with sociable tests over mockist isolation; fake only at true boundaries (network, Redis, the
   Kubernetes API, the clock). See the testing strategy in
   [`docs/deviations.md`](docs/deviations.md).
+- **Develop alongside BeneDB.** [BeneDB](../benedb) (a SpiceDB port on Thresh) is the first
+  production consumer and links this checkout directly, so the two repos move together. A change to
+  a Thresh public API — a signature, a hook, a builder method, an option, a wire shape — is not
+  finished until BeneDB compiles and passes against it: update `../benedb` in the same piece of
+  work, and run its `pnpm typecheck` and `pnpm test` before calling the change done.
 - **Work in vertical slices.** Deliver one thin end-to-end capability at a time — interface through
   runtime through provider — rather than building a layer at a time. Each slice should be
   demonstrable and tested before starting the next, and should map to an exit criterion in the
