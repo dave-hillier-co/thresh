@@ -1466,6 +1466,7 @@ export class SiloBuilder {
       const unregister = registerRuntimeMetrics({
         activationCount: () => node.activationCount(),
         directoryCache: () => node.directoryCacheStats(),
+        directoryRecovery: () => node.directoryRecoveryStats(),
       });
       this.closers.push(async () => unregister());
     }
@@ -1662,6 +1663,7 @@ export class SiloBuilder {
       onStart: this.starters,
       onOwnershipChange,
       onStop: this.closers,
+      ...(this.logger !== undefined ? { logger: this.logger } : {}),
       startupTasks: this.startupTasks.map((fn) => async () => {
         await ensureEmbeddedClient(); // no-op without an in-process network
         await fn(grainFactoryAccess);

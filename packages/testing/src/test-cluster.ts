@@ -146,6 +146,11 @@ export class TestCluster {
   private disposed = false;
   // One membership authority for the whole cluster (silos see it through
   // per-silo `localSilo()` views) so every silo agrees on the view version.
+  // That agreement is a property of this fixture, not of membership in general:
+  // each production silo numbers its views from its own Kubernetes watch, so
+  // there identical versions denote unrelated views (issue #72). Tests rely on
+  // version equality meaning view equality — e.g. the directory's `staleView`
+  // guard — and must keep sharing one service to do so.
   private shared: StaticMembershipService | undefined;
 
   // Cluster-wide "durable" backends, shared by every silo.

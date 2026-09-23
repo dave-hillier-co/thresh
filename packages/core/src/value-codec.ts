@@ -40,6 +40,31 @@ const T = "$thresh";
 const V = "$tsvv";
 const CURRENT_VERSION = 1;
 
+/**
+ * Every tag this build decodes with a shape of its own — i.e. every `case` in
+ * `decodeValue`'s tagged branch, plus every tag in the surrogate registry. A
+ * version gate cannot ask that switch what it knows, so this set and the switch
+ * have to be kept in step: a tag missing here is a tag whose version is not
+ * checked (see the gate in `decodeValue` for why only these need checking).
+ */
+const builtInTags = new Set([
+  "bigint",
+  "date",
+  "bytes",
+  "guid",
+  "grainId",
+  "cancellationToken",
+  "undefined",
+  "domException",
+  "callAborted",
+  "taskCanceled",
+  "error",
+  "silo",
+  "map",
+  "set",
+  "grainRef",
+]);
+
 export interface CodecContext {
   /** Rehydrate a grain reference identity into a working proxy on receive. */
   resolveGrainReference?: (identity: GrainReferenceIdentity) => unknown;
@@ -62,6 +87,44 @@ export class CircularReferenceError extends Error {
     );
     this.name = "CircularReferenceError";
   }
+}
+
+/**
+ * Thrown by `decodeValue` for an envelope stamped with a schema version newer
+ * than this build knows how to read. The stamp exists so a reader can tell
+ * shapes apart, and the only honest answer to "this shape is not one I have
+ * field rules for" is to refuse: decoding it with today's rules would hand the
+ * caller a value assembled from fields that mean something else, with nothing
+ * to say so. A build that bumps `CURRENT_VERSION` is therefore saying its
+ * payloads need the branch this error tells an older reader to add.
+ *
+ * Not registered in `knownErrors`: that table is closed over the classes
+ * `@thresh/core/errors` declares, and crossing a silo boundary as itself is not
+ * this error's job — it says a payload could not be read, and the read fails
+ * where it happened.
+ */
+export class UnsupportedSchemaVersionError extends Error {
+  constructor(
+    public readonly tag: string,
+    public readonly version: number,
+    public readonly supportedVersion: number,
+  ) {
+    super(
+      `decodeValue: "${tag}" envelope is stamped schema version ${version}, but this build decodes version ${supportedVersion}`,
+    );
+    this.name = "UnsupportedSchemaVersionError";
+  }
+}
+
+/**
+ * The schema version an envelope was written with: its stamped `V`, or 1 for a
+ * payload written before the field existed. Anything else parked under `V` is
+ * read as 1 as well — the stamp selects a decode shape, so a value that is not a
+ * version is not a way for a payload to opt out of being read.
+ */
+function versionOf(envelope: Record<string, unknown>): number {
+  const stamped = envelope[V];
+  return typeof stamped === "number" && Number.isInteger(stamped) && stamped >= 1 ? stamped : 1;
 }
 
 /**
@@ -572,6 +635,15 @@ export function decodeValue(value: unknown, ctx: CodecContext = {}): unknown {
   const obj = value as Record<string, unknown>;
   const tag = obj[T];
   if (typeof tag === "string") {
+    // The version gate: a payload from a newer build, stamped with a version this one has no field
+    // rules for. Applying today's layout to it would produce a wrong value silently, so refuse.
+    // Scoped deliberately to tags whose shape this build KNOWS (`builtInTags`, or a registered
+    // surrogate) — an unknown tag has no rules to apply and so cannot be misread; it keeps
+    // degrading to a plain object below, exactly as the newer-build case there describes.
+    const version = versionOf(obj);
+    if (version > CURRENT_VERSION && (builtInTags.has(tag) || surrogates.has(tag))) {
+      throw new UnsupportedSchemaVersionError(tag, version, CURRENT_VERSION);
+    }
     switch (tag) {
       case "bigint":
         return BigInt(obj.value as string);

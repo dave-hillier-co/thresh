@@ -162,7 +162,10 @@ export class DistributedDispatcher implements Dispatcher {
     // the single-winner directory CAS below has no way to represent. Route
     // straight to the catalog's pick-or-scale instead of the cache/directory
     // funnel; this also means a stateless-worker call always resolves on
-    // whichever silo makes it, exactly like Orleans.
+    // whichever silo makes it, exactly like Orleans. `deliverLocal` — the path
+    // every request that arrived over a connection takes, including a client's
+    // — makes the same diversion, so a wire-arrived call joins the receiving
+    // silo's own pool rather than being pinned to it by a directory entry.
     if (this.deps.catalog.isStatelessWorkerType(withDeadline.target.type)) {
       return this.deps.catalog.pickOrScaleWorker(withDeadline.target).invoke(withDeadline, opts);
     }
@@ -188,6 +191,16 @@ export class DistributedDispatcher implements Dispatcher {
 
   /** A request that arrived here: ensure a local activation, or forward to the CAS winner. */
   async deliverLocal(req: InvocationRequest, opts?: InvokeCallOptions): Promise<unknown> {
+    // [StatelessWorker] grains bypass the directory funnel here too (see
+    // `deliver`): a call that arrived over a connection is already confined to
+    // this silo, and its activations are interchangeable, so it joins this
+    // silo's local pool rather than registering an ordinary single activation
+    // — which would pin the grain here and serve every later call, from every
+    // silo, from that one activation.
+    if (this.deps.catalog.isStatelessWorkerType(req.target.type)) {
+      return this.deps.catalog.pickOrScaleWorker(req.target).invoke(req, opts);
+    }
+
     const existing = await this.deps.catalog.resolveLive(req.target);
     if (existing !== undefined) return existing.invoke(req, opts);
 
