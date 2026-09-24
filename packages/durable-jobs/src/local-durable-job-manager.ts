@@ -59,6 +59,16 @@ export class LocalDurableJobManager {
   private readonly joinedAtMs: number;
   /** Shards claimed since join, while the ramp-up window is still active (`computeClaimBudget`'s `totalClaimedShards`). */
   private claimedSinceJoin = 0;
+  /**
+   * Set by `stop()`, and never cleared: once stopping, this silo claims no
+   * shard and starts no executor (Orleans cancels the manager's `_cts` in
+   * `Stop`, which fails any later shard creation). The host stops the manager
+   * before deactivating activations, so grain calls in the grace period,
+   * `onDeactivate` hooks and a mid-flight membership refresh can all still
+   * reach it afterwards — an executor started then would never be stopped and
+   * its shard never released.
+   */
+  private stopped = false;
 
   constructor(
     private readonly store: JobShardStore,
@@ -154,6 +164,7 @@ export class LocalDurableJobManager {
    * executor for each. Idempotent — already-owned shards keep their executors.
    */
   async refreshOwnership(ownership: ShardOwnershipContext): Promise<void> {
+    if (this.stopped) return;
     this.ownership = ownership;
     const shards = await this.store.listShards();
     const active = new Set(ownership.activeRingKeys);
@@ -202,6 +213,7 @@ export class LocalDurableJobManager {
    * awaiting its in-flight work). Best-effort release so a successor can claim.
    */
   async stop(): Promise<void> {
+    this.stopped = true;
     for (const shardKey of [...this.executors.keys()]) {
       await this.stopExecutor(shardKey);
       await this.store.releaseShard(shardKey, this.ownership.localRingKey).catch(() => undefined);
@@ -236,6 +248,7 @@ export class LocalDurableJobManager {
   private async ensureOwned(shardKey: number): Promise<ShardExecutor | undefined> {
     const existing = this.executors.get(shardKey);
     if (existing !== undefined) return existing;
+    if (this.stopped) return undefined;
     return this.claimAndStart(shardKey, []);
   }
 
@@ -248,12 +261,19 @@ export class LocalDurableJobManager {
       maxAdoptedCount: this.options.maxAdoptedCount,
     });
     if (claimed === undefined) return undefined; // lost the claim or poisoned
+    if (this.stopped) {
+      // `stop()` began while the claim was in flight: hand the shard straight
+      // back rather than run it on a silo that is going away.
+      await this.store.releaseShard(shardKey, this.ownership.localRingKey).catch(() => undefined);
+      return undefined;
+    }
     return this.startExecutor(shardKey);
   }
 
-  private async startExecutor(shardKey: number): Promise<ShardExecutor> {
+  private async startExecutor(shardKey: number): Promise<ShardExecutor | undefined> {
     const existing = this.executors.get(shardKey);
     if (existing !== undefined) return existing;
+    if (this.stopped) return undefined;
     const executor = new ShardExecutor(
       shardKey,
       this.store,
