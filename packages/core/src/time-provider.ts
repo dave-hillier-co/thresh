@@ -58,7 +58,11 @@ interface ChainedTimerHandle {
 }
 
 function isChainedTimerHandle(handle: TimerHandle): handle is ChainedTimerHandle {
-  return typeof handle === "object" && handle !== null && (handle as { chained?: unknown }).chained === true;
+  return (
+    typeof handle === "object" &&
+    handle !== null &&
+    (handle as { chained?: unknown }).chained === true
+  );
 }
 
 /**
