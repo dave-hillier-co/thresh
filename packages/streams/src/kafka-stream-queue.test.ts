@@ -4,6 +4,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import type { StreamFailureHandler } from "@thresh/streams/queue-pulling-agent";
 import { KafkaStreamQueue, KafkaTopicQueues } from "@thresh/streams/kafka-stream-queue";
 import { MemoryStreamCursorStore } from "@thresh/streams/stream-cursor-store";
+import type { Admin } from "kafkajs";
 import type { QueueEntry } from "@thresh/streams/redis-stream-queue";
 
 const KAFKA_BROKERS = process.env.KAFKA_BROKERS ?? "localhost:9092";
@@ -305,6 +306,90 @@ describe.skipIf(kafka === undefined)("KafkaTopicQueues / KafkaStreamQueue", () =
       // m3-m5 have to be redelivered, not lost.
       const redelivered = await drain(queue, 3, 15_000, delivered[1]!.token);
       expect(redelivered.map((e) => e.event)).toEqual(["m3", "m4", "m5"]);
+    } finally {
+      await client.stop();
+    }
+  }, 20_000);
+
+  it("a failed acquire leaves the partition acquirable, so a retry really seeks and resumes (issue #113)", async () => {
+    const topic = await createTopic(1);
+    // Cursor store whose first read fails — the cursor-store blip that makes
+    // `KafkaPartitionOwner` retry the acquire.
+    let failNextRead = true;
+    const inner = new MemoryStreamCursorStore();
+    const cursors = {
+      getCursor: async (provider: string, idx: number) => {
+        if (failNextRead) {
+          failNextRead = false;
+          throw new Error("cursor store blip");
+        }
+        return inner.getCursor(provider, idx);
+      },
+      commit: (provider: string, idx: number, cursor: number) =>
+        inner.commit(provider, idx, cursor),
+      seek: (provider: string, idx: number, cursor: number) => inner.seek(provider, idx, cursor),
+    };
+    const client = new KafkaTopicQueues(kafka!, topic, "prov-acquire-retry", cursors);
+    await client.start(1);
+    try {
+      await expect(client.acquire(0)).rejects.toThrow("cursor store blip");
+      const queue = new KafkaStreamQueue(client, 0);
+      await queue.append("s1", "m1");
+
+      // The retry must not short-circuit on a half-finished earlier attempt:
+      // it has to seek to the durable cursor and resume the paused partition.
+      await client.acquire(0);
+      const entries = await drain(queue, 1);
+      expect(entries.map((e) => e.event)).toEqual(["m1"]);
+    } finally {
+      await client.stop();
+    }
+  }, 20_000);
+
+  it("seek never lets records fetched from the old position into the rewound buffer (issue #100)", async () => {
+    const topic = await createTopic(1);
+    const cursors = new MemoryStreamCursorStore();
+    // Hold the rewind's offset lookup open while one more record is
+    // produced and fetched from the consumer's *old* (pre-rewind) position —
+    // exactly what a live partition does during that admin round trip.
+    let duringSeek: (() => Promise<void>) | undefined;
+    const wrapAdmin = (admin: Admin): Admin =>
+      new Proxy(admin, {
+        get(target, prop, receiver) {
+          if (prop === "fetchTopicOffsetsByTimestamp") {
+            return async (...args: Parameters<Admin["fetchTopicOffsetsByTimestamp"]>) => {
+              const hook = duringSeek;
+              duringSeek = undefined;
+              if (hook !== undefined) await hook();
+              return target.fetchTopicOffsetsByTimestamp(...args);
+            };
+          }
+          const value: unknown = Reflect.get(target, prop, receiver);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+    const wrapped = {
+      producer: (...a: Parameters<Kafka["producer"]>) => kafka!.producer(...a),
+      consumer: (...a: Parameters<Kafka["consumer"]>) => kafka!.consumer(...a),
+      admin: (...a: Parameters<Kafka["admin"]>) => wrapAdmin(kafka!.admin(...a)),
+    } as unknown as Kafka;
+    const client = new KafkaTopicQueues(wrapped, topic, "prov-rewind-stale", cursors);
+    await client.start(1);
+    try {
+      await client.acquire(0);
+      const queue = new KafkaStreamQueue(client, 0);
+      for (const event of ["m1", "m2", "m3", "m4", "m5"]) await queue.append("s1", event);
+      const delivered = await drain(queue, 5);
+      await queue.commit(delivered[4]!.token);
+
+      duringSeek = async () => {
+        await queue.append("s1", "m6");
+        await waitFor(() => client.readAfter(0, 0, 1000).some((e) => e.event === "m6"));
+      };
+      await queue.seek(delivered[1]!.token);
+
+      const redelivered = await drain(queue, 4, 15_000, delivered[1]!.token);
+      expect(redelivered.map((e) => e.event)).toEqual(["m3", "m4", "m5", "m6"]);
     } finally {
       await client.stop();
     }

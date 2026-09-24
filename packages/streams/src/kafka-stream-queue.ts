@@ -116,7 +116,7 @@ export class KafkaTopicQueues {
     // so nothing should buffer before a queue is actually owned (`acquire`
     // resumes it). The brief window between `run` and `pause` can admit a
     // handful of messages into a not-yet-owned partition's buffer; that is
-    // harmless (`acquire` resets the buffer before seeking/resuming).
+    // harmless (`acquire` resets the buffer as it seeks, before resuming).
     void this.consumer.run({
       eachMessage: async ({ partition, message }) => {
         this.onMessage(partition, message);
@@ -180,12 +180,37 @@ export class KafkaTopicQueues {
   async acquire(idx: number): Promise<void> {
     if (this.acquired.has(idx)) return;
     this.acquired.add(idx);
+    try {
+      const cursor = await this.cursorStore.getCursor(this.providerName, idx);
+      const target = await this.resolveStartOffset(idx, cursor);
+      // Released while the cursor/offset lookups were in flight: don't
+      // resume a partition this silo no longer owns.
+      if (!this.acquired.has(idx)) return;
+      this.seekAndResetBuffer(idx, target);
+      this.pausedByBackpressure.delete(idx);
+      this.consumer.resume([{ topic: this.topic, partitions: [idx] }]);
+    } catch (err) {
+      // A failed acquire (cursor-store or admin blip) must leave the
+      // partition acquirable: otherwise the `acquired` guard above turns
+      // `KafkaPartitionOwner`'s retry into a no-op that "succeeds" without
+      // ever seeking or resuming, and the partition sits paused forever.
+      this.acquired.delete(idx);
+      throw err;
+    }
+  }
+
+  /**
+   * Seeks the consumer and drops the buffer in the same synchronous step.
+   * Resetting the buffer any earlier (before an awaited offset lookup)
+   * would let records still being fetched from the consumer's old position
+   * land in the fresh buffer ahead of the seek target's records — out of
+   * order, and trimmed/committed past on the next read. Once `seek` is
+   * registered kafkajs skips the rest of any in-flight batch for the
+   * partition, so nothing stale can arrive after this.
+   */
+  private seekAndResetBuffer(idx: number, offset: number): void {
+    this.consumer.seek({ topic: this.topic, partition: idx, offset: String(offset) });
     this.buffers.set(idx, []);
-    const cursor = await this.cursorStore.getCursor(this.providerName, idx);
-    const target = await this.resolveStartOffset(idx, cursor);
-    this.consumer.seek({ topic: this.topic, partition: idx, offset: String(target) });
-    this.pausedByBackpressure.delete(idx);
-    this.consumer.resume([{ topic: this.topic, partitions: [idx] }]);
   }
 
   /** Called when this silo loses ownership of partition `idx`'s queue. */
@@ -292,9 +317,9 @@ export class KafkaTopicQueues {
   async seek(idx: number, cursor: number, signal?: AbortSignal): Promise<void> {
     await this.cursorStore.seek(this.providerName, idx, cursor, signal);
     if (!this.acquired.has(idx)) return;
-    this.buffers.set(idx, []);
     const target = await this.resolveStartOffset(idx, cursor);
-    this.consumer.seek({ topic: this.topic, partition: idx, offset: String(target) });
+    if (!this.acquired.has(idx)) return; // released meanwhile; the next acquire reads the rewound cursor
+    this.seekAndResetBuffer(idx, target);
     if (this.pausedByBackpressure.has(idx)) {
       this.pausedByBackpressure.delete(idx);
       this.consumer.resume([{ topic: this.topic, partitions: [idx] }]);

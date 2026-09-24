@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   KafkaPartitionOwner,
   type PartitionOwnershipClient,
@@ -182,5 +182,30 @@ describe("KafkaPartitionOwner", () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(attempts).toBe(1);
+  });
+
+  it("stop() disarms a pending retry backoff timer instead of leaving it armed", async () => {
+    vi.useFakeTimers();
+    try {
+      const client: PartitionOwnershipClient = {
+        acquire: async () => {
+          throw new Error("cursor store blip");
+        },
+        release: () => undefined,
+      };
+      const owner = new KafkaPartitionOwner(client, () => undefined, {
+        retryBackoffMs: () => 5000,
+        onAcquireError: () => undefined,
+      });
+
+      owner.setWanted([0]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(vi.getTimerCount()).toBe(1); // the retry backoff
+
+      owner.stop();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

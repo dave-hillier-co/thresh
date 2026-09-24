@@ -13,14 +13,30 @@ export interface PartitionOwnershipClient {
 export interface KafkaPartitionOwnerOptions {
   /** Backoff before retrying a failed acquire (defaults to 2^attempt * 50ms, capped at 5s). */
   retryBackoffMs?: (attempt: number) => number;
-  /** Sleep injection — the clock is a true boundary, fake it in tests. */
-  sleep?: (ms: number) => Promise<void>;
+  /**
+   * Sleep injection — the clock is a true boundary, fake it in tests. The
+   * signal aborts on `stop()`; the sleep should then settle promptly (and
+   * disarm its timer) rather than hold the process open.
+   */
+  sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
   /** Notified when an acquire attempt fails (before it's retried). */
   onAcquireError?: (idx: number, error: unknown) => void;
 }
 
 const defaultBackoff = (attempt: number): number => Math.min(50 * 2 ** attempt, 5000);
-const defaultSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+const defaultSleep = (ms: number, signal: AbortSignal): Promise<void> =>
+  new Promise((resolve) => {
+    if (signal.aborted) return resolve();
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      resolve();
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
 
 /**
  * Drives `PartitionOwnershipClient.acquire`/`release` to track a desired set
@@ -50,7 +66,8 @@ export class KafkaPartitionOwner {
   private readonly owned = new Set<number>();
   private readonly acquiring = new Set<number>();
   private readonly retryBackoffMs: (attempt: number) => number;
-  private readonly sleep: (ms: number) => Promise<void>;
+  private readonly sleep: (ms: number, signal: AbortSignal) => Promise<void>;
+  private readonly stopping = new AbortController();
   private readonly onAcquireError: (idx: number, error: unknown) => void;
   private stopped = false;
 
@@ -96,9 +113,10 @@ export class KafkaPartitionOwner {
     }
   }
 
-  /** Stop acquiring/retrying — no further `client` calls after this settles. Does not release what's owned. */
+  /** Stop acquiring/retrying and disarm any pending retry backoff. Does not release what's owned. */
   stop(): void {
     this.stopped = true;
+    this.stopping.abort();
   }
 
   private beginAcquire(idx: number, attempt: number): void {
@@ -120,7 +138,7 @@ export class KafkaPartitionOwner {
         this.acquiring.delete(idx);
         this.onAcquireError(idx, err);
         if (this.stopped || !this.wanted.has(idx)) return;
-        void this.sleep(this.retryBackoffMs(attempt)).then(() => {
+        void this.sleep(this.retryBackoffMs(attempt), this.stopping.signal).then(() => {
           if (
             this.stopped ||
             !this.wanted.has(idx) ||
