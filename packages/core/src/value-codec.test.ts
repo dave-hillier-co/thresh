@@ -779,5 +779,32 @@ describe("value-codec", () => {
       expect(() => encodeValue(Symbol("s"))).toThrow();
       expect(() => encodeValue(new Promise<void>(() => {}))).toThrow();
     });
+
+    it("lets a registered surrogate carry a value the codec would otherwise reject", () => {
+      // UnsupportedValueError's own message points callers at registerSurrogate, so a
+      // surrogate for one of these types must actually be consulted.
+      registerSurrogate<RegExp>({
+        tag: "test.regexp",
+        test: (v) => v instanceof RegExp,
+        encode: (r) => ({ source: r.source, flags: r.flags }),
+        decode: (f) => new RegExp(f.source as string, f.flags as string),
+      });
+      const decoded = deserializeValue<RegExp>(serializeValue(/ab+c/gi));
+      expect(decoded).toBeInstanceOf(RegExp);
+      expect(decoded.source).toBe("ab+c");
+      expect(decoded.flags).toBe("gi");
+    });
+
+    it("round-trips a subclass of a typed array as its built-in base kind", () => {
+      class Samples extends Float64Array {}
+      const decoded = decodeValue(encodeValue(new Samples([1.5, 2.5])));
+      expect(decoded).toBeInstanceOf(Float64Array);
+      expect(Array.from(decoded as Float64Array)).toEqual([1.5, 2.5]);
+    });
+
+    it("rejects a malformed typedArray envelope with a clear error rather than a TypeError", () => {
+      const envelope = encodeValue(new Int16Array([1])) as Record<string, unknown>;
+      expect(() => decodeValue({ ...envelope, values: "nope" })).toThrow(/typed array/);
+    });
   });
 });

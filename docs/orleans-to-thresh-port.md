@@ -162,7 +162,8 @@ The exceptions, where the port must do real work:
   round-trips too, tagged as a `typedArray` envelope (`{kind, values}`) rather than passed through
   raw — `DataView`, a raw `ArrayBuffer`, a `RegExp`, and a sparse array (a hole, not `undefined`)
   have no faithful form here and `encodeValue` throws `UnsupportedValueError` for them rather than
-  silently corrupting them, the same as it does for a circular reference. `-0` is preserved exactly
+  silently corrupting them, the same as it does for a circular reference (a registered surrogate
+  for one of those types is still honoured). `-0` is preserved exactly
   (also tagged) rather than losing its sign the way a plain `JSON.stringify(-0)` or MessagePack's
   own integer fast path would.
 - **`decimal`, `long`/`ulong`, `DateTimeOffset`, `Guid`.** TypeScript `number` is a float64.

@@ -91,6 +91,14 @@ const TYPED_ARRAY_CTORS: Record<string, TypedArrayCtor> = {
   BigUint64Array: BigUint64Array as unknown as TypedArrayCtor,
 };
 
+function typedArrayKind(view: ArrayBufferView): string {
+  for (const [kind, ctor] of Object.entries(TYPED_ARRAY_CTORS)) {
+    if (view instanceof (ctor as unknown as abstract new (...args: never[]) => object)) return kind;
+  }
+  // Unreachable for a same-realm typed array; a foreign-realm one falls back to its own name.
+  return view.constructor.name;
+}
+
 export interface CodecContext {
   /** Rehydrate a grain reference identity into a working proxy on receive. */
   resolveGrainReference?: (identity: GrainReferenceIdentity) => unknown;
@@ -507,7 +515,9 @@ function encodeInner(
   // has no element type to decode elements as, so that one falls through instead — the generic
   // object branch far below rejects it as unrepresentable, same as a raw `ArrayBuffer`.
   if (ArrayBuffer.isView(value) && !(value instanceof DataView)) {
-    const kind = value.constructor.name;
+    // The built-in base kind, not `constructor.name`: a subclass (`class Samples extends
+    // Float64Array`) would otherwise stamp a kind no decoder can resolve.
+    const kind = typedArrayKind(value);
     const source = value as unknown as ArrayLike<number | bigint>;
     const values: unknown[] = [];
     for (let i = 0; i < source.length; i++) {
@@ -577,21 +587,6 @@ function encodeInner(
     return tagged("grainRef", { interfaceId: ref.interfaceId, ...grainIdFields(ref.grainId) });
   }
 
-  // Issue #119: built-ins with no faithful plain-object form. Each one has no (or the wrong)
-  // enumerable own properties, so without this check the generic object/other branches further
-  // down would silently flatten it to `{}` (a RegExp, a Promise, a WeakMap/WeakSet) or hand back
-  // the live reference unchanged (a function, a symbol) — neither of which is what was sent.
-  // Checked ahead of `findSurrogate` (like every built-in above): a caller with a genuine need to
-  // carry one of these registers a surrogate for it, but the default is to fail loudly.
-  if (value instanceof RegExp) throw new UnsupportedValueError(path, "a RegExp");
-  if (value instanceof Promise) throw new UnsupportedValueError(path, "a Promise");
-  if (value instanceof WeakMap) throw new UnsupportedValueError(path, "a WeakMap");
-  if (value instanceof WeakSet) throw new UnsupportedValueError(path, "a WeakSet");
-  if (value instanceof ArrayBuffer) throw new UnsupportedValueError(path, "an ArrayBuffer");
-  if (value instanceof DataView) throw new UnsupportedValueError(path, "a DataView");
-  if (typeof value === "function") throw new UnsupportedValueError(path, "a function");
-  if (typeof value === "symbol") throw new UnsupportedValueError(path, "a symbol");
-
   const surrogate = findSurrogate(value);
   if (surrogate !== undefined) {
     if (seen.has(value)) throw new CircularReferenceError(path);
@@ -606,6 +601,22 @@ function encodeInner(
       seen.delete(value);
     }
   }
+
+  // Issue #119: built-ins with no faithful plain-object form. Each one has no (or the wrong)
+  // enumerable own properties, so without this check the generic object/other branches further
+  // down would silently flatten it to `{}` (a RegExp, a Promise, a WeakMap/WeakSet) or hand back
+  // the live reference unchanged (a function, a symbol) — neither of which is what was sent.
+  // Checked AFTER `findSurrogate`, so a caller with a genuine need to carry one of these (the
+  // remedy `UnsupportedValueError`'s own message names) can register a surrogate for it; the
+  // default, with none registered, is to fail loudly.
+  if (value instanceof RegExp) throw new UnsupportedValueError(path, "a RegExp");
+  if (value instanceof Promise) throw new UnsupportedValueError(path, "a Promise");
+  if (value instanceof WeakMap) throw new UnsupportedValueError(path, "a WeakMap");
+  if (value instanceof WeakSet) throw new UnsupportedValueError(path, "a WeakSet");
+  if (value instanceof ArrayBuffer) throw new UnsupportedValueError(path, "an ArrayBuffer");
+  if (value instanceof DataView) throw new UnsupportedValueError(path, "a DataView");
+  if (typeof value === "function") throw new UnsupportedValueError(path, "a function");
+  if (typeof value === "symbol") throw new UnsupportedValueError(path, "a symbol");
 
   if (value instanceof Map) {
     if (seen.has(value)) throw new CircularReferenceError(path);
@@ -766,7 +777,10 @@ export function decodeValue(value: unknown, ctx: CodecContext = {}): unknown {
         if (ctor === undefined) {
           throw new Error(`decodeValue: unknown typed array kind "${kind}"`);
         }
-        const values = (obj.values as unknown[]).map((v) => decodeValue(v, ctx));
+        if (!Array.isArray(obj.values)) {
+          throw new Error(`decodeValue: malformed typed array envelope (kind "${kind}")`);
+        }
+        const values = obj.values.map((v) => decodeValue(v, ctx));
         return new ctor(values as (number | bigint)[]);
       }
       case "domException":

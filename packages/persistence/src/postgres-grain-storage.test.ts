@@ -179,6 +179,45 @@ describe.skipIf(pool === undefined)("PostgresGrainStorage", () => {
       await expect(b.clear()).rejects.toBeInstanceOf(InconsistentStateError);
     });
 
+    // The delete is committed while the stale write is already in flight: the
+    // write must still see the row as gone and conflict, not insert it anew.
+    it("rejects a stale write that races a concurrent delete", async () => {
+      const a = makeState(makeStorage());
+      a.value.cents = 1;
+      await a.write();
+      const b = makeState(makeStorage());
+      await b.read();
+
+      const deleter = await pool!.connect();
+      try {
+        await deleter.query("BEGIN");
+        await deleter.query(`DELETE FROM ${table} WHERE grain_id = $1 AND state_name = 'balance'`, [
+          id.toString(),
+        ]);
+        b.value.cents = 99;
+        const write = b.write().then(
+          () => "written",
+          (err: unknown) => err,
+        );
+        // Wait until the write is genuinely blocked on the uncommitted delete.
+        for (let i = 0; i < 200; i++) {
+          const waiting = await pool!.query(
+            `SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE $1`,
+            [`%${table}%`],
+          );
+          if (waiting.rows.length > 0) break;
+          await new Promise((r) => setTimeout(r, 10));
+        }
+        await deleter.query("COMMIT");
+        expect(await write).toBeInstanceOf(InconsistentStateError);
+      } finally {
+        deleter.release();
+      }
+      const reread = makeState(makeStorage());
+      await reread.read();
+      expect(reread.exists).toBe(false);
+    });
+
     it("still allows a blind write (no etag) to recreate a never-written record", async () => {
       const blind = makeState(makeStorage());
       blind.value.cents = 42;
