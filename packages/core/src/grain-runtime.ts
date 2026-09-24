@@ -53,6 +53,11 @@ export interface GrainRuntime {
   /** The named broadcast-channel provider (Orleans `IBroadcastChannelProvider`). */
   getBroadcastChannelProvider(name?: string): BroadcastChannelProvider;
   deactivateOnIdle(): void;
+  /**
+   * Keep this activation from idle collection for `by` from now (Orleans
+   * `DelayDeactivation`). Each call replaces the previous keep-alive, so it can
+   * shorten one; a zero or negative duration cancels it.
+   */
   delayDeactivation(by: Duration): void;
   /**
    * Request that this activation migrate to another silo the next time it goes

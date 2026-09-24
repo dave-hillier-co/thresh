@@ -106,8 +106,19 @@ export async function runCallFilters<C extends GrainCallContext>(
   });
   const invoke = async (): Promise<void> => {
     if (index < filters.length) {
-      const filter = filters[index++]!;
-      await filter(context);
+      const filter = filters[index]!;
+      // Mirror Orleans' `GrainMethodInvoker.Invoke`, which does `stage--` in a
+      // `finally` after invoking the current stage. Restoring `index` once this
+      // filter's call completes (rather than leaving it advanced) means a
+      // filter that calls `context.invoke()` more than once — a retry filter,
+      // say — re-runs every downstream filter on each call, instead of jumping
+      // straight to the method on the second invocation.
+      index++;
+      try {
+        await filter(context);
+      } finally {
+        index--;
+      }
     } else {
       reachedTerminal = true;
       context.result = await terminal();

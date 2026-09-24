@@ -1,4 +1,6 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { newActivationId, type ActivationId } from "@thresh/core/activation-id";
+import { Guid } from "@thresh/core/guid";
 import {
   broadcastChannelObserver,
   BroadcastConsumerInterface,
@@ -13,6 +15,7 @@ import {
 import {
   GrainCallError,
   GrainExtensionNotInstalledException,
+  InconsistentStateError,
   RejectionError,
 } from "@thresh/core/errors";
 import {
@@ -122,6 +125,15 @@ function parseNamespaceKey(key: string): [namespace: string, key: string] {
 }
 
 /**
+ * Runs a function in the async context this module was loaded in — the empty
+ * root, with no `AsyncLocalStorage` store set — whatever context the caller is
+ * in. The JS analogue of Orleans' `ExecutionContextSuppressor`, used so a
+ * grain timer tick never inherits any async-local state from the call that
+ * registered the timer (see `registerTimer`).
+ */
+const runInRootAsyncContext = AsyncLocalStorage.snapshot();
+
+/**
  * The runtime's per-grain bookkeeping object and the grain's `GrainContext`.
  * It owns the turn scheduler and drives the activation lifecycle.
  */
@@ -216,6 +228,7 @@ export class ActivationData implements GrainContext {
   private lastActiveMs: number;
   private keepAliveUntilMs = 0;
   private deactivateRequested = false;
+  private pendingDeactivationReason: DeactivationReason | undefined;
   /**
    * True when `deactivateOnIdle()` was called while this activation was still
    * `"activating"` (from within `onActivate`). Orleans rejects the triggering
@@ -378,7 +391,10 @@ export class ActivationData implements GrainContext {
                 },
                 () => this.callMethod(req),
               ),
-          );
+          ).catch((error: unknown) => {
+            this.deactivateOnInconsistentState(error);
+            throw error;
+          });
           return restoreReadOnlyGuard === undefined
             ? invocation
             : invocation.finally(restoreReadOnlyGuard);
@@ -498,7 +514,49 @@ export class ActivationData implements GrainContext {
     const turnOptions: InvokeMethodOptions = options?.interleave ? { alwaysInterleave: true } : {};
     const timer = new GrainTimerImpl(
       this.time,
-      (cb) => this.scheduler.schedule({ options: turnOptions, run: cb }),
+      (cb) =>
+        this.scheduler.schedule({
+          options: turnOptions,
+          // Orleans creates the timer under `ExecutionContextSuppressor`
+          // ("Avoid capturing async locals", GrainTimer.cs:42-46) so a tick
+          // never inherits the registering call's ambient state. `setTimeout`
+          // otherwise carries the enclosing turn's `AsyncLocalStorage`
+          // snapshot into every fire, so without this a tick would run under
+          // the ORIGINAL registering call's reentrancy id, deadline,
+          // transaction and RequestContext headers rather than its own. Give
+          // every tick a fresh, empty RequestContext and an `InvocationContext`
+          // scoped to this activation with no inherited transaction, deadline
+          // or signal — the same shape a self-initiated call would get.
+          // Resetting only Thresh's own two stores is not enough: any other
+          // async-local context (OpenTelemetry's active span, a host's
+          // logging scope) would still leak in, so the tick first returns to
+          // the empty root async context, then scopes Thresh's stores fresh.
+          run: () => {
+            const tick = runInRootAsyncContext(() =>
+              runWithRequestContext({}, () =>
+                invocationContext.run(
+                  {
+                    senderId: undefined,
+                    ownerId: this.id,
+                    reentrancyId: Guid.newGuid().toString(),
+                  },
+                  cb,
+                ),
+              ),
+            );
+            // Orleans' `IsKeepAlive` (GrainTimer.cs:81) resets the idle timer
+            // when a keep-alive tick's message completes
+            // (`ActivationData.OnCompletedRequest`, ActivationData.cs:1486);
+            // an ordinary (non-keep-alive) tick does not touch it, so by
+            // itself it never postpones collection (see `TimerOptions.keepAlive`).
+            const settled = tick.catch((error: unknown) => {
+              this.deactivateOnInconsistentState(error);
+              throw error;
+            });
+            if (options?.keepAlive === true) return settled.finally(() => this.touch());
+            return settled;
+          },
+        }),
       callback,
       due,
       period,
@@ -622,7 +680,20 @@ export class ActivationData implements GrainContext {
     this.state = "invalid";
   }
 
-  requestDeactivation(): void {
+  /**
+   * Why a pending `requestDeactivation` wants this activation gone, when the
+   * requester named a reason (e.g. `"application-error"` for an escaped
+   * `InconsistentStateError`). Undefined for a plain `deactivateOnIdle()`,
+   * which keeps each finalizer's own default reason.
+   */
+  get requestedDeactivationReason(): DeactivationReason | undefined {
+    return this.pendingDeactivationReason;
+  }
+
+  requestDeactivation(reason?: DeactivationReason): void {
+    if (reason !== undefined && this.pendingDeactivationReason === undefined) {
+      this.pendingDeactivationReason = reason;
+    }
     this.deactivateRequested = true;
     // Called during onActivate (still "activating"): don't defer to the next
     // idle sweep — the activation must never become servable (see
@@ -631,8 +702,16 @@ export class ActivationData implements GrainContext {
     if (this.state === "activating") this.deactivateRequestedDuringActivation = true;
   }
 
+  /**
+   * Mirrors Orleans' `ActivationData.DelayDeactivation` (ActivationData.cs:486-509):
+   * a non-positive `byMs` cancels any active keep-alive and reverts to normal
+   * collection, rather than being folded in via `Math.max` (which could only
+   * ever extend, never shorten or cancel, a previously requested keep-alive).
+   * A positive `byMs` REPLACES whatever keep-alive was in effect — later,
+   * shorter calls narrow it, matching upstream's unconditional assignment.
+   */
   delayDeactivation(byMs: number): void {
-    this.keepAliveUntilMs = Math.max(this.keepAliveUntilMs, this.time.now() + byMs);
+    this.keepAliveUntilMs = byMs <= 0 ? 0 : this.time.now() + byMs;
   }
 
   /** Mark this activation to migrate (rather than deactivate) when next idle. */
@@ -766,6 +845,27 @@ export class ActivationData implements GrainContext {
    */
   get deactivationRequestedAndIdle(): boolean {
     return this.state === "valid" && !this.scheduler.busy && this.deactivateRequested;
+  }
+
+  /**
+   * Orleans deactivates an activation that lets an inconsistent-state
+   * exception escape a call or timer tick (`InsideRuntimeClient.cs:326`),
+   * rather than leave a stale or duplicate activation stuck, so the next call
+   * gets a fresh one. Only the activation the error originated in: the marker
+   * is cleared before the error travels on, so a caller that merely
+   * propagates it is not deactivated too (`IsSourceActivation`,
+   * InsideRuntimeClient.cs:326-329). Routed through `requestDeactivation`,
+   * like `deactivateOnIdle()`, so the catalog finalizes it once the failing
+   * turn has settled — on the next lookup for this grain or the next idle
+   * sweep — with its full cleanup (directory unregistration, state unbinding,
+   * instance disposal), and the next call is handed a fresh activation rather
+   * than rejected by this one mid-teardown. Deactivating directly from inside
+   * the failing turn would deadlock against the deactivation's own turn.
+   */
+  private deactivateOnInconsistentState(error: unknown): void {
+    if (!(error instanceof InconsistentStateError) || !error.isSourceActivation) return;
+    error.isSourceActivation = false;
+    this.requestDeactivation({ code: "application-error", description: error.message });
   }
 
   private touch(): void {
