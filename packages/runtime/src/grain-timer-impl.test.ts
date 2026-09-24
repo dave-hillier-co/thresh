@@ -184,19 +184,18 @@ describe("GrainTimerImpl", () => {
     // the tick settles would leave two independent tick chains running.
     const time = new FakeTimeProvider();
     let ticks = 0;
-    let timer: GrainTimerImpl | undefined;
     let resolveFirst: (() => void) | undefined;
     const callback = () => {
       ticks++;
       if (ticks === 1) {
-        timer!.change({ ms: 100 }, { ms: 100 });
+        timer.change({ ms: 100 }, { ms: 100 });
         return new Promise<void>((resolve) => {
           resolveFirst = resolve;
         });
       }
       return Promise.resolve();
     };
-    timer = new GrainTimerImpl(time, (cb) => cb(), callback, { ms: 10 }, { ms: 10 });
+    const timer = new GrainTimerImpl(time, (cb) => cb(), callback, { ms: 10 }, { ms: 10 });
 
     time.advance(10);
     await flush();
