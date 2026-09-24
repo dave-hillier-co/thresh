@@ -1,9 +1,5 @@
 import type { GrainType } from "@thresh/core/grain-type";
-import {
-  recordAgentPoll,
-  recordStreamDelivered,
-  recordStreamFailed,
-} from "@thresh/observability/stream-metrics";
+import { recordAgentPoll } from "@thresh/observability/stream-metrics";
 import type { QueueEntry } from "@thresh/streams/redis-stream-queue";
 import type { HashRange } from "@thresh/streams/queue-ownership";
 import type { StreamDeliver } from "@thresh/streams/stream-deliver";
@@ -53,9 +49,10 @@ export interface PullingStreamProviderHost {
 
 /**
  * Reports a permanently-failed delivery — Orleans' `IStreamFailureHandler.OnDeliveryFailure`.
- * Called once the agent has exhausted the retry budget and is about to advance
- * the queue cursor past the bad event so it stops blocking other subscribers
- * multiplexed on the same physical queue.
+ * Called once one subscriber's own retry budget is exhausted (`FanOutDelivery`,
+ * `maxEventDeliveryTimeMs`) and that subscriber alone is about to be skipped;
+ * every other subscriber of the same event keeps its own retry/delivery
+ * unaffected.
  */
 export interface StreamFailureHandler {
   onDeliveryFailure(
@@ -72,14 +69,6 @@ export interface QueuePullingAgentOptions {
   pollIntervalMs?: number;
   /** Maximum entries read per poll (defaults to 128). */
   batchSize?: number;
-  /** Max delivery attempts per event before skipping (defaults to 3). */
-  maxAttempts?: number;
-  /** Backoff between retries within a single pump (defaults to 2^attempt * 50ms, capped at 5s). */
-  retryBackoffMs?: (attempt: number) => number;
-  /** Notified when an event is skipped after exhausting the retry budget. */
-  failureHandler?: StreamFailureHandler;
-  /** Sleep injection — the clock is a true boundary, fake it in tests. */
-  sleep?: (ms: number) => Promise<void>;
   /**
    * Notified when a pump fails outside delivery (cursor read, queue read,
    * commit). The agent keeps polling — the next poll retries from the
@@ -87,9 +76,6 @@ export interface QueuePullingAgentOptions {
    */
   onPumpError?: (error: unknown) => void;
 }
-
-const defaultBackoff = (attempt: number): number => Math.min(50 * 2 ** attempt, 5000);
-const defaultSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 /**
  * Pulls one physical queue and delivers each entry to its subscribers, then
@@ -99,18 +85,18 @@ const defaultSleep = (ms: number): Promise<void> => new Promise((r) => setTimeou
  * silo owns; `PullingAgentManager` (a later slice) starts/stops them as ring
  * ownership changes.
  *
- * On delivery failure the agent retries up to `maxAttempts` with exponential
- * backoff. If still failing it skips the event (commits the cursor past it) and
- * notifies the `failureHandler` — Orleans' `IStreamFailureHandler` — so a
- * single poison event cannot stall every other subscriber sharing the queue.
+ * Retry-then-skip on a delivery failure is the `deliver` callback's own job
+ * (`PullingStreamProviderCore.fanOut` delegates it to `FanOutDelivery`, which
+ * retries and skips each subscriber independently — issues #97/#98/#111):
+ * this agent's own retry is unbounded and driven entirely by its poll loop
+ * (`this.pollIntervalMs`), matching how a queue-read or commit failure is
+ * already handled below — the whole entry (e.g. a `registry.subscribers()`
+ * read failing) is simply retried on the next poll, with the cursor left
+ * uncommitted, until `deliver` stops throwing.
  */
 export class QueuePullingAgent {
   private readonly pollIntervalMs: number;
   private readonly batchSize: number;
-  private readonly maxAttempts: number;
-  private readonly retryBackoffMs: (attempt: number) => number;
-  private readonly failureHandler: StreamFailureHandler | undefined;
-  private readonly sleep: (ms: number) => Promise<void>;
   private readonly onPumpError: (error: unknown) => void;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private cursor: number | undefined;
@@ -125,10 +111,6 @@ export class QueuePullingAgent {
   ) {
     this.pollIntervalMs = options.pollIntervalMs ?? 50;
     this.batchSize = options.batchSize ?? 128;
-    this.maxAttempts = options.maxAttempts ?? 3;
-    this.retryBackoffMs = options.retryBackoffMs ?? defaultBackoff;
-    this.failureHandler = options.failureHandler;
-    this.sleep = options.sleep ?? defaultSleep;
     this.onPumpError =
       options.onPumpError ?? ((error) => console.error("stream pump failed", error));
   }
@@ -195,50 +177,35 @@ export class QueuePullingAgent {
   }
 
   /**
-   * Attempts delivery up to `maxAttempts` times with exponential backoff.
-   * Returns true if the entry is durably handled (delivered, or skipped after
-   * exhausting the retry budget) so the caller advances the cursor; returns
-   * false to leave the cursor so the entry is redelivered on the next poll —
-   * used when the agent is stopping mid-retry.
+   * Attempts delivery once. `deliver` (`PullingStreamProviderCore.fanOut`)
+   * never rejects for an ordinary subscriber failure — it retries and skips
+   * each subscriber on its own (`FanOutDelivery`) — so a rejection here means
+   * either a queue-wide failure (e.g. the subscriber registry read itself
+   * failed) or a `RecoverableStreamDeliveryError`. Returns true once the
+   * entry is durably handled so the caller advances the cursor; returns
+   * false to leave the cursor so the entry is redelivered on the next poll.
    */
   private async tryDeliver(streamKey: string, event: unknown, token: number): Promise<boolean> {
-    let lastError: unknown;
-    for (let attempt = 1; attempt <= this.maxAttempts; attempt++) {
-      if (!this.running) return false;
-      try {
-        await this.deliver(streamKey, event, token);
-        recordStreamDelivered({ "thresh.stream.key": streamKey });
-        return true;
-      } catch (err) {
-        if (err instanceof RecoverableStreamDeliveryError) {
-          // The consumer is deactivating to resume from its own persisted
-          // checkpoint (see the error's doc) rather than have this event
-          // retried in place. Rewind the queue's committed cursor to that
-          // checkpoint and forget the cached cursor, so the next poll
-          // re-reads from there and redelivers everything the reactivated
-          // consumer needs — not just this one event.
-          await this.queue.seek(err.resumeToken);
-          this.resetCursor();
-          return false; // leave the cursor; caller stops this batch, no advance
-        }
-        lastError = err;
-        if (attempt < this.maxAttempts) await this.sleep(this.retryBackoffMs(attempt));
-      }
-    }
-    // Retry budget exhausted: notify the failure handler, then advance past the
-    // event so a single poison entry does not stall the rest of the queue.
-    recordStreamFailed({ "thresh.stream.key": streamKey });
     try {
-      await this.failureHandler?.onDeliveryFailure(
-        streamKey,
-        event,
-        token,
-        lastError,
-        this.maxAttempts,
-      );
-    } catch {
-      // Swallow handler errors — observability must not itself block delivery.
+      await this.deliver(streamKey, event, token);
+      return true;
+    } catch (err) {
+      if (err instanceof RecoverableStreamDeliveryError) {
+        // The consumer is deactivating to resume from its own persisted
+        // checkpoint (see the error's doc) rather than have this event
+        // retried in place. Rewind the queue's committed cursor to that
+        // checkpoint and forget the cached cursor, so the next poll
+        // re-reads from there and redelivers everything the reactivated
+        // consumer needs — not just this one event.
+        await this.queue.seek(err.resumeToken);
+        this.resetCursor();
+        return false; // leave the cursor; caller stops this batch, no advance
+      }
+      // A queue-wide failure (not a subscriber's): leave the cursor and
+      // propagate to `pump()`'s catch, whose next scheduled poll retries this
+      // same entry — unbounded, the same way a queue read/commit failure is
+      // already handled, since it isn't one poison subscriber to skip.
+      throw err;
     }
-    return true;
   }
 }

@@ -37,6 +37,21 @@ export interface PostgresPullingStreamProviderOptions {
    */
   failureHandler?: StreamFailureHandler;
   /**
+   * Total time (ms) to keep retrying delivery to ONE subscriber before
+   * skipping it and notifying `failureHandler` — every other subscriber of
+   * the same event is retried and timed out independently (Orleans
+   * `MaxEventDeliveryTime`; default 1 minute).
+   */
+  maxEventDeliveryTimeMs?: number;
+  /**
+   * Bounds a single delivery attempt to one subscriber (Orleans
+   * `ResponseTimeout`; default 30s) so a hung `onNext` cannot stall this
+   * provider's queues, or silo shutdown, forever.
+   */
+  deliveryResponseTimeoutMs?: number;
+  /** Backoff between retries to the same subscriber; defaults to 2^attempt * 50ms, capped at 5s. */
+  retryBackoffMs?: (attempt: number) => number;
+  /**
    * How long to keep delivered rows around before the opportunistic
    * per-commit trim deletes them (a replay window). Omitted trims eagerly:
    * every row at or below the committed cursor is deleted on the next commit.
@@ -92,6 +107,13 @@ export class PostgresPullingStreamProvider implements ActivationBoundStreamProvi
     this.core = new PullingStreamProviderCore(name, this.queues, this.registry, {
       ...(options.pollIntervalMs !== undefined ? { pollIntervalMs: options.pollIntervalMs } : {}),
       ...(options.failureHandler !== undefined ? { failureHandler: options.failureHandler } : {}),
+      ...(options.maxEventDeliveryTimeMs !== undefined
+        ? { maxEventDeliveryTimeMs: options.maxEventDeliveryTimeMs }
+        : {}),
+      ...(options.deliveryResponseTimeoutMs !== undefined
+        ? { deliveryResponseTimeoutMs: options.deliveryResponseTimeoutMs }
+        : {}),
+      ...(options.retryBackoffMs !== undefined ? { retryBackoffMs: options.retryBackoffMs } : {}),
     });
   }
 
