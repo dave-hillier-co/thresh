@@ -47,4 +47,13 @@ export interface InvocationRequest {
    * on a chain governs every downstream hop.
    */
   deadline?: number;
+  /**
+   * How many times this exact call has already been forwarded silo-to-silo
+   * because the receiving silo's directory CAS named a different owner
+   * (Orleans `Message.ForwardCount`). Absent/0 on the caller's original
+   * dispatch; incremented by `DistributedDispatcher.forwardTo` on each hop
+   * and capped there (`MaxForwardCount`), so an inconsistent directory view
+   * cannot loop forever between silos (issue #110).
+   */
+  forwardCount?: number;
 }

@@ -28,6 +28,9 @@ import type {
   PlacementStrategy,
 } from "@thresh/runtime/placement/placement-strategy";
 
+/** Orleans `SiloMessagingOptions.MaxForwardCount` — see `forwardTo`. */
+const MAX_FORWARD_COUNT = 2;
+
 /** Sends a request to a remote silo and awaits its response. */
 export interface RemoteInvoker {
   send(silo: SiloAddress, req: InvocationRequest): Promise<unknown>;
@@ -337,8 +340,34 @@ export class DistributedDispatcher implements Dispatcher {
       }
 
       admitted(); // the grain lives elsewhere: nothing is coming up here
-      return this.deps.remote.send(winner.silo, req);
+      return this.forwardTo(winner.silo, req, opts);
     });
+  }
+
+  /**
+   * Forward a request this silo just discovered it doesn't own to the CAS
+   * winner, capped the way Orleans caps `MessageCenter.TryForwardMessage`
+   * (`MaxForwardCount` = 2): an inconsistent directory view otherwise turns
+   * this into a loop bounded only by the call timeout (issue #110). Also
+   * fires `opts.onForward`, which `ClusterNode.receiveRequest` uses to tell
+   * the ORIGINAL caller to evict its `LocationCache` entry for `req.target`
+   * (Orleans `MessageCenter.AddToCacheInvalidationHeader`) instead of that
+   * caller routing to this now-wrong silo forever.
+   */
+  private forwardTo(
+    to: SiloAddress,
+    req: InvocationRequest,
+    opts?: InvokeCallOptions,
+  ): Promise<unknown> {
+    const forwardCount = (req.forwardCount ?? 0) + 1;
+    if (forwardCount > MAX_FORWARD_COUNT) {
+      throw new RejectionError(
+        `forward count exceeded (${MAX_FORWARD_COUNT}) resolving ${req.target.toString()}`,
+        "noActivation",
+      );
+    }
+    opts?.onForward?.(to);
+    return this.deps.remote.send(to, { ...req, forwardCount });
   }
 
   /**

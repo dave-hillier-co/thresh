@@ -2142,6 +2142,7 @@ export class ClusterNode {
       ...(req.interfaceVersion !== undefined ? { interfaceVersion: req.interfaceVersion } : {}),
       method: req.method,
       ...(req.deadline !== undefined ? { deadline: req.deadline } : {}),
+      ...(req.forwardCount !== undefined ? { forwardCount: req.forwardCount } : {}),
       requestContext: {
         reentrancyId: req.reentrancyId,
         ...(req.transaction !== undefined
@@ -2163,6 +2164,11 @@ export class ClusterNode {
     }
     const pending = this.sendAndAwait(conn, message, silo.toString());
     const response = await pending;
+    // The callee had to forward this call on to its own CAS winner: `silo` is
+    // a stale address for `req.target`, so evict it here rather than routing
+    // to it again next call (Orleans `MessageCenter.AddToCacheInvalidationHeader`;
+    // see `staleCacheEntry`'s doc — issue #110).
+    if (response.staleCacheEntry === true) this.cache.invalidate(req.target);
     // Merge the participants the callee (and its sub-calls) enlisted back into
     // the ambient transaction, so the root agent commits/aborts them too. Done
     // even on an error reply, so an aborting transaction releases remote locks.
@@ -3080,6 +3086,13 @@ export class ClusterNode {
             pendingCalls: 0,
           }
         : undefined;
+    // Set if `deliverLocal` had to forward this call on to a different silo
+    // (its directory CAS named another owner): the caller's cached address
+    // for `targetGrain` is stale, and both the success and error replies
+    // below stamp it with `staleCacheEntry` (see that field's doc)
+    // regardless of whether the forwarded call itself then succeeded or
+    // failed.
+    let forwardedTo: SiloAddress | undefined;
     try {
       // Extract the incoming W3C `traceparent` (if any) BEFORE placement and
       // activation run, not just around method dispatch (`tracingFilters()`'s
@@ -3101,7 +3114,11 @@ export class ClusterNode {
         // real subscriber activation) does.
         message.interfaceId === BroadcastChannelPublisherInterface.id
           ? this.dispatchBroadcastPublish(message)
-          : this.dispatcher.deliverLocal(this.toRequest(message, transaction)),
+          : this.dispatcher.deliverLocal(this.toRequest(message, transaction), {
+              onForward: (to) => {
+                forwardedTo = to;
+              },
+            }),
       );
       if (message.direction === "oneWay" || replyTo === undefined) return;
       const response = responseTo(
@@ -3110,12 +3127,14 @@ export class ClusterNode {
         this.serializer.serialize(result),
         this.options.local,
       );
+      if (forwardedTo !== undefined) response.staleCacheEntry = true;
       this.attachParticipants(response, transaction);
       await this.reply(replyTo, response);
     } catch (err) {
       if (message.direction === "oneWay" || replyTo === undefined) return;
       const { kind, body } = this.serializeError(err);
       const response = responseTo(message, kind, body, this.options.local);
+      if (forwardedTo !== undefined) response.staleCacheEntry = true;
       this.attachParticipants(response, transaction);
       await this.reply(replyTo, response);
     }
@@ -3156,6 +3175,7 @@ export class ClusterNode {
       ...(message.sendingGrain !== undefined ? { sender: message.sendingGrain } : {}),
       ...(transaction !== undefined ? { transaction } : {}),
       ...(message.deadline !== undefined ? { deadline: message.deadline } : {}),
+      ...(message.forwardCount !== undefined ? { forwardCount: message.forwardCount } : {}),
       ...(message.requestContext?.headers !== undefined
         ? { headers: message.requestContext.headers }
         : {}),

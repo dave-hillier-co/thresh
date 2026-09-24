@@ -89,8 +89,26 @@ export interface Message {
    */
   deadline?: number | undefined;
 
+  /**
+   * How many times this call has already been forwarded silo-to-silo (Orleans
+   * `Message.ForwardCount`), carried across a hop so `MaxForwardCount` caps
+   * the WHOLE chain, not just one silo's own attempts (issue #110). Absent on
+   * a caller's original dispatch.
+   */
+  forwardCount?: number | undefined;
+
   /** On a reply: participants the callee enlisted, for the caller to merge. */
   transactionParticipants?: SerializedParticipant[] | undefined;
+
+  /**
+   * On a reply: the receiving silo had to forward this call on (its directory
+   * CAS named a different owner), so the address the caller had cached/looked
+   * up for `targetGrain` is stale (Orleans `MessageCenter
+   * .AddToCacheInvalidationHeader`). `ClusterNode.sendRemote` evicts its
+   * `LocationCache` entry for `targetGrain` on seeing this instead of routing
+   * to the now-wrong silo again next call (issue #110).
+   */
+  staleCacheEntry?: boolean | undefined;
 
   /** Serialized arguments (request) or result/error (response). */
   body: Uint8Array;
