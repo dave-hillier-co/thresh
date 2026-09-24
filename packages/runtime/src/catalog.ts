@@ -606,7 +606,12 @@ export class Catalog {
     for (const [key, activation] of this.activations) {
       await this.collectOne(activation, ageLimitOverrideMs);
       if (activation.state === "invalid") {
-        this.activations.delete(key);
+        // `collectOne` awaits the deactivate hook, so a `getOrCreate` in that
+        // gap may already have replaced this key with a fresh activation
+        // (Orleans reproduction: idle collection racing a reactivation).
+        // Only remove the entry if it's still the one we just collected —
+        // otherwise we'd delete the live replacement and leak this one.
+        if (this.activations.get(key) === activation) this.activations.delete(key);
         await this.disposeCollected(activation);
       }
     }
