@@ -188,6 +188,12 @@ export interface ClusterNodeOptions {
   directoryPeer?: DirectoryPeer;
   serializer?: Serializer;
   time?: TimeProvider;
+  /**
+   * How long a cross-silo call waits for its reply (default 30s; Orleans
+   * `SiloMessagingOptions.ResponseTimeout`). Also sent as every request's
+   * time-to-live, so the callee drops a request still queued once its caller
+   * has stopped waiting (issue #90).
+   */
   callTimeoutMs?: number;
   /** Tuning for join/handoff directory-range recovery pulls; see the module-level defaults. */
   recovery?: {
@@ -2060,7 +2066,7 @@ export class ClusterNode {
       interfaceId: req.interfaceId,
       ...(req.interfaceVersion !== undefined ? { interfaceVersion: req.interfaceVersion } : {}),
       method: req.method,
-      ...(req.deadline !== undefined ? { deadline: req.deadline } : {}),
+      ...this.wireExpiry(req),
       requestContext: {
         reentrancyId: req.reentrancyId,
         ...(req.headers !== undefined ? { headers: req.headers } : {}),
@@ -2128,6 +2134,25 @@ export class ClusterNode {
 
   // --- transport ---
 
+  /**
+   * The request's ambient deadline and time-to-live as wire fields, both
+   * RELATIVE to this silo's clock (Orleans writes `TimeToLive` as remaining
+   * ms), so the receiver re-bases them on its own clock in `toRequest` and
+   * never compares two silos' wall clocks. The time-to-live is this node's
+   * own call timeout -- the point at which `sendAndAwait` stops waiting --
+   * or whatever is left of one the request already carried from an earlier
+   * hop (a forward), if shorter; a one-way request, which nobody waits for,
+   * gets none (Orleans `Message.IsExpirableMessage`). Issue #90.
+   */
+  private wireExpiry(req: InvocationRequest): Pick<Message, "deadlineInMs" | "timeToLiveMs"> {
+    const now = this.time.now();
+    const inherited = req.expiresAt === undefined ? Infinity : req.expiresAt - now;
+    return {
+      ...(req.deadline !== undefined ? { deadlineInMs: req.deadline - now } : {}),
+      ...(req.options.oneWay ? {} : { timeToLiveMs: Math.min(this.callTimeoutMs, inherited) }),
+    };
+  }
+
   private async sendRemote(silo: SiloAddress, req: InvocationRequest): Promise<unknown> {
     const conn = await this.connections.get(silo);
     const correlationId = nextCorrelationId();
@@ -2141,7 +2166,7 @@ export class ClusterNode {
       interfaceId: req.interfaceId,
       ...(req.interfaceVersion !== undefined ? { interfaceVersion: req.interfaceVersion } : {}),
       method: req.method,
-      ...(req.deadline !== undefined ? { deadline: req.deadline } : {}),
+      ...this.wireExpiry(req),
       ...(req.forwardCount !== undefined ? { forwardCount: req.forwardCount } : {}),
       requestContext: {
         reentrancyId: req.reentrancyId,
@@ -2168,7 +2193,7 @@ export class ClusterNode {
     // a stale address for `req.target`, so evict it here rather than routing
     // to it again next call (Orleans `MessageCenter.AddToCacheInvalidationHeader`;
     // see `staleCacheEntry`'s doc — issue #110).
-    if (response.staleCacheEntry === true) this.cache.invalidate(req.target);
+    if (response.staleCacheEntry === true) this.cache.invalidate(req.target, silo);
     // Merge the participants the callee (and its sub-calls) enlisted back into
     // the ambient transaction, so the root agent commits/aborts them too. Done
     // even on an error reply, so an aborting transaction releases remote locks.
@@ -3174,7 +3199,12 @@ export class ClusterNode {
       reentrancyId: message.requestContext?.reentrancyId ?? newChainId(),
       ...(message.sendingGrain !== undefined ? { sender: message.sendingGrain } : {}),
       ...(transaction !== undefined ? { transaction } : {}),
-      ...(message.deadline !== undefined ? { deadline: message.deadline } : {}),
+      ...(message.deadlineInMs !== undefined
+        ? { deadline: this.time.now() + message.deadlineInMs }
+        : {}),
+      ...(message.timeToLiveMs !== undefined
+        ? { expiresAt: this.time.now() + message.timeToLiveMs }
+        : {}),
       ...(message.forwardCount !== undefined ? { forwardCount: message.forwardCount } : {}),
       ...(message.requestContext?.headers !== undefined
         ? { headers: message.requestContext.headers }

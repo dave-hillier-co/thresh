@@ -12,6 +12,7 @@ import {
 } from "@thresh/core/durable-job";
 import {
   GrainCallError,
+  GrainCallTimeoutError,
   GrainExtensionNotInstalledException,
   RejectionError,
 } from "@thresh/core/errors";
@@ -343,6 +344,15 @@ export class ActivationData implements GrainContext {
         args: req.args,
         ...(signal !== undefined ? { signal } : {}),
         run: () => {
+          // A wire-arrived request whose caller has already stopped waiting
+          // (its time-to-live ran out while it sat in this activation's
+          // queue) is not run at all -- Orleans `InsideRuntimeClient.Invoke`
+          // drops an expired message at exactly this point (issue #90).
+          if (req.expiresAt !== undefined && this.time.now() >= req.expiresAt) {
+            throw new GrainCallTimeoutError(
+              `request ${req.method} to ${this.id.toString()} expired before it ran`,
+            );
+          }
           if (this.state === "invalid" || this.state === "deactivating") {
             // A failed activation surfaces the original activation error to the
             // caller; the ordinary deactivating/idle-invalid cases have none, so

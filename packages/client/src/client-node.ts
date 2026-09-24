@@ -402,6 +402,14 @@ export class ClientNode implements Dispatcher {
           sendingGrain: req.sender,
           interfaceId: req.interfaceId,
           method: req.method,
+          // Both RELATIVE to this client's clock, like Orleans' wire
+          // `TimeToLive`: the gateway re-bases them on its own clock. The
+          // time-to-live is what is left of this call's budget -- the point
+          // this client stops waiting -- so the gateway does not run a request
+          // nobody is waiting for any more (Orleans
+          // `OutsideRuntimeClient.SendRequest`; issue #90).
+          ...(req.deadline !== undefined ? { deadlineInMs: req.deadline - this.now() } : {}),
+          ...(req.options.oneWay ? {} : { timeToLiveMs: deadline - this.now() }),
           requestContext: {
             reentrancyId: req.reentrancyId,
             ...(req.headers !== undefined ? { headers: req.headers } : {}),

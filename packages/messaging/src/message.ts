@@ -79,15 +79,25 @@ export interface Message {
   requestContext?: RequestContext | undefined;
 
   /**
-   * Absolute deadline (epoch ms) for this call chain, if one is ambient
-   * (Orleans `Message.TimeToLive`, mirrored here since a plain timestamp,
-   * unlike an `AbortSignal`, IS wire-safe). Carried by `ClusterNode.sendRemote`
-   * from `InvocationRequest.deadline` and read back by `toRequest` on the
-   * receiving end, so the deadline governs the remote turn too instead of
-   * stopping at the `RemoteInvoker` boundary (issue #90). Forwarded unchanged
-   * on a subsequent hop, same as `requestContext.transaction`.
+   * Milliseconds left, when sent, on the call chain's ambient deadline
+   * (`InvocationRequest.deadline`), if one is set. RELATIVE, like Orleans'
+   * wire `TimeToLive` (`MessageSerializer` writes the remaining ms and the
+   * receiver restarts a local stopwatch from it), so two silos' wall clocks
+   * are never compared: `ClusterNode.sendRemote` subtracts its own `now()`,
+   * `toRequest` adds the receiver's back (issue #90). May be negative (the
+   * deadline had already passed when sent).
    */
-  deadline?: number | undefined;
+  deadlineInMs?: number | undefined;
+
+  /**
+   * Orleans `Message.TimeToLive`: milliseconds, when sent, until the caller
+   * stops waiting for the reply (its call timeout, or less if the request was
+   * itself already carrying a shorter one). Set on every non-one-way request;
+   * the receiver turns it into `InvocationRequest.expiresAt` and drops the
+   * request at turn start once it has passed, instead of running a call
+   * nobody is waiting for any more (issue #90).
+   */
+  timeToLiveMs?: number | undefined;
 
   /**
    * How many times this call has already been forwarded silo-to-silo (Orleans

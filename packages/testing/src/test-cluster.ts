@@ -96,6 +96,13 @@ export interface TestClusterOptions {
    * `FakeTimeProvider` via `time` to drive it deterministically in tests.
    */
   defaultResponseTimeout?: Duration;
+  /**
+   * How long a caller waits for a cross-silo reply, and so the time-to-live
+   * every request carries, forwarded to every silo (Orleans
+   * `SiloMessagingOptions.ResponseTimeout`; see `SiloConfig.callTimeout`).
+   * Defaults to 30s.
+   */
+  callTimeout?: Duration;
   /** Load-shedding config applied to every silo in this cluster (Orleans `Configure<LoadSheddingOptions>`). */
   loadShedding?: Partial<LoadSheddingOptions>;
   /** Injectable RNG forwarded to every silo, for deterministic placement in tests. */
@@ -404,6 +411,7 @@ export class TestCluster {
       ...(this.options.defaultResponseTimeout !== undefined
         ? { defaultResponseTimeout: this.options.defaultResponseTimeout }
         : {}),
+      ...(this.options.callTimeout !== undefined ? { callTimeout: this.options.callTimeout } : {}),
       ...(this.options.loadShedding !== undefined
         ? { loadShedding: this.options.loadShedding }
         : {}),
