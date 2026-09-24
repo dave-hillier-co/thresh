@@ -270,9 +270,10 @@ describe("ShardExecutor", () => {
     resolveRun({ kind: "failed", error: new Error("boom") });
     await flush();
 
-    const [persisted] = await store.readJobs(0);
+    const persistedJobs = await store.readJobs(0);
+    expect(persistedJobs).toHaveLength(1);
     // Completion at t=6000 + 2000ms backoff = 8000, not poll-start 1000 + 2000 = 3000.
-    expect(persisted.dueTime.getTime()).toBe(8000);
+    expect(persistedJobs[0]?.dueTime.getTime()).toBe(8000);
 
     await exec.stop();
   });
