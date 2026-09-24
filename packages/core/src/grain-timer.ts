@@ -3,7 +3,9 @@ import type { Duration } from "./duration";
 /**
  * A non-durable, per-activation timer. Its callback fires as a turn (so it
  * respects single-threaded execution) and it is cancelled when the activation
- * deactivates. A timer does not keep a grain alive by itself.
+ * deactivates. A timer does not keep a grain alive by itself unless registered
+ * with `keepAlive`. Periodic ticks are fixed-delay: the next tick is armed only
+ * once the previous one has finished, so ticks of one timer never overlap.
  */
 export interface GrainTimer {
   change(due: Duration, period?: Duration): void;
