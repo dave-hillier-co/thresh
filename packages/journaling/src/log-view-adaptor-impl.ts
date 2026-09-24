@@ -106,18 +106,41 @@ export class LogViewAdaptorImpl<TState, TEvent>
 
   private async runConfirmLoop(): Promise<void> {
     // Keep draining until nothing is left pending: a concurrent raise can add
-    // more events while this loop is mid-flight (between two `await`s), and
-    // those must be confirmed too before any joined caller's promise settles.
+    // more events to the end of `pending` while this loop is mid-flight
+    // (between two `await`s), and those must be confirmed too before any
+    // joined caller's promise settles.
+    //
+    // Mirrors Orleans (`LogViewAdaptor.cs`): an event is removed from `pending`
+    // only once it is actually persisted, one at a time, so a failed append
+    // leaves it (and everything queued after it) in place for a later
+    // `confirmSubmittedEntries` to re-read and retry -- never silently
+    // dropped. The one documented exception is `InconsistentStateError` (the
+    // substrate's version CAS): that is `tryAppend`'s conditional-conflict
+    // signal, which Orleans drops rather than retries on the moved base --
+    // see its doc comment above.
     while (this.pending.length > 0) {
-      const toConfirm = this.pending;
-      this.pending = [];
-      for (const event of toConfirm) {
+      // Removed up front, not after: `manager.append` calls this machine's own
+      // `apply` synchronously on success, which recomputes `tentative` by
+      // folding `pending` over `confirmed` -- it must no longer see this event
+      // there, or it would be applied twice (once via `confirmed`, once via
+      // the recompute).
+      const event = this.pending.shift()!;
+      try {
         await this.manager.append(this.name, { t: "event", e: event } satisfies Frame<
           TState,
           TEvent
         >);
+      } catch (error) {
+        if (!(error instanceof InconsistentStateError)) {
+          // Put it back at the front, ahead of anything concurrently raised,
+          // for a later `confirmSubmittedEntries` to re-read and retry.
+          this.pending.unshift(event);
+          throw error;
+        }
         this.unconfirmedCount -= 1;
+        throw error;
       }
+      this.unconfirmedCount -= 1;
     }
   }
 

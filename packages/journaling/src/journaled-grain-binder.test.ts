@@ -1,9 +1,52 @@
 import { describe, expect, it } from "vitest";
 import { GrainId } from "@thresh/core/grain-id";
+import type { GrainId as GrainIdType } from "@thresh/core/grain-id";
+import type { JournalEntry, JournalSegment, JournalStorage } from "@thresh/core/journal-storage";
 import { JournaledGrain } from "@thresh/core/journaled-grain";
 import { MemoryJournalStorage } from "@thresh/journaling/memory-journal-storage";
 import { JournalStorageRegistry } from "@thresh/journaling/journal-storage-registry";
 import { bindJournaledGrain } from "@thresh/journaling/journaled-grain-binder";
+
+/** Wraps a `JournalStorage`, throwing on the Nth `append` call (1-indexed) instead of delegating. */
+class FailingAppendStorage implements JournalStorage {
+  private calls = 0;
+
+  constructor(
+    private readonly inner: JournalStorage,
+    private readonly failOnCall: number,
+    private readonly error: () => Error,
+  ) {}
+
+  read(logName: string, grainId: GrainIdType, signal?: AbortSignal): Promise<JournalSegment> {
+    return this.inner.read(logName, grainId, signal);
+  }
+
+  append(
+    logName: string,
+    grainId: GrainIdType,
+    entries: readonly JournalEntry[],
+    expectedVersion: number | undefined,
+    signal?: AbortSignal,
+  ): Promise<number> {
+    this.calls += 1;
+    if (this.calls === this.failOnCall) throw this.error();
+    return this.inner.append(logName, grainId, entries, expectedVersion, signal);
+  }
+
+  replace(
+    logName: string,
+    grainId: GrainIdType,
+    entries: readonly JournalEntry[],
+    expectedVersion: number | undefined,
+    signal?: AbortSignal,
+  ): Promise<number> {
+    return this.inner.replace(logName, grainId, entries, expectedVersion, signal);
+  }
+
+  clear(logName: string, grainId: GrainIdType, signal?: AbortSignal): Promise<void> {
+    return this.inner.clear(logName, grainId, signal);
+  }
+}
 
 interface CountState {
   count: number;
@@ -150,5 +193,29 @@ describe("JournaledGrain log-consistency protocol", () => {
       { kind: "add", amount: 3 },
     ]);
     expect(grain["retrieveConfirmedEvents"](1, 2)).toEqual([{ kind: "add", amount: 2 }]);
+  });
+
+  it("keeps the un-appended remainder of a batch pending after a transient append failure (#95)", async () => {
+    const memory = new MemoryJournalStorage();
+    // Fail the second `append` call: the first raised event ("add 1") persists,
+    // the second ("add 10") hits a transient storage error.
+    const flaky = new FailingAppendStorage(memory, 2, () => new Error("transient storage blip"));
+    const grain = new CounterGrain();
+    await bindJournaledGrain(grain, id, new JournalStorageRegistry().add("default", flaky));
+
+    grain.add(1);
+    grain.add(10);
+    await expect(grain.confirm()).rejects.toThrow("transient storage blip");
+
+    // The first event persisted; the second must still be pending, not lost.
+    expect(grain.confirmed()).toEqual({ count: 1 });
+    expect(grain.confirmedVersion()).toBe(1);
+    expect(grain.tentative()).toEqual({ count: 11 });
+
+    // Retrying confirm (storage now healthy) must persist the surviving event.
+    await grain.confirm();
+    expect(grain.confirmed()).toEqual({ count: 11 });
+    expect(grain.confirmedVersion()).toBe(2);
+    expect(grain.tentative()).toEqual({ count: 11 });
   });
 });
