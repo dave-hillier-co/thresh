@@ -5,7 +5,11 @@ import {
 } from "@thresh/streams/kafka-partition-owner";
 
 /** Deferred acquire the test drives by hand, to land it exactly mid-flight. */
-function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void; reject: (e: unknown) => void } {
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (v: T) => void;
+  reject: (e: unknown) => void;
+} {
   let resolve!: (v: T) => void;
   let reject!: (e: unknown) => void;
   const promise = new Promise<T>((res, rej) => {

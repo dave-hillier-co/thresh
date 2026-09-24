@@ -121,7 +121,12 @@ export class KafkaPartitionOwner {
         this.onAcquireError(idx, err);
         if (this.stopped || !this.wanted.has(idx)) return;
         void this.sleep(this.retryBackoffMs(attempt)).then(() => {
-          if (this.stopped || !this.wanted.has(idx) || this.owned.has(idx) || this.acquiring.has(idx)) {
+          if (
+            this.stopped ||
+            !this.wanted.has(idx) ||
+            this.owned.has(idx) ||
+            this.acquiring.has(idx)
+          ) {
             return;
           }
           this.beginAcquire(idx, attempt + 1);
