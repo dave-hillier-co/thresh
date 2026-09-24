@@ -63,10 +63,25 @@ describe("activation migration mechanics", () => {
     expect(bag).toEqual({ count: 5 });
   });
 
-  it("rejects calls after dehydration as stale, so they re-resolve to the new host", async () => {
+  it("holds calls after dehydration and only rejects them as stale once the migration settles (GH #91)", async () => {
     const { activation } = makeActivation(5);
     await activation.dehydrate();
-    await expect(activation.invoke(bump(1))).rejects.toMatchObject({
+
+    // A call reaching a dehydrated (mid-migration) activation is HELD, not
+    // failed immediately — Orleans reroutes it once the move settles rather
+    // than surfacing it as an application error (see `ActivationData.invoke`).
+    const held = activation.invoke(bump(1));
+    let settled = false;
+    void held.catch(() => undefined).then(() => (settled = true));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    // The driving process (e.g. `ClusterNode.migrateActivationTo`) finalizes
+    // once the target has accepted the move; only THEN does the held call
+    // resolve, signalling the dispatcher to re-resolve to the new host.
+    activation.finalizeDeactivation();
+    await expect(held).rejects.toMatchObject({
       name: "RejectionError",
       kind: "noActivation",
     });

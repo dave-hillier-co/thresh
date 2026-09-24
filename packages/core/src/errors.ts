@@ -123,6 +123,22 @@ export class RejectionError extends ThreshRuntimeError {
   }
 }
 
+/**
+ * Whether `err` is a `RejectionError` whose kind means "the target moved,
+ * disappeared, or is momentarily out of view" — a stale routing artifact a
+ * caller should re-resolve and retry against, rather than a genuine
+ * application-level refusal. Shared by every dispatcher (`LocalDispatcher`,
+ * `DistributedDispatcher`) so a held call that a deactivating/migrating
+ * activation reroutes (see `ActivationData.invoke`'s "noActivation" throw)
+ * is retried the same way everywhere it can surface.
+ */
+export function isStaleActivationRejection(err: unknown): boolean {
+  return (
+    err instanceof RejectionError &&
+    (err.kind === "noActivation" || err.kind === "unknownTarget" || err.kind === "staleView")
+  );
+}
+
 /** A grain call that did not receive a response within its deadline. */
 export class GrainCallTimeoutError extends ThreshRuntimeError {
   constructor(message: string) {

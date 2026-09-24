@@ -1,3 +1,4 @@
+import { isStaleActivationRejection } from "@thresh/core/errors";
 import { type Logger, noopLogger } from "@thresh/core/logger";
 import type { InvocationRequest } from "@thresh/core/request";
 import type { Catalog } from "@thresh/runtime/catalog";
@@ -35,6 +36,17 @@ export class LocalDispatcher implements Dispatcher {
       return this.catalog.pickOrScaleWorker(withDeadline.target).invoke(withDeadline, opts);
     }
     const activation = await this.catalog.getOrCreate(withDeadline.target);
-    return activation.invoke(withDeadline, opts);
+    try {
+      return await activation.invoke(withDeadline, opts);
+    } catch (err) {
+      // The activation we grabbed was deactivating or migrating and has
+      // since finished settling (see `ActivationData.invoke`'s hold-and-
+      // reroute branch): re-resolve rather than surfacing that reroute
+      // signal as an application error — the single silo here has nowhere
+      // else to reroute to but a fresh activation.
+      if (!isStaleActivationRejection(err)) throw err;
+      const retried = await this.catalog.getOrCreate(withDeadline.target);
+      return retried.invoke(withDeadline, opts);
+    }
   }
 }

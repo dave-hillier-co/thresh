@@ -166,6 +166,25 @@ export class ActivationData implements GrainContext {
     return this.didFailActivation;
   }
 
+  /**
+   * True only for the `deactivateRequestedDuringActivation` case: this
+   * activation asked to deactivate from within its own `onActivate` and so
+   * never went valid (Orleans: the triggering — and any queued — call is
+   * rejected with "Forwarding failed" rather than held, since there is no
+   * "settled" state to reroute it to). Distinct from an ordinary deactivation
+   * or migration (see `invoke`'s "deactivating"/`dehydrated` handling below),
+   * which HOLDS a call and reroutes it once the process finishes.
+   */
+  private neverActivated = false;
+
+  /**
+   * Resolved by `finalizeDeactivation` for every waiter queued while this
+   * activation was mid-deactivation or mid-migration (`dehydrated` but not
+   * yet finalized) — see `invoke`'s hold-and-reroute branch and
+   * `awaitFinalized`.
+   */
+  private finalizationWaiters: Array<() => void> = [];
+
   /** Runs once before `onActivate` (e.g. read persistent state); set by the catalog. */
   preActivate: (() => Promise<void>) | undefined;
 
@@ -295,7 +314,12 @@ export class ActivationData implements GrainContext {
               // activation turn, so scheduling another turn here would
               // deadlock) so the next queued turn (the call that triggered
               // this activation) observes "invalid" and is rejected rather
-              // than served (Orleans parity: "Forwarding failed").
+              // than served (Orleans parity: "Forwarding failed"). Set
+              // BEFORE flipping to "deactivating" so a call whose turn runs
+              // concurrently (a reentrant grain) sees it immediately too and
+              // rejects outright instead of holding for a reroute that will
+              // never come.
+              this.neverActivated = true;
               this.state = "deactivating";
               for (const timer of this.timers) timer.dispose();
               this.timers.clear();
@@ -326,6 +350,20 @@ export class ActivationData implements GrainContext {
 
   invoke(req: InvocationRequest, opts?: InvokeCallOptions): Promise<unknown> {
     this.touch();
+    // Deactivating (idle collection, `deactivateOnIdle`, shutdown), or
+    // migrating (`dehydrated` — the directory hand-off to the target is in
+    // flight but this activation hasn't finished tearing down yet): checked
+    // BEFORE scheduling a turn, deliberately — not from inside one. Holding
+    // this call open as a running turn would occupy the (non-reentrant)
+    // scheduler for as long as the hold lasts, and the deactivation/migration
+    // this call is waiting on itself needs to SCHEDULE a turn (the
+    // `onDeactivate` hook) to ever complete, which would then never be
+    // admitted: a deadlock. Checking here instead means a held call never
+    // touches the scheduler at all, so it can never block the very turn it's
+    // waiting on. See `awaitFinalized`/`rerouteOrReject`.
+    if (this.state === "invalid" || this.state === "deactivating" || this.dehydrated) {
+      return this.rerouteOrReject();
+    }
     // Composed once per call: the caller's own `opts.signal` plus whatever
     // `AbortSignal` a `req.deadline` (ambient or freshly set — see
     // `InvokeCallOptions.deadlineMs`) derives, on THIS activation's own clock
@@ -343,17 +381,23 @@ export class ActivationData implements GrainContext {
         args: req.args,
         ...(signal !== undefined ? { signal } : {}),
         run: () => {
-          if (this.state === "invalid" || this.state === "deactivating") {
-            // A failed activation surfaces the original activation error to the
-            // caller; the ordinary deactivating/idle-invalid cases have none, so
-            // they fall back to the generic unavailable error.
+          // Re-checked here (rather than relying solely on the pre-schedule
+          // check above): a call already QUEUED behind the very turn that
+          // fails activation (`beginActivate`'s `onActivate` turn, or its
+          // `deactivateRequestedDuringActivation` turn) saw "activating" at
+          // schedule time, before either flag was set — this is the only way
+          // `state` can still reach "invalid" here, since an ordinary
+          // deactivation/migration is always caught pre-schedule instead (see
+          // above) and never leaves a turn queued behind it in that state.
+          if (this.state === "invalid") {
             if (this.didFailActivation) throw this.activationFailure;
-            throw new GrainCallError(`activation unavailable: ${this.id.toString()}`);
-          }
-          // Dehydrated for migration: the directory now points at the new host, so
-          // reject as stale and let the caller re-resolve there.
-          if (this.dehydrated) {
-            throw new RejectionError(`activation migrated: ${this.id.toString()}`, "noActivation");
+            if (this.neverActivated) {
+              throw new GrainCallError(`activation unavailable: ${this.id.toString()}`);
+            }
+            throw new RejectionError(
+              `activation unavailable: ${this.id.toString()}`,
+              "noActivation",
+            );
           }
           // A fresh, mutable copy of the incoming headers so `requestContext.set`
           // during the turn does not mutate the caller's bag but does flow to
@@ -620,6 +664,45 @@ export class ActivationData implements GrainContext {
   /** Complete a deactivation whose hook already ran via `runDeactivateHook`. */
   finalizeDeactivation(): void {
     this.state = "invalid";
+    const waiters = this.finalizationWaiters;
+    this.finalizationWaiters = [];
+    for (const resolve of waiters) resolve();
+  }
+
+  /**
+   * Resolves once this activation is fully torn down (`finalizeDeactivation`
+   * has run) — immediately if that has already happened. Used by `invoke`'s
+   * hold-and-reroute branch to block a call reaching a deactivating/migrating
+   * activation until there is something settled to reroute it against.
+   */
+  private awaitFinalized(): Promise<void> {
+    if (this.state === "invalid") return Promise.resolve();
+    return new Promise((resolve) => this.finalizationWaiters.push(resolve));
+  }
+
+  /**
+   * `invoke`'s handling for a call that reached this activation while it was
+   * deactivating, migrating (`dehydrated`), or already fully torn down after
+   * either. A failed activation, or one that never went valid
+   * (`neverActivated`), is rejected outright — there is nothing to hold for
+   * or reroute to. Otherwise this HOLDS (Orleans
+   * `ProcessRequestsToInvalidActivation`/`RerouteAllQueuedMessages`,
+   * forwarding to `ForwardingAddress` on migration) until
+   * `finalizeDeactivation` runs, then signals the dispatcher to re-resolve —
+   * a fresh directory lookup/placement by then reflects either the migrated
+   * activation's new host or nothing at all, both of which
+   * `LocalDispatcher`/`DistributedDispatcher` retry against (see
+   * `isStaleActivationRejection`) — rather than surfacing this as an
+   * application error.
+   */
+  private rerouteOrReject(): Promise<never> {
+    if (this.didFailActivation) return Promise.reject(this.activationFailure);
+    if (this.neverActivated) {
+      return Promise.reject(new GrainCallError(`activation unavailable: ${this.id.toString()}`));
+    }
+    return this.awaitFinalized().then((): never => {
+      throw new RejectionError(`activation unavailable: ${this.id.toString()}`, "noActivation");
+    });
   }
 
   requestDeactivation(): void {
