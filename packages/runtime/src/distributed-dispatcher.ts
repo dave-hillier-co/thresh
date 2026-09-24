@@ -451,6 +451,21 @@ export class DistributedDispatcher implements Dispatcher {
   }
 }
 
+/**
+ * Whether `err` reflects a stale cache/directory entry that is safe to
+ * invalidate-and-resend: the callee never started the turn, so resending
+ * cannot duplicate work (Orleans never resends at all -- `InsideRuntimeClient`
+ * just invalidates and surfaces the rejection -- but this codebase's cache
+ * sits in front of the dispatcher rather than the transport, so a resend here
+ * plays the role of Orleans' fresh `AddressAndSendMessage` lookup).
+ *
+ * Deliberately excludes `"siloUnavailable"` (issue #88): that kind means the
+ * pooled CONNECTION died, not that the address was wrong, and the callee may
+ * already be mid-turn when it fires. Resending it would be the exact bug the
+ * issue reports -- a call already executing gets re-sent and runs twice. Do
+ * not add it here without a test asserting this set by name (see
+ * `docs/design-notes-parity-gaps.md`).
+ */
 function isStaleRejection(err: unknown): boolean {
   return (
     err instanceof RejectionError &&

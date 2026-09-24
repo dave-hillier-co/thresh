@@ -110,7 +110,21 @@ export type RejectionKind =
   | "deserialization"
   | "noActivation"
   | "noCandidates"
-  | "staleView";
+  | "staleView"
+  /**
+   * A pooled connection to the target peer was lost mid-call (Orleans
+   * `SiloUnavailableException`, raised locally only — it never crosses the
+   * wire). Distinct from `unknownTarget`, which a perfectly live peer can
+   * also send back (`routeToClient` with no gateway, a dangling directory
+   * pointer): those are safe to treat as a stale cache/directory entry and
+   * resend, because the callee never started the turn. A dropped connection
+   * gives no such guarantee — the callee may already be mid-turn — so this
+   * kind is deliberately NOT stale (`isStaleRejection` in
+   * `distributed-dispatcher.ts` must not admit it): it surfaces to the
+   * caller instead of being silently resent, which is what let a lost
+   * connection re-run an already-executing call (issue #88).
+   */
+  | "siloUnavailable";
 
 /** A runtime-level refusal the caller can inspect to decide whether to retry. */
 export class RejectionError extends ThreshRuntimeError {

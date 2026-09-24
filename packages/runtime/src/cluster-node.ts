@@ -626,10 +626,14 @@ export class ClusterNode {
       (m) => this.onMessage(m),
       // A pooled connection dying underneath a pending call would otherwise
       // hang it until the call timeout; fail just that peer's calls fast.
+      // "siloUnavailable", not "unknownTarget": the callee may already be
+      // mid-turn when the connection drops, so this must NOT be treated as a
+      // stale, safe-to-resend rejection (Orleans `CallbackData.OnTargetSiloFail`
+      // -> `SiloUnavailableException`; see the doc on `RejectionKind`).
       (peer) =>
         this.correlation.rejectFor(
           peer.toString(),
-          new RejectionError(`connection to ${peer.toString()} was lost`, "unknownTarget"),
+          new RejectionError(`connection to ${peer.toString()} was lost`, "siloUnavailable"),
         ),
     );
     this.factory = new GrainFactory(
