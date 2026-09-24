@@ -72,13 +72,21 @@ export class GrainTimerImpl implements GrainTimer {
 
   private fire(): void {
     if (this.disposed) return;
-    // Reschedule first (fixed-rate) so periodic ticks don't drift with turn time.
-    if (this.periodMs !== undefined) this.schedule(this.periodMs);
     // Mirrors Orleans' `TimerQueueTimer.TimerTick`, which catches and logs a
     // per-tick exception (scheduler admission rejection or a callback throw)
     // rather than letting it propagate — an unhandled rejection here would
     // otherwise crash the process (Node's default) and, for a periodic timer,
     // there'd be nothing left to log it since `fire` isn't awaited by anyone.
-    this.runTurn(this.callback).catch((error) => this.onError(error));
+    //
+    // Fixed-delay (Orleans `GrainTimer.OnTickCompleted`, ~GrainTimer.cs:138-167):
+    // the next period is armed only once THIS tick's turn has settled, never
+    // before. Rearming up front (fixed-rate) let a slow callback's ticks queue
+    // without bound — risking `MaxEnqueuedRequestsHardLimit` — or, for an
+    // interleaving timer, run several ticks of the same timer concurrently.
+    this.runTurn(this.callback)
+      .catch((error) => this.onError(error))
+      .finally(() => {
+        if (!this.disposed && this.periodMs !== undefined) this.schedule(this.periodMs);
+      });
   }
 }

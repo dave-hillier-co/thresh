@@ -144,6 +144,39 @@ describe("GrainTimerImpl", () => {
     timer.dispose();
   });
 
+  it("arms the next tick only once the previous callback settles (fixed-delay), never overlapping or queuing", async () => {
+    // Orleans arms the next tick only after the callback completes
+    // (`GrainTimer.OnTickCompleted`), so ticks of one timer never overlap or
+    // queue even when a callback outlasts the period.
+    const time = new FakeTimeProvider();
+    let armCount = 0;
+    const originalSetTimer = time.setTimer.bind(time);
+    time.setTimer = (handler, delayMs) => {
+      armCount++;
+      return originalSetTimer(handler, delayMs);
+    };
+    let resolveCallback: (() => void) | undefined;
+    const callback = () =>
+      new Promise<void>((resolve) => {
+        resolveCallback = resolve;
+      });
+    const timer = new GrainTimerImpl(time, (cb) => cb(), callback, { ms: 5 }, { ms: 5 });
+
+    expect(armCount).toBe(1); // the initial due-time schedule from the constructor
+
+    time.advance(5);
+    await flush();
+    // The callback is still pending — the next tick must not have been armed yet.
+    expect(armCount).toBe(1);
+
+    resolveCallback?.();
+    await flush();
+    // Only now that the callback settled is the next period armed.
+    expect(armCount).toBe(2);
+
+    timer.dispose();
+  });
+
   it("leaves prior scheduling untouched when change() rejects an invalid value", () => {
     const time = new FakeTimeProvider();
     let fired = false;
