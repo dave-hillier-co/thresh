@@ -1,6 +1,7 @@
 import { keyToString, type GrainKey } from "@thresh/core/grain-key";
 import type { GrainId } from "@thresh/core/grain-id";
 import type { GrainType } from "@thresh/core/grain-type";
+import { raceSignal } from "@thresh/core/abort";
 import { stableHash32 } from "@thresh/core/hash";
 import type { TimeProvider } from "@thresh/core/time-provider";
 import type {
@@ -189,7 +190,7 @@ export class PullingStreamProviderCore implements ActivationBoundStreamProvider 
       if (this.agents.has(i)) continue;
       const agent = new QueuePullingAgent(
         this.queues[i]!,
-        (streamKey, event, token) => this.fanOut(streamKey, event, token),
+        (streamKey, event, token, signal) => this.fanOut(streamKey, event, token, signal),
         { pollIntervalMs: this.pollIntervalMs },
       );
       this.agents.set(i, agent);
@@ -227,11 +228,16 @@ export class PullingStreamProviderCore implements ActivationBoundStreamProvider 
    * independently (issues #97, #98, #111) — so a failing or slow subscriber
    * never delays or drops the event for the rest.
    */
-  private async fanOut(streamKey: string, event: unknown, token: number): Promise<void> {
+  private async fanOut(
+    streamKey: string,
+    event: unknown,
+    token: number,
+    signal: AbortSignal,
+  ): Promise<void> {
     // Explicit subscribers (from the durable registry) plus implicit ones (grain
     // types bound to the stream's namespace), deduplicated so a grain that is both
     // gets the event once.
-    const explicit = await this.registry.subscribers(streamKey);
+    const explicit = await raceSignal(this.registry.subscribers(streamKey), signal);
     const implicit = implicitSubscriberIds(streamKey, this.implicitTypesFor);
     const seen = new Set<string>();
     const subscribers: GrainId[] = [];
@@ -241,7 +247,7 @@ export class PullingStreamProviderCore implements ActivationBoundStreamProvider 
       seen.add(id);
       subscribers.push(subscriber);
     }
-    await this.fanOutDelivery.deliverToAll(subscribers, streamKey, event, token);
+    await this.fanOutDelivery.deliverToAll(subscribers, streamKey, event, token, signal);
   }
 
   private streamFor<T>(

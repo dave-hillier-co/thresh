@@ -189,6 +189,55 @@ describe("FanOutDelivery", () => {
     expect(calls).toBe(2);
   });
 
+  it("rethrows the earliest resume token when several subscribers ask to rewind, so no subscriber's checkpoint is skipped", async () => {
+    const time = new FakeTimeProvider();
+    const fanOut = new FanOutDelivery(
+      async (subscriber) => {
+        if (subscriber.equals(A)) throw new RecoverableStreamDeliveryError("resync", 5);
+        if (subscriber.equals(C)) throw new RecoverableStreamDeliveryError("resync", 2);
+      },
+      { time },
+    );
+
+    const error = await fanOut.deliverToAll([A, B, C], "s", "e", 6).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(RecoverableStreamDeliveryError);
+    expect((error as RecoverableStreamDeliveryError).resumeToken).toBe(2);
+  });
+
+  it("stops retrying and rejects without reporting a skip once the signal aborts", async () => {
+    const time = new FakeTimeProvider();
+    const failures: unknown[] = [];
+    let calls = 0;
+    const fanOut = new FanOutDelivery(
+      async () => {
+        calls++;
+        throw new Error("always fails");
+      },
+      {
+        time,
+        retryBackoffMs: () => 100,
+        failureHandler: { onDeliveryFailure: (...args) => void failures.push(args) },
+      },
+    );
+    const controller = new AbortController();
+
+    const done = fanOut.deliverToAll([A], "s", "e", 1, controller.signal);
+    const outcome = done.then(
+      () => "resolved",
+      () => "rejected",
+    );
+    await tick();
+    controller.abort();
+    await tick(10);
+
+    expect(await outcome).toBe("rejected");
+    const callsAtAbort = calls;
+    time.advance(10_000);
+    await tick(10);
+    expect(calls).toBe(callsAtAbort);
+    expect(failures).toEqual([]);
+  });
+
   it("never retries a RecoverableStreamDeliveryError and rethrows it once every subscriber has settled", async () => {
     const time = new FakeTimeProvider();
     const delivered: string[] = [];

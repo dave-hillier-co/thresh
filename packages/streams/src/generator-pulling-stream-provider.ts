@@ -160,7 +160,7 @@ export class GeneratorPullingStreamProvider
       if (this.agents.has(i)) continue;
       const agent = new QueuePullingAgent(
         this.queues[i]!,
-        (streamKey, event, token) => this.fanOut(streamKey, event, token),
+        (streamKey, event, token, signal) => this.fanOut(streamKey, event, token, signal),
         { pollIntervalMs: this.pollIntervalMs },
       );
       this.agents.set(i, agent);
@@ -179,7 +179,12 @@ export class GeneratorPullingStreamProvider
     return new ReadOnlyGeneratedStream<T>(id);
   }
 
-  private async fanOut(streamKey: string, event: unknown, token: number): Promise<void> {
+  private async fanOut(
+    streamKey: string,
+    event: unknown,
+    token: number,
+    signal: AbortSignal,
+  ): Promise<void> {
     const implicit = implicitSubscriberIds(streamKey, this.implicitTypesFor);
     const seen = new Set<string>();
     const subscribers = [];
@@ -189,7 +194,7 @@ export class GeneratorPullingStreamProvider
       seen.add(id);
       subscribers.push(subscriber);
     }
-    await this.fanOutDelivery.deliverToAll(subscribers, streamKey, event, token);
+    await this.fanOutDelivery.deliverToAll(subscribers, streamKey, event, token, signal);
   }
 }
 

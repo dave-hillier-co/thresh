@@ -5,8 +5,17 @@ import type { HashRange } from "@thresh/streams/queue-ownership";
 import type { StreamDeliver } from "@thresh/streams/stream-deliver";
 import { RecoverableStreamDeliveryError } from "@thresh/streams/stream-recovery";
 
-/** Delivers one pulled event to the stream's subscribers; the agent supplies it. */
-export type DeliverEvent = (streamKey: string, event: unknown, token: number) => Promise<void>;
+/**
+ * Delivers one pulled event to the stream's subscribers; the agent supplies it.
+ * `signal` aborts when the agent stops, so a retrying or hung delivery is
+ * abandoned instead of holding `stop()` (and silo shutdown) hostage.
+ */
+export type DeliverEvent = (
+  streamKey: string,
+  event: unknown,
+  token: number,
+  signal: AbortSignal,
+) => Promise<void>;
 
 /**
  * The minimal shape a physical queue must offer a pulling agent: a durably
@@ -103,6 +112,7 @@ export class QueuePullingAgent {
   private pumping = false;
   private running = false;
   private inflight: Promise<void> | undefined;
+  private shutdown = new AbortController();
 
   constructor(
     private readonly queue: PullableQueue,
@@ -118,12 +128,19 @@ export class QueuePullingAgent {
   start(): void {
     if (this.running) return;
     this.running = true;
+    if (this.shutdown.signal.aborted) this.shutdown = new AbortController();
     this.schedule(0);
   }
 
-  /** Resolves once any in-flight pump has settled, so the caller can safely close the queue's backing client. */
+  /**
+   * Resolves once any in-flight pump has settled, so the caller can safely
+   * close the queue's backing client. Aborts the delivery signal first, so a
+   * subscriber still being retried, or a hung `onNext`, is abandoned (cursor
+   * left uncommitted) rather than waited out — Orleans' `IsShutdown` retry filter.
+   */
   async stop(): Promise<void> {
     this.running = false;
+    this.shutdown.abort();
     if (this.timer !== undefined) clearTimeout(this.timer);
     this.timer = undefined;
     await this.inflight;
@@ -187,9 +204,11 @@ export class QueuePullingAgent {
    */
   private async tryDeliver(streamKey: string, event: unknown, token: number): Promise<boolean> {
     try {
-      await this.deliver(streamKey, event, token);
+      await this.deliver(streamKey, event, token, this.shutdown.signal);
       return true;
     } catch (err) {
+      // Stopped mid-delivery: leave the cursor for the next owner.
+      if (!this.running) return false;
       if (err instanceof RecoverableStreamDeliveryError) {
         // The consumer is deactivating to resume from its own persisted
         // checkpoint (see the error's doc) rather than have this event
