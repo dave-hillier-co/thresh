@@ -191,6 +191,71 @@ Not filed — test infrastructure and documentation rather than bugs:
 - [ ] The 16 documentation corrections tabled in the review — docs contradicting the code in
       `deviations.md`, `orleans-to-thresh-port.md`, `EPICS.md` and `README.md`.
 
+### Orleans comparison review (2026-09-23)
+
+Fixed on `integration/2026-09-24-review-fixes`, each test-first and adversarially reviewed; the
+full unit, parity and Postgres suites, typecheck and lint pass, and BeneDB typechecks and passes
+against the integrated tree.
+
+- [x] #88 connection loss is its own non-retriable `siloUnavailable` kind; only pre-execution
+      rejections are resent.
+- [x] #89 gateways drop disconnected clients after `clientDropTimeoutMs` and reject their pending
+      calls; the client directory republishes on membership change and a refresh timer. Deliberate
+      difference: calls to a disconnected-but-not-yet-dropped client are rejected at once rather than
+      buffered.
+- [x] #90 every request carries a relative time-to-live on the wire (re-based on the receiver's
+      clock) and is dropped at turn start once expired; `callTimeout` is now configurable on
+      `SiloConfig` / `TestClusterOptions`.
+- [x] #91 calls reaching a deactivating or migrating activation are held and rerouted.
+- [x] #92, #105 grain-timer ticks start with a clean ambient context and are fixed-delay.
+- [x] #93 a failed migration still deactivates. #106 idle collection deletes only its own entry.
+- [x] #94, #95, #96, #117 journals replay on rehydrate, `confirmEvents` keeps unappended events,
+      the snapshot records the version, one state-machine manager per grain.
+- [x] #98, #111 pulling-stream delivery retries until `maxEventDeliveryTimeMs` (1 min) and each
+      delivery is bounded by the response timeout.
+- [x] #100, #113 Kafka keeps an interrupted batch, rewind re-seeks, and partition acquire re-checks
+      ownership and retries.
+- [x] #101 `setTimer` chains delays beyond 2^31−1 ms.
+- [x] #102, #103, #114, #115 reminders replace on etag change and stay on the `startAt + n·period`
+      grid; durable jobs back off from completion and run a periodic shard check (10 min).
+- [x] #104 turn admission mirrors `MayInvokeRequest` (blocking request, not "anything running").
+- [x] #107 a stuck activation is deactivated and its queued calls rerouted. `MaxRequestProcessingTime`
+      now defaults to Orleans' 2 hours (was 30s, below the one-minute call timeout).
+- [x] #109 a non-empty etag against a missing record is a conflict in all three providers; `read()`
+      of a missing record resets the value. #119 typed arrays and `-0` round-trip; unrepresentable
+      values throw `UnsupportedValueError`.
+- [x] #116 a re-invoking call filter re-runs the inner chain. #120 all five minor items.
+- [ ] #74 **partly fixed** — a periodic load publisher now runs in production. `ResourceOptimizedPlacement`
+      still scores by activation count only; it needs a CPU/memory statistics source.
+- [ ] #97 **partly fixed** — a failing subscriber no longer takes the event from the others, but
+      without a cursor per consumer it still holds back later events on that queue for up to
+      `maxEventDeliveryTimeMs`.
+- [ ] Needs a design decision, not attempted: #85 (clustered-silo config guards), #87 (is interleaving
+      a contract?), #99 (Postgres stream visibility — serialise appends or a snapshot watermark),
+      #112 (`startToken` / multiple subscriptions: implement or record as a deviation), #118
+      (call-chain reentrancy default).
+
+Follow-ups surfaced while fixing them:
+
+- [ ] `ClientNode.invoke` re-sends to another gateway after a reply timeout — the client-side twin of #88.
+- [ ] A silo declared dead by membership does not fail its pending calls unless the connection closes
+      (Orleans `CallbackData.OnTargetSiloFail`); `InProcessTransport` never reports a lost connection.
+- [ ] `LocationCache` is unbounded with no TTL/LRU (side remark in #110).
+- [ ] `DistributedDispatcher` resends on any stale-kind rejection, so a call whose own body threw a
+      nested `noActivation` could run twice; `LocalDispatcher` was narrowed to `isRerouteRejection`.
+- [ ] A remote caller whose route came from a fresh directory lookup (not the cache) is not resent
+      after a stuck or migrating activation rejects it.
+- [ ] A held call (#91) is not cancelled by its caller's signal or deadline, only by
+      `DeactivationTimeout`.
+- [ ] A failed migration leaves the old directory entry in place (Orleans unregisters); the next call
+      repairs it.
+- [ ] `stopBudgetMs` covers grace plus `deactivateAll` only; `onBeforeDeactivate` and `onStop` run on top.
+- [ ] Local calls still pass unrepresentable values (RegExp, sparse arrays) that a remote call rejects.
+- [ ] `ClusterNode.deliverStreamEvent` and the memory provider's implicit fan-out have no delivery
+      deadline of their own.
+- [ ] `shardActivationBufferMs` is resolved but unused (Thresh shards have no start time distinct from
+      their jobs' due times).
+
 ## Beyond parity
 
 - [ ] [#38](https://github.com/dave-hillier-co/thresh/issues/38) Browser state
