@@ -37,6 +37,12 @@ const DEFAULT_MINIMUM_PERIOD_MS = 60_000;
 interface Scheduled {
   handle: TimerHandle;
   entry: ReminderEntry;
+  /**
+   * The local sequence number at which this schedule was made (Orleans
+   * `LocalReminderData.LocalSequenceNumber`): a reconcile whose table read
+   * began before it must not replace or cancel it.
+   */
+  sequence: number;
 }
 
 /**
@@ -54,6 +60,8 @@ export class LocalReminderService implements ReminderRegistry {
   private refreshHandle: TimerHandle | undefined;
   private readonly logger: Logger;
   private readonly minimumPeriodMs: number;
+  /** Orleans `localTableSequence`: bumped at each reconcile read and each local (re)schedule. */
+  private localSequence = 0;
 
   constructor(
     private readonly table: ReminderTable,
@@ -85,7 +93,10 @@ export class LocalReminderService implements ReminderRegistry {
     }
     const startAt = new Date(this.time.now() + dueMs);
     const etag = await this.table.upsert({ grainId, name, startAt, period });
-    if (this.owns(grainId)) this.scheduleEntry({ grainId, name, startAt, period, etag });
+    // A fresh local registration keeps its first tick at `startAt` even if the
+    // table write took long enough that `startAt` is now a few ms past (e.g. a
+    // zero due time): no tick was missed, so the grid skip doesn't apply.
+    if (this.owns(grainId)) this.scheduleEntry({ grainId, name, startAt, period, etag }, startAt);
   }
 
   async unregister(grainId: GrainId, name: string): Promise<void> {
@@ -132,18 +143,26 @@ export class LocalReminderService implements ReminderRegistry {
    * table's etag differs from the one it has.
    */
   private async reconcile(): Promise<void> {
+    // Orleans' cachedSequence: anything scheduled locally after this point is
+    // newer than what the read below can return, so the read must not
+    // replace or cancel it.
+    const readSequence = ++this.localSequence;
     const owned = new Map<string, ReminderEntry>();
     for (const [begin, end] of this.ranges) {
       for (const entry of await this.table.readRange(begin, end)) {
         owned.set(this.key(entry.grainId, entry.name), entry);
       }
     }
-    for (const key of [...this.scheduled.keys()]) {
-      if (!owned.has(key)) this.cancel(key);
+    for (const [key, current] of [...this.scheduled]) {
+      if (!owned.has(key) && current.sequence < readSequence) this.cancel(key);
     }
     for (const [key, entry] of owned) {
       const current = this.scheduled.get(key);
-      if (current === undefined || current.entry.etag !== entry.etag) this.scheduleEntry(entry);
+      if (current === undefined) {
+        this.scheduleEntry(entry);
+      } else if (current.entry.etag !== entry.etag && current.sequence < readSequence) {
+        this.scheduleEntry(entry);
+      }
     }
   }
 
@@ -177,26 +196,34 @@ export class LocalReminderService implements ReminderRegistry {
     const periodMs = durationToMs(entry.period);
     if (periodMs <= 0) return entry.startAt; // one-shot: never reconciled/rescheduled after firing
     const startMs = entry.startAt.getTime();
-    // Without a recorded fire, the only reference point for "how many ticks
-    // were missed" is now — same as Orleans computing CalculateInitialDueTime
-    // against UtcNow at schedule time.
-    const reference =
-      entry.lastFiredAt === undefined ? this.time.now() : entry.lastFiredAt.getTime();
-    if (reference < startMs) return entry.startAt; // first tick hasn't happened yet
-    const periodsElapsed = Math.floor((reference - startMs) / periodMs) + 1;
-    return new Date(startMs + periodsElapsed * periodMs);
+    // Like CalculateInitialDueTime, measure from *now*: the first grid
+    // boundary at or after now (a boundary exactly at now is due now). A
+    // recorded tick only ever pushes that later — never to a boundary that is
+    // already past — so a new owner neither re-fires the tick the old owner
+    // just delivered nor fires a catch-up tick for a long-past lastFiredAt.
+    let periods = Math.max(0, Math.ceil((this.time.now() - startMs) / periodMs));
+    if (entry.lastFiredAt !== undefined) {
+      const firedPeriods = Math.floor((entry.lastFiredAt.getTime() - startMs) / periodMs) + 1;
+      periods = Math.max(periods, firedPeriods);
+    }
+    return new Date(startMs + periods * periodMs);
   }
 
-  private scheduleEntry(entry: ReminderEntry): void {
+  private scheduleEntry(entry: ReminderEntry, firstDueAt: Date = this.nextDueAt(entry)): void {
     const key = this.key(entry.grainId, entry.name);
     this.cancel(key);
-    const dueMs = Math.max(0, this.nextDueAt(entry).getTime() - this.time.now());
-    this.scheduled.set(key, { entry, handle: this.time.setTimer(() => this.fire(entry), dueMs) });
+    const dueMs = Math.max(0, firstDueAt.getTime() - this.time.now());
+    this.scheduled.set(key, {
+      entry,
+      handle: this.time.setTimer(() => this.fire(entry), dueMs),
+      sequence: ++this.localSequence,
+    });
   }
 
   private fire(entry: ReminderEntry): void {
     const key = this.key(entry.grainId, entry.name);
-    if (!this.scheduled.has(key)) return;
+    const current = this.scheduled.get(key);
+    if (current === undefined) return;
     const periodMs = durationToMs(entry.period);
     const firedAt = new Date(this.time.now());
     if (periodMs > 0) {
@@ -210,6 +237,7 @@ export class LocalReminderService implements ReminderRegistry {
       this.scheduled.set(key, {
         entry: tickedEntry,
         handle: this.time.setTimer(() => this.fire(tickedEntry), nextDueMs),
+        sequence: current.sequence, // same registration, just its next tick
       });
       void this.table
         .recordFired(entry.grainId, entry.name, entry.etag, firedAt)
