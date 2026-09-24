@@ -168,6 +168,33 @@ class WarehouseGrain extends Grain implements IWarehouse {
   }
 }
 
+interface ILedger extends GrainKey<string> {
+  add(n: number): Promise<[number, number]>;
+  scheduleMigration(target: SiloAddress): Promise<void>;
+}
+const ILedger = defineGrainInterface<ILedger>("ILedger.migration");
+
+@grain()
+class LedgerGrain extends JournaledGrain<number, number> implements ILedger {
+  initialState(): number {
+    return 0;
+  }
+
+  transitionState(state: number, event: number): number {
+    return state + event;
+  }
+
+  async add(n: number): Promise<[number, number]> {
+    this.raiseEvent(n);
+    await this.confirmEvents();
+    return [this.state, this.version];
+  }
+
+  async scheduleMigration(target: SiloAddress): Promise<void> {
+    this.runtime.migrateOnIdle(target);
+  }
+}
+
 describe("durable-state migration (issue #94)", () => {
   const local0 = new SiloAddress("silo-m0", "uid-m0", "silo-m0:11111");
   const local1 = new SiloAddress("silo-m1", "uid-m1", "silo-m1:11112");
@@ -191,6 +218,7 @@ describe("durable-state migration (issue #94)", () => {
       .useInProcessTransport(network)
       .useMemoryJournaling(storage)
       .registerGrain(WarehouseGrain, { interfaces: [IWarehouse] })
+      .registerGrain(LedgerGrain, { interfaces: [ILedger] })
       .build();
   }
 
@@ -227,6 +255,51 @@ describe("durable-state migration (issue #94)", () => {
       // And further writes must succeed (no stale version/log-consistency error).
       await node1.getGrain(IWarehouse, "wh-1").stock("pear", 3);
       expect(await node1.getGrain(IWarehouse, "wh-1").qty("pear")).toBe(3);
+    } finally {
+      await node0.stop();
+      await node1.stop();
+    }
+  });
+});
+
+describe("JournaledGrain migration (issue #94)", () => {
+  const local0 = new SiloAddress("silo-l0", "uid-l0", "silo-l0:11111");
+  const local1 = new SiloAddress("silo-l1", "uid-l1", "silo-l1:11112");
+  const ledgerId = new GrainId("Ledger", "l-1");
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+
+  it("replays the confirmed events on the target silo", async () => {
+    const network = new InProcessNetwork();
+    const storage = new MemoryJournalStorage();
+    const time = new FakeTimeProvider();
+    const build = (local: SiloAddress) =>
+      createSilo({
+        clusterId: "c-ledger-migration",
+        local,
+        time,
+        collectionAgeSeconds: 30,
+        collectionIntervalSeconds: 10,
+        random: () => 0,
+      })
+        .useStaticMembership([local0, local1])
+        .useInProcessTransport(network)
+        .useMemoryJournaling(storage)
+        .registerGrain(LedgerGrain, { interfaces: [ILedger] })
+        .build();
+    const node0 = build(local0);
+    const node1 = build(local1);
+    await node0.start();
+    await node1.start();
+    try {
+      await node0.getGrain(ILedger, "l-1").add(5);
+      expect(await node0.getGrain(ILedger, "l-1").add(7)).toEqual([12, 2]);
+
+      await node0.getGrain(ILedger, "l-1").scheduleMigration(local1);
+      time.advance(31_000);
+      for (let i = 0; i < 200 && !node1.isActive(ledgerId); i++) await flush();
+
+      expect(node1.isActive(ledgerId)).toBe(true);
+      expect(await node1.getGrain(ILedger, "l-1").add(1)).toEqual([13, 3]);
     } finally {
       await node0.stop();
       await node1.stop();
