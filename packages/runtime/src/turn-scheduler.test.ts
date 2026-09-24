@@ -576,6 +576,97 @@ describe("TurnScheduler", () => {
       w.resolve(); // the wedged turn is left dangling, but let it settle so the test cleans up
     });
 
+    it("does not deactivate an overdue blocking turn while nothing is waiting behind it (Orleans only checks from a blocked waiting request)", async () => {
+      // Orleans runs the MaxRequestProcessingTime check inside
+      // ProcessPendingRequests, only for a waiting message that MayInvokeRequest
+      // refuses — a long turn nobody is waiting on is never deactivated.
+      const time = new FakeTimeProvider();
+      const stuckCalls: string[] = [];
+      const sched = new TurnScheduler({
+        maxRequestProcessingTimeMs: 1000,
+        time,
+        onStuck: () => {
+          stuckCalls.push("stuck");
+          return new Error("stuck");
+        },
+      });
+      const w = deferred<string>();
+      const slow = sched.schedule({ options: {}, method: "slow", run: () => w.promise });
+      await flush();
+      time.advance(5000);
+      expect(stuckCalls).toEqual([]);
+      w.resolve("done");
+      await expect(slow).resolves.toBe("done");
+      // And the activation is still serving afterwards.
+      await expect(sched.schedule({ options: {}, run: async () => "next" })).resolves.toBe("next");
+    });
+
+    it("deactivates once a request arrives that is blocked behind an already-overdue blocking turn", async () => {
+      const time = new FakeTimeProvider();
+      const stuckCalls: Array<string | undefined> = [];
+      const sched = new TurnScheduler({
+        maxRequestProcessingTimeMs: 1000,
+        time,
+        onStuck: (turn) => {
+          stuckCalls.push(turn.method);
+          return new Error("activation is stuck");
+        },
+      });
+      const w = deferred();
+      void sched.schedule({ options: {}, method: "wedged", run: () => w.promise });
+      await flush();
+      time.advance(1000);
+      expect(stuckCalls).toEqual([]);
+
+      const blocked = sched.schedule({ options: {}, method: "later", run: async () => "never" });
+      await expect(blocked).rejects.toThrow("activation is stuck");
+      expect(stuckCalls).toEqual(["wedged"]);
+      w.resolve();
+    });
+
+    it("does not deactivate when the arriving request can be admitted alongside the overdue turn", async () => {
+      const time = new FakeTimeProvider();
+      const stuckCalls: string[] = [];
+      const sched = new TurnScheduler({
+        maxRequestProcessingTimeMs: 1000,
+        time,
+        onStuck: () => {
+          stuckCalls.push("stuck");
+          return new Error("stuck");
+        },
+      });
+      const w = deferred();
+      void sched.schedule({ options: { readOnly: true }, run: () => w.promise });
+      await flush();
+      time.advance(1000);
+      await expect(
+        sched.schedule({ options: { readOnly: true }, run: async () => "read" }),
+      ).resolves.toBe("read");
+      expect(stuckCalls).toEqual([]);
+      w.resolve();
+    });
+
+    it("never deactivates a fully reentrant grain (every request is admitted, so none is ever blocked)", async () => {
+      const time = new FakeTimeProvider();
+      const stuckCalls: string[] = [];
+      const sched = new TurnScheduler({
+        reentrant: true,
+        maxRequestProcessingTimeMs: 1000,
+        time,
+        onStuck: () => {
+          stuckCalls.push("stuck");
+          return new Error("stuck");
+        },
+      });
+      const w = deferred();
+      void sched.schedule({ options: {}, run: () => w.promise });
+      await flush();
+      time.advance(1000);
+      await expect(sched.schedule({ options: {}, run: async () => "ok" })).resolves.toBe("ok");
+      expect(stuckCalls).toEqual([]);
+      w.resolve();
+    });
+
     it("does not call onStuck for a long-running interleaved turn — only the blocking one", async () => {
       const time = new FakeTimeProvider();
       const stuckCalls: string[] = [];

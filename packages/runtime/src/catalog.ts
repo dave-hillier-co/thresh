@@ -254,6 +254,9 @@ export class Catalog {
     if (existing !== undefined && existing.state !== "invalid") {
       if (!existing.deactivationRequestedAndIdle) return Promise.resolve(existing);
       return this.finalizeStale(key, existing).then(() => {
+        // A stuck-removal during `finalizeStale` may already have replaced it.
+        const replacement = this.activations.get(key);
+        if (replacement !== undefined && replacement.state !== "invalid") return replacement;
         const created = this.create(id, activationId, rehydrationBag, sourceAddr);
         this.activations.set(key, created);
         return created;
@@ -288,6 +291,9 @@ export class Catalog {
       description: "deactivateOnIdle requested",
     });
     existing.finalizeDeactivation();
+    // Removed as stuck while `onDeactivate` awaited (its cleanup already ran
+    // in `handleStuckActivation`): leave any replacement under `key` alone.
+    if (this.activations.get(key) !== existing) return;
     this.activations.delete(key);
     if (this.options.grainActivator?.disposeInstance !== undefined) {
       await this.options.grainActivator.disposeInstance(existing.instance, existing.id);
@@ -634,7 +640,10 @@ export class Catalog {
   async collectIdle(ageLimitOverrideMs?: number): Promise<void> {
     for (const [key, activation] of this.activations) {
       await this.collectOne(activation, ageLimitOverrideMs);
-      if (activation.state === "invalid") {
+      // Identity check: while `collectOne` awaited, this activation may have
+      // been removed as stuck (`handleStuckActivation`, which already ran
+      // `onDeactivated`) and a fresh one stored under the same key.
+      if (activation.state === "invalid" && this.activations.get(key) === activation) {
         this.activations.delete(key);
         await this.disposeCollected(activation);
       }
@@ -643,8 +652,11 @@ export class Catalog {
       for (const activation of list) {
         await this.collectOne(activation, ageLimitOverrideMs);
       }
-      const collected = list.filter((a) => a.state === "invalid");
-      const remaining = list.filter((a) => a.state !== "invalid");
+      // Re-read: a stuck worker may have been removed (and already disposed
+      // via `handleStuckActivation`) while `collectOne` awaited.
+      const current = this.workerActivations.get(key) ?? [];
+      const collected = current.filter((a) => a.state === "invalid");
+      const remaining = current.filter((a) => a.state !== "invalid");
       if (remaining.length === 0) this.workerActivations.delete(key);
       else this.workerActivations.set(key, remaining);
       for (const activation of collected) await this.disposeCollected(activation);

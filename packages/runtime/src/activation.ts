@@ -254,6 +254,7 @@ export class ActivationData implements GrainContext {
   private readonly deactivationTimeoutMs: number | undefined;
   private readonly logger: Logger;
   private readonly onStuckHook: ((activation: ActivationData) => void) | undefined;
+  private stuckRejection: RejectionError | undefined;
 
   constructor(
     id: GrainId,
@@ -309,15 +310,30 @@ export class ActivationData implements GrainContext {
    */
   private handleStuckTurn(turn: Turn<unknown>): unknown {
     this.state = "invalid";
+    // Stop this orphaned activation's timers: every tick would only be
+    // rejected by the scheduler (and logged) forever, keeping it alive.
+    for (const timer of this.timers) timer.dispose();
+    this.timers.clear();
     this.logger.warn("activation is stuck processing a request; deactivating", {
       grainId: this.id.toString(),
       ...(turn.method !== undefined ? { method: turn.method } : {}),
     });
-    this.onStuckHook?.(this);
-    return new RejectionError(
+    const rejection = new RejectionError(
       `activation ${this.id.toString()} is stuck and has been deactivated`,
       "noActivation",
     );
+    this.stuckRejection = rejection;
+    this.onStuckHook?.(this);
+    return rejection;
+  }
+
+  /**
+   * True when `error` is the rejection this activation handed a call that it
+   * never ran because the activation was deactivated as stuck — a call that
+   * is safe to re-deliver to a fresh activation (Orleans reroutes it).
+   */
+  isStuckRejection(error: unknown): boolean {
+    return this.stuckRejection !== undefined && error === this.stuckRejection;
   }
 
   /** Schedule `onActivate` as the first turn, so it precedes any message. */

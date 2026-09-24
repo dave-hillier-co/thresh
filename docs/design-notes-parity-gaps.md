@@ -38,16 +38,21 @@ Read [`deviations.md`](deviations.md) for what stays Orleans-faithful and what i
 
 ## 2. Turn-scheduler back-pressure and deactivation timeout
 
-**Shipped.** All three of (A)/(B)/(C) below are implemented. (B) landed as: the watchdog (already
-present for the warning) now, on the SAME timer firing, marks the activation `invalid`, evicts and
-rejects every turn still queued behind the wedged one and every turn scheduled from then on
-(`RejectionError("noActivation")`, so a cached caller re-resolves and lands on a fresh activation —
-Orleans' reroute), and unregisters it from the catalog and directory
+**Shipped.** All three of (A)/(B)/(C) below are implemented. (B) landed as Orleans'
+`DeactivateStuckActivation`, with upstream's trigger: the watchdog warns once the blocking turn
+passes `maxRequestProcessingTimeMs` and marks it overdue, and the activation is deactivated only
+when a request is waiting that cannot be admitted behind that overdue turn (Orleans runs the check
+from `ProcessPendingRequests` for a request `MayInvokeRequest` refuses). A long turn nobody waits
+on, or one every arrival may interleave with (a fully reentrant grain), is never deactivated.
+Deactivation marks the activation `invalid`, disposes its timers, rejects every queued and later
+turn with `RejectionError("noActivation")`, and unregisters it from the catalog and directory
 (`TurnScheduler`'s `onStuck` → `ActivationData.handleStuckTurn` → `Catalog.handleStuckActivation`).
-It does NOT wait for cancellation (#1) first: like upstream, it never interrupts the wedged turn
-itself (JS has no thread to preempt any more than a stuck native thread can be force-killed) — it
-only stops treating the activation as alive, leaving the one wedged turn to finish, or never finish,
-on its own. See `packages/runtime/src/turn-scheduler.ts`, `activation.ts`, `catalog.ts`.
+Those rejected calls never ran, so they are re-delivered to a fresh activation, Orleans' reroute:
+`LocalDispatcher` retries that exact rejection, and `DistributedDispatcher` re-resolves a cached
+route on `noActivation`. Like upstream, it never interrupts the wedged turn itself (JS has no thread
+to preempt any more than a stuck native thread can be force-killed): the one wedged turn is left to
+finish, or never finish, on its orphaned activation. See `packages/runtime/src/turn-scheduler.ts`,
+`activation.ts`, `catalog.ts`, `local-dispatcher.ts`.
 
 **Problem (historical).** Per-activation queue is unbounded. A grain that stops draining its queue grows memory without limit; `onDeactivate` has no upper bound so silo shutdown can stall on a single hung activation. There is no stuck-turn detection — an infinite loop in user code wedges the activation silently.
 

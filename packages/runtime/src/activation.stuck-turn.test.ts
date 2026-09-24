@@ -79,6 +79,9 @@ describe("ActivationData stuck-turn deactivation (Orleans DeactivateStuckActivat
     await flush();
 
     void activation.invoke(call());
+    // Orleans only deactivates from a waiting request that is blocked behind
+    // the overdue turn, so queue one.
+    activation.invoke(call("quick")).catch(() => undefined);
     await flush();
     time.advance(1000);
 
@@ -112,6 +115,7 @@ describe("ActivationData stuck-turn deactivation (Orleans DeactivateStuckActivat
     await flush();
 
     void activation.invoke(call());
+    activation.invoke(call("quick")).catch(() => undefined);
     await flush();
     time.advance(1000);
     expect(activation.state).toBe("invalid");
@@ -144,6 +148,7 @@ describe("ActivationData stuck-turn deactivation (Orleans DeactivateStuckActivat
     await flush();
 
     void activation.invoke(call());
+    activation.invoke(call("quick")).catch(() => undefined);
     await flush();
     time.advance(1000);
 
@@ -165,6 +170,53 @@ describe("ActivationData stuck-turn deactivation (Orleans DeactivateStuckActivat
     time.advance(1000);
 
     expect(warnings.some(([msg]) => msg.includes("MaxRequestProcessingTime"))).toBe(true);
+    grain.gate.resolve("done");
+  });
+
+  it("stays valid while an overdue turn runs with nothing waiting behind it", async () => {
+    const time = new FakeTimeProvider();
+    const { activation, grain } = makeActivation(time, { maxRequestProcessingTimeMs: 1000 });
+    await flush();
+
+    const slow = activation.invoke(call());
+    await flush();
+    time.advance(5000);
+    expect(activation.state).toBe("valid");
+
+    grain.gate.resolve("done");
+    await expect(slow).resolves.toBe("done");
+    await expect(activation.invoke(call("quick"))).resolves.toBe("quick:done");
+  });
+
+  it("disposes the stuck activation's grain timers so they stop ticking on the orphaned activation", async () => {
+    const time = new FakeTimeProvider();
+    const { logger, warnings } = recordingLogger();
+    const { activation, grain } = makeActivation(time, {
+      maxRequestProcessingTimeMs: 1000,
+      logger,
+    });
+    await flush();
+    let ticks = 0;
+    activation.registerTimer(
+      async () => {
+        ticks++;
+      },
+      { seconds: 60 },
+      { seconds: 60 },
+    );
+
+    void activation.invoke(call());
+    activation.invoke(call("quick")).catch(() => undefined);
+    await flush();
+    time.advance(1000);
+    expect(activation.state).toBe("invalid");
+    const warningsAtStuck = warnings.length;
+
+    time.advance(600_000);
+    await flush();
+    expect(ticks).toBe(0);
+    expect(warnings.filter(([m]) => m.includes("grain timer"))).toHaveLength(0);
+    expect(warnings.length).toBe(warningsAtStuck);
     grain.gate.resolve("done");
   });
 });

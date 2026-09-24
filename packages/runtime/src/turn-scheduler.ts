@@ -83,9 +83,14 @@ export interface TurnSchedulerOptions {
    */
   maxRequestProcessingTimeMs?: number;
   /**
-   * Called once, synchronously, the moment the blocking turn is judged stuck
-   * (`maxRequestProcessingTimeMs` exceeded) — Orleans
-   * `ActivationData.DeactivateStuckActivation`. Its return value is used to
+   * Called once, synchronously, the moment the activation is judged stuck —
+   * Orleans `ActivationData.DeactivateStuckActivation`, which upstream reaches
+   * only from `ProcessPendingRequests`: a waiting request cannot be admitted
+   * AND the blocking turn has run past `maxRequestProcessingTimeMs`. So an
+   * overdue turn with nothing waiting behind it (or only requests that may
+   * interleave with it, e.g. on a fully reentrant grain) never triggers it;
+   * the first blocked arrival after the limit (or a request already waiting
+   * when the limit passes) does. Its return value is used to
    * reject every turn currently QUEUED behind the wedged one (Orleans
    * `RerouteAllQueuedMessages`) and every turn `schedule()`d from this point
    * on (this activation cannot recover, so nothing should ever queue behind
@@ -115,6 +120,9 @@ interface RunningTurn {
   reentrancyId: string | undefined;
   method: string | undefined;
   args: readonly unknown[] | undefined;
+  turn: Turn<unknown>;
+  /** Set once this turn, as the blocking turn, has run past `maxRequestProcessingTimeMs`. */
+  overdue: boolean;
 }
 
 /**
@@ -225,12 +233,18 @@ export class TurnScheduler {
       });
     }
     return new Promise<R>((resolve, reject) => {
-      this.queue.push({
+      const item: QueuedTurn = {
         turn: turn as Turn<unknown>,
         resolve: resolve as (value: unknown) => void,
         reject,
-      });
+      };
+      this.queue.push(item);
       this.pump();
+      // Orleans runs its MaxRequestProcessingTime check from
+      // `ProcessPendingRequests`, for a waiting request `MayInvokeRequest`
+      // refuses: a request that has to wait behind an already-overdue
+      // blocking turn is what declares the activation stuck.
+      if (this.queue.includes(item)) this.deactivateIfStuck();
     });
   }
 
@@ -297,6 +311,8 @@ export class TurnScheduler {
       reentrancyId: item.turn.reentrancyId,
       method: item.turn.method,
       args: item.turn.args,
+      turn: item.turn,
+      overdue: false,
     };
     const isFirstTurn = !this.firstTurnSeen;
     this.firstTurnSeen = true;
@@ -327,10 +343,8 @@ export class TurnScheduler {
    * Schedule a one-shot warning if `turn` is still running once
    * `maxRequestProcessingTimeMs` elapses (Orleans' `MaxRequestProcessingTime`
    * stuck-turn detection), and — only when `turn` is the BLOCKING turn (see
-   * the class doc) and `onStuck` is configured — deactivate this activation
-   * (Orleans `DeactivateStuckActivation`): evict and reject every currently
-   * queued turn with `onStuck`'s return value, and reject every future
-   * `schedule()` the same way. There is no way to actually abort a running
+   * the class doc) — mark it overdue, so that a request waiting behind it now
+   * or arriving later deactivates the activation (`deactivateIfStuck`). There is no way to actually abort a running
    * `async` function from outside it in JS — Orleans itself can't force-kill
    * a thread either, hence upstream leaving the blocking request "dangling"
    * — so the wedged turn itself keeps running to completion regardless.
@@ -345,13 +359,30 @@ export class TurnScheduler {
         elapsedMs: this.time.now() - startedAtMs,
         maxRequestProcessingTimeMs: this.maxRequestProcessingTimeMs,
       });
-      if (this.onStuck === undefined || this.stuck !== undefined) return;
       if (this.blockingTurn !== running) return; // only the blocking turn triggers deactivation
-      const rejection = this.onStuck(turn);
-      this.stuck = { rejection };
-      const queued = this.queue.splice(0, this.queue.length);
-      for (const item of queued) item.reject(rejection);
+      running.overdue = true;
+      // Anything still queued at this point is waiting on the blocking turn
+      // (`pump` admits every admissible turn), so it is already stuck.
+      if (this.queue.length > 0) this.deactivateIfStuck();
     }, this.maxRequestProcessingTimeMs);
+  }
+
+  /**
+   * Orleans `DeactivateStuckActivation`, reached (as upstream) only when a
+   * waiting request cannot be admitted and the blocking turn has run past
+   * `maxRequestProcessingTimeMs`: evict and reject every queued turn with
+   * `onStuck`'s return value, and reject every later `schedule()` the same way.
+   * A long turn nobody is waiting on, or one every arrival can interleave
+   * with (a fully reentrant grain, read-only alongside read-only), is left alone.
+   */
+  private deactivateIfStuck(): void {
+    if (this.onStuck === undefined || this.stuck !== undefined) return;
+    const blocking = this.blockingTurn;
+    if (blocking === undefined || !blocking.overdue || this.queue.length === 0) return;
+    const rejection = this.onStuck(blocking.turn);
+    this.stuck = { rejection };
+    const queued = this.queue.splice(0, this.queue.length);
+    for (const item of queued) item.reject(rejection);
   }
 
   private enterSection(id: string): void {

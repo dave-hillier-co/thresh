@@ -28,6 +28,19 @@ class StuckGrain extends Grain {
 
 const metadata = getGrainMetadata(StuckGrain)!;
 
+@grain()
+class HangingDeactivateGrain extends Grain {
+  static gate = deferred();
+  async ping(): Promise<string> {
+    return "pong";
+  }
+  override async onDeactivate(): Promise<void> {
+    await HangingDeactivateGrain.gate.promise;
+  }
+}
+
+const hangingMetadata = getGrainMetadata(HangingDeactivateGrain)!;
+
 function buildCatalog(
   time: FakeTimeProvider,
   onDeactivated: (activation: ActivationData) => void,
@@ -63,6 +76,18 @@ describe("Catalog stuck-activation deactivation (Orleans DeactivateStuckActivati
       options: {},
       reentrancyId: "r-1",
     });
+    // A waiting request blocked behind the overdue turn is what triggers
+    // Orleans' stuck check.
+    activation
+      .invoke({
+        target: id,
+        interfaceId: 0,
+        method: "block",
+        args: [],
+        options: {},
+        reentrancyId: "r-1b",
+      })
+      .catch(() => undefined);
     await flush();
     time.advance(1000);
 
@@ -87,6 +112,16 @@ describe("Catalog stuck-activation deactivation (Orleans DeactivateStuckActivati
       options: {},
       reentrancyId: "r-2",
     });
+    first
+      .invoke({
+        target: id,
+        interfaceId: 0,
+        method: "block",
+        args: [],
+        options: {},
+        reentrancyId: "r-2b",
+      })
+      .catch(() => undefined);
     await flush();
     time.advance(1000);
     expect(catalog.get(id)).toBeUndefined();
@@ -95,5 +130,50 @@ describe("Catalog stuck-activation deactivation (Orleans DeactivateStuckActivati
     expect(second).not.toBe(first);
 
     (first.instance as StuckGrain).gate.resolve("done");
+  });
+
+  it("an idle-collection sweep that was deactivating the stuck activation does not remove the fresh activation that replaced it", async () => {
+    HangingDeactivateGrain.gate = deferred();
+    const time = new FakeTimeProvider();
+    const deactivated: ActivationData[] = [];
+    const grainTypes = new Map<string, RegisteredGrain>([
+      [hangingMetadata.grainType, { ctor: HangingDeactivateGrain, metadata: hangingMetadata }],
+    ]);
+    const catalog = new Catalog({
+      grainTypes,
+      factory: new GrainFactory(() => hangingMetadata.grainType, time),
+      time,
+      defaultCollectionAgeSeconds: 1,
+      onDeactivated: (a) => deactivated.push(a),
+      activationOptions: { maxRequestProcessingTimeMs: 1000 },
+    });
+    const id = new GrainId(hangingMetadata.grainType, "c");
+    const first = await catalog.getOrCreate(id);
+    await flush();
+    time.advance(2000);
+
+    const sweep = catalog.collectIdle(); // onDeactivate hangs: the blocking turn wedges
+    await flush();
+    first
+      .invoke({
+        target: id,
+        interfaceId: 0,
+        method: "ping",
+        args: [],
+        options: {},
+        reentrancyId: "r-c",
+      })
+      .catch(() => undefined); // waits behind the wedged onDeactivate
+    await flush();
+    time.advance(1000); // stuck: removed from the catalog
+    expect(catalog.get(id)).toBeUndefined();
+
+    const second = await catalog.getOrCreate(id);
+    await flush();
+    HangingDeactivateGrain.gate.resolve(); // the orphaned onDeactivate finally completes
+    await sweep;
+
+    expect(catalog.get(id)).toBe(second);
+    expect(deactivated).toEqual([first]);
   });
 });
