@@ -1,4 +1,5 @@
 import { newActivationId, type ActivationId } from "@thresh/core/activation-id";
+import { Guid } from "@thresh/core/guid";
 import {
   broadcastChannelObserver,
   BroadcastConsumerInterface,
@@ -498,7 +499,31 @@ export class ActivationData implements GrainContext {
     const turnOptions: InvokeMethodOptions = options?.interleave ? { alwaysInterleave: true } : {};
     const timer = new GrainTimerImpl(
       this.time,
-      (cb) => this.scheduler.schedule({ options: turnOptions, run: cb }),
+      (cb) =>
+        this.scheduler.schedule({
+          options: turnOptions,
+          // Orleans creates the timer under `ExecutionContextSuppressor`
+          // ("Avoid capturing async locals", GrainTimer.cs:42-46) so a tick
+          // never inherits the registering call's ambient state. `setTimeout`
+          // otherwise carries the enclosing turn's `AsyncLocalStorage`
+          // snapshot into every fire, so without this a tick would run under
+          // the ORIGINAL registering call's reentrancy id, deadline,
+          // transaction and RequestContext headers rather than its own. Give
+          // every tick a fresh, empty RequestContext and an `InvocationContext`
+          // scoped to this activation with no inherited transaction, deadline
+          // or signal — the same shape a self-initiated call would get.
+          run: () =>
+            runWithRequestContext({}, () =>
+              invocationContext.run(
+                {
+                  senderId: undefined,
+                  ownerId: this.id,
+                  reentrancyId: Guid.newGuid().toString(),
+                },
+                cb,
+              ),
+            ),
+        }),
       callback,
       due,
       period,
