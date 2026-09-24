@@ -149,15 +149,17 @@ export class StateMachineManagerImpl implements StateMachineManager {
     const frames = [...this.machines.values()].map((machine) =>
       serializeValue({ m: machine.name, k: "snap", p: machine.snapshot() } satisfies LogEnvelope),
     );
+    // Work out the retirement bookkeeping this compaction implies, but only
+    // commit it once the replace is durable: a failed compaction (swallowed by
+    // the in-turn path in `append`, then retried) wrote nothing, so it must not
+    // spend any grace period or drop buffered data from memory.
+    const nextRetiring = new Map<string, RetirementRecord>();
     for (const [name, record] of this.retiring) {
       const count = record.compactionsSinceOrphaned + 1;
-      if (count >= this.retirementGraceCompactions) {
-        // Grace period elapsed while still unregistered: purge for good by
-        // simply not writing a frame for it.
-        this.retiring.delete(name);
-        continue;
-      }
-      record.compactionsSinceOrphaned = count;
+      // Grace period elapsed while still unregistered: purge for good by
+      // simply not writing a frame for it.
+      if (count >= this.retirementGraceCompactions) continue;
+      nextRetiring.set(name, { ops: record.ops, compactionsSinceOrphaned: count });
       frames.push(
         serializeValue({
           m: name,
@@ -168,6 +170,8 @@ export class StateMachineManagerImpl implements StateMachineManager {
     }
     this.version = await this.storage.replace(this.logName, this.grainId, frames, this.version);
     this.liveEntryCount = frames.length;
+    this.retiring.clear();
+    for (const [name, record] of nextRetiring) this.retiring.set(name, record);
   }
 
   async clear(): Promise<void> {

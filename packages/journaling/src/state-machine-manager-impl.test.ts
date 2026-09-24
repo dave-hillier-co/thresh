@@ -368,4 +368,36 @@ describe("StateMachineManagerImpl", () => {
     await fresh.replay();
     expect(replayed.value).toBe(2);
   });
+
+  it("does not spend a retiring structure's grace period on a compaction that failed", async () => {
+    const memory = new MemoryJournalStorage();
+
+    const gen1 = new StateMachineManagerImpl("journal", id, memory);
+    const keep1 = new DurableDictionaryImpl<string, number>("keep", gen1);
+    const retire1 = new DurableDictionaryImpl<string, number>("retire", gen1);
+    gen1.register(keep1);
+    gen1.register(retire1);
+    await gen1.replay();
+    await retire1.set("b", 1);
+
+    // Orphaned (grace = 2). The first compaction fails and is swallowed by the
+    // in-turn path; it wrote nothing, so it must not count against the grace
+    // period -- nor drop the buffered data from memory.
+    const flaky = new FailingReplaceStorage(memory, 1, () => new Error("compaction blip"));
+    const gen2 = new StateMachineManagerImpl("journal", id, flaky, { snapshotThreshold: 1 });
+    const keep2 = new DurableDictionaryImpl<string, number>("keep", gen2);
+    gen2.register(keep2);
+    await gen2.replay();
+    await keep2.set("a", 1); // live entries 3 >= threshold: in-turn compaction fails
+    await keep2.set("a", 2); // retried: succeeds -- the 1st compaction actually written
+
+    const gen3 = new StateMachineManagerImpl("journal", id, memory);
+    const keep3 = new DurableDictionaryImpl<string, number>("keep", gen3);
+    const retire3 = new DurableDictionaryImpl<string, number>("retire", gen3);
+    gen3.register(keep3);
+    gen3.register(retire3);
+    await gen3.replay();
+    expect(keep3.get("a")).toBe(2);
+    expect(retire3.get("b")).toBe(1); // only 1 of 2 compactions spent
+  });
 });
