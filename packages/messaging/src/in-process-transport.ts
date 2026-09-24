@@ -108,6 +108,11 @@ export class InProcessTransport implements Transport {
     }
     const network = this.network;
     const from = preamble.siloAddress;
+    // Fired if the dialler's `close()` runs, so the accepted side (the
+    // listener's `onAccept` hook) learns the socket dropped — mirrors the real
+    // transports, where closing either end of a TCP/WS socket fires the
+    // other's `onClose`.
+    let notifyAcceptedSideClosed: ((err?: unknown) => void) | undefined;
     if (endpoint.onAccept !== undefined) {
       const duplexConnection: Connection = {
         send: (message) => {
@@ -121,12 +126,15 @@ export class InProcessTransport implements Transport {
           queueMicrotask(() => void onMessage(message, to));
         },
         close: async () => undefined,
+        onClose: (callback) => {
+          notifyAcceptedSideClosed = callback;
+        },
       };
       endpoint.onAccept(preamble, duplexConnection);
     }
     return {
       send: (message) => network.deliver(to, message, from),
-      close: async () => undefined,
+      close: async () => notifyAcceptedSideClosed?.(),
     };
   }
 }

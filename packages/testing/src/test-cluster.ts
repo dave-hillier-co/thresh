@@ -127,6 +127,27 @@ export interface TestClusterOptions {
   /** How often the idle-collection sweep runs on every silo (defaults to 60s). */
   collectionIntervalSeconds?: number;
   /**
+   * How often every silo pushes its load snapshot to its peers (Orleans
+   * `DeploymentLoadPublisherOptions`, defaults to 1s). Lower it in a test that
+   * needs cross-silo load visibility without waiting a full period, or pass
+   * `0` to disable the periodic push and rely only on the test hooks'
+   * forced pushes.
+   */
+  loadPublishIntervalMs?: number;
+  /**
+   * How long a disconnected client stays registered on its gateway before
+   * being dropped, forwarded to every silo (Orleans
+   * `SiloMessagingOptions.ClientDropTimeout`, defaults to 1 minute).
+   */
+  clientDropTimeoutMs?: number;
+  /**
+   * How often every silo republishes its locally connected clients to its
+   * peers, on top of the immediate republish a membership change triggers
+   * (Orleans `SiloMessagingOptions.ClientRegistrationRefresh`, defaults to 5
+   * minutes).
+   */
+  clientDirectoryRefreshMs?: number;
+  /**
    * The shared transport network silos are built on. Defaults to a plain
    * `InProcessNetwork`; pass a subclass (e.g. one that counts messages) for
    * tests that need to observe traffic on the wire.
@@ -427,6 +448,15 @@ export class TestCluster {
         : {}),
       ...(this.options.collectionIntervalSeconds !== undefined
         ? { collectionIntervalSeconds: this.options.collectionIntervalSeconds }
+        : {}),
+      ...(this.options.loadPublishIntervalMs !== undefined
+        ? { loadPublishIntervalMs: this.options.loadPublishIntervalMs }
+        : {}),
+      ...(this.options.clientDropTimeoutMs !== undefined
+        ? { clientDropTimeoutMs: this.options.clientDropTimeoutMs }
+        : {}),
+      ...(this.options.clientDirectoryRefreshMs !== undefined
+        ? { clientDirectoryRefreshMs: this.options.clientDirectoryRefreshMs }
         : {}),
     })
       .useMembership(membership)

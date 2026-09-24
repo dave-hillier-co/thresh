@@ -140,10 +140,11 @@ in [`docs/project-review-2026-09-22.md`](docs/project-review-2026-09-22.md).
       by requester, so a source can return an entry it did not own, costing a miss that lazy activation
       rebuilds (never a wrong answer).
 - [ ] [#74](https://github.com/dave-hillier-co/thresh/issues/74) **F8** — **partly fixed.** Placement
-      now reads a peer's pushed count, but `publishLoadStats` is only ever called from the test-only
-      load-shedding hooks, so nothing publishes in production and the inversion persists. Needs a
-      periodic publisher. `ResourceOptimizedPlacement` still ignores its weights — there is no CPU or
-      memory signal to score with. See the issue's comment.
+      reads a peer's pushed count, and every silo now pushes it on a `DeploymentLoadPublisher`-style
+      timer (`loadPublishIntervalMs`, default 1s), so the activation-count inversion is gone.
+      `ResourceOptimizedPlacement` still ignores its weights: the port has no environment-statistics
+      provider (Orleans' `EnvironmentStatisticsProvider`, Kalman-filtered CPU and memory), so the
+      load snapshot carries no CPU or memory signal to score with.
 - [x] [#75](https://github.com/dave-hillier-co/thresh/issues/75) **F9** — a wire-arrived stateless-worker
       call now joins the receiving silo's local pool instead of being directory-registered.
 - [x] [#76](https://github.com/dave-hillier-co/thresh/issues/76) **F10** — `release` settles the

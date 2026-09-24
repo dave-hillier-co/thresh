@@ -690,6 +690,12 @@ describe("recovery exhaustion (one shot for the process lifetime, silently swall
         transport,
         time,
         random: () => 0.99,
+        // This test's fault injection counts exactly two connection failures
+        // to silo(1) via `flaky`; the periodic client/load gossip timers would
+        // spend that budget on unrelated background traffic instead.
+        loadPublishIntervalMs: 0,
+        clientDropTimeoutMs: 0,
+        clientDirectoryRefreshMs: 0,
         ...extra,
       });
       node.registerGrain(CounterGrain, { interfaces: [ICounter] });
