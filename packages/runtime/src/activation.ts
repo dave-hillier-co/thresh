@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { newActivationId, type ActivationId } from "@thresh/core/activation-id";
 import { Guid } from "@thresh/core/guid";
 import {
@@ -122,6 +123,15 @@ function parseNamespaceKey(key: string): [namespace: string, key: string] {
   const slash = key.indexOf("/");
   return slash < 0 ? [key, ""] : [key.slice(0, slash), key.slice(slash + 1)];
 }
+
+/**
+ * Runs a function in the async context this module was loaded in — the empty
+ * root, with no `AsyncLocalStorage` store set — whatever context the caller is
+ * in. The JS analogue of Orleans' `ExecutionContextSuppressor`, used so a
+ * grain timer tick never inherits any async-local state from the call that
+ * registered the timer (see `registerTimer`).
+ */
+const runInRootAsyncContext = AsyncLocalStorage.snapshot();
 
 /**
  * The runtime's per-grain bookkeeping object and the grain's `GrainContext`.
@@ -527,15 +537,21 @@ export class ActivationData implements GrainContext {
           // every tick a fresh, empty RequestContext and an `InvocationContext`
           // scoped to this activation with no inherited transaction, deadline
           // or signal — the same shape a self-initiated call would get.
+          // Resetting only Thresh's own two stores is not enough: any other
+          // async-local context (OpenTelemetry's active span, a host's
+          // logging scope) would still leak in, so the tick first returns to
+          // the empty root async context, then scopes Thresh's stores fresh.
           run: () => {
-            const tick = runWithRequestContext({}, () =>
-              invocationContext.run(
-                {
-                  senderId: undefined,
-                  ownerId: this.id,
-                  reentrancyId: Guid.newGuid().toString(),
-                },
-                cb,
+            const tick = runInRootAsyncContext(() =>
+              runWithRequestContext({}, () =>
+                invocationContext.run(
+                  {
+                    senderId: undefined,
+                    ownerId: this.id,
+                    reentrancyId: Guid.newGuid().toString(),
+                  },
+                  cb,
+                ),
               ),
             );
             // Orleans' `IsKeepAlive` (GrainTimer.cs:81) resets the idle timer

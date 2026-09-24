@@ -1,4 +1,4 @@
-import { AsyncResource } from "node:async_hooks";
+import { AsyncLocalStorage, AsyncResource } from "node:async_hooks";
 import { beforeEach, describe, expect, it } from "vitest";
 import { grain } from "@thresh/core/decorators";
 import { Grain } from "@thresh/core/grain";
@@ -43,7 +43,16 @@ class TickerGrain extends Grain implements ITicker {
 interface IContextChecker extends GrainKey<string> {
   startWithHeader(): Promise<void>;
   sawHeader(): Promise<string | undefined>;
+  startInForeignContext(): Promise<void>;
+  sawForeign(): Promise<string | undefined>;
 }
+
+/**
+ * Stands in for any other `AsyncLocalStorage` a host process runs under —
+ * OpenTelemetry's context manager (the active span), a logging scope — which
+ * Orleans' `ExecutionContextSuppressor` also keeps out of a timer tick.
+ */
+const foreignStore = new AsyncLocalStorage<string>();
 const IContextChecker = defineGrainInterface<IContextChecker>("IContextChecker");
 
 /**
@@ -68,6 +77,22 @@ class ContextCheckerGrain extends Grain implements IContextChecker {
   }
   async sawHeader(): Promise<string | undefined> {
     return this.header;
+  }
+
+  private foreign: string | undefined = "not fired yet";
+
+  async startInForeignContext(): Promise<void> {
+    foreignStore.run("registering-call", () => {
+      this.timer = this.runtime.registerTimer(
+        async () => {
+          this.foreign = foreignStore.getStore();
+        },
+        { ms: 10 },
+      );
+    });
+  }
+  async sawForeign(): Promise<string | undefined> {
+    return this.foreign;
   }
 }
 
@@ -164,5 +189,22 @@ describe("timer ambient context", () => {
     ctxTime.advance(10);
     await flush();
     expect(await c.sawHeader()).toBeUndefined();
+  });
+
+  it("does not carry any other async-local context (e.g. an active trace span) into a tick", async () => {
+    const ctxTime = new ContextCapturingTimeProvider();
+    const ctxSilo = new Silo({
+      time: ctxTime,
+      defaultCollectionAgeSeconds: 100_000,
+      collectionIntervalSeconds: 100_000,
+    });
+    ctxSilo.registerGrain(ContextCheckerGrain, { interfaces: [IContextChecker] });
+    ctxSilo.start();
+
+    const c = ctxSilo.getGrain(IContextChecker, "foreign");
+    await c.startInForeignContext();
+    ctxTime.advance(10);
+    await flush();
+    expect(await c.sawForeign()).toBeUndefined();
   });
 });
