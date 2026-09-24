@@ -184,6 +184,20 @@ const DEFAULT_RECOVERY_RETRY_MS = 2_000;
  * also 1s) — see `scheduleLoadPublish`.
  */
 const DEFAULT_LOAD_PUBLISH_INTERVAL_MS = 1_000;
+/**
+ * Default grace period a disconnected client is kept registered before being
+ * dropped (Orleans `Constants.DEFAULT_CLIENT_DROP_TIMEOUT`, 1 minute). Also the
+ * period of the maintenance sweep that checks for it, mirroring Orleans'
+ * `Gateway.gatewayMaintenanceTimer`, which ticks on this same interval.
+ */
+const DEFAULT_CLIENT_DROP_TIMEOUT_MS = 60_000;
+/**
+ * Default period on which a silo republishes its locally connected clients to
+ * every peer, in case an earlier gossip was missed (Orleans
+ * `SiloMessagingOptions.DEFAULT_CLIENT_REGISTRATION_REFRESH`, 5 minutes). A
+ * membership change also triggers an immediate republish — see `updateView`.
+ */
+const DEFAULT_CLIENT_DIRECTORY_REFRESH_MS = 300_000;
 
 export interface ClusterNodeOptions {
   local: SiloAddress;
@@ -227,6 +241,19 @@ export interface ClusterNodeOptions {
    * test-only `siloTestHooks()` forced pushes populate `remoteLoadStats` then.
    */
   loadPublishIntervalMs?: number;
+  /**
+   * How long a disconnected client stays registered before this gateway drops
+   * it — rejecting further routing to it and gossiping `unregister` (Orleans
+   * `SiloMessagingOptions.ClientDropTimeout`, defaults to 1 minute). Also the
+   * period of the maintenance sweep that checks for it.
+   */
+  clientDropTimeoutMs?: number;
+  /**
+   * How often a silo republishes its locally connected clients to every peer,
+   * on top of the immediate republish a membership change triggers (Orleans
+   * `SiloMessagingOptions.ClientRegistrationRefresh`, defaults to 5 minutes).
+   */
+  clientDirectoryRefreshMs?: number;
   /**
    * Bind state before `onActivate` (provided by the hosting layer). `"rehydrate"`
    * mode binds facets without reading storage so migrated state is preserved.
@@ -506,6 +533,16 @@ export class ClusterNode {
    * found by the address it stamped as `sendingSilo`.
    */
   private readonly clientConnectionsByEndpoint = new Map<string, Connection>();
+  /**
+   * Every client this silo currently claims to host, keyed by `clientId.toString()`
+   * — both connected (present in `clientConnections`) and disconnected-but-not-
+   * yet-dropped (Orleans keeps a `ClientState` around, connection-less, from
+   * `RecordClosedConnection` until `ReadyToDrop`). The source of truth for
+   * `republishClientDirectory` and for what `dropDisconnectedClients` removes.
+   */
+  private readonly localClientIds = new Map<string, GrainId>();
+  /** When a locally held client connection closed, keyed like `localClientIds` (Orleans `ClientState.DisconnectedSince`). */
+  private readonly clientDisconnectedSince = new Map<string, number>();
   /** This silo's (test-hooks-latched) CPU-usage source (Orleans `TestHooksEnvironmentStatisticsProvider`). */
   private readonly environmentStatistics = new TestHooksEnvironmentStatisticsProvider();
   /** Decides whether this silo is currently shedding load (Orleans `OverloadDetector`). */
@@ -566,6 +603,12 @@ export class ClusterNode {
   private readonly loadPublishIntervalMs: number;
   /** The pending `scheduleLoadPublish` re-arm, cleared on `stop()`. */
   private loadPublishTimer: TimerHandle | undefined;
+  private readonly clientDropTimeoutMs: number;
+  private readonly clientDirectoryRefreshMs: number;
+  /** The pending `scheduleClientMaintenance` re-arm, cleared on `stop()`. */
+  private clientMaintenanceTimer: TimerHandle | undefined;
+  /** The pending `scheduleClientDirectoryRefresh` re-arm, cleared on `stop()`. */
+  private clientDirectoryRefreshTimer: TimerHandle | undefined;
 
   /** Routes directory operations to the owning silo's partition over the transport. */
   private readonly transportPeer: DirectoryPeer = {
@@ -598,6 +641,9 @@ export class ClusterNode {
     this.recoveryRetentionMs = options.recovery?.retentionMs ?? DEFAULT_RECOVERY_RETENTION_MS;
     this.recoveryRetryMs = options.recovery?.retryMs ?? DEFAULT_RECOVERY_RETRY_MS;
     this.loadPublishIntervalMs = options.loadPublishIntervalMs ?? DEFAULT_LOAD_PUBLISH_INTERVAL_MS;
+    this.clientDropTimeoutMs = options.clientDropTimeoutMs ?? DEFAULT_CLIENT_DROP_TIMEOUT_MS;
+    this.clientDirectoryRefreshMs =
+      options.clientDirectoryRefreshMs ?? DEFAULT_CLIENT_DIRECTORY_REFRESH_MS;
     this.overloadDetector = new OverloadDetector(this.environmentStatistics, {
       ...DEFAULT_LOAD_SHEDDING_OPTIONS,
       ...options.loadShedding,
@@ -1203,18 +1249,30 @@ export class ClusterNode {
         ringBeforeJoin.isEmpty ? undefined : ringBeforeJoin.ownerOf(grainId),
       );
     }
-    // Orleans `DeploymentLoadPublisher.StartAsync`: publish once immediately, then on
-    // the recurring interval — so a freshly started silo doesn't wait a full period
-    // before peers see its load, and peers' loads are visible to it immediately too.
-    if (this.loadPublishIntervalMs > 0) {
-      void this.publishLoadStats();
-      this.scheduleLoadPublish();
-    }
+    // Orleans `DeploymentLoadPublisher.StartAsync` also publishes once immediately
+    // on top of the recurring interval. Deliberately not mirrored here: at the
+    // moment this silo starts, a peer already in `membership`'s active set may not
+    // actually be listening yet (silos commonly start up in sequence), and dialling
+    // it this early would race that peer's own connection attempts back — a
+    // transient failure this silo's `ConnectionManager` would (correctly) share
+    // with any other concurrent caller of the same in-flight connect. Waiting for
+    // the first `loadPublishIntervalMs` tick costs freshly joined peers one
+    // interval of stale (zero) load data, in exchange for never dialling a peer
+    // before it is up.
+    if (this.loadPublishIntervalMs > 0) this.scheduleLoadPublish();
+    if (this.clientDropTimeoutMs > 0) this.scheduleClientMaintenance();
+    if (this.clientDirectoryRefreshMs > 0) this.scheduleClientDirectoryRefresh();
   }
 
   async stop(): Promise<void> {
     if (this.loadPublishTimer !== undefined) this.time.clearTimer(this.loadPublishTimer);
     this.loadPublishTimer = undefined;
+    if (this.clientMaintenanceTimer !== undefined)
+      this.time.clearTimer(this.clientMaintenanceTimer);
+    this.clientMaintenanceTimer = undefined;
+    if (this.clientDirectoryRefreshTimer !== undefined)
+      this.time.clearTimer(this.clientDirectoryRefreshTimer);
+    this.clientDirectoryRefreshTimer = undefined;
     // Nothing will consume a re-armed pull from here on.
     for (const reArm of this.recoveryReArms.values()) {
       if (reArm.timer !== undefined) this.time.clearTimer(reArm.timer);
@@ -1257,6 +1315,15 @@ export class ClusterNode {
     const newRing = this.buildRing();
     const live = new Set(activeSilos(snapshot).map((s) => s.ringKey));
     const present = new Set(memberSilos(snapshot).map((s) => s.ringKey));
+    // Silos newly active in this view: they never received this silo's
+    // `broadcastClientGossip` from before they joined, so republish this
+    // silo's clients to them now instead of leaving them to learn of it only
+    // from `clientDirectoryRefreshMs`'s next tick (Orleans' `ClientDirectory`
+    // republishing its table on every membership change).
+    const oldLive = new Set(oldRing.silos().map((s) => s.ringKey));
+    const newlyActive = activeSilos(snapshot).filter(
+      (s) => !oldLive.has(s.ringKey) && !s.equals(local),
+    );
 
     for (const member of oldRing.silos()) {
       if (!present.has(member.ringKey)) {
@@ -1265,6 +1332,7 @@ export class ClusterNode {
         this.clientDirectory.unregisterSilo(member);
       }
     }
+    this.republishClientDirectory(newlyActive);
     // Peer manifests may have shifted with the view (a silo upgraded/left);
     // drop them all and re-fetch lazily on the next version-aware placement.
     this.manifestCache.clear();
@@ -2002,37 +2070,136 @@ export class ClusterNode {
    * its client-hosted observers down the SAME socket the client dialled
    * (Orleans' duplex gateway model), recorded in the local `ClientDirectory`,
    * and gossiped to every other active silo so the whole cluster learns which
-   * gateway the client is on.
+   * gateway the client is on. A reconnect (the client's socket to this same
+   * gateway dropped and came back) clears any pending drop from
+   * `dropDisconnectedClients` — Orleans' `RecordConnection` resets
+   * `DisconnectedSince` the same way.
    */
   private onClientAccept(preamble: ConnectionPreamble, connection: Connection): void {
     const clientId = preamble.clientId;
     if (clientId === undefined) return;
-    this.clientConnections.set(clientId.toString(), connection);
+    const key = clientId.toString();
+    this.clientConnections.set(key, connection);
     this.clientConnectionsByEndpoint.set(preamble.siloAddress.endpoint, connection);
+    this.clientDisconnectedSince.delete(key);
+    this.localClientIds.set(key, clientId);
     this.clientDirectory.register(clientId, this.options.local);
     this.broadcastClientGossip({ op: "register", clientId, gateway: this.options.local });
+    connection.onClose?.(() =>
+      this.recordClosedClientConnection(clientId, preamble.siloAddress.endpoint, connection),
+    );
+  }
+
+  /**
+   * The transport dropped this connection on its own (Orleans
+   * `Gateway.RecordClosedConnection`). Free the local send path immediately —
+   * so a call already in flight to this client fails fast with "client not
+   * connected here" instead of writing to a dead socket and waiting out the
+   * caller's full response timeout — but keep the client registered in
+   * `clientDirectory`/gossiped to peers until `dropDisconnectedClients` decides
+   * it hasn't reconnected within `clientDropTimeoutMs`, in case this is a brief
+   * blip and the same connection comes back. Guarded by connection identity: a
+   * reconnect may already have replaced this entry before the old socket's
+   * close callback runs.
+   */
+  private recordClosedClientConnection(
+    clientId: GrainId,
+    endpoint: string,
+    connection: Connection,
+  ): void {
+    const key = clientId.toString();
+    if (this.clientConnections.get(key) !== connection) return;
+    this.clientConnections.delete(key);
+    this.clientConnectionsByEndpoint.delete(endpoint);
+    this.clientDisconnectedSince.set(key, this.time.now());
+  }
+
+  /**
+   * Re-arm the disconnected-client sweep (Orleans `Gateway.PerformGatewayMaintenance`,
+   * ticking on `ClientDropTimeout`). Scheduled again as soon as the timer
+   * fires, independent of the sweep's own (synchronous) work; cleared in `stop()`.
+   */
+  private scheduleClientMaintenance(): void {
+    this.clientMaintenanceTimer = this.time.setTimer(() => {
+      this.scheduleClientMaintenance();
+      this.dropDisconnectedClients();
+    }, this.clientDropTimeoutMs);
+  }
+
+  /**
+   * Drop every client that has been disconnected from this gateway for at
+   * least `clientDropTimeoutMs` with no reconnect (Orleans
+   * `Gateway.DropDisconnectedClients`/`ClientState.ReadyToDrop`): forget it
+   * locally and gossip `unregister` so every peer's `ClientDirectory` stops
+   * routing to this gateway for it. A pending call to it has already failed
+   * fast, at `recordClosedClientConnection` — there is nothing queued here to
+   * reject, unlike Orleans' buffered `ClientState`.
+   */
+  private dropDisconnectedClients(): void {
+    const now = this.time.now();
+    for (const [key, disconnectedSince] of this.clientDisconnectedSince) {
+      if (now - disconnectedSince < this.clientDropTimeoutMs) continue;
+      this.clientDisconnectedSince.delete(key);
+      if (this.clientConnections.has(key)) continue; // reconnected since
+      const clientId = this.localClientIds.get(key);
+      this.localClientIds.delete(key);
+      if (clientId === undefined) continue;
+      this.clientDirectory.unregister(clientId, this.options.local);
+      this.broadcastClientGossip({ op: "unregister", clientId, gateway: this.options.local });
+    }
+  }
+
+  /** Fire-and-forget a `system: "client"` gossip message to a single peer. */
+  private sendClientGossip(peer: SiloAddress, gossip: ClientGossip): void {
+    const body = this.serializer.serialize(gossip);
+    this.connections
+      .get(peer)
+      .then((conn) => {
+        conn.send({
+          correlationId: nextCorrelationId(),
+          direction: "oneWay",
+          system: "client",
+          targetGrain: gossip.clientId,
+          sendingSilo: this.options.local,
+          interfaceId: 0,
+          method: "",
+          body,
+        });
+      })
+      .catch(() => undefined); // best-effort: an unreachable peer just misses this update
   }
 
   /** Fire-and-forget a `system: "client"` gossip message to every other active silo. */
   private broadcastClientGossip(gossip: ClientGossip): void {
-    const body = this.serializer.serialize(gossip);
-    for (const peer of this.otherActiveSilos()) {
-      this.connections
-        .get(peer)
-        .then((conn) => {
-          conn.send({
-            correlationId: nextCorrelationId(),
-            direction: "oneWay",
-            system: "client",
-            targetGrain: gossip.clientId,
-            sendingSilo: this.options.local,
-            interfaceId: 0,
-            method: "",
-            body,
-          });
-        })
-        .catch(() => undefined); // best-effort: an unreachable peer just misses this update
+    for (const peer of this.otherActiveSilos()) this.sendClientGossip(peer, gossip);
+  }
+
+  /**
+   * Republish every client this silo currently hosts to `peers` (Orleans
+   * `ClientDirectory` republishing its table on a membership change, and on
+   * `ClientRegistrationRefresh` in case an earlier gossip was dropped): a
+   * silo whose `broadcastClientGossip` at accept time predates `peers` joining
+   * never reached them, and would otherwise answer every call to that client
+   * with "no gateway for client" until the client's next reconnect.
+   */
+  private republishClientDirectory(peers: readonly SiloAddress[]): void {
+    if (peers.length === 0 || this.localClientIds.size === 0) return;
+    for (const clientId of this.localClientIds.values()) {
+      for (const peer of peers) {
+        this.sendClientGossip(peer, { op: "register", clientId, gateway: this.options.local });
+      }
     }
+  }
+
+  /**
+   * Re-arm the periodic republish (Orleans `ClientDirectory`'s
+   * `_refreshTimer`, ticking on `ClientRegistrationRefresh`). Cleared in `stop()`.
+   */
+  private scheduleClientDirectoryRefresh(): void {
+    this.clientDirectoryRefreshTimer = this.time.setTimer(() => {
+      this.scheduleClientDirectoryRefresh();
+      this.republishClientDirectory(this.otherActiveSilos());
+    }, this.clientDirectoryRefreshMs);
   }
 
   /** Apply an inbound client-directory gossip update (oneWay; never replies). */
@@ -2455,7 +2622,7 @@ export class ClusterNode {
   private scheduleLoadPublish(): void {
     this.loadPublishTimer = this.time.setTimer(() => {
       this.scheduleLoadPublish();
-      void this.publishLoadStats();
+      void this.publishLoadStats().catch(() => undefined);
     }, this.loadPublishIntervalMs);
   }
 

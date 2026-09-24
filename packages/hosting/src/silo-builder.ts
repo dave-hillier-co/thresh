@@ -185,6 +185,19 @@ export interface SiloConfig {
    * defaults to 1s); see `ClusterNodeOptions.loadPublishIntervalMs`.
    */
   loadPublishIntervalMs?: number;
+  /**
+   * How long a disconnected client stays registered on this gateway before
+   * being dropped (Orleans `SiloMessagingOptions.ClientDropTimeout`, defaults
+   * to 1 minute); see `ClusterNodeOptions.clientDropTimeoutMs`.
+   */
+  clientDropTimeoutMs?: number;
+  /**
+   * How often this silo republishes its locally connected clients to every
+   * peer, on top of the immediate republish a membership change triggers
+   * (Orleans `SiloMessagingOptions.ClientRegistrationRefresh`, defaults to 5
+   * minutes); see `ClusterNodeOptions.clientDirectoryRefreshMs`.
+   */
+  clientDirectoryRefreshMs?: number;
   /** Injectable RNG for deterministic placement in examples/tests. */
   random?: () => number;
   /** How often each silo re-reads its reminder ranges from the table (defaults to 60s). */
@@ -1370,6 +1383,12 @@ export class SiloBuilder {
         : {}),
       ...(this.config.loadPublishIntervalMs !== undefined
         ? { loadPublishIntervalMs: this.config.loadPublishIntervalMs }
+        : {}),
+      ...(this.config.clientDropTimeoutMs !== undefined
+        ? { clientDropTimeoutMs: this.config.clientDropTimeoutMs }
+        : {}),
+      ...(this.config.clientDirectoryRefreshMs !== undefined
+        ? { clientDirectoryRefreshMs: this.config.clientDirectoryRefreshMs }
         : {}),
       ...(this.config.defaultResponseTimeout !== undefined
         ? { defaultResponseTimeoutMs: durationToMs(this.config.defaultResponseTimeout) }

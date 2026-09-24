@@ -87,6 +87,11 @@ describe("transactional keepalive lifecycle on grain deactivation (#23 follow-up
     const silo = buildSilo(storage, time);
     await silo.start();
     try {
+      // `start()` itself arms a couple of periodic silo-wide timers (e.g. the
+      // cross-silo load publisher) that also use a 1s period, so only look for
+      // the confirmation worker's timer among calls made from here on.
+      const callsBeforeActivation = setTimerSpy.mock.calls.length;
+
       // Activating resolves the in-doubt record's TM, which is unreachable:
       // the record stays in-doubt and the confirmation worker is scheduled
       // against the silo's clock, at the default 1s initial backoff — distinct
@@ -95,7 +100,7 @@ describe("transactional keepalive lifecycle on grain deactivation (#23 follow-up
       await silo.getGrain(Account, "a").ping();
 
       const confirmationCallIndex = setTimerSpy.mock.calls.findIndex(
-        ([, delay]) => delay === 1_000,
+        ([, delay], index) => index >= callsBeforeActivation && delay === 1_000,
       );
       expect(confirmationCallIndex).toBeGreaterThanOrEqual(0);
       const confirmationHandle = setTimerSpy.mock.results[confirmationCallIndex]!.value as unknown;

@@ -128,6 +128,19 @@ export interface TestClusterOptions {
    */
   loadPublishIntervalMs?: number;
   /**
+   * How long a disconnected client stays registered on its gateway before
+   * being dropped, forwarded to every silo (Orleans
+   * `SiloMessagingOptions.ClientDropTimeout`, defaults to 1 minute).
+   */
+  clientDropTimeoutMs?: number;
+  /**
+   * How often every silo republishes its locally connected clients to its
+   * peers, on top of the immediate republish a membership change triggers
+   * (Orleans `SiloMessagingOptions.ClientRegistrationRefresh`, defaults to 5
+   * minutes).
+   */
+  clientDirectoryRefreshMs?: number;
+  /**
    * The shared transport network silos are built on. Defaults to a plain
    * `InProcessNetwork`; pass a subclass (e.g. one that counts messages) for
    * tests that need to observe traffic on the wire.
@@ -430,6 +443,12 @@ export class TestCluster {
         : {}),
       ...(this.options.loadPublishIntervalMs !== undefined
         ? { loadPublishIntervalMs: this.options.loadPublishIntervalMs }
+        : {}),
+      ...(this.options.clientDropTimeoutMs !== undefined
+        ? { clientDropTimeoutMs: this.options.clientDropTimeoutMs }
+        : {}),
+      ...(this.options.clientDirectoryRefreshMs !== undefined
+        ? { clientDirectoryRefreshMs: this.options.clientDirectoryRefreshMs }
         : {}),
     })
       .useMembership(membership)
