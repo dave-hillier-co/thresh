@@ -78,8 +78,47 @@ export interface Message {
   responseKind?: ResponseKind | undefined;
   requestContext?: RequestContext | undefined;
 
+  /**
+   * Milliseconds left, when sent, on the call chain's ambient deadline
+   * (`InvocationRequest.deadline`), if one is set. RELATIVE, like Orleans'
+   * wire `TimeToLive` (`MessageSerializer` writes the remaining ms and the
+   * receiver restarts a local stopwatch from it), so two silos' wall clocks
+   * are never compared: `ClusterNode.sendRemote` subtracts its own `now()`,
+   * `toRequest` adds the receiver's back (issue #90). May be negative (the
+   * deadline had already passed when sent).
+   */
+  deadlineInMs?: number | undefined;
+
+  /**
+   * Orleans `Message.TimeToLive`: milliseconds, when sent, until the caller
+   * stops waiting for the reply (its call timeout, or less if the request was
+   * itself already carrying a shorter one). Set on every non-one-way request;
+   * the receiver turns it into `InvocationRequest.expiresAt` and drops the
+   * request at turn start once it has passed, instead of running a call
+   * nobody is waiting for any more (issue #90).
+   */
+  timeToLiveMs?: number | undefined;
+
+  /**
+   * How many times this call has already been forwarded silo-to-silo (Orleans
+   * `Message.ForwardCount`), carried across a hop so `MaxForwardCount` caps
+   * the WHOLE chain, not just one silo's own attempts (issue #110). Absent on
+   * a caller's original dispatch.
+   */
+  forwardCount?: number | undefined;
+
   /** On a reply: participants the callee enlisted, for the caller to merge. */
   transactionParticipants?: SerializedParticipant[] | undefined;
+
+  /**
+   * On a reply: the receiving silo had to forward this call on (its directory
+   * CAS named a different owner), so the address the caller had cached/looked
+   * up for `targetGrain` is stale (Orleans `MessageCenter
+   * .AddToCacheInvalidationHeader`). `ClusterNode.sendRemote` evicts its
+   * `LocationCache` entry for `targetGrain` on seeing this instead of routing
+   * to the now-wrong silo again next call (issue #110).
+   */
+  staleCacheEntry?: boolean | undefined;
 
   /** Serialized arguments (request) or result/error (response). */
   body: Uint8Array;

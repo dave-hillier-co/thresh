@@ -28,8 +28,15 @@ export class LocationCache {
     this.cache.set(addr.grainId.toString(), addr);
   }
 
-  invalidate(grainId: GrainId): void {
-    this.cache.delete(grainId.toString());
+  /**
+   * Evict `grainId`'s entry -- or, given `staleSilo`, only if the entry still
+   * points at that silo (Orleans `InvalidateCache(GrainAddress)`), so a late
+   * stale-location hint cannot evict an entry already refreshed elsewhere.
+   */
+  invalidate(grainId: GrainId, staleSilo?: SiloAddress): void {
+    const key = grainId.toString();
+    if (staleSilo !== undefined && this.cache.get(key)?.silo.equals(staleSilo) !== true) return;
+    this.cache.delete(key);
   }
 
   invalidateSilo(silo: SiloAddress): void {

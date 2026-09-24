@@ -1,4 +1,5 @@
 import type { InvocationRequest } from "@thresh/core/request";
+import type { SiloAddress } from "@thresh/core/silo-address";
 
 /**
  * Local, per-call ambient cancellation for a `Dispatcher.invoke` — distinct
@@ -21,6 +22,16 @@ export interface InvokeCallOptions {
    * might be driving locally.
    */
   deadlineMs?: number;
+  /**
+   * Internal: fired if this call had to forward to a different silo because a
+   * directory CAS this silo lost named another owner (`DistributedDispatcher
+   * .forwardTo`). Set only by `ClusterNode.receiveRequest`, which uses it to
+   * tell the ORIGINAL caller which cached `LocationCache` address to evict
+   * (Orleans `MessageCenter.AddToCacheInvalidationHeader`) instead of that
+   * caller routing to the now-wrong silo forever (issue #110). Never set on a
+   * top-level or grain-to-grain call.
+   */
+  onForward?: (to: SiloAddress) => void;
 }
 
 /**

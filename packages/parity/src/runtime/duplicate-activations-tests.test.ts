@@ -1,8 +1,9 @@
 // Ported from dotnet/orleans test/Orleans.Runtime.Tests/DuplicateActivationsTests.cs @ v10.1.0 (MIT).
 // Upstream also bumps SiloMessagingOptions.ResponseTimeout to 1 minute to
-// accommodate stress-test load; this framework applies no per-call response
-// timeout by default (one is opt-in via `defaultResponseTimeout`), so there is
-// nothing to configure here.
+// accommodate stress-test load; `callTimeout` is that option here (the
+// caller's reply wait AND every request's time-to-live), so it is bumped the
+// same way -- at the 30s default, target calls queued behind 10k others can
+// outlive their time-to-live and be dropped.
 import { afterAll, beforeAll, describe } from "vitest";
 import { orleansTest } from "@thresh/testing/orleans-test";
 import { TestCluster } from "@thresh/testing/test-cluster";
@@ -14,6 +15,7 @@ describe("UnitTests.CatalogTests.DuplicateActivationsTests", () => {
   beforeAll(async () => {
     cluster = await TestCluster.start({
       grains: [{ ctor: CatalogTestGrain, interfaces: [ICatalogTestGrain] }],
+      callTimeout: { minutes: 1 },
     });
   });
 

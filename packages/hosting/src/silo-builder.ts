@@ -195,6 +195,14 @@ export interface SiloConfig {
    */
   defaultResponseTimeout?: Duration;
   /**
+   * How long a caller waits for a cross-silo reply before failing the call
+   * with a timeout (Orleans `SiloMessagingOptions.ResponseTimeout`). It is
+   * also the time-to-live every request carries: a request still queued at
+   * its target once this has passed is dropped rather than run, since its
+   * caller is no longer waiting. Defaults to 30s.
+   */
+  callTimeout?: Duration;
+  /**
    * Load-shedding config (Orleans `Configure<LoadSheddingOptions>`). Defaults
    * to shedding disabled; see `ClusterNodeOptions.loadShedding`.
    */
@@ -1364,6 +1372,9 @@ export class SiloBuilder {
         : {}),
       ...(this.config.defaultResponseTimeout !== undefined
         ? { defaultResponseTimeoutMs: durationToMs(this.config.defaultResponseTimeout) }
+        : {}),
+      ...(this.config.callTimeout !== undefined
+        ? { callTimeoutMs: durationToMs(this.config.callTimeout) }
         : {}),
       ...(this.config.random !== undefined ? { random: this.config.random } : {}),
       // Calling useVersioning() enables versioning with resolved defaults, so the
