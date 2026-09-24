@@ -261,7 +261,9 @@ export class Catalog {
     const existing = this.activations.get(key);
     if (existing !== undefined && existing.state !== "invalid") {
       if (!existing.deactivationRequestedAndIdle) return Promise.resolve(existing);
-      return this.finalizeStale(key, existing).then(() => this.createAndStore(key, id, activationId, rehydrationBag, sourceAddr));
+      return this.finalizeStale(key, existing).then(() =>
+        this.createAndStore(key, id, activationId, rehydrationBag, sourceAddr),
+      );
     }
     return this.createAndStore(key, id, activationId, rehydrationBag, sourceAddr);
   }
@@ -651,17 +653,46 @@ export class Catalog {
     }
   }
 
-  async deactivateAll(reason: DeactivationReason): Promise<void> {
+  /**
+   * `deadlineMs`, when given, bounds the WHOLE sweep (Orleans cancels
+   * `DeactivateAllActivations(ct)` with the host's own stop token) — separate
+   * from each activation's own per-hook `deactivationTimeoutMs`, which bounds
+   * only one activation's `onDeactivate` call. Without an overall deadline, a
+   * grace period plus N activations each individually capped at, say, 30s can
+   * still add up (in the pathological case of many slow hooks queued behind
+   * each other on a saturated scheduler) to longer than the process's own
+   * termination grace period, so the whole silo gets SIGKILLed mid-stop
+   * instead of finishing cleanly (issue #108). An activation still mid-flight
+   * when the deadline passes is left alone rather than force-finalized: its
+   * hook keeps running in the background (same trade-off as
+   * `awaitWithDeactivationTimeout`), and it is skipped below rather than
+   * disposed/unregistered out from under itself.
+   */
+  async deactivateAll(reason: DeactivationReason, deadlineMs?: number): Promise<void> {
     // Set BEFORE snapshotting: `getOrActivate` is synchronous up to its first
     // await, so this is visible to every subsequent call — including one
     // already racing this one — before it can create and store an activation
     // this sweep's snapshot has already missed.
     this.stopping = true;
     const all = [...this.activations.values(), ...[...this.workerActivations.values()].flat()];
-    await Promise.all(all.map((a) => a.deactivate(reason)));
+    const deactivated = Promise.all(all.map((a) => a.deactivate(reason)));
+    if (deadlineMs === undefined) {
+      await deactivated;
+    } else {
+      let handle: ReturnType<TimeProvider["setTimer"]> | undefined;
+      const timedOut = new Promise<void>((resolve) => {
+        handle = this.options.time.setTimer(resolve, deadlineMs);
+      });
+      await Promise.race([deactivated, timedOut]);
+      if (handle !== undefined) this.options.time.clearTimer(handle);
+    }
     this.activations.clear();
     this.workerActivations.clear();
     for (const a of all) {
+      // Still deactivating: the overall deadline above cut this sweep off
+      // before this one finished — leave it be rather than dispose/unregister
+      // an activation whose own hook may still be running.
+      if (a.state !== "invalid") continue;
       if (this.options.grainActivator?.disposeInstance !== undefined) {
         await this.options.grainActivator.disposeInstance(a.instance, a.id);
       }

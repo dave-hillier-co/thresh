@@ -32,7 +32,10 @@ describe("Catalog refuses to create activations once deactivateAll has started (
     await catalog.getOrCreate(idA);
     await flush();
 
-    const deactivating = catalog.deactivateAll({ code: "shutting-down", description: "silo stopping" });
+    const deactivating = catalog.deactivateAll({
+      code: "shutting-down",
+      description: "silo stopping",
+    });
 
     // A `getOrCreate` for a DIFFERENT id, racing the sweep, must not create
     // an orphan that deactivateAll's already-taken snapshot will never

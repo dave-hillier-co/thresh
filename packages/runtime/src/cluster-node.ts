@@ -1189,7 +1189,14 @@ export class ClusterNode {
     }
   }
 
-  async stop(): Promise<void> {
+  /**
+   * `deadlineMs`, when given, bounds `Catalog.deactivateAll`'s whole sweep
+   * (see its doc) — the host's overall stop budget minus whatever grace
+   * period it already spent, so the combined wait fits inside the process's
+   * own termination grace period instead of risking a SIGKILL mid-stop
+   * (issue #108).
+   */
+  async stop(deadlineMs?: number): Promise<void> {
     // Nothing will consume a re-armed pull from here on.
     for (const reArm of this.recoveryReArms.values()) {
       if (reArm.timer !== undefined) this.time.clearTimer(reArm.timer);
@@ -1199,7 +1206,10 @@ export class ClusterNode {
     // Deactivate before tearing down transport: onDeactivate hooks may make cross-silo
     // calls (e.g. notifying a watcher grain on another silo), which need the listener and
     // outbound connections still up. Only close them once every activation has drained.
-    await this.catalog.deactivateAll({ code: "shutting-down", description: "node stopping" });
+    await this.catalog.deactivateAll(
+      { code: "shutting-down", description: "node stopping" },
+      deadlineMs,
+    );
     await this.listener?.close();
     await this.connections.closeAll();
     // Only now is nothing left that could answer a call: the listener is closed and every pooled

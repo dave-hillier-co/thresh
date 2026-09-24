@@ -43,6 +43,13 @@ export interface SiloHostParts {
    * directly and this is ignored). Unset falls back to `GracefulShutdown`'s own default.
    */
   gracefulShutdownMs?: number;
+  /**
+   * `GracefulShutdown`'s overall stop budget, used the same way as
+   * `gracefulShutdownMs` (only when `buildSiloHost` constructs the default
+   * `GracefulShutdown`; ignored with a caller-supplied `shutdown`). Unset
+   * falls back to `GracefulShutdown`'s own default (`DEFAULT_STOP_BUDGET_MS`).
+   */
+  stopBudgetMs?: number;
   membership: MembershipService;
   reminderService?: ReminderService | undefined;
   /** The elected activation-rebalancer worker, started/stopped with the host. */
@@ -66,6 +73,19 @@ export interface SiloHostParts {
   >;
   /** Run after the node drains — e.g. disconnect durable provider clients. */
   onStop?: ReadonlyArray<() => Promise<void>>;
+  /**
+   * Run before the node deactivates its activations (`shutdown.drain()` ->
+   * `ClusterNode.stop()` -> `Catalog.deactivateAll`) — stream providers and
+   * the durable-job manager stop here, matching Orleans' own ordering
+   * (`PersistentStreamProviderOptions.cs:58`, `LocalDurableJobManager.cs:120`
+   * both stop at `ServiceLifecycleStage.Active`, before
+   * `Catalog.DeactivateAllActivations`, `Silo.cs:387-395`): otherwise they
+   * keep delivering into activations for the whole grace period plus
+   * deactivation, creating exactly the orphaned-activation race
+   * `deactivateAll` now refuses (issue #108), then failing once the
+   * transport underneath them has closed anyway.
+   */
+  onBeforeDeactivate?: ReadonlyArray<() => Promise<void>>;
   /**
    * Run after the node starts but before the silo is marked ready — e.g. call
    * grains from application startup code (Orleans `IStartupTask`).
@@ -248,11 +268,19 @@ export class SiloHost {
   }
 
   async stop(): Promise<void> {
-    const { rebalancerWorker, selfProbeWorker, reminderService, shutdown, healthServer, onStop } =
-      this.parts;
+    const {
+      rebalancerWorker,
+      selfProbeWorker,
+      reminderService,
+      shutdown,
+      healthServer,
+      onStop,
+      onBeforeDeactivate,
+    } = this.parts;
     this.membershipWatch?.abort();
     rebalancerWorker?.stop();
     reminderService?.stop();
+    await this.runHooks(onBeforeDeactivate);
     // `selfProbeWorker` keeps ticking through `shutdown.drain()`'s grace
     // period rather than stopping here alongside the other workers: it reads
     // `HealthCheck.isDraining()` to no-op its own flip once `drain()` sets
@@ -310,10 +338,9 @@ export function buildSiloHost(
 ): SiloHost {
   const shutdown =
     parts.shutdown ??
-    new GracefulShutdown(
-      parts.health,
-      parts.node,
-      parts.gracefulShutdownMs !== undefined ? { graceMs: parts.gracefulShutdownMs } : {},
-    );
+    new GracefulShutdown(parts.health, parts.node, {
+      ...(parts.gracefulShutdownMs !== undefined ? { graceMs: parts.gracefulShutdownMs } : {}),
+      ...(parts.stopBudgetMs !== undefined ? { stopBudgetMs: parts.stopBudgetMs } : {}),
+    });
   return new SiloHost({ ...parts, shutdown });
 }

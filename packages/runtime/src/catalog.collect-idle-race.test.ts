@@ -13,11 +13,11 @@ import { FakeTimeProvider } from "@thresh/runtime/test-support/fake-time-provide
  * from issue #106 (a fresh reactivation lands while the old activation's
  * hook is still in flight).
  */
-const raceHook: { current?: () => Promise<void> } = {};
+const raceHook: { current: (() => Promise<void>) | undefined } = { current: undefined };
 
 @grain()
 class RacyGrain extends Grain {
-  async onDeactivate(): Promise<void> {
+  override async onDeactivate(): Promise<void> {
     const hook = raceHook.current;
     raceHook.current = undefined;
     await hook?.();

@@ -61,6 +61,41 @@ describe("GracefulShutdown", () => {
     expect(observedMs).toBeGreaterThan(0);
   });
 
+  it("bounds node.stop() by the overall stop budget minus the grace period already spent (issue #108)", async () => {
+    const health = new HealthCheck();
+    let deadlineSeen: number | undefined;
+    const node: Drainable = {
+      stop: async (deadlineMs?: number) => {
+        deadlineSeen = deadlineMs;
+      },
+    };
+
+    await new GracefulShutdown(health, node, {
+      graceMs: 5000,
+      stopBudgetMs: 30000,
+      delay: () => Promise.resolve(),
+    }).drain();
+
+    expect(deadlineSeen).toBe(25000);
+  });
+
+  it("defaults the stop budget to DEFAULT_STOP_BUDGET_MS", async () => {
+    const health = new HealthCheck();
+    let deadlineSeen: number | undefined;
+    const node: Drainable = {
+      stop: async (deadlineMs?: number) => {
+        deadlineSeen = deadlineMs;
+      },
+    };
+
+    await new GracefulShutdown(health, node, {
+      graceMs: 0,
+      delay: () => Promise.resolve(),
+    }).drain();
+
+    expect(deadlineSeen).toBe(30000);
+  });
+
   it("drains only once", async () => {
     const health = new HealthCheck();
     let stops = 0;
