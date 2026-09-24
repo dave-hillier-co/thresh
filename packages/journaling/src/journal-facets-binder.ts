@@ -2,6 +2,7 @@ import type { GrainId } from "@thresh/core/grain-id";
 import { getDurableFields } from "@thresh/core/durable-state-metadata";
 import { isCustomStorageHost, JournaledGrain } from "@thresh/core/journaled-grain";
 import {
+  bindDurableStates,
   durableFieldsProviderName,
   registerDurableMachines,
 } from "@thresh/journaling/durable-state-activator";
@@ -29,9 +30,10 @@ import { StateMachineManagerImpl } from "@thresh/journaling/state-machine-manage
  * available (and correct) for a grain that only uses one of the two facets.
  *
  * A `JournaledGrain` that also implements `CustomStorageInterface` owns its
- * own log persistence and never touches the journal substrate at all, so it
- * is unaffected by manager sharing -- delegated to `bindJournaledGrain`
- * unchanged.
+ * own log persistence and never touches the journal substrate at all, and a
+ * `JournaledGrain` whose durable fields name a different journal store writes
+ * its log elsewhere; neither shares a log with its durable fields, so both are
+ * bound through `bindDurableStates` + `bindJournaledGrain` unchanged.
  */
 export async function bindJournalFacets(
   instance: object,
@@ -46,23 +48,32 @@ export async function bindJournalFacets(
   } = {},
 ): Promise<void> {
   const isJournaledGrain = instance instanceof JournaledGrain;
+  const fields = getDurableFields(instance);
+  const durableProvider = durableFieldsProviderName(fields, grainId);
 
-  if (isJournaledGrain && isCustomStorageHost(instance)) {
+  // Only a substrate-backed JournaledGrain whose log lands on the SAME journal
+  // store as the durable fields actually shares a log with them. A
+  // custom-storage host persists its events itself, and a JournaledGrain on a
+  // different provider from its fields writes to a different store, so in
+  // both cases the two facets never collide -- bind each on its own (keeping
+  // existing history where it has always lived).
+  const sharesLog =
+    isJournaledGrain &&
+    !isCustomStorageHost(instance) &&
+    fields.length > 0 &&
+    registry.get(durableProvider) === registry.get(opts.provider);
+  if (!sharesLog) {
+    await bindDurableStates(instance, grainId, registry, opts);
     await bindJournaledGrain(instance, grainId, registry, opts);
     return;
   }
 
-  const fields = getDurableFields(instance);
-  if (fields.length === 0 && !isJournaledGrain) return;
-
-  const providerName = durableFieldsProviderName(fields, grainId) ?? opts.provider;
-  const storage = registry.get(providerName);
-  const manager = new StateMachineManagerImpl("journal", grainId, storage, {
+  const manager = new StateMachineManagerImpl("journal", grainId, registry.get(opts.provider), {
     ...(opts.snapshotThreshold !== undefined ? { snapshotThreshold: opts.snapshotThreshold } : {}),
   });
 
   registerDurableMachines(instance, fields, manager);
-  if (isJournaledGrain) installJournalViewAdaptor(instance, manager);
+  installJournalViewAdaptor(instance, manager);
 
   if (opts.replay ?? true) await manager.replay();
 }
