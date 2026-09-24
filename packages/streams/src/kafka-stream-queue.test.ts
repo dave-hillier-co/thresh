@@ -63,9 +63,10 @@ async function drain(
   queue: KafkaStreamQueue,
   count: number,
   timeoutMs = 10_000,
+  startCursor = 0,
 ): Promise<QueueEntry[]> {
   const collected: QueueEntry[] = [];
-  let cursor = 0;
+  let cursor = startCursor;
   const start = Date.now();
   while (collected.length < count) {
     if (Date.now() - start > timeoutMs) {
@@ -239,6 +240,71 @@ describe.skipIf(kafka === undefined)("KafkaTopicQueues / KafkaStreamQueue", () =
       // once the seek lands on the new earliest offset.
       const [recovered] = await drain(queue, 1);
       expect(recovered!.event).toBe("m4");
+    } finally {
+      await client.stop();
+    }
+  }, 20_000);
+
+  it("readAfter does not discard buffered entries the caller never confirmed (interrupted batch, issue #100)", async () => {
+    const topic = await createTopic(1);
+    const cursors = new MemoryStreamCursorStore();
+    const client = new KafkaTopicQueues(kafka!, topic, "prov-partial-batch", cursors);
+    await client.start(1);
+    try {
+      await client.acquire(0);
+      const queue = new KafkaStreamQueue(client, 0);
+      for (const event of ["m1", "m2", "m3", "m4", "m5"]) await queue.append("s1", event);
+
+      // Read the whole batch, as `QueuePullingAgent.pump` does (`drain`
+      // retries `readAfter` until all 5 have arrived — it never commits, so
+      // this alone must not cost the queue anything).
+      const all = await drain(queue, 5);
+      expect(all.map((e) => e.event)).toEqual(["m1", "m2", "m3", "m4", "m5"]);
+
+      // Only m1, m2 are ever durably confirmed — simulating a cursor-store
+      // blip on the next commit that interrupts the rest of the batch.
+      await queue.commit(all[1]!.token);
+
+      // A read from the still-committed cursor must still see m3-m5: they
+      // were handed back by the earlier full read but never confirmed, so
+      // `readAfter` must not have thrown them away as a side effect of
+      // returning them once already.
+      const retry = await queue.readAfter(all[1]!.token, 5);
+      expect(retry.map((e) => e.event)).toEqual(["m3", "m4", "m5"]);
+
+      // And it must stay that way — repeating the read from the same
+      // uncommitted cursor is idempotent, exactly like `RedisStreamQueue`'s
+      // non-destructive `XRANGE`.
+      const retryAgain = await queue.readAfter(all[1]!.token, 5);
+      expect(retryAgain.map((e) => e.event)).toEqual(["m3", "m4", "m5"]);
+    } finally {
+      await client.stop();
+    }
+  }, 20_000);
+
+  it("seek re-seeks the consumer so a rewind actually redelivers from the earlier cursor (issue #100)", async () => {
+    const topic = await createTopic(1);
+    const cursors = new MemoryStreamCursorStore();
+    const client = new KafkaTopicQueues(kafka!, topic, "prov-rewind", cursors);
+    await client.start(1);
+    try {
+      await client.acquire(0);
+      const queue = new KafkaStreamQueue(client, 0);
+      for (const event of ["m1", "m2", "m3", "m4", "m5"]) await queue.append("s1", event);
+
+      const delivered = await drain(queue, 5);
+      expect(delivered.map((e) => e.event)).toEqual(["m1", "m2", "m3", "m4", "m5"]);
+      await queue.commit(delivered[4]!.token);
+
+      // Simulate `RecoverableStreamDeliveryError(resume=<token after m2>)`:
+      // the consumer wants to resume from its own checkpoint, rewinding past
+      // what was already delivered.
+      await queue.seek(delivered[1]!.token);
+
+      // Rewind must actually re-seek the consumer / refill the buffer —
+      // m3-m5 have to be redelivered, not lost.
+      const redelivered = await drain(queue, 3, 15_000, delivered[1]!.token);
+      expect(redelivered.map((e) => e.event)).toEqual(["m3", "m4", "m5"]);
     } finally {
       await client.stop();
     }
