@@ -60,6 +60,14 @@ export class PersistentStateImpl<T> implements PersistentState<T>, IGrainMigrati
         this.storage.read(this.stateName, this.grainId, this.holder, signal),
       ),
     );
+    // Issue #109: a provider's read() only reports exists/etag for a missing
+    // record — it has no `defaultValue` of its own to reset to — so any
+    // unsaved local mutation would otherwise survive a read that found
+    // nothing. Orleans resets to a fresh instance here too
+    // (AdoNetGrainStorage.cs:261-266, RedisGrainStorage.cs:110-118).
+    if (!this.holder.exists) {
+      this.holder.value = this.defaultValue();
+    }
   }
 
   async write(signal?: AbortSignal): Promise<void> {

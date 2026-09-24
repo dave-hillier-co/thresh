@@ -198,13 +198,25 @@ export class PostgresGrainStorage implements GrainStorage {
     signal?: AbortSignal,
   ): Promise<void> {
     const etag = randomUUID();
-    // No row -> insert succeeds regardless of expected etag (matches the memory
-    // provider). An existing row only updates when the caller's etag still
-    // matches; a blind (`''`, never a UUID) or stale etag updates zero rows.
+    // No row -> insert succeeds only for a blind write (`''`, never a UUID):
+    // a non-empty expected etag against a missing row is a conflict (issue
+    // #109 — mirrors Orleans' AdoNet CheckVersionInconsistency), not a
+    // license to resurrect whatever the caller thought was there. An
+    // existing row only updates when the caller's etag still matches; a
+    // blind or stale etag against an existing row updates zero rows. The
+    // `WHERE $6 = '' OR EXISTS (...)` guard is what enforces the missing-row
+    // rule: it only lets the plain INSERT branch propose a row when either
+    // the caller had no etag, or a row genuinely exists for `ON CONFLICT` to
+    // arbitrate — a non-empty etag with no existing row proposes nothing, so
+    // the statement inserts and returns zero rows.
     const res = await raceSignal(
       this.pool.query<{ etag: string }>(
         `INSERT INTO ${this.table} (service_id, grain_id, state_name, data, etag)
-       VALUES ($1, $2, $3, $4, $5)
+       SELECT $1, $2, $3, $4, $5
+       WHERE $6 = '' OR EXISTS (
+         SELECT 1 FROM ${this.table}
+         WHERE service_id = $1 AND grain_id = $2 AND state_name = $3
+       )
        ON CONFLICT (service_id, grain_id, state_name) DO UPDATE
          SET data = EXCLUDED.data, etag = EXCLUDED.etag
          WHERE ${this.table}.etag = $6
@@ -258,7 +270,12 @@ export class PostgresGrainStorage implements GrainStorage {
       signal,
     );
     const row = res.rows[0]!;
-    if (row.present && !row.deleted) {
+    // A present row that did not delete (blank or stale etag) is a conflict,
+    // as before; a MISSING row with a non-empty expected etag is now one too
+    // (issue #109) — otherwise a stale clearer would treat someone else's
+    // earlier delete as a no-op success rather than the conflict it is.
+    const expected = state.etag ?? "";
+    if ((row.present && !row.deleted) || (!row.present && expected !== "")) {
       throw new InconsistentStateError(
         `etag conflict clearing ${stateName} for ${grainId.toString()}`,
         state.etag,
