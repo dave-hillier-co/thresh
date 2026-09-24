@@ -10,7 +10,7 @@ import type { LogViewAdaptor } from "@thresh/core/journaled-grain";
  * snapshot -- without it, compaction (which empties `confirmedEvents`) would
  * make the version appear to reset to the post-compaction entry count.
  */
-type Frame<TState, TEvent> = { t: "event"; e: TEvent } | { t: "snap"; s: TState; v: number };
+type Frame<TState, TEvent> = { t: "event"; e: TEvent } | { t: "snap"; s: TState; v?: number };
 
 /**
  * The `LogViewAdaptor` implementation, mirroring Orleans' state-storage /
@@ -39,11 +39,12 @@ export class LogViewAdaptorImpl<TState, TEvent>
   private pending: TEvent[] = [];
   /**
    * Count of raised-but-not-yet-confirmed events. Tracked separately from
-   * `pending.length` (which gets swapped out at the *start* of a confirmation
-   * so concurrently-raised events queue behind it): this only decreases once
-   * an event has actually been persisted, so a raise-then-fire-and-forget-
-   * confirm still reports a nonzero tentative/confirmed version gap for as
-   * long as the persist is in flight.
+   * `pending.length` (the event being appended is taken off `pending` before
+   * its append, so its own `apply` does not fold it in twice): this only
+   * decreases once an event has actually been persisted (or dropped on a
+   * conflict), so a raise-then-fire-and-forget-confirm still reports a
+   * nonzero tentative/confirmed version gap for as long as the persist is in
+   * flight.
    */
   private unconfirmedCount = 0;
   /** The single in-flight `confirmSubmittedEntries` loop, if any (see below). */
@@ -89,8 +90,8 @@ export class LogViewAdaptorImpl<TState, TEvent>
    * writer through its `StateMachineManager`, so the raise cannot lose a race to another log
    * writer the way the custom-storage adaptor's version CAS can; the one conflict left is the
    * substrate's own storage CAS (a duplicate activation), which surfaces as an
-   * `InconsistentStateError` from the append. That conflict reports `false` -- and the swapped-out
-   * batch is not requeued by `runConfirmLoop`, so the event is dropped, never applied by a later
+   * `InconsistentStateError` from the append. That conflict reports `false` -- and `runConfirmLoop` does not requeue the
+   * conflicting event, so it is dropped (from the tentative view too), never applied by a later
    * confirm. Anything else is a genuine storage failure and propagates.
    */
   async tryAppend(event: TEvent): Promise<boolean> {
@@ -151,7 +152,10 @@ export class LogViewAdaptorImpl<TState, TEvent>
           this.pending.unshift(event);
           throw error;
         }
+        // Dropped for good: take it out of the tentative view as well, or
+        // `tentativeView` would keep showing an event nothing will apply.
         this.unconfirmedCount -= 1;
+        this.tentative = this.pending.reduce(this.transition, this.confirmed);
         throw error;
       }
       this.unconfirmedCount -= 1;
@@ -193,7 +197,10 @@ export class LogViewAdaptorImpl<TState, TEvent>
     } else {
       this.confirmed = frame.s;
       this.confirmedEvents = [];
-      this.version = frame.v;
+      // A snapshot written before the version travelled with it has no `v`;
+      // fall back to what such a log always reported (a count from zero at the
+      // snapshot) rather than poisoning the version with `undefined`.
+      this.version = frame.v ?? 0;
     }
     // Recompute (don't just mirror confirmed): events may have been raised
     // concurrently with the append that triggered this `apply`.

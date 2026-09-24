@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import { GrainId } from "@thresh/core/grain-id";
 import type { GrainId as GrainIdType } from "@thresh/core/grain-id";
 import type { JournalEntry, JournalSegment, JournalStorage } from "@thresh/core/journal-storage";
+import { InconsistentStateError } from "@thresh/core/errors";
 import { JournaledGrain } from "@thresh/core/journaled-grain";
+import { serializeValue } from "@thresh/core/value-codec";
 import { MemoryJournalStorage } from "@thresh/journaling/memory-journal-storage";
 import { JournalStorageRegistry } from "@thresh/journaling/journal-storage-registry";
 import { bindJournaledGrain } from "@thresh/journaling/journaled-grain-binder";
@@ -74,6 +76,14 @@ class CounterGrain extends JournaledGrain<CountState, CountEvent> {
 
   confirm(): Promise<void> {
     return this.confirmEvents();
+  }
+
+  tryAdd(amount: number): Promise<boolean> {
+    return this.raiseConditionalEvent({ kind: "add", amount });
+  }
+
+  tentativeVer(): number {
+    return this.tentativeVersion;
   }
 
   clear(): Promise<void> {
@@ -249,5 +259,44 @@ describe("JournaledGrain log-consistency protocol", () => {
     await reactivated.confirm();
     expect(reactivated.confirmed()).toEqual({ count: 8 });
     expect(reactivated.confirmedVersion()).toBe(8);
+  });
+
+  it("drops a conflicting conditional event from the tentative view too, not just the count", async () => {
+    const memory = new MemoryJournalStorage();
+    const conflicting = new FailingAppendStorage(
+      memory,
+      1,
+      () => new InconsistentStateError("journal version conflict", undefined, undefined),
+    );
+    const grain = new CounterGrain();
+    await bindJournaledGrain(grain, id, new JournalStorageRegistry().add("default", conflicting));
+
+    expect(await grain.tryAdd(5)).toBe(false);
+
+    // The event was not applied and will not be: the tentative view and
+    // version must agree with the confirmed ones rather than still show it.
+    expect(grain.confirmed()).toEqual({ count: 0 });
+    expect(grain.tentative()).toEqual({ count: 0 });
+    expect(grain.tentativeVer()).toBe(grain.confirmedVersion());
+  });
+
+  it("reads a snapshot frame written before the version was recorded in it", async () => {
+    const storage = new MemoryJournalStorage();
+    // A pre-#96 compaction frame: state only, no `v`.
+    await storage.append(
+      "journal",
+      id,
+      [serializeValue({ m: "journal", k: "snap", p: { t: "snap", s: { count: 4 } } })],
+      undefined,
+    );
+
+    const grain = await makeGrain(storage);
+    expect(grain.confirmed()).toEqual({ count: 4 });
+    expect(grain.confirmedVersion()).toBe(0);
+
+    grain.add(1);
+    await grain.confirm();
+    expect(grain.confirmedVersion()).toBe(1);
+    expect(grain["retrieveConfirmedEvents"](0, 1)).toEqual([{ kind: "add", amount: 1 }]);
   });
 });
