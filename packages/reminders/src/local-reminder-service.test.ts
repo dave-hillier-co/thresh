@@ -187,6 +187,48 @@ describe("LocalReminderService — GetReminder(s)", () => {
   });
 });
 
+describe("LocalReminderService — catch-up after downtime (initial due time)", () => {
+  it("skips missed ticks and resumes on the startAt + n*period grid instead of firing immediately", async () => {
+    // Orleans' CalculateInitialDueTime: a reminder whose first tick is long
+    // past does not fire at once — it waits for the next startAt + n*period
+    // boundary, and later ticks stay on that grid.
+    const time = new FakeTimeProvider();
+    const table = new MemoryReminderTable();
+    const fires: number[] = [];
+    const onFire = async (): Promise<void> => {
+      fires.push(time.now());
+    };
+
+    const serviceA = new LocalReminderService(table, time, onFire, [WHOLE], 0, {
+      minimumPeriod: { ms: 0 },
+    });
+    // startAt = 1000, period = 1000.
+    await serviceA.register(billing, "tick", { ms: 1000 }, { ms: 1000 });
+    serviceA.stop(); // simulate the silo going down before the first tick
+
+    // "Downtime" 0 -> 3400: no timer is live, so the clock just moves.
+    time.advance(3400);
+
+    // A fresh service takes over and reconciles from the table.
+    const serviceB = new LocalReminderService(table, time, onFire, [WHOLE], 0, {
+      minimumPeriod: { ms: 0 },
+    });
+    await serviceB.refreshOwnership([WHOLE]);
+    await flush();
+    expect(fires).toEqual([]); // no catch-up fire for the missed ticks at 2000 and 3000
+
+    time.advance(600); // grid boundary startAt + 3*period = 4000
+    await flush();
+    expect(fires).toEqual([4000]);
+
+    time.advance(1000); // next tick stays on the grid: 5000, not 4000 + drift
+    await flush();
+    expect(fires).toEqual([4000, 5000]);
+
+    serviceB.stop();
+  });
+});
+
 describe("LocalReminderService — double-fire on rebalance", () => {
   it("does not fire immediately when a fresh instance reconciles the same table after a tick", async () => {
     // Ownership-handoff hazard: without a persisted last-fired instant, a new

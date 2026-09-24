@@ -157,19 +157,26 @@ export class LocalReminderService implements ReminderRegistry {
   }
 
   /**
-   * The next due instant for `entry`: `startAt` if it has never fired (first
-   * tick, unchanged behaviour); otherwise the next period boundary after
-   * `max(lastFiredAt, startAt)` (issue: reminder double-fire on rebalance) —
-   * so a new owner's `reconcile()` resumes the schedule instead of firing
-   * immediately for every reminder in a range that just moved.
+   * The next due instant for `entry`. Mirrors Orleans' `CalculateInitialDueTime`:
+   * if `startAt` (or the last recorded tick) hasn't passed yet, that's the due
+   * time; otherwise ticks have been missed and we skip straight to the next
+   * `startAt + n*period` grid boundary rather than firing a catch-up tick.
+   * Used both for the very first schedule (a reminder registered, or
+   * reconciled onto a new owner, with a long-past `startAt` doesn't fire
+   * immediately — issue: reminder fires a catch-up tick after downtime) and
+   * after every fire (so ticks stay on the grid instead of drifting by
+   * fire-time + period — issue: reminder double-fire on rebalance).
    */
   private nextDueAt(entry: ReminderEntry): Date {
-    if (entry.lastFiredAt === undefined) return entry.startAt;
     const periodMs = durationToMs(entry.period);
-    if (periodMs <= 0) return entry.startAt; // one-shot: never reconciled after firing
+    if (periodMs <= 0) return entry.startAt; // one-shot: never reconciled/rescheduled after firing
     const startMs = entry.startAt.getTime();
-    const base = Math.max(entry.lastFiredAt.getTime(), startMs);
-    const periodsElapsed = Math.floor((base - startMs) / periodMs) + 1;
+    // Without a recorded fire, the only reference point for "how many ticks
+    // were missed" is now — same as Orleans computing CalculateInitialDueTime
+    // against UtcNow at schedule time.
+    const reference = entry.lastFiredAt === undefined ? this.time.now() : entry.lastFiredAt.getTime();
+    if (reference < startMs) return entry.startAt; // first tick hasn't happened yet
+    const periodsElapsed = Math.floor((reference - startMs) / periodMs) + 1;
     return new Date(startMs + periodsElapsed * periodMs);
   }
 
@@ -188,11 +195,14 @@ export class LocalReminderService implements ReminderRegistry {
     if (periodMs > 0) {
       // Reschedule first (fixed-rate) before delivering the tick. Persist the
       // tick instant so a future owner (rebalance/restart) resumes from it
-      // rather than refiring from the original startAt.
+      // rather than refiring from the original startAt. Schedule the next tick
+      // from the startAt + n*period grid (nextDueAt), not fire-time + period,
+      // so a late tick doesn't drag every later tick's schedule with it.
       const tickedEntry: ReminderEntry = { ...entry, lastFiredAt: firedAt };
+      const nextDueMs = Math.max(0, this.nextDueAt(tickedEntry).getTime() - this.time.now());
       this.scheduled.set(key, {
         entry: tickedEntry,
-        handle: this.time.setTimer(() => this.fire(tickedEntry), periodMs),
+        handle: this.time.setTimer(() => this.fire(tickedEntry), nextDueMs),
       });
       void this.table
         .recordFired(entry.grainId, entry.name, entry.etag, firedAt)
