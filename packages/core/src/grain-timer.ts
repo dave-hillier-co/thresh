@@ -20,4 +20,14 @@ export interface TimerOptions {
    * self-disposing timer), which would otherwise deadlock a non-reentrant grain.
    */
   interleave?: boolean;
+  /**
+   * Treat each tick as activity that keeps the activation alive for idle
+   * collection, the same as an ordinary grain call (Orleans'
+   * `GrainTimerCreationOptions.KeepAlive`, via the tick message's
+   * `IsKeepAlive` — see `ActivationData.OnCompletedRequest`,
+   * ActivationData.cs:1486). Defaults to `false`: a timer's own ticks do NOT
+   * by themselves postpone collection, matching this class's default doc
+   * above and Orleans' own `KeepAlive` default.
+   */
+  keepAlive?: boolean;
 }
