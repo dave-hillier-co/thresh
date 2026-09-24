@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { grain } from "@thresh/core/decorators";
+import { RejectionError } from "@thresh/core/errors";
 import { Grain } from "@thresh/core/grain";
 import { GrainId } from "@thresh/core/grain-id";
 import { getGrainMetadata } from "@thresh/core/grain-metadata";
@@ -29,7 +30,15 @@ class RerouteGrain extends Grain {
   async ping(): Promise<string> {
     return "pong";
   }
+  async failNested(): Promise<string> {
+    runs++;
+    // What a nested call's exhausted reroute looks like from inside a body
+    // that already ran: the same kind the runtime uses for "never ran here".
+    throw new RejectionError("nested target unavailable", "noActivation");
+  }
 }
+
+let runs = 0;
 
 const metadata = getGrainMetadata(RerouteGrain)!;
 
@@ -70,5 +79,26 @@ describe("LocalDispatcher reroutes calls queued behind a stuck activation (Orlea
     await expect(queued).resolves.toBe("pong");
     expect(catalog.get(id)).not.toBe(first);
     wedge.resolve("done");
+  });
+
+  it("never resends a call whose own body threw a noActivation rejection", async () => {
+    runs = 0;
+    const time = new FakeTimeProvider();
+    const factory = new GrainFactory(() => metadata.grainType, time);
+    const catalog = new Catalog({
+      grainTypes: new Map<string, RegisteredGrain>([
+        [metadata.grainType, { ctor: RerouteGrain, metadata }],
+      ]),
+      factory,
+      time,
+      defaultCollectionAgeSeconds: 900,
+    });
+    const dispatcher = new LocalDispatcher(catalog);
+    const id = new GrainId(metadata.grainType, "nested");
+
+    await expect(dispatcher.invoke(req(id, "failNested", "r-1"))).rejects.toThrow(
+      "nested target unavailable",
+    );
+    expect(runs).toBe(1);
   });
 });

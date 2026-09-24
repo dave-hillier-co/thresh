@@ -119,8 +119,8 @@ export type RejectionKind =
    * pointer): those are safe to treat as a stale cache/directory entry and
    * resend, because the callee never started the turn. A dropped connection
    * gives no such guarantee — the callee may already be mid-turn — so this
-   * kind is deliberately NOT stale (`isStaleRejection` in
-   * `distributed-dispatcher.ts` must not admit it): it surfaces to the
+   * kind is deliberately NOT stale (`isStaleActivationRejection` must not
+   * admit it): it surfaces to the
    * caller instead of being silently resent, which is what let a lost
    * connection re-run an already-executing call (issue #88).
    */
@@ -135,6 +135,29 @@ export class RejectionError extends ThreshRuntimeError {
     super(message);
     this.name = "RejectionError";
   }
+}
+
+/**
+ * Whether `err` is a `RejectionError` whose kind means "the target moved,
+ * disappeared, or is momentarily out of view" — a stale routing artifact a
+ * caller should re-resolve and retry against, rather than a genuine
+ * application-level refusal. Shared by every dispatcher (`LocalDispatcher`,
+ * `DistributedDispatcher`) so a held call that a deactivating/migrating
+ * activation reroutes (see `ActivationData.invoke`'s "noActivation" throw)
+ * is retried the same way everywhere it can surface.
+ *
+ * Only kinds whose callee never started the turn belong here, so a resend
+ * cannot duplicate work. Deliberately excludes `"siloUnavailable"` (issue
+ * #88): that kind means the pooled CONNECTION died, not that the address was
+ * wrong, and the callee may already be mid-turn when it fires — resending it
+ * would re-run a call already executing. Do not add it here without a test
+ * asserting this set by name (see `docs/design-notes-parity-gaps.md`).
+ */
+export function isStaleActivationRejection(err: unknown): boolean {
+  return (
+    err instanceof RejectionError &&
+    (err.kind === "noActivation" || err.kind === "unknownTarget" || err.kind === "staleView")
+  );
 }
 
 /** A grain call that did not receive a response within its deadline. */

@@ -177,7 +177,7 @@ describe("LocalDispatcher one-way failure logging", () => {
     const failure = new Error("callee exploded");
     const activation = {
       invoke: vi.fn().mockRejectedValue(failure),
-      isStuckRejection: () => false,
+      isRerouteRejection: () => false,
     };
     const catalog = {
       isStatelessWorkerType: () => false,

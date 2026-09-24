@@ -1,5 +1,5 @@
 import { newActivationId } from "@thresh/core/activation-id";
-import { RejectionError } from "@thresh/core/errors";
+import { isStaleActivationRejection, RejectionError } from "@thresh/core/errors";
 import type { GrainAddress } from "@thresh/core/grain-address";
 import type { GrainId } from "@thresh/core/grain-id";
 import type { GrainType } from "@thresh/core/grain-type";
@@ -178,18 +178,40 @@ export class DistributedDispatcher implements Dispatcher {
       try {
         return await this.routeTo(cached, withDeadline, opts);
       } catch (err) {
-        if (!isStaleRejection(err)) throw err;
+        if (!isStaleActivationRejection(err)) throw err;
         this.deps.cache.invalidate(withDeadline.target); // stale entry: re-resolve below
       }
     }
 
-    const found = await this.deps.directory.lookup(withDeadline.target);
-    if (found !== undefined) {
-      this.deps.cache.put(found);
-      return this.routeTo(found, withDeadline, opts);
-    }
+    return this.lookupAndInvoke(withDeadline, opts);
+  }
 
-    return this.placeAndInvoke(withDeadline, opts);
+  /**
+   * Directory lookup, then route — retried once against a fresh lookup when
+   * the resolved target turns out stale. A deactivating or migrating
+   * activation HOLDS a call reaching it and only reroutes (throws a
+   * `noActivation`-kind `RejectionError`, see `ActivationData.invoke`) once
+   * it has fully settled, so by the time that reroute fires here, a fresh
+   * lookup reflects the outcome (the migrated activation's new host, or
+   * nothing at all) rather than racing it — one retry is enough, and it
+   * converges rather than looping. Falls through to placement only when the
+   * directory genuinely has nothing for this id.
+   */
+  private async lookupAndInvoke(
+    req: InvocationRequest,
+    opts?: InvokeCallOptions,
+    retrying = false,
+  ): Promise<unknown> {
+    const found = await this.deps.directory.lookup(req.target);
+    if (found === undefined) return this.placeAndInvoke(req, opts);
+    this.deps.cache.put(found);
+    try {
+      return await this.routeTo(found, req, opts);
+    } catch (err) {
+      if (!isStaleActivationRejection(err) || retrying) throw err;
+      this.deps.cache.invalidate(req.target);
+      return this.lookupAndInvoke(req, opts, true);
+    }
   }
 
   /** A request that arrived here: ensure a local activation, or forward to the CAS winner. */
@@ -478,26 +500,4 @@ export class DistributedDispatcher implements Dispatcher {
         : this.deps.remote.send(targetSilo, req);
     });
   }
-}
-
-/**
- * Whether `err` reflects a stale cache/directory entry that is safe to
- * invalidate-and-resend: the callee never started the turn, so resending
- * cannot duplicate work (Orleans never resends at all -- `InsideRuntimeClient`
- * just invalidates and surfaces the rejection -- but this codebase's cache
- * sits in front of the dispatcher rather than the transport, so a resend here
- * plays the role of Orleans' fresh `AddressAndSendMessage` lookup).
- *
- * Deliberately excludes `"siloUnavailable"` (issue #88): that kind means the
- * pooled CONNECTION died, not that the address was wrong, and the callee may
- * already be mid-turn when it fires. Resending it would be the exact bug the
- * issue reports -- a call already executing gets re-sent and runs twice. Do
- * not add it here without a test asserting this set by name (see
- * `docs/design-notes-parity-gaps.md`).
- */
-function isStaleRejection(err: unknown): boolean {
-  return (
-    err instanceof RejectionError &&
-    (err.kind === "noActivation" || err.kind === "unknownTarget" || err.kind === "staleView")
-  );
 }

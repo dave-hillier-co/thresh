@@ -38,11 +38,15 @@ export class LocalDispatcher implements Dispatcher {
     try {
       return await activation.invoke(withDeadline, opts);
     } catch (error) {
-      // The activation was deactivated as stuck (MaxRequestProcessingTime)
-      // before this call ever ran: re-deliver it to a fresh activation, as
-      // Orleans' `RerouteAllQueuedMessages` does. Only that exact rejection
-      // is retried, so a call that did run is never executed twice.
-      if (!activation.isStuckRejection(error)) throw error;
+      // The call never ran here: the activation was deactivated as stuck
+      // (MaxRequestProcessingTime), or it was deactivating/migrating and held
+      // the call until it settled (`ActivationData.invoke`'s hold-and-reroute).
+      // Re-deliver it to a fresh activation, as Orleans'
+      // `RerouteAllQueuedMessages` does. Only this activation's own reroute
+      // rejections are retried, so a call that did run -- even one whose own
+      // body threw a "noActivation" rejection from a nested call -- is never
+      // executed twice.
+      if (!activation.isRerouteRejection(error)) throw error;
       return this.deliver(req, opts);
     }
   }
