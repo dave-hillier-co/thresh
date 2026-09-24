@@ -53,6 +53,21 @@ export interface KafkaPullingStreamProviderOptions {
    * below its earliest available offset).
    */
   failureHandler?: StreamFailureHandler;
+  /**
+   * Total time (ms) to keep retrying delivery to ONE subscriber before
+   * skipping it and notifying `failureHandler` — every other subscriber of
+   * the same event is retried and timed out independently (Orleans
+   * `MaxEventDeliveryTime`; default 1 minute).
+   */
+  maxEventDeliveryTimeMs?: number;
+  /**
+   * Bounds a single delivery attempt to one subscriber (Orleans
+   * `ResponseTimeout`; default 30s) so a hung `onNext` cannot stall this
+   * provider's queues, or silo shutdown, forever.
+   */
+  deliveryResponseTimeoutMs?: number;
+  /** Backoff between retries to the same subscriber; defaults to 2^attempt * 50ms, capped at 5s. */
+  retryBackoffMs?: (attempt: number) => number;
   /** In-memory per-partition buffer size before the partition is paused (defaults to 1000). */
   highWaterMark?: number;
 }
@@ -104,6 +119,13 @@ export class KafkaPullingStreamProvider implements ActivationBoundStreamProvider
     this.core = new PullingStreamProviderCore(name, queues, this.registry, {
       ...(options.pollIntervalMs !== undefined ? { pollIntervalMs: options.pollIntervalMs } : {}),
       ...(options.failureHandler !== undefined ? { failureHandler: options.failureHandler } : {}),
+      ...(options.maxEventDeliveryTimeMs !== undefined
+        ? { maxEventDeliveryTimeMs: options.maxEventDeliveryTimeMs }
+        : {}),
+      ...(options.deliveryResponseTimeoutMs !== undefined
+        ? { deliveryResponseTimeoutMs: options.deliveryResponseTimeoutMs }
+        : {}),
+      ...(options.retryBackoffMs !== undefined ? { retryBackoffMs: options.retryBackoffMs } : {}),
     });
   }
 

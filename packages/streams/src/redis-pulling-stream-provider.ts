@@ -36,6 +36,21 @@ export interface RedisPullingStreamProviderOptions {
    */
   failureHandler?: StreamFailureHandler;
   /**
+   * Total time (ms) to keep retrying delivery to ONE subscriber before
+   * skipping it and notifying `failureHandler` — every other subscriber of
+   * the same event is retried and timed out independently (Orleans
+   * `MaxEventDeliveryTime`; default 1 minute).
+   */
+  maxEventDeliveryTimeMs?: number;
+  /**
+   * Bounds a single delivery attempt to one subscriber (Orleans
+   * `ResponseTimeout`; default 30s) so a hung `onNext` cannot stall this
+   * provider's queues, or silo shutdown, forever.
+   */
+  deliveryResponseTimeoutMs?: number;
+  /** Backoff between retries to the same subscriber; defaults to 2^attempt * 50ms, capped at 5s. */
+  retryBackoffMs?: (attempt: number) => number;
+  /**
    * Logical service identity this provider's queues, registry and cursors
    * belong to (Orleans' `ClusterOptions.ServiceId`). Two clusters pointed at
    * the same Redis and provider name stay partitioned by it — the queues
@@ -86,6 +101,13 @@ export class RedisPullingStreamProvider implements ActivationBoundStreamProvider
     this.core = new PullingStreamProviderCore(name, queues, registry, {
       ...(options.pollIntervalMs !== undefined ? { pollIntervalMs: options.pollIntervalMs } : {}),
       ...(options.failureHandler !== undefined ? { failureHandler: options.failureHandler } : {}),
+      ...(options.maxEventDeliveryTimeMs !== undefined
+        ? { maxEventDeliveryTimeMs: options.maxEventDeliveryTimeMs }
+        : {}),
+      ...(options.deliveryResponseTimeoutMs !== undefined
+        ? { deliveryResponseTimeoutMs: options.deliveryResponseTimeoutMs }
+        : {}),
+      ...(options.retryBackoffMs !== undefined ? { retryBackoffMs: options.retryBackoffMs } : {}),
     });
   }
 

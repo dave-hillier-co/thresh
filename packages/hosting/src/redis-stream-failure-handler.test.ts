@@ -98,7 +98,14 @@ describe.skipIf(admin === undefined)("useDurableStreamFailureStore + addRedisStr
       .useMembership(membership)
       .useInProcessTransport(net)
       .useDurableStreamFailureStore(store)
-      .addRedisStreams("default", { url: REDIS_URL, keyPrefix })
+      .addRedisStreams("default", {
+        url: REDIS_URL,
+        keyPrefix,
+        // Keep the subscriber's retry budget short so the test doesn't wait
+        // out the real (Orleans) 1-minute `maxEventDeliveryTimeMs` default.
+        maxEventDeliveryTimeMs: 50,
+        retryBackoffMs: () => 10,
+      })
       .registerGrain(PoisonRoomGrain, { interfaces: [IPoisonRoom] })
       .registerGrain(AlwaysFailingConsumerGrain, { interfaces: [IAlwaysFailingConsumerGrain] })
       .build();
@@ -108,7 +115,8 @@ describe.skipIf(admin === undefined)("useDurableStreamFailureStore + addRedisStr
       await silo.getGrain(IPoisonRoom, "room-1").say("poison");
       await waitFor(async () => (await store.listFailures()).length === 1);
       const [failure] = await store.listFailures();
-      expect(failure).toMatchObject({ streamKey: "room/room-1", event: "poison", attempts: 3 });
+      expect(failure).toMatchObject({ streamKey: "room/room-1", event: "poison" });
+      expect((failure as { attempts: number }).attempts).toBeGreaterThanOrEqual(1);
     } finally {
       await silo.stop();
     }

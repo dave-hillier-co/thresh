@@ -640,10 +640,20 @@ export class SiloBuilder {
    * `IStreamFailureHandler`) is forwarded to every queue's pulling agent,
    * defaulting to a handler backed by `useDurableStreamFailureStore`'s store
    * when one was registered and this call supplies none of its own.
+   * `options.maxEventDeliveryTimeMs`/`deliveryResponseTimeoutMs`/`retryBackoffMs`
+   * tune per-subscriber delivery retry (Orleans `MaxEventDeliveryTime`/
+   * `ResponseTimeout`; see `PullingStreamProviderCoreOptions`).
    */
   addRedisStreams(
     name: string,
-    options: { url: string; keyPrefix?: string; failureHandler?: StreamFailureHandler },
+    options: {
+      url: string;
+      keyPrefix?: string;
+      failureHandler?: StreamFailureHandler;
+      maxEventDeliveryTimeMs?: number;
+      deliveryResponseTimeoutMs?: number;
+      retryBackoffMs?: (attempt: number) => number;
+    },
   ): this {
     const client = createClient({ url: options.url });
     client.on("error", () => {});
@@ -655,6 +665,9 @@ export class SiloBuilder {
     const provider = new RedisPullingStreamProvider(client, name, {
       ...toConfigOption("keyPrefix", options.keyPrefix),
       ...toConfigOption("failureHandler", failureHandler),
+      ...toConfigOption("maxEventDeliveryTimeMs", options.maxEventDeliveryTimeMs),
+      ...toConfigOption("deliveryResponseTimeoutMs", options.deliveryResponseTimeoutMs),
+      ...toConfigOption("retryBackoffMs", options.retryBackoffMs),
       serviceId: this.serviceIdentity,
     });
     this.pullingStreams.push(provider);
@@ -682,7 +695,9 @@ export class SiloBuilder {
    * defaulting to a handler backed by `useDurableStreamFailureStore`'s store
    * when one was registered and this call supplies none of its own.
    * `options.retainFor` keeps a replay window of delivered rows instead of
-   * trimming them eagerly on commit.
+   * trimming them eagerly on commit. `options.maxEventDeliveryTimeMs`/
+   * `deliveryResponseTimeoutMs`/`retryBackoffMs` tune per-subscriber delivery
+   * retry (Orleans `MaxEventDeliveryTime`/`ResponseTimeout`).
    */
   addPostgresStreams(
     name: string,
@@ -693,6 +708,9 @@ export class SiloBuilder {
       tablePrefix?: string;
       failureHandler?: StreamFailureHandler;
       retainFor?: Duration;
+      maxEventDeliveryTimeMs?: number;
+      deliveryResponseTimeoutMs?: number;
+      retryBackoffMs?: (attempt: number) => number;
     },
   ): this {
     const pool = new Pool({ connectionString: options.connectionString });
@@ -708,6 +726,9 @@ export class SiloBuilder {
       ...toConfigOption("tablePrefix", options.tablePrefix),
       ...toConfigOption("failureHandler", failureHandler),
       ...toConfigOption("retainFor", options.retainFor),
+      ...toConfigOption("maxEventDeliveryTimeMs", options.maxEventDeliveryTimeMs),
+      ...toConfigOption("deliveryResponseTimeoutMs", options.deliveryResponseTimeoutMs),
+      ...toConfigOption("retryBackoffMs", options.retryBackoffMs),
       serviceId: this.serviceIdentity,
     });
     this.pullingStreams.push(provider);
@@ -742,7 +763,9 @@ export class SiloBuilder {
    * `IStreamFailureHandler`) is forwarded to every queue's pulling agent —
    * and to the retention-gap edge case — defaulting to a handler backed by
    * `useDurableStreamFailureStore`'s store when one was registered and this
-   * call supplies none of its own.
+   * call supplies none of its own. `options.maxEventDeliveryTimeMs`/
+   * `deliveryResponseTimeoutMs`/`retryBackoffMs` tune per-subscriber delivery
+   * retry (Orleans `MaxEventDeliveryTime`/`ResponseTimeout`).
    */
   addKafkaStreams(
     name: string,
@@ -752,6 +775,9 @@ export class SiloBuilder {
       pollIntervalMs?: number;
       topicPrefix?: string;
       failureHandler?: StreamFailureHandler;
+      maxEventDeliveryTimeMs?: number;
+      deliveryResponseTimeoutMs?: number;
+      retryBackoffMs?: (attempt: number) => number;
       metadata:
         | { postgres: { connectionString: string; tablePrefix?: string } }
         | { redis: { url: string; keyPrefix?: string } };
@@ -801,6 +827,9 @@ export class SiloBuilder {
       ...toConfigOption("pollIntervalMs", options.pollIntervalMs),
       ...toConfigOption("topicPrefix", options.topicPrefix),
       ...toConfigOption("failureHandler", failureHandler),
+      ...toConfigOption("maxEventDeliveryTimeMs", options.maxEventDeliveryTimeMs),
+      ...toConfigOption("deliveryResponseTimeoutMs", options.deliveryResponseTimeoutMs),
+      ...toConfigOption("retryBackoffMs", options.retryBackoffMs),
     });
     this.pullingStreams.push(provider);
     this.starters.push(async () => {

@@ -52,6 +52,10 @@ describe.skipIf(client === undefined)("RedisPullingStreamProvider", () => {
       queueCount: 1,
       pollIntervalMs: 5,
       failureHandler,
+      // Keep the subscriber's retry budget short so the test doesn't wait out
+      // the real (Orleans) 1-minute `maxEventDeliveryTimeMs` default.
+      maxEventDeliveryTimeMs: 50,
+      retryBackoffMs: () => 10,
     });
     provider.setDeliver(async () => {
       throw new Error("always fails");
@@ -64,7 +68,8 @@ describe.skipIf(client === undefined)("RedisPullingStreamProvider", () => {
       await stream.publish("poison");
 
       await waitFor(() => failures.length === 1);
-      expect(failures).toEqual([{ streamKey: "room/bad", attempts: 3 }]);
+      expect(failures[0]?.streamKey).toBe("room/bad");
+      expect(failures[0]?.attempts).toBeGreaterThanOrEqual(1);
     } finally {
       await provider.stop();
     }
@@ -75,6 +80,8 @@ describe.skipIf(client === undefined)("RedisPullingStreamProvider", () => {
       keyPrefix: prefix,
       queueCount: 1,
       pollIntervalMs: 5,
+      maxEventDeliveryTimeMs: 50,
+      retryBackoffMs: () => 10,
     });
     let attempts = 0;
     provider.setDeliver(async () => {
@@ -88,9 +95,9 @@ describe.skipIf(client === undefined)("RedisPullingStreamProvider", () => {
       const stream = provider.getStream<string>("room", "bad2");
       await stream.publish("poison");
 
-      await waitFor(() => attempts >= 3);
+      await waitFor(() => attempts >= 2);
       // Nothing should throw from the agent even with no handler wired.
-      await new Promise((r) => setTimeout(r, 50));
+      await new Promise((r) => setTimeout(r, 100));
     } finally {
       await provider.stop();
     }
