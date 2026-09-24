@@ -180,7 +180,8 @@ export class LocalReminderService implements ReminderRegistry {
     // Without a recorded fire, the only reference point for "how many ticks
     // were missed" is now — same as Orleans computing CalculateInitialDueTime
     // against UtcNow at schedule time.
-    const reference = entry.lastFiredAt === undefined ? this.time.now() : entry.lastFiredAt.getTime();
+    const reference =
+      entry.lastFiredAt === undefined ? this.time.now() : entry.lastFiredAt.getTime();
     if (reference < startMs) return entry.startAt; // first tick hasn't happened yet
     const periodsElapsed = Math.floor((reference - startMs) / periodMs) + 1;
     return new Date(startMs + periodsElapsed * periodMs);
