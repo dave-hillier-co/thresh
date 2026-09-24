@@ -6,7 +6,7 @@ import {
   type AppendableQueue,
   type SubscriptionRegistry,
 } from "@thresh/streams/pulling-stream-provider-core";
-import type { QueueEntry } from "@thresh/streams/queue-pulling-agent";
+import type { QueueEntry } from "@thresh/streams/redis-stream-queue";
 
 /** An always-empty queue that records every poll a pulling agent makes of it. */
 class RecordingQueue implements AppendableQueue {

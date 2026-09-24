@@ -2829,19 +2829,9 @@ export class ClusterNode {
     }
     let moved = 0;
     for (const activation of candidates.slice(0, count)) {
-      const accepted = await this.migrateActivationTo(activation, target);
-      // `migrateActivationTo` dehydrates unconditionally before attempting the
-      // send, which poisons every future call on this activation with
-      // "activation migrated" (`ActivationData.dehydrate`) whether or not the
-      // target actually took it over. Orleans' `StartMigrationAsync` returning
-      // false still continues deactivation (`ActivationData.cs` ~2092-2123)
-      // rather than leaving the activation live but rejecting forever, so this
-      // runs unconditionally too — only whether `moved` counts it differs.
-      await activation.deactivate({
-        code: "migrating",
-        description: accepted ? "rebalanced to another silo" : "failed migration to another silo",
-      });
-      if (accepted) moved++;
+      if (await this.migrateThenDeactivate(activation, target, "rebalanced to another silo")) {
+        moved++;
+      }
     }
     return moved;
   }
@@ -2914,13 +2904,28 @@ export class ClusterNode {
   private async migrateGrainToSilo(grainId: GrainId, target: SiloAddress): Promise<boolean> {
     const activation = this.catalog.get(grainId);
     if (activation === undefined) return false;
+    return this.migrateThenDeactivate(activation, target, "repartitioned to another silo");
+  }
+
+  /**
+   * Hand `activation` to `target` and deactivate it here whether or not the
+   * target accepted. `migrateActivationTo` dehydrates before attempting the
+   * send, which poisons every later call on this activation with "activation
+   * migrated" (`ActivationData.dehydrate`) whatever the outcome; Orleans'
+   * `StartMigrationAsync` returning false likewise still continues into
+   * deactivation (`ActivationData.FinishDeactivating`) rather than leaving the
+   * activation live but rejecting forever (issue #93). Returns whether the
+   * target accepted.
+   */
+  private async migrateThenDeactivate(
+    activation: ActivationData,
+    target: SiloAddress,
+    description: string,
+  ): Promise<boolean> {
     const accepted = await this.migrateActivationTo(activation, target);
-    // See the matching comment in `migrateRandomActivations`: a failed
-    // migration must still continue into deactivation, since dehydrate()
-    // already poisoned this activation regardless of outcome.
     await activation.deactivate({
       code: "migrating",
-      description: accepted ? "repartitioned to another silo" : "failed migration to another silo",
+      description: accepted ? description : `failed migration (${description})`,
     });
     return accepted;
   }
