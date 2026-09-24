@@ -16,16 +16,14 @@ import { randomIntegerKey } from "@thresh/parity/support/keys";
 // (`this.state = "invalid"`) — the thrown error itself is swallowed by the
 // `.catch(() => {...})` and never stored anywhere `invoke()` can surface it.
 
-// A second, more severe defect: once an activation's `onActivate` fails, a
-// *second* call to the same grain identity on a cluster with more than one
-// silo does not fail fast — it runs away allocating fresh activations and
-// directory registrations without bound, exhausting the process heap (OOM)
-// rather than surfacing a rejection. Repro: two silos, a grain whose
-// `onActivate` always throws, two sequential calls to the same grain
-// reference — the second call never settles. See bugsFound for the isolated
-// repro. `BasicActivation_BurstFail` (10,000 concurrent calls to such a grain)
-// would trigger exactly this, so its body is written for documentation but
-// never executed (gapped, not ported) to avoid hanging this suite.
+// A second, more severe defect this test suite once risked hitting: once an
+// activation's `onActivate` fails, a *second* call to the same grain identity
+// on a cluster with more than one silo could run away allocating fresh
+// activations and directory registrations without bound, exhausting the
+// process heap (OOM) rather than surfacing a rejection. That has since been
+// fixed (see bugsFound for the isolated repro this comment used to point at),
+// so `BasicActivation_BurstFail` (10,000 concurrent calls to such a grain)
+// below now runs like any other ported test rather than being gapped.
 
 describe("DefaultCluster.Tests.General.BasicActivationTests", () => {
   let cluster: TestCluster;
