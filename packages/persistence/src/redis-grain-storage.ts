@@ -26,7 +26,11 @@ export interface RedisGrainStorageOptions {
 const CONFLICT = "THRESH_ETAG_CONFLICT";
 
 // Conditional write: only set when the caller's expected etag matches the
-// stored one (or no record exists yet). Atomic on the server so two silos
+// stored one, or (issue #109) both are blank — a non-empty caller etag
+// against a missing record is a conflict, not a license to resurrect
+// whatever it thought was there, mirroring Orleans' own Redis provider
+// (`RedisGrainStorage.cs:134`: `((not etag or etag == '') and (not ARGV[1]
+// or ARGV[1] == '')) or etag == ARGV[1]`). Atomic on the server so two silos
 // racing to write the same grain produce one winner and one conflict — the
 // same optimistic-concurrency contract as MemoryGrainStorage.
 const WRITE = `
@@ -35,11 +39,18 @@ if cur then
   if ARGV[1] == '' or ARGV[1] ~= cur then
     return redis.error_reply('${CONFLICT} ' .. cur)
   end
+else
+  if ARGV[1] ~= '' then
+    return redis.error_reply('${CONFLICT} ')
+  end
 end
 redis.call('HSET', KEYS[1], 'etag', ARGV[3], 'data', ARGV[2])
 return ARGV[3]`;
 
-// Conditional delete with the same etag guard; a missing record is a no-op.
+// Conditional delete with the same etag guard (`RedisGrainStorage.cs:214`): a
+// missing record is a no-op only for a blank caller etag; a non-empty one
+// against a missing record is a conflict (issue #109) rather than a silent
+// no-op that hides someone else's earlier delete.
 const CLEAR = `
 local cur = redis.call('HGET', KEYS[1], 'etag')
 if cur then
@@ -47,6 +58,10 @@ if cur then
     return redis.error_reply('${CONFLICT} ' .. cur)
   end
   redis.call('DEL', KEYS[1])
+else
+  if ARGV[1] ~= '' then
+    return redis.error_reply('${CONFLICT} ')
+  end
 end
 return 'OK'`;
 

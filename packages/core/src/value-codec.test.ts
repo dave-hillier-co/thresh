@@ -718,4 +718,110 @@ describe("value-codec", () => {
       expect(decodeValue(encodeValue(value))).toEqual(value);
     });
   });
+
+  // Issue #119: these values were silently corrupted (a Float64Array
+  // arriving as `{0: 1.5}`, `-0` arriving as `0`, a sparse array hole
+  // arriving as `null`) or dropped (a RegExp arriving as `{}`) instead of
+  // round-tripping or being rejected. Orleans either round-trips a value type
+  // (`double[]` etc.) or throws for one it cannot represent; the codec must
+  // do the same rather than hand back a wrong value with no signal.
+  describe("typed arrays, -0 and unrepresentable values (issue #119)", () => {
+    it.each([
+      ["Int8Array", new Int8Array([-1, 0, 1, 127, -128])],
+      ["Uint8ClampedArray", new Uint8ClampedArray([0, 128, 255])],
+      ["Int16Array", new Int16Array([-32768, 0, 32767])],
+      ["Uint16Array", new Uint16Array([0, 65535])],
+      ["Int32Array", new Int32Array([-2147483648, 0, 2147483647])],
+      ["Uint32Array", new Uint32Array([0, 4294967295])],
+      ["Float32Array", new Float32Array([1.5, -1.5, 0])],
+      ["Float64Array", new Float64Array([1.5, -1.5, Number.NaN, Infinity])],
+      ["BigInt64Array", new BigInt64Array([-1n, 0n, 1n])],
+      ["BigUint64Array", new BigUint64Array([0n, 18446744073709551615n])],
+    ] as const)("round-trips a %s", (_kind, typedArray) => {
+      const decoded = decodeValue(encodeValue(typedArray));
+      expect(decoded).toBeInstanceOf(typedArray.constructor);
+      expect(decoded).toEqual(typedArray);
+    });
+
+    it("round-trips a typed array through the JSON transport (serializeValue)", () => {
+      const original = new Float64Array([1.5, -1.5]);
+      const decoded = deserializeValue<Float64Array>(serializeValue(original));
+      expect(decoded).toBeInstanceOf(Float64Array);
+      expect(decoded).toEqual(original);
+    });
+
+    it("round-trips a typed array nested inside a plain object", () => {
+      const value = { samples: new Float64Array([1, 2, 3]) };
+      const decoded = decodeValue(encodeValue(value)) as typeof value;
+      expect(decoded.samples).toBeInstanceOf(Float64Array);
+      expect(decoded.samples).toEqual(value.samples);
+    });
+
+    it("preserves -0 as a bare value", () => {
+      const decoded = decodeValue(encodeValue(-0)) as number;
+      expect(Object.is(decoded, -0)).toBe(true);
+    });
+
+    it("preserves -0 through the JSON transport, which JSON.stringify alone would lose", () => {
+      expect(Object.is(JSON.parse(JSON.stringify(-0)), -0)).toBe(false); // the bug this guards against
+      const decoded = deserializeValue<number>(serializeValue(-0));
+      expect(Object.is(decoded, -0)).toBe(true);
+    });
+
+    it("preserves -0 nested inside an object and inside a Float64Array", () => {
+      const value = { at: -0, samples: new Float64Array([-0, 0]) };
+      const decoded = decodeValue(encodeValue(value)) as { at: number; samples: Float64Array };
+      expect(Object.is(decoded.at, -0)).toBe(true);
+      expect(Object.is(decoded.samples[0], -0)).toBe(true);
+      expect(Object.is(decoded.samples[1], 0)).toBe(true);
+    });
+
+    it("still encodes an ordinary 0 as a plain number, not a tagged envelope", () => {
+      expect(encodeValue(0)).toBe(0);
+    });
+
+    it("throws rather than silently dropping a RegExp's state", () => {
+      expect(() => encodeValue(/abc/gi)).toThrow();
+      expect(() => encodeValue({ pattern: /abc/ })).toThrow();
+    });
+
+    it("throws rather than silently turning a sparse array hole into null", () => {
+      // eslint-disable-next-line no-sparse-arrays
+      const sparse = [1, , 3];
+      expect(() => encodeValue(sparse)).toThrow();
+    });
+
+    it("throws for other values the codec cannot represent", () => {
+      expect(() => encodeValue(() => {})).toThrow();
+      expect(() => encodeValue(Symbol("s"))).toThrow();
+      expect(() => encodeValue(new Promise<void>(() => {}))).toThrow();
+    });
+
+    it("lets a registered surrogate carry a value the codec would otherwise reject", () => {
+      // UnsupportedValueError's own message points callers at registerSurrogate, so a
+      // surrogate for one of these types must actually be consulted.
+      registerSurrogate<RegExp>({
+        tag: "test.regexp",
+        test: (v) => v instanceof RegExp,
+        encode: (r) => ({ source: r.source, flags: r.flags }),
+        decode: (f) => new RegExp(f.source as string, f.flags as string),
+      });
+      const decoded = deserializeValue<RegExp>(serializeValue(/ab+c/gi));
+      expect(decoded).toBeInstanceOf(RegExp);
+      expect(decoded.source).toBe("ab+c");
+      expect(decoded.flags).toBe("gi");
+    });
+
+    it("round-trips a subclass of a typed array as its built-in base kind", () => {
+      class Samples extends Float64Array {}
+      const decoded = decodeValue(encodeValue(new Samples([1.5, 2.5])));
+      expect(decoded).toBeInstanceOf(Float64Array);
+      expect(Array.from(decoded as Float64Array)).toEqual([1.5, 2.5]);
+    });
+
+    it("rejects a malformed typedArray envelope with a clear error rather than a TypeError", () => {
+      const envelope = encodeValue(new Int16Array([1])) as Record<string, unknown>;
+      expect(() => decodeValue({ ...envelope, values: "nope" })).toThrow(/typed array/);
+    });
+  });
 });

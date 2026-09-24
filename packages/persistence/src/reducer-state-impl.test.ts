@@ -59,4 +59,20 @@ describe("ReducerStateImpl (snapshot mode)", () => {
     await reader.read();
     expect(reader.value).toEqual({ total: 7, ops: 2 });
   });
+
+  // Issue #109 (related): a read that finds no record must not leave an
+  // unsaved raise() in place — Orleans resets to a fresh instance.
+  it("resets to the initial value when read() finds no record", async () => {
+    const state = new ReducerStateImpl<Counter, CounterEvent>(
+      "counter",
+      id,
+      new MemoryGrainStorage(),
+      initial,
+      reduce,
+    );
+    state.raise({ by: 9 }); // never written
+    await state.read();
+    expect(state.exists).toBe(false);
+    expect(state.value).toEqual({ total: 0, ops: 0 });
+  });
 });

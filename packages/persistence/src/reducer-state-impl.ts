@@ -14,7 +14,7 @@ export class ReducerStateImpl<TState, TEvent> implements ReducerState<TState, TE
     private readonly stateName: string,
     private readonly grainId: GrainId,
     private readonly storage: GrainStorage,
-    initial: () => TState,
+    private readonly initial: () => TState,
     private readonly reduce: Reducer<TState, TEvent>,
   ) {
     this.holder = { value: initial(), exists: false };
@@ -39,6 +39,12 @@ export class ReducerStateImpl<TState, TEvent> implements ReducerState<TState, TE
 
   async read(): Promise<void> {
     await this.storage.read(this.stateName, this.grainId, this.holder);
+    // Issue #109: see PersistentStateImpl.read() — a missing record resets
+    // the in-memory value to a fresh default rather than leaving an unsaved
+    // mutation in place.
+    if (!this.holder.exists) {
+      this.holder.value = this.initial();
+    }
   }
 
   async write(): Promise<void> {

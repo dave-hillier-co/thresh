@@ -157,6 +157,15 @@ The exceptions, where the port must do real work:
   serializer and the in-memory clone carry the `Uint8Array` natively, while `serializeValue` and the
   JSON serializer tag it as base64 (`encodeValue(value, { binaryAsBase64: true })`) — JSON has no
   binary type, and untagged a typed array degrades to `{"0":1,...}` and comes back a plain object.
+  Every other typed array (`Int8Array`, `Uint8ClampedArray`, `Int16Array`/`Uint16Array`,
+  `Int32Array`/`Uint32Array`, `Float32Array`/`Float64Array`, `BigInt64Array`/`BigUint64Array`)
+  round-trips too, tagged as a `typedArray` envelope (`{kind, values}`) rather than passed through
+  raw — `DataView`, a raw `ArrayBuffer`, a `RegExp`, and a sparse array (a hole, not `undefined`)
+  have no faithful form here and `encodeValue` throws `UnsupportedValueError` for them rather than
+  silently corrupting them, the same as it does for a circular reference (a registered surrogate
+  for one of those types is still honoured). `-0` is preserved exactly
+  (also tagged) rather than losing its sign the way a plain `JSON.stringify(-0)` or MessagePack's
+  own integer fast path would.
 - **`decimal`, `long`/`ulong`, `DateTimeOffset`, `Guid`.** TypeScript `number` is a float64.
   `long`/`ulong` that can exceed 2^53 must become `bigint` or a string, and the choice has to be
   made once, at the value type, not per call site. `uint`/`ushort` fit in `number` exactly, so

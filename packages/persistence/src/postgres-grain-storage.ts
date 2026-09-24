@@ -198,26 +198,34 @@ export class PostgresGrainStorage implements GrainStorage {
     signal?: AbortSignal,
   ): Promise<void> {
     const etag = randomUUID();
-    // No row -> insert succeeds regardless of expected etag (matches the memory
-    // provider). An existing row only updates when the caller's etag still
-    // matches; a blind (`''`, never a UUID) or stale etag updates zero rows.
+    const expected = state.etag ?? "";
+    const key = [this.serviceId, grainId.toString(), stateName];
+    const data = serializeValue(state.value);
+    // Two single-statement paths, chosen by whether the caller holds an etag,
+    // mirroring Orleans' AdoNet `CheckVersionInconsistency` (issue #109):
+    //  - blind write (`''`, never a UUID): insert only if no row exists; a row
+    //    that does exist is a conflict (zero rows returned).
+    //  - versioned write: update only the row whose etag still matches. A
+    //    stale etag, or a row that has gone missing, updates zero rows — so a
+    //    stale writer can never resurrect a cleared record. The UPDATE takes
+    //    the row lock, so a concurrent in-flight DELETE is waited out and then
+    //    re-checked rather than raced (an INSERT ... WHERE EXISTS guard reads
+    //    a snapshot that can still see the row being deleted, and inserts).
     const res = await raceSignal(
-      this.pool.query<{ etag: string }>(
-        `INSERT INTO ${this.table} (service_id, grain_id, state_name, data, etag)
-       VALUES ($1, $2, $3, $4, $5)
-       ON CONFLICT (service_id, grain_id, state_name) DO UPDATE
-         SET data = EXCLUDED.data, etag = EXCLUDED.etag
-         WHERE ${this.table}.etag = $6
-       RETURNING etag`,
-        [
-          this.serviceId,
-          grainId.toString(),
-          stateName,
-          serializeValue(state.value),
-          etag,
-          state.etag ?? "",
-        ],
-      ),
+      expected === ""
+        ? this.pool.query<{ etag: string }>(
+            `INSERT INTO ${this.table} (service_id, grain_id, state_name, data, etag)
+             VALUES ($1, $2, $3, $4, $5)
+             ON CONFLICT (service_id, grain_id, state_name) DO NOTHING
+             RETURNING etag`,
+            [...key, data, etag],
+          )
+        : this.pool.query<{ etag: string }>(
+            `UPDATE ${this.table} SET data = $4, etag = $5
+             WHERE service_id = $1 AND grain_id = $2 AND state_name = $3 AND etag = $6
+             RETURNING etag`,
+            [...key, data, etag, expected],
+          ),
       signal,
     );
     if (res.rows.length === 0) {
@@ -258,7 +266,12 @@ export class PostgresGrainStorage implements GrainStorage {
       signal,
     );
     const row = res.rows[0]!;
-    if (row.present && !row.deleted) {
+    // A present row that did not delete (blank or stale etag) is a conflict,
+    // as before; a MISSING row with a non-empty expected etag is now one too
+    // (issue #109) — otherwise a stale clearer would treat someone else's
+    // earlier delete as a no-op success rather than the conflict it is.
+    const expected = state.etag ?? "";
+    if ((row.present && !row.deleted) || (!row.present && expected !== "")) {
       throw new InconsistentStateError(
         `etag conflict clearing ${stateName} for ${grainId.toString()}`,
         state.etag,
