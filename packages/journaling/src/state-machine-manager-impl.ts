@@ -134,8 +134,15 @@ export class StateMachineManagerImpl implements StateMachineManager {
     machine.apply(payload);
     this.liveEntryCount += 1;
     // Keep the threshold above the machine count so we don't recompact on every append.
-    if (this.liveEntryCount >= Math.max(this.snapshotThreshold, this.machines.size + 1))
-      await this.compact();
+    if (this.liveEntryCount >= Math.max(this.snapshotThreshold, this.machines.size + 1)) {
+      // The entry above is already durable and applied by the time we get
+      // here; a failure compacting it must not propagate into `append`'s
+      // caller, or a retrying caller (e.g. `DurableList.add`) would re-append
+      // and apply the same entry twice. `liveEntryCount` (and thus this
+      // threshold check) is left as-is, so the next append tries the
+      // compaction again.
+      await this.compact().catch(() => {});
+    }
   }
 
   async compact(): Promise<void> {

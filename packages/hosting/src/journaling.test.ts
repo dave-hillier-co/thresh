@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { durableDictionary, durableList, grain } from "@thresh/core/decorators";
+import { durableDictionary, durableList, durableState, grain } from "@thresh/core/decorators";
 import { defineGrain, useDurableDictionary } from "@thresh/core/define-grain";
 import { Grain } from "@thresh/core/grain";
 import { GrainId } from "@thresh/core/grain-id";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
 import type { GrainKey } from "@thresh/core/key-kinds";
-import type { DurableDictionary, DurableList } from "@thresh/core/durable-state";
+import type { DurableDictionary, DurableList, DurableValue } from "@thresh/core/durable-state";
+import { JournaledGrain } from "@thresh/core/journaled-grain";
 import { SiloAddress } from "@thresh/core/silo-address";
 import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
 import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
@@ -64,6 +65,7 @@ function buildSilo(storage: MemoryJournalStorage, config: Partial<SiloConfig> = 
     .useMemoryJournaling(storage)
     .registerGrain(CartGrain, { interfaces: [ICart] })
     .registerGrain(InventoryGrain.grain, { interfaces: [IInventory] })
+    .registerGrain(TabGrain, { interfaces: [ITab] })
     .build();
 }
 
@@ -228,6 +230,95 @@ describe("durable-state migration (issue #94)", () => {
     } finally {
       await node0.stop();
       await node1.stop();
+    }
+  });
+});
+
+// A grain combining a JournaledGrain event log with a @durableState field, for
+// the shared-manager repro in issue #117.
+interface ITab extends GrainKey<string> {
+  ring(): Promise<number>;
+  setLabel(label: string): Promise<void>;
+  count(): Promise<number>;
+  label(): Promise<string | undefined>;
+}
+const ITab = defineGrainInterface<ITab>("ITab", {
+  options: { count: { readOnly: true }, label: { readOnly: true } },
+});
+
+type TabEvent = { kind: "ring" };
+
+@grain()
+class TabGrain extends JournaledGrain<number, TabEvent> {
+  @durableState("label")
+  private labelCell!: DurableValue<string>;
+
+  initialState(): number {
+    return 0;
+  }
+
+  transitionState(state: number, event: TabEvent): number {
+    if (event.kind === "ring") return state + 1;
+    return state;
+  }
+
+  async ring(): Promise<number> {
+    this.raiseEvent({ kind: "ring" });
+    await this.confirmEvents();
+    return this.state;
+  }
+
+  async setLabel(label: string): Promise<void> {
+    await this.labelCell.set(label);
+  }
+
+  async count(): Promise<number> {
+    return this.state;
+  }
+
+  async label(): Promise<string | undefined> {
+    return this.labelCell.value;
+  }
+}
+
+describe("JournaledGrain combined with @durableState (issue #117)", () => {
+  it("shares one log across many compactions without either facet retiring the other's entries", async () => {
+    const storage = new MemoryJournalStorage();
+    // A low threshold forces several compactions across the sequence below.
+    const first = buildSilo(storage, { snapshotThreshold: 2 });
+    await first.start();
+    try {
+      const tab = first.getGrain(ITab, "t-1");
+      await tab.setLabel("alpha");
+      await tab.ring(); // count 1
+      await tab.ring(); // count 2 -- crosses the threshold, compacts
+      await tab.setLabel("beta");
+      await tab.ring(); // count 3 -- crosses again
+      await tab.ring(); // count 4 -- and again
+
+      expect(await tab.count()).toBe(4);
+      expect(await tab.label()).toBe("beta");
+    } finally {
+      await first.stop();
+    }
+
+    // Reactivate: replay must restore BOTH facets in full. If they had run on
+    // two separate managers over the same log, each would see the other's
+    // entries as unregistered and, after two compactions, purge them.
+    const restarted = buildSilo(storage, { snapshotThreshold: 2 });
+    await restarted.start();
+    try {
+      const tab = restarted.getGrain(ITab, "t-1");
+      expect(await tab.count()).toBe(4);
+      expect(await tab.label()).toBe("beta");
+
+      // And further writes to both facets must still work.
+      await tab.ring();
+      await tab.setLabel("gamma");
+      expect(await tab.count()).toBe(5);
+      expect(await tab.label()).toBe("gamma");
+    } finally {
+      await restarted.stop();
     }
   });
 });

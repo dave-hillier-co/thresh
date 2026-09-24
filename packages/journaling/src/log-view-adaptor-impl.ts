@@ -163,11 +163,7 @@ export class LogViewAdaptorImpl<TState, TEvent>
     // `baseVersion` is the (global) version compaction last collapsed away, so
     // a requested range is translated into an offset into it.
     const baseVersion = this.version - this.confirmedEvents.length;
-    if (
-      fromVersion < baseVersion ||
-      toVersion < fromVersion ||
-      toVersion > this.version
-    ) {
+    if (fromVersion < baseVersion || toVersion < fromVersion || toVersion > this.version) {
       throw new Error(`invalid range [${fromVersion}, ${toVersion}]`);
     }
     return this.confirmedEvents.slice(fromVersion - baseVersion, toVersion - baseVersion);

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { InconsistentStateError } from "@thresh/core/errors";
 import { GrainId } from "@thresh/core/grain-id";
+import type { GrainId as GrainIdType } from "@thresh/core/grain-id";
+import type { JournalEntry, JournalSegment, JournalStorage } from "@thresh/core/journal-storage";
 import { DurableValueImpl } from "@thresh/journaling/durable-value-impl";
 import { DurableDictionaryImpl } from "@thresh/journaling/durable-dictionary-impl";
 import { DurableListImpl } from "@thresh/journaling/durable-list-impl";
@@ -8,6 +10,47 @@ import { MemoryJournalStorage } from "@thresh/journaling/memory-journal-storage"
 import { StateMachineManagerImpl } from "@thresh/journaling/state-machine-manager-impl";
 
 const id = new GrainId("Agg", "g1");
+
+/** Wraps a `JournalStorage`, throwing on the Nth `replace` call (1-indexed) instead of delegating. */
+class FailingReplaceStorage implements JournalStorage {
+  private calls = 0;
+
+  constructor(
+    private readonly inner: JournalStorage,
+    private readonly failOnCall: number,
+    private readonly error: () => Error,
+  ) {}
+
+  read(logName: string, grainId: GrainIdType, signal?: AbortSignal): Promise<JournalSegment> {
+    return this.inner.read(logName, grainId, signal);
+  }
+
+  append(
+    logName: string,
+    grainId: GrainIdType,
+    entries: readonly JournalEntry[],
+    expectedVersion: number | undefined,
+    signal?: AbortSignal,
+  ): Promise<number> {
+    return this.inner.append(logName, grainId, entries, expectedVersion, signal);
+  }
+
+  replace(
+    logName: string,
+    grainId: GrainIdType,
+    entries: readonly JournalEntry[],
+    expectedVersion: number | undefined,
+    signal?: AbortSignal,
+  ): Promise<number> {
+    this.calls += 1;
+    if (this.calls === this.failOnCall) throw this.error();
+    return this.inner.replace(logName, grainId, entries, expectedVersion, signal);
+  }
+
+  clear(logName: string, grainId: GrainIdType, signal?: AbortSignal): Promise<void> {
+    return this.inner.clear(logName, grainId, signal);
+  }
+}
 
 async function frameKinds(storage: MemoryJournalStorage): Promise<string[]> {
   const segment = await storage.read("journal", id);
@@ -297,5 +340,32 @@ describe("StateMachineManagerImpl", () => {
       await gen3.replay();
       expect(retire3.has("b")).toBe(false);
     });
+  });
+
+  it("does not throw into the caller when the in-turn compaction fails after a durable save (#117)", async () => {
+    const memory = new MemoryJournalStorage();
+    // Fail the first `replace` call, which is the compaction triggered once
+    // the live entry count crosses the (single-machine) effective threshold.
+    const flaky = new FailingReplaceStorage(memory, 1, () => new Error("compaction blip"));
+    const manager = new StateMachineManagerImpl("journal", id, flaky, { snapshotThreshold: 1 });
+    const value = new DurableValueImpl<number>("v", manager);
+    manager.register(value);
+    await manager.replay();
+
+    await value.set(1); // below the effective threshold (machines.size + 1): no compaction yet
+
+    // This append both persists the entry durably AND triggers an in-turn
+    // compaction that fails. The entry is already safely written -- the call
+    // must not throw, or a retrying caller (e.g. DurableList.add) would
+    // re-append and apply it twice.
+    await expect(value.set(2)).resolves.toBeUndefined();
+    expect(value.value).toBe(2);
+
+    // The entry is durable even though its compaction failed.
+    const fresh = new StateMachineManagerImpl("journal", id, memory, { snapshotThreshold: 1 });
+    const replayed = new DurableValueImpl<number>("v", fresh);
+    fresh.register(replayed);
+    await fresh.replay();
+    expect(replayed.value).toBe(2);
   });
 });
