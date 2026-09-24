@@ -242,7 +242,7 @@ export class ShardExecutor {
         continue;
       }
       admitted += 1;
-      const run = this.runOne(job, now);
+      const run = this.runOne(job);
       this.inFlight.add(run);
       void run.finally(() => this.inFlight.delete(run));
       settled.push(run);
@@ -293,7 +293,7 @@ export class ShardExecutor {
   }
 
   /** Run one dequeued job, apply its result, and release the concurrency slot. */
-  private async runOne(job: QueuedJob, now: number): Promise<void> {
+  private async runOne(job: QueuedJob): Promise<void> {
     this.running += 1;
     const durable = this.jobs.get(job.id);
     try {
@@ -324,7 +324,11 @@ export class ShardExecutor {
       } catch (error) {
         result = { kind: "failed", error };
       }
-      await this.applyResult(job, result, attempt, now, runId);
+      // Backoff and pollAfter are measured from when the run actually
+      // finished, not from `now` (poll-start): a handler slower than its
+      // backoff must not retry immediately (Orleans computes UtcNow + delay
+      // at the moment of failure, and waits PollAfterDelay after the result).
+      await this.applyResult(job, result, attempt, this.time.now(), runId);
     } finally {
       this.running -= 1;
       this.limiter.release();

@@ -6,7 +6,7 @@ import type {
   ShouldRetry,
 } from "@thresh/core/durable-job";
 import { Guid } from "@thresh/core/guid";
-import type { TimeProvider } from "@thresh/core/time-provider";
+import type { TimeProvider, TimerHandle } from "@thresh/core/time-provider";
 import { registerDurableJobQueueDepth } from "@thresh/observability/durable-job-metrics";
 import { claimBudget, defaultShouldRetry, shardKeyFor } from "@thresh/durable-jobs/job-model";
 import type { JobShardStore } from "@thresh/durable-jobs/job-shard-store";
@@ -32,6 +32,8 @@ export interface ResolvedDurableJobsOptions {
   shardClaimMaxBudget: number;
   /** Zero disables the time-based ramp-up: falls back to the flat `claimRampUpBudget` per step. */
   shardClaimRampUpDurationMs: number;
+  /** Zero disables the periodic self-driven shard check (Orleans `PeriodicShardCheck`). */
+  periodicShardCheckMs: number;
 }
 
 /** The membership facts the manager needs to claim and adopt shards. */
@@ -59,6 +61,16 @@ export class LocalDurableJobManager {
   private readonly joinedAtMs: number;
   /** Shards claimed since join, while the ramp-up window is still active (`computeClaimBudget`'s `totalClaimedShards`). */
   private claimedSinceJoin = 0;
+  /** Timer for the periodic self-driven shard check (Orleans `PeriodicShardCheck`). */
+  private checkHandle: TimerHandle | undefined;
+  /**
+   * Serialises ownership reconciliation: the periodic check and
+   * membership-driven calls run one at a time, as Orleans' single
+   * PeriodicShardCheck loop does, so one run never stops an executor another
+   * has just started from a stale snapshot.
+   */
+  private reconciling: Promise<void> = Promise.resolve();
+  private stopped = false;
 
   constructor(
     private readonly store: JobShardStore,
@@ -152,9 +164,37 @@ export class LocalDurableJobManager {
    * for shards no longer claimable here, then claim newly available shards
    * (orphaned or owned by a dead silo) under the ramp-up budget and start an
    * executor for each. Idempotent — already-owned shards keep their executors.
+   * Re-arms the periodic shard check on every call (including its own ticks),
+   * so a shard left orphaned beyond the ramp-up budget, or a claim that failed
+   * on a store error, is retried on the next tick even in a stable cluster
+   * with no membership change (Orleans' `PeriodicShardCheck`). Calls are
+   * serialised with each other and with the periodic check; a no-op after
+   * `stop()`.
    */
-  async refreshOwnership(ownership: ShardOwnershipContext): Promise<void> {
-    this.ownership = ownership;
+  refreshOwnership(ownership: ShardOwnershipContext): Promise<void> {
+    if (!this.stopped) this.ownership = ownership;
+    return this.enqueueReconcile();
+  }
+
+  /** Queue one reconciliation against the latest known membership view. */
+  private enqueueReconcile(): Promise<void> {
+    const run = this.reconciling.then(() => this.reconcileNow());
+    this.reconciling = run.catch(() => undefined);
+    return run;
+  }
+
+  private async reconcileNow(): Promise<void> {
+    if (this.stopped) return;
+    try {
+      await this.reconcileOwnership(this.ownership);
+    } finally {
+      // Re-arm even when this run failed on a store error, so the periodic
+      // check keeps retrying (Orleans' loop logs the error and carries on).
+      this.scheduleCheck();
+    }
+  }
+
+  private async reconcileOwnership(ownership: ShardOwnershipContext): Promise<void> {
     const shards = await this.store.listShards();
     const active = new Set(ownership.activeRingKeys);
 
@@ -162,6 +202,7 @@ export class LocalDurableJobManager {
     // as owner, but the process lost its in-memory executor, so start one (no
     // re-claim needed) to reload and fire the persisted jobs.
     for (const shard of shards) {
+      if (this.stopped) return;
       if (shard.owner === ownership.localRingKey && !this.executors.has(shard.shardKey)) {
         await this.startExecutor(shard.shardKey);
       }
@@ -177,6 +218,7 @@ export class LocalDurableJobManager {
     );
     const toClaim = this.claimBudgetForThisStep(claimable.length);
     for (const shard of claimable.slice(0, toClaim)) {
+      if (this.stopped) return;
       // A dead-owner shard is adopted; an unclaimed one is just claimed.
       const deadOwner = shard.owner !== undefined && !active.has(shard.owner) ? [shard.owner] : [];
       const started = await this.claimAndStart(shard.shardKey, deadOwner);
@@ -195,6 +237,17 @@ export class LocalDurableJobManager {
     }
   }
 
+  /** Re-arm the periodic shard check (0 disables it). */
+  private scheduleCheck(): void {
+    if (this.checkHandle !== undefined) this.time.clearTimer(this.checkHandle);
+    this.checkHandle = undefined;
+    if (this.stopped || this.options.periodicShardCheckMs <= 0) return;
+    this.checkHandle = this.time.setTimer(() => {
+      this.checkHandle = undefined;
+      void this.enqueueReconcile().catch(() => undefined);
+    }, this.options.periodicShardCheckMs);
+  }
+
   /**
    * Stop every executor (silo shutdown). Drains each executor's in-flight run
    * *before* releasing its shard, so a successor claiming the shard never
@@ -202,6 +255,12 @@ export class LocalDurableJobManager {
    * awaiting its in-flight work). Best-effort release so a successor can claim.
    */
   async stop(): Promise<void> {
+    this.stopped = true;
+    if (this.checkHandle !== undefined) this.time.clearTimer(this.checkHandle);
+    this.checkHandle = undefined;
+    // Let an in-flight reconciliation finish (it bails at its next step once
+    // stopped), so it can't start an executor after the drain below.
+    await this.reconciling;
     for (const shardKey of [...this.executors.keys()]) {
       await this.stopExecutor(shardKey);
       await this.store.releaseShard(shardKey, this.ownership.localRingKey).catch(() => undefined);
@@ -302,6 +361,7 @@ export function resolveOptions(options: {
   shardClaimInitialBudget?: number;
   shardClaimMaxBudget?: number;
   shardClaimRampUpDuration?: Duration;
+  periodicShardCheckInterval?: Duration;
 }): ResolvedDurableJobsOptions {
   const shardDurationMs =
     options.shardDuration !== undefined ? durationToMs(options.shardDuration) : 3_600_000;
@@ -330,6 +390,11 @@ export function resolveOptions(options: {
       options.shardClaimRampUpDuration !== undefined
         ? durationToMs(options.shardClaimRampUpDuration)
         : 0,
+    // Orleans' PeriodicShardCheck default.
+    periodicShardCheckMs:
+      options.periodicShardCheckInterval !== undefined
+        ? durationToMs(options.periodicShardCheckInterval)
+        : 600_000,
   };
 }
 
