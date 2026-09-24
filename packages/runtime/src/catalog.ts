@@ -254,6 +254,9 @@ export class Catalog {
     if (existing !== undefined && existing.state !== "invalid") {
       if (!existing.deactivationRequestedAndIdle) return Promise.resolve(existing);
       return this.finalizeStale(key, existing).then(() => {
+        // A stuck-removal during `finalizeStale` may already have replaced it.
+        const replacement = this.activations.get(key);
+        if (replacement !== undefined && replacement.state !== "invalid") return replacement;
         const created = this.create(id, activationId, rehydrationBag, sourceAddr);
         this.activations.set(key, created);
         return created;
@@ -290,12 +293,41 @@ export class Catalog {
       },
     );
     existing.finalizeDeactivation();
+    // Removed as stuck while `onDeactivate` awaited (its cleanup already ran
+    // in `handleStuckActivation`): leave any replacement under `key` alone.
+    if (this.activations.get(key) !== existing) return;
     this.activations.delete(key);
     if (this.options.grainActivator?.disposeInstance !== undefined) {
       await this.options.grainActivator.disposeInstance(existing.instance, existing.id);
     }
     this.options.deactivateState?.(existing.instance, existing.id);
     this.options.onDeactivated?.(existing);
+  }
+
+  /**
+   * `ActivationOptions.onStuck`: an activation has deactivated itself because
+   * its blocking turn is stuck (Orleans `DeactivateStuckActivation`) and
+   * already marked itself `invalid`. Remove it from whichever map holds it
+   * (ordinary or stateless-worker) and run the same `onDeactivated` hook an
+   * ordinary deactivation gets (directory unregister, cache invalidation) —
+   * so the wedged turn is left dangling on its own, orphaned activation
+   * object, while the NEXT call for this grain id activates a fresh one.
+   * Deliberately skips `disposeCollected`'s `disposeInstance`/`deactivateState`
+   * hooks: those assume `onDeactivate` ran cleanly, which it did not here.
+   */
+  private handleStuckActivation(activation: ActivationData): void {
+    const key = activation.id.toString();
+    if (this.activations.get(key) === activation) {
+      this.activations.delete(key);
+    } else {
+      const list = this.workerActivations.get(key);
+      if (list !== undefined) {
+        const remaining = list.filter((a) => a !== activation);
+        if (remaining.length === 0) this.workerActivations.delete(key);
+        else this.workerActivations.set(key, remaining);
+      }
+    }
+    this.options.onDeactivated?.(activation);
   }
 
   /**
@@ -479,7 +511,10 @@ export class Catalog {
       ageSeconds * 1000,
       reg.metadata.reentrant,
       activationId,
-      this.options.activationOptions ?? {},
+      {
+        ...this.options.activationOptions,
+        onStuck: (a) => this.handleStuckActivation(a),
+      },
     );
     activation.runtime = new GrainRuntimeImpl(this.options.factory, activation, {
       time: this.options.time,
@@ -609,7 +644,10 @@ export class Catalog {
   async collectIdle(ageLimitOverrideMs?: number): Promise<void> {
     for (const [key, activation] of this.activations) {
       await this.collectOne(activation, ageLimitOverrideMs);
-      if (activation.state === "invalid") {
+      // Identity check: while `collectOne` awaited, this activation may have
+      // been removed as stuck (`handleStuckActivation`, which already ran
+      // `onDeactivated`) and a fresh one stored under the same key.
+      if (activation.state === "invalid" && this.activations.get(key) === activation) {
         this.activations.delete(key);
         await this.disposeCollected(activation);
       }
@@ -618,8 +656,11 @@ export class Catalog {
       for (const activation of list) {
         await this.collectOne(activation, ageLimitOverrideMs);
       }
-      const collected = list.filter((a) => a.state === "invalid");
-      const remaining = list.filter((a) => a.state !== "invalid");
+      // Re-read: a stuck worker may have been removed (and already disposed
+      // via `handleStuckActivation`) while `collectOne` awaited.
+      const current = this.workerActivations.get(key) ?? [];
+      const collected = current.filter((a) => a.state === "invalid");
+      const remaining = current.filter((a) => a.state !== "invalid");
       if (remaining.length === 0) this.workerActivations.delete(key);
       else this.workerActivations.set(key, remaining);
       for (const activation of collected) await this.disposeCollected(activation);

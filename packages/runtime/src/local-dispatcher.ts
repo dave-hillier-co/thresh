@@ -35,6 +35,15 @@ export class LocalDispatcher implements Dispatcher {
       return this.catalog.pickOrScaleWorker(withDeadline.target).invoke(withDeadline, opts);
     }
     const activation = await this.catalog.getOrCreate(withDeadline.target);
-    return activation.invoke(withDeadline, opts);
+    try {
+      return await activation.invoke(withDeadline, opts);
+    } catch (error) {
+      // The activation was deactivated as stuck (MaxRequestProcessingTime)
+      // before this call ever ran: re-deliver it to a fresh activation, as
+      // Orleans' `RerouteAllQueuedMessages` does. Only that exact rejection
+      // is retried, so a call that did run is never executed twice.
+      if (!activation.isStuckRejection(error)) throw error;
+      return this.deliver(req, opts);
+    }
   }
 }
