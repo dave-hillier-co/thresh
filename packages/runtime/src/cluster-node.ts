@@ -245,13 +245,15 @@ export interface ClusterNodeOptions {
    * How long a disconnected client stays registered before this gateway drops
    * it — rejecting further routing to it and gossiping `unregister` (Orleans
    * `SiloMessagingOptions.ClientDropTimeout`, defaults to 1 minute). Also the
-   * period of the maintenance sweep that checks for it.
+   * period of the maintenance sweep that checks for it. `0` disables the sweep:
+   * a disconnected client then stays registered until this silo leaves.
    */
   clientDropTimeoutMs?: number;
   /**
    * How often a silo republishes its locally connected clients to every peer,
    * on top of the immediate republish a membership change triggers (Orleans
    * `SiloMessagingOptions.ClientRegistrationRefresh`, defaults to 5 minutes).
+   * `0` disables the periodic republish; the membership-change one still runs.
    */
   clientDirectoryRefreshMs?: number;
   /**
@@ -542,6 +544,14 @@ export class ClusterNode {
    */
   private readonly localClientIds = new Map<string, GrainId>();
   /** When a locally held client connection closed, keyed like `localClientIds` (Orleans `ClientState.DisconnectedSince`). */
+  /**
+   * The correlation-table peer tag of each accepted client connection: every
+   * call forwarded down that socket is registered under it, so the socket
+   * closing can fail exactly those calls (`recordClosedClientConnection`)
+   * instead of leaving each to its full call timeout.
+   */
+  private readonly clientConnectionTags = new WeakMap<Connection, string>();
+  private nextClientConnectionTag = 0;
   private readonly clientDisconnectedSince = new Map<string, number>();
   /** This silo's (test-hooks-latched) CPU-usage source (Orleans `TestHooksEnvironmentStatisticsProvider`). */
   private readonly environmentStatistics = new TestHooksEnvironmentStatisticsProvider();
@@ -1795,10 +1805,11 @@ export class ClusterNode {
    * snapshot it last pushed (`remoteLoadStats`, the same source `isOverloaded`
    * reads). That snapshot is the only cross-silo load signal that exists, so a
    * peer which has never pushed one still reports zero activations — the
-   * pre-existing "unknown load" default, not a claim that it is idle. There is
-   * still no periodic gossip timer; a push happens when the peer's own
-   * load-shedding test hooks force one. `resourceStats` stays local-only for
-   * the same reason: it carries nothing the activation count does not already.
+   * pre-existing "unknown load" default, not a claim that it is idle. Peers
+   * push it every `loadPublishIntervalMs` (`scheduleLoadPublish`), and the
+   * load-shedding test hooks force an immediate push. `resourceStats` stays
+   * local-only: it carries nothing the activation count does not already
+   * (there is no CPU or memory signal in the snapshot yet).
    */
   private placementContext(): Omit<PlacementContext, "localSilo"> {
     const snapshot = this.options.membership.current();
@@ -2083,6 +2094,10 @@ export class ClusterNode {
     this.clientConnectionsByEndpoint.set(preamble.siloAddress.endpoint, connection);
     this.clientDisconnectedSince.delete(key);
     this.localClientIds.set(key, clientId);
+    this.clientConnectionTags.set(
+      connection,
+      `client-connection:${key}#${(this.nextClientConnectionTag += 1)}`,
+    );
     this.clientDirectory.register(clientId, this.options.local);
     this.broadcastClientGossip({ op: "register", clientId, gateway: this.options.local });
     connection.onClose?.(() =>
@@ -2092,10 +2107,13 @@ export class ClusterNode {
 
   /**
    * The transport dropped this connection on its own (Orleans
-   * `Gateway.RecordClosedConnection`). Free the local send path immediately —
-   * so a call already in flight to this client fails fast with "client not
-   * connected here" instead of writing to a dead socket and waiting out the
-   * caller's full response timeout — but keep the client registered in
+   * `Gateway.RecordClosedConnection`). Fail every call already written to this
+   * socket (tagged by `clientConnectionTags`) and free the local send path, so
+   * a later call fails fast with "client not connected" instead of writing to a
+   * dead socket and waiting out the caller's full response timeout. This
+   * deliberately differs from Orleans, which queues messages for a
+   * disconnected client in `ClientState` and only rejects them at drop time;
+   * there is no such buffer here. Keep the client registered in
    * `clientDirectory`/gossiped to peers until `dropDisconnectedClients` decides
    * it hasn't reconnected within `clientDropTimeoutMs`, in case this is a brief
    * blip and the same connection comes back. Guarded by connection identity: a
@@ -2108,6 +2126,15 @@ export class ClusterNode {
     connection: Connection,
   ): void {
     const key = clientId.toString();
+    // Calls already written to this socket can never be answered over it:
+    // fail them now, whether or not a reconnect has already replaced it.
+    const tag = this.clientConnectionTags.get(connection);
+    if (tag !== undefined) {
+      this.correlation.rejectFor(
+        tag,
+        new RejectionError(`connection to client ${key} was lost`, "unknownTarget"),
+      );
+    }
     if (this.clientConnections.get(key) !== connection) return;
     this.clientConnections.delete(key);
     this.clientConnectionsByEndpoint.delete(endpoint);
@@ -2258,7 +2285,7 @@ export class ClusterNode {
       conn.send(message);
       return undefined;
     }
-    const pending = this.sendAndAwait(conn, message);
+    const pending = this.sendAndAwait(conn, message, this.clientConnectionTags.get(conn));
     return this.interpretResponse(await pending);
   }
 
@@ -2296,7 +2323,7 @@ export class ClusterNode {
       return;
     }
     try {
-      const pending = this.sendAndAwait(conn, forward);
+      const pending = this.sendAndAwait(conn, forward, this.clientConnectionTags.get(conn));
       const clientResponse = await pending;
       if (replyTo === undefined) return;
       const relayed = responseTo(
@@ -2602,18 +2629,6 @@ export class ClusterNode {
   // ── Load-aware placement (Orleans `DeploymentLoadPublisher`) ────────────────
 
   /**
-   * Push this silo's current load snapshot (activation count + overloaded flag)
-   * to every other active silo, as `system: "loadstats"` requests, and wait for
-   * all of them to land — Orleans' `DeploymentLoadPublisher.PublishStatistics`.
-   * Called periodically by `scheduleLoadPublish` and, in tests, forced
-   * immediately by `siloTestHooks()` after every latch/unlatch (mirrors
-   * Orleans' test-only `PropagateStatisticsToCluster`'s
-   * `ForceRuntimeStatisticsCollection` call) so
-   * `IActivationCountBasedPlacementTestGrain.LatchOverloaded`/`LatchCpuUsage`
-   * are immediately visible without waiting for the next interval.
-   * Best-effort: an unreachable peer is skipped rather than failing the call.
-   */
-  /**
    * Re-arm the periodic push (Orleans `DeploymentLoadPublisher`'s
    * `RegisterTimer`-driven `PublishStatistics`). Scheduled again as soon as the
    * timer fires, independent of how long the push itself takes, so a slow or
@@ -2626,6 +2641,18 @@ export class ClusterNode {
     }, this.loadPublishIntervalMs);
   }
 
+  /**
+   * Push this silo's current load snapshot (activation count + overloaded flag)
+   * to every other active silo, as `system: "loadstats"` requests, and wait for
+   * all of them to land — Orleans' `DeploymentLoadPublisher.PublishStatistics`.
+   * Called periodically by `scheduleLoadPublish` and, in tests, forced
+   * immediately by `siloTestHooks()` after every latch/unlatch (mirrors
+   * Orleans' test-only `PropagateStatisticsToCluster`'s
+   * `ForceRuntimeStatisticsCollection` call) so
+   * `IActivationCountBasedPlacementTestGrain.LatchOverloaded`/`LatchCpuUsage`
+   * are immediately visible without waiting for the next interval.
+   * Best-effort: an unreachable peer is skipped rather than failing the call.
+   */
   async publishLoadStats(): Promise<void> {
     const peers = activeSilos(this.options.membership.current()).filter(
       (s) => !s.equals(this.options.local),
