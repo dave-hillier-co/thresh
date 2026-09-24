@@ -271,6 +271,15 @@ export interface SiloConfig {
    */
   gracefulShutdownMs?: number;
   /**
+   * `GracefulShutdown`'s overall stop budget — `gracefulShutdownMs` plus the
+   * node's own deactivation sweep together fit inside this, so a slow
+   * `onDeactivate` hook can't push the total stop past the process's own
+   * termination grace period (e.g. Kubernetes' `terminationGracePeriodSeconds`)
+   * and get the pod SIGKILLed mid-stop. Unset defaults to
+   * `DEFAULT_STOP_BUDGET_MS` (`graceful-shutdown.ts`).
+   */
+  stopBudgetMs?: number;
+  /**
    * Self-probe liveness (docs/design-notes-parity-gaps.md item 9, option A):
    * periodically call a no-op system grain on THIS silo and flip readiness
    * false after `missedThreshold` consecutive misses, catching a hung grain
@@ -379,6 +388,13 @@ export class SiloBuilder {
     | undefined;
   private readonly starters: Array<() => Promise<void>> = [];
   private readonly closers: Array<() => Promise<void>> = [];
+  /**
+   * Stops run BEFORE the node deactivates activations (`SiloHost.stop`'s
+   * `onBeforeDeactivate`) — stream providers and the durable-job manager,
+   * matching Orleans' own ordering (see that field's doc). Everything else
+   * still stops via `closers`, after deactivation.
+   */
+  private readonly preDeactivateClosers: Array<() => Promise<void>> = [];
   private readonly startupTasks: Array<(grains: GrainFactoryAccess) => Promise<void>> = [];
   private readonly pullingStreams: PullingStreamProviderHost[] = [];
   private readonly memoryStreams: Array<{
@@ -674,8 +690,13 @@ export class SiloBuilder {
     this.starters.push(async () => {
       await client.connect();
     });
-    this.closers.push(async () => {
+    // Stop polling before deactivateAll, or it keeps delivering into
+    // activations that are (or are about to be) deactivating; the client
+    // connection itself can close after.
+    this.preDeactivateClosers.push(async () => {
       await provider.stop();
+    });
+    this.closers.push(async () => {
       await client.close();
     });
     return this.addStreamProvider(name, provider);
@@ -735,8 +756,12 @@ export class SiloBuilder {
     this.starters.push(async () => {
       await provider.start();
     });
-    this.closers.push(async () => {
+    // Stop polling before deactivateAll (see `addRedisStreams`); the pool
+    // itself can close after.
+    this.preDeactivateClosers.push(async () => {
       await provider.stop();
+    });
+    this.closers.push(async () => {
       await pool.end();
     });
     return this.addStreamProvider(name, provider);
@@ -835,8 +860,12 @@ export class SiloBuilder {
     this.starters.push(async () => {
       await provider.start();
     });
-    this.closers.push(async () => {
+    // Stop polling before deactivateAll (see `addRedisStreams`); the Kafka
+    // client can disconnect after.
+    this.preDeactivateClosers.push(async () => {
       await provider.stop();
+    });
+    this.closers.push(async () => {
       await provider.disconnect();
     });
     return this.addStreamProvider(name, provider);
@@ -858,7 +887,8 @@ export class SiloBuilder {
   ): this {
     const provider = new GeneratorPullingStreamProvider(name, config, options);
     this.pullingStreams.push(provider);
-    this.closers.push(async () => {
+    // Stop before deactivateAll (see `addRedisStreams`).
+    this.preDeactivateClosers.push(async () => {
       await provider.stop();
     });
     return this.addStreamProvider(name, provider);
@@ -1630,8 +1660,10 @@ export class SiloBuilder {
           activeRingKeys: activeSilos(membership.current()).map((s) => s.ringKey),
         });
       });
-      // Graceful drain releases this silo's shards so a successor can claim them.
-      this.closers.push(async () => manager.stop());
+      // Graceful drain releases this silo's shards so a successor can claim
+      // them — stopped before deactivateAll, or it keeps delivering jobs
+      // into activations that are (or are about to be) deactivating.
+      this.preDeactivateClosers.push(async () => manager.stop());
     }
     for (const provider of this.pullingStreams) {
       provider.setDeliver((grainId, streamKey, event, token) =>
@@ -1660,7 +1692,11 @@ export class SiloBuilder {
       if (filter !== undefined) provider.setStreamFilter(filter);
       // Cancel every stream's inactivity timer on shutdown so none leak past
       // this silo's lifetime (a leaked `setTimeout`/fake-clock timer would
-      // otherwise hang a test worker).
+      // otherwise hang a test worker). Unlike the pulling providers this
+      // stays AFTER deactivation: `stop()` here only cancels timers (there is
+      // no agent to stop — delivery is a direct push on `publish`), and a
+      // publish from an `onDeactivate` hook re-arms one, so stopping earlier
+      // would leak exactly the timer this is here to cancel.
       this.closers.push(async () => provider.stop());
     }
 
@@ -1724,12 +1760,14 @@ export class SiloBuilder {
       gracefulShutdownMs:
         this.config.gracefulShutdownMs ??
         (this.membership instanceof KubernetesMembership ? DEFAULT_GRACE_MS : 0),
+      ...(this.config.stopBudgetMs !== undefined ? { stopBudgetMs: this.config.stopBudgetMs } : {}),
       membership: this.membership,
       reminderService,
       rebalancerWorker,
       selfProbeWorker,
       onStart: this.starters,
       onOwnershipChange,
+      onBeforeDeactivate: this.preDeactivateClosers,
       onStop: this.closers,
       ...(this.logger !== undefined ? { logger: this.logger } : {}),
       startupTasks: this.startupTasks.map((fn) => async () => {

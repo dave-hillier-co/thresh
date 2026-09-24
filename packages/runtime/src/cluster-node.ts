@@ -1284,7 +1284,14 @@ export class ClusterNode {
     if (this.clientDirectoryRefreshMs > 0) this.scheduleClientDirectoryRefresh();
   }
 
-  async stop(): Promise<void> {
+  /**
+   * `deadlineMs`, when given, bounds `Catalog.deactivateAll`'s whole sweep
+   * (see its doc) — the host's overall stop budget minus whatever grace
+   * period it already spent, so the combined wait fits inside the process's
+   * own termination grace period instead of risking a SIGKILL mid-stop
+   * (issue #108).
+   */
+  async stop(deadlineMs?: number): Promise<void> {
     if (this.loadPublishTimer !== undefined) this.time.clearTimer(this.loadPublishTimer);
     this.loadPublishTimer = undefined;
     if (this.clientMaintenanceTimer !== undefined)
@@ -1302,7 +1309,10 @@ export class ClusterNode {
     // Deactivate before tearing down transport: onDeactivate hooks may make cross-silo
     // calls (e.g. notifying a watcher grain on another silo), which need the listener and
     // outbound connections still up. Only close them once every activation has drained.
-    await this.catalog.deactivateAll({ code: "shutting-down", description: "node stopping" });
+    await this.catalog.deactivateAll(
+      { code: "shutting-down", description: "node stopping" },
+      deadlineMs,
+    );
     await this.listener?.close();
     await this.connections.closeAll();
     // Only now is nothing left that could answer a call: the listener is closed and every pooled
@@ -3090,12 +3100,7 @@ export class ClusterNode {
     }
     let moved = 0;
     for (const activation of candidates.slice(0, count)) {
-      const accepted = await this.migrateActivationTo(activation, target);
-      if (accepted) {
-        await activation.deactivate({
-          code: "migrating",
-          description: "rebalanced to another silo",
-        });
+      if (await this.migrateThenDeactivate(activation, target, "rebalanced to another silo")) {
         moved++;
       }
     }
@@ -3170,13 +3175,29 @@ export class ClusterNode {
   private async migrateGrainToSilo(grainId: GrainId, target: SiloAddress): Promise<boolean> {
     const activation = this.catalog.get(grainId);
     if (activation === undefined) return false;
+    return this.migrateThenDeactivate(activation, target, "repartitioned to another silo");
+  }
+
+  /**
+   * Hand `activation` to `target` and deactivate it here whether or not the
+   * target accepted. `migrateActivationTo` dehydrates before attempting the
+   * send, which poisons every later call on this activation with "activation
+   * migrated" (`ActivationData.dehydrate`) whatever the outcome; Orleans'
+   * `StartMigrationAsync` returning false likewise still continues into
+   * deactivation (`ActivationData.FinishDeactivating`) rather than leaving the
+   * activation live but rejecting forever (issue #93). Returns whether the
+   * target accepted.
+   */
+  private async migrateThenDeactivate(
+    activation: ActivationData,
+    target: SiloAddress,
+    description: string,
+  ): Promise<boolean> {
     const accepted = await this.migrateActivationTo(activation, target);
-    if (accepted) {
-      await activation.deactivate({
-        code: "migrating",
-        description: "repartitioned to another silo",
-      });
-    }
+    await activation.deactivate({
+      code: "migrating",
+      description: accepted ? description : `failed migration (${description})`,
+    });
     return accepted;
   }
 

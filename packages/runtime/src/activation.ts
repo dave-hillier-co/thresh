@@ -350,6 +350,11 @@ export class ActivationData implements GrainContext {
     return this.stuckRejection !== undefined && error === this.stuckRejection;
   }
 
+  /** True once this activation has deactivated itself as stuck (see `handleStuckTurn`). */
+  get isDeactivatedAsStuck(): boolean {
+    return this.stuckRejection !== undefined;
+  }
+
   /** Schedule `onActivate` as the first turn, so it precedes any message. */
   beginActivate(reason: ActivationReason): void {
     this.state = "activating";

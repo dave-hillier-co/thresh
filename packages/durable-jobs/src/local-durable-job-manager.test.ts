@@ -439,3 +439,65 @@ describe("LocalDurableJobManager.stop draining", () => {
     expect(events).toEqual(["handler-done", "released"]);
   });
 });
+
+describe("LocalDurableJobManager after stop()", () => {
+  const ownership: ShardOwnershipContext = { localRingKey: "silo1", activeRingKeys: ["silo1"] };
+
+  // `SiloHost.stop` stops the manager BEFORE deactivating activations (Orleans
+  // stops `LocalDurableJobManager` at `ServiceLifecycleStage.Active`), so the
+  // grace period and every `onDeactivate` hook still run afterwards and may
+  // schedule jobs, and a membership view change may still be mid-flight. None
+  // of that may claim a shard and start an executor on this stopping silo:
+  // nothing would ever stop it or release its shard again.
+  it("persists a newly scheduled job without claiming its shard or starting an executor", async () => {
+    const store = new MemoryJobShardStore();
+    const time = new FakeTimeProvider();
+    const manager = new LocalDurableJobManager(
+      store,
+      time,
+      async () => completed,
+      resolveOptions({}),
+      ownership,
+    );
+    await manager.stop();
+
+    const job = await manager.scheduleJob({
+      name: "job",
+      dueTime: new Date(time.now() + 60_000),
+      target: new GrainId("test", "g"),
+    });
+
+    expect(manager.ownedShards()).toEqual([]);
+    const shard = (await store.listShards()).find((s) => s.shardKey === job.shardKey);
+    expect(shard).toBeDefined(); // persisted, for a live silo to claim
+    expect(shard!.owner).toBeUndefined();
+  });
+
+  it("neither claims shards on an ownership refresh nor accepts a forwarded job", async () => {
+    const store = new MemoryJobShardStore();
+    await seedOrphanedShards(store, 2);
+    const time = new FakeTimeProvider();
+    const manager = new LocalDurableJobManager(
+      store,
+      time,
+      async () => completed,
+      resolveOptions({}),
+      ownership,
+    );
+    await manager.stop();
+
+    await manager.refreshOwnership(ownership);
+    expect(manager.ownedShards()).toEqual([]);
+
+    const accepted = await manager.receiveForwardedJob({
+      id: "fwd",
+      name: "job",
+      dueTime: new Date(1_000_000_000),
+      target: new GrainId("test", "g"),
+      shardKey: 99,
+      metadata: {},
+    });
+    expect(accepted).toBe(false);
+    expect(manager.ownedShards()).toEqual([]);
+  });
+});
