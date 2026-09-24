@@ -242,6 +242,41 @@ describe("ShardExecutor", () => {
     await exec.stop();
   });
 
+  it("measures retry backoff from completion time, not poll start", async () => {
+    // A handler slower than its backoff must not retry immediately: the delay
+    // is added to when the run actually finished, not to the poll-start `now`
+    // that was captured before the (possibly long) run began.
+    const store = new MemoryJobShardStore();
+    const time = new FakeTimeProvider();
+    const limiter = new ConcurrencyLimiter(2);
+    let resolveRun: (r: { kind: "failed"; error: unknown }) => void = () => undefined;
+    const run: RunJob = () =>
+      new Promise((res) => {
+        resolveRun = res;
+      });
+    const shouldRetry = () => ({ ms: 2000 }); // fixed 2s backoff
+    await store.persistAdd(job("a", 1000));
+    const exec = new ShardExecutor(0, store, time, limiter, run, () => false, {
+      ...OPTIONS,
+      shouldRetry,
+    });
+    await exec.load();
+
+    time.advance(1000); // poll starts at t=1000, dequeues and starts running "a"
+    await flush();
+
+    // The handler takes 5s of wall-clock time before it fails.
+    time.advance(5000); // now t=6000, run still in flight
+    resolveRun({ kind: "failed", error: new Error("boom") });
+    await flush();
+
+    const [persisted] = await store.readJobs(0);
+    // Completion at t=6000 + 2000ms backoff = 8000, not poll-start 1000 + 2000 = 3000.
+    expect(persisted.dueTime.getTime()).toBe(8000);
+
+    await exec.stop();
+  });
+
   it("stop() resolves only after an in-flight run settles (undrained-stop regression)", async () => {
     // Ownership-handoff hazard: if stop() didn't await the in-flight runOne(),
     // a rebalance could let the new shard owner re-run a job whose handler is
