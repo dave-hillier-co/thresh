@@ -39,6 +39,15 @@ class BalancedGrain extends Grain implements IPing {
   }
 }
 
+// Lands on the least-loaded silo by activation count (power-of-k over peers).
+const IPowerOfK = defineGrainInterface<IPing>("IPowerOfK.placement");
+@grain({ placement: "activationCount" })
+class PowerOfKGrain extends Grain implements IPing {
+  async ping(): Promise<string> {
+    return "pong";
+  }
+}
+
 // preferLocal, used to seed activations on a chosen silo.
 const ISeed = defineGrainInterface<IPing>("ISeed.placement");
 @grain({ placement: "preferLocal" })
@@ -61,6 +70,7 @@ function buildCluster(count: number) {
       { ctor: WorkerGrain, interfaces: [IWorker] },
       { ctor: FilteredGrain, interfaces: [IFiltered] },
       { ctor: BalancedGrain, interfaces: [IBalanced] },
+      { ctor: PowerOfKGrain, interfaces: [IPowerOfK] },
       { ctor: SeedGrain, interfaces: [ISeed] },
     ],
   });
@@ -182,6 +192,88 @@ describe("silo-wide default placement strategy", () => {
     try {
       await cluster.silos[2]!.host.getGrain(IExplicitRandom, "r").ping();
       const hosts = hostsOf(cluster, new GrainId("ExplicitRandom", "r"));
+      expect(hosts).toHaveLength(1);
+      expect(hosts[0]).toBe(cluster.silos[0]);
+    } finally {
+      await cluster.dispose();
+    }
+  });
+});
+
+describe("cross-silo load-aware placement", () => {
+  /**
+   * Load silo-1 with `count` activations and leave exactly one on silo-0, then
+   * force silo-1 to push its load snapshot (the four latch/unlatch hooks are
+   * the test-only stand-in for Orleans' periodic `DeploymentLoadPublisher`
+   * gossip — see `SiloLoadSheddingTestHooks`). Silo-0's placement context must
+   * then read silo-1's real count rather than a hardcoded zero.
+   */
+  async function seedLoadedPeer(cluster: TestCluster, count: number): Promise<void> {
+    for (let i = 0; i < count; i += 1)
+      await cluster.silos[1]!.host.getGrain(ISeed, `peer-${i}`).ping();
+    await cluster.silos[0]!.host.getGrain(ISeed, "local").ping();
+    await cluster.silos[1]!.host.loadShedding.unlatchCpuUsage();
+  }
+
+  it("keeps a power-of-k grain on the caller's silo when the peer is the loaded one", async () => {
+    const cluster = await buildCluster(2);
+    try {
+      await seedLoadedPeer(cluster, 5);
+
+      // Placed from silo-0: one activation here against five on silo-1, so the
+      // only correct answer is silo-0 — a peer that reported zero would win.
+      await cluster.silos[0]!.host.getGrain(IPowerOfK, "x").ping();
+      const hosts = hostsOf(cluster, new GrainId("PowerOfK", "x"));
+      expect(hosts).toHaveLength(1);
+      expect(hosts[0]).toBe(cluster.silos[0]);
+    } finally {
+      await cluster.dispose();
+    }
+  });
+
+  it("keeps a resource-optimized grain on the caller's silo when the peer is the loaded one", async () => {
+    const cluster = await buildCluster(2);
+    try {
+      await seedLoadedPeer(cluster, 5);
+
+      await cluster.silos[0]!.host.getGrain(IBalanced, "x").ping();
+      const hosts = hostsOf(cluster, new GrainId("Balanced", "x"));
+      expect(hosts).toHaveLength(1);
+      expect(hosts[0]).toBe(cluster.silos[0]);
+    } finally {
+      await cluster.dispose();
+    }
+  });
+
+  /**
+   * Without any test-hook-forced push, a peer's load must still become visible
+   * on its own — the periodic `DeploymentLoadPublisher`-style publisher
+   * (`scheduleLoadPublish`), not just the latch/unlatch hooks the tests above
+   * lean on. A tiny `loadPublishIntervalMs` stands in for the real 1s default
+   * so the test doesn't wait a full period.
+   */
+  it("learns a peer's load from the periodic publisher alone, with no test hook forcing it", async () => {
+    const cluster = await TestCluster.start({
+      clusterId: "cp-periodic",
+      initialSilos: 2,
+      random: () => 0,
+      loadPublishIntervalMs: 10,
+      siloMetadata: ({ index }) => ({ role: roleOf(index) }),
+      grains: [
+        { ctor: PowerOfKGrain, interfaces: [IPowerOfK] },
+        { ctor: SeedGrain, interfaces: [ISeed] },
+      ],
+    });
+    try {
+      for (let i = 0; i < 5; i += 1)
+        await cluster.silos[1]!.host.getGrain(ISeed, `peer-${i}`).ping();
+      await cluster.silos[0]!.host.getGrain(ISeed, "local").ping();
+
+      // Give the periodic publisher a few intervals to land, with no forced push.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      await cluster.silos[0]!.host.getGrain(IPowerOfK, "x").ping();
+      const hosts = hostsOf(cluster, new GrainId("PowerOfK", "x"));
       expect(hosts).toHaveLength(1);
       expect(hosts[0]).toBe(cluster.silos[0]);
     } finally {

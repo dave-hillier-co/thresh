@@ -10,6 +10,7 @@ import {
   type StreamSubscriptionHandle,
   type SubscribeOptions,
 } from "@thresh/core/stream";
+import { FanOutDelivery } from "@thresh/streams/fan-out-delivery";
 import { implicitSubscriberIds } from "@thresh/streams/implicit-subscriptions";
 import {
   GeneratorStreamQueue,
@@ -18,6 +19,7 @@ import {
 import {
   QueuePullingAgent,
   type PullingStreamProviderHost,
+  type StreamFailureHandler,
 } from "@thresh/streams/queue-pulling-agent";
 import { ownedQueueIndices, type HashRange } from "@thresh/streams/queue-ownership";
 import type { StreamDeliver } from "@thresh/streams/stream-deliver";
@@ -27,6 +29,22 @@ export interface GeneratorPullingStreamProviderOptions {
   /** Number of physical queues, each generating one synthetic stream (defaults to 4). */
   queueCount?: number;
   pollIntervalMs?: number;
+  /** Notified when a subscriber's delivery exhausts its retry budget (Orleans `IStreamFailureHandler`). */
+  failureHandler?: StreamFailureHandler;
+  /**
+   * Total time (ms) to keep retrying delivery to ONE subscriber before
+   * skipping it — every other subscriber of the same event is retried and
+   * timed out independently (Orleans `MaxEventDeliveryTime`; default 1 minute).
+   */
+  maxEventDeliveryTimeMs?: number;
+  /**
+   * Bounds a single delivery attempt to one subscriber (Orleans
+   * `ResponseTimeout`; default 30s) so a hung `onNext` cannot stall this
+   * provider's queues, or silo shutdown, forever.
+   */
+  deliveryResponseTimeoutMs?: number;
+  /** Backoff between retries to the same subscriber; defaults to 2^attempt * 50ms, capped at 5s. */
+  retryBackoffMs?: (attempt: number) => number;
 }
 
 /**
@@ -48,6 +66,14 @@ export class GeneratorPullingStreamProvider
   private readonly pollIntervalMs: number;
   private readonly queues: GeneratorStreamQueue[];
   private readonly agents = new Map<number, QueuePullingAgent>();
+  private readonly fanOutDelivery: FanOutDelivery;
+  /**
+   * Set by `stop()` and never cleared: the host stops this provider before
+   * deactivating activations, so a membership refresh already in flight (or a
+   * late partition acquisition) can still call `startAgentsFor` afterwards —
+   * an agent started then would never be stopped.
+   */
+  private stopped = false;
   private deliver: StreamDeliver = async () => undefined;
   private implicitTypesFor: (namespace: string) => Iterable<GrainType> = () => [];
 
@@ -68,6 +94,19 @@ export class GeneratorPullingStreamProvider
     this.queueCount = options.queueCount ?? 4;
     this.pollIntervalMs = options.pollIntervalMs ?? 20;
     this.queues = Array.from({ length: this.queueCount }, () => new GeneratorStreamQueue(config));
+    this.fanOutDelivery = new FanOutDelivery(
+      (subscriber, streamKey, event, token) => this.deliver(subscriber, streamKey, event, token),
+      {
+        ...(options.failureHandler !== undefined ? { failureHandler: options.failureHandler } : {}),
+        ...(options.maxEventDeliveryTimeMs !== undefined
+          ? { maxEventDeliveryTimeMs: options.maxEventDeliveryTimeMs }
+          : {}),
+        ...(options.deliveryResponseTimeoutMs !== undefined
+          ? { deliveryResponseTimeoutMs: options.deliveryResponseTimeoutMs }
+          : {}),
+        ...(options.retryBackoffMs !== undefined ? { retryBackoffMs: options.retryBackoffMs } : {}),
+      },
+    );
   }
 
   /** Total physical queues; queue ownership is assigned over `[0, physicalQueueCount)`. */
@@ -116,6 +155,7 @@ export class GeneratorPullingStreamProvider
   }
 
   startAgentsFor(indices: Iterable<number>): void {
+    if (this.stopped) return;
     const wanted = new Set(indices);
     for (const [i, agent] of this.agents) {
       if (!wanted.has(i)) {
@@ -128,7 +168,7 @@ export class GeneratorPullingStreamProvider
       if (this.agents.has(i)) continue;
       const agent = new QueuePullingAgent(
         this.queues[i]!,
-        (streamKey, event, token) => this.fanOut(streamKey, event, token),
+        (streamKey, event, token, signal) => this.fanOut(streamKey, event, token, signal),
         { pollIntervalMs: this.pollIntervalMs },
       );
       this.agents.set(i, agent);
@@ -137,6 +177,7 @@ export class GeneratorPullingStreamProvider
   }
 
   async stop(): Promise<void> {
+    this.stopped = true;
     const agents = [...this.agents.values()];
     this.agents.clear();
     await Promise.all(agents.map((agent) => agent.stop()));
@@ -147,15 +188,22 @@ export class GeneratorPullingStreamProvider
     return new ReadOnlyGeneratedStream<T>(id);
   }
 
-  private async fanOut(streamKey: string, event: unknown, token: number): Promise<void> {
+  private async fanOut(
+    streamKey: string,
+    event: unknown,
+    token: number,
+    signal: AbortSignal,
+  ): Promise<void> {
     const implicit = implicitSubscriberIds(streamKey, this.implicitTypesFor);
     const seen = new Set<string>();
+    const subscribers = [];
     for (const subscriber of implicit) {
       const id = subscriber.toString();
       if (seen.has(id)) continue;
       seen.add(id);
-      await this.deliver(subscriber, streamKey, event, token);
+      subscribers.push(subscriber);
     }
+    await this.fanOutDelivery.deliverToAll(subscribers, streamKey, event, token, signal);
   }
 }
 

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
 import type { TimeProvider } from "@thresh/core/time-provider";
 import { nowNanosOf, systemTimeProvider } from "@thresh/core/time-provider";
@@ -72,6 +72,66 @@ describe("FakeTimeProvider.nowNanos", () => {
     const time = new FakeTimeProvider();
     time.advance(7);
     expect(time.nowNanos()).toBe(time.nowNanos());
+  });
+});
+
+describe("systemTimeProvider.setTimer", () => {
+  // Node's `setTimeout` stores the delay in a signed 32-bit field: a delay
+  // over ~24.8 days (2^31 - 1 ms) overflows and gets clamped to 1ms, firing
+  // (near-)immediately instead of at the requested time.
+  const OVERFLOW_MS = 0x7fffffff; // 2^31 - 1
+  const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("clamps a delay past setTimeout's overflow point and chains until the real due time", () => {
+    const fired: number[] = [];
+    systemTimeProvider.setTimer(() => fired.push(Date.now()), THIRTY_DAYS_MS);
+
+    // Advancing just short of the real due time must not fire early — a
+    // clamped, un-chained setTimeout would have fired within ~1ms.
+    vi.advanceTimersByTime(THIRTY_DAYS_MS - 1000);
+    expect(fired).toHaveLength(0);
+
+    vi.advanceTimersByTime(1000);
+    expect(fired).toHaveLength(1);
+  });
+
+  it("fires exactly once for a delay past the overflow point, not on every chained re-arm", () => {
+    const fired: number[] = [];
+    systemTimeProvider.setTimer(() => fired.push(Date.now()), THIRTY_DAYS_MS);
+
+    vi.advanceTimersByTime(THIRTY_DAYS_MS);
+    expect(fired).toHaveLength(1);
+
+    // Nothing left armed: advancing further must not fire it again.
+    vi.advanceTimersByTime(THIRTY_DAYS_MS);
+    expect(fired).toHaveLength(1);
+  });
+
+  it("clearTimer cancels a chained (past-overflow) timer before it fires", () => {
+    const fired: number[] = [];
+    const handle = systemTimeProvider.setTimer(() => fired.push(Date.now()), THIRTY_DAYS_MS);
+
+    vi.advanceTimersByTime(OVERFLOW_MS); // one re-arm in, still chaining
+    systemTimeProvider.clearTimer(handle);
+    vi.advanceTimersByTime(THIRTY_DAYS_MS);
+
+    expect(fired).toHaveLength(0);
+  });
+
+  it("still uses a single native timer for a delay within setTimeout's range", () => {
+    const fired: number[] = [];
+    systemTimeProvider.setTimer(() => fired.push(Date.now()), 1000);
+    expect(vi.getTimerCount()).toBe(1);
+    vi.advanceTimersByTime(1000);
+    expect(fired).toHaveLength(1);
   });
 });
 

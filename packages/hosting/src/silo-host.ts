@@ -2,6 +2,7 @@ import type { GrainId } from "@thresh/core/grain-id";
 import type { GrainInterface } from "@thresh/core/grain-interface";
 import type { GrainKeyKind } from "@thresh/core/grain-key";
 import type { KeyTypeOf } from "@thresh/core/key-kinds";
+import { type Logger, noopLogger } from "@thresh/core/logger";
 import type { MembershipService } from "@thresh/core/membership";
 import type { StreamProvider } from "@thresh/core/stream";
 import type { GrainDirectory } from "@thresh/directory/grain-directory";
@@ -42,6 +43,13 @@ export interface SiloHostParts {
    * directly and this is ignored). Unset falls back to `GracefulShutdown`'s own default.
    */
   gracefulShutdownMs?: number;
+  /**
+   * `GracefulShutdown`'s overall stop budget, used the same way as
+   * `gracefulShutdownMs` (only when `buildSiloHost` constructs the default
+   * `GracefulShutdown`; ignored with a caller-supplied `shutdown`). Unset
+   * falls back to `GracefulShutdown`'s own default (`DEFAULT_STOP_BUDGET_MS`).
+   */
+  stopBudgetMs?: number;
   membership: MembershipService;
   reminderService?: ReminderService | undefined;
   /** The elected activation-rebalancer worker, started/stopped with the host. */
@@ -66,10 +74,29 @@ export interface SiloHostParts {
   /** Run after the node drains — e.g. disconnect durable provider clients. */
   onStop?: ReadonlyArray<() => Promise<void>>;
   /**
+   * Run before the node deactivates its activations (`shutdown.drain()` ->
+   * `ClusterNode.stop()` -> `Catalog.deactivateAll`) — stream providers and
+   * the durable-job manager stop here, matching Orleans' own ordering
+   * (`PersistentStreamProviderOptions.cs:58`, `LocalDurableJobManager.cs:120`
+   * both stop at `ServiceLifecycleStage.Active`, before
+   * `Catalog.DeactivateAllActivations`, `Silo.cs:387-395`): otherwise they
+   * keep delivering into activations for the whole grace period plus
+   * deactivation, creating exactly the orphaned-activation race
+   * `deactivateAll` now refuses (issue #108), then failing once the
+   * transport underneath them has closed anyway.
+   */
+  onBeforeDeactivate?: ReadonlyArray<() => Promise<void>>;
+  /**
    * Run after the node starts but before the silo is marked ready — e.g. call
    * grains from application startup code (Orleans `IStartupTask`).
    */
   startupTasks?: ReadonlyArray<() => Promise<void>>;
+  /**
+   * Where the host reports its own failures — the membership watch's failed view
+   * updates. Unset is a no-op, like every other optional logger seam here; the
+   * builder passes its `useLogging` logger through.
+   */
+  logger?: Logger | undefined;
 }
 
 /**
@@ -241,11 +268,30 @@ export class SiloHost {
   }
 
   async stop(): Promise<void> {
-    const { rebalancerWorker, selfProbeWorker, reminderService, shutdown, healthServer, onStop } =
-      this.parts;
+    const {
+      rebalancerWorker,
+      selfProbeWorker,
+      reminderService,
+      shutdown,
+      healthServer,
+      onStop,
+      onBeforeDeactivate,
+    } = this.parts;
     this.membershipWatch?.abort();
     rebalancerWorker?.stop();
     reminderService?.stop();
+    // Contained, unlike `onStop`: these run before the drain, so one failing
+    // provider stop must not skip deactivating every activation, closing the
+    // transport and the rest of the teardown (Orleans logs a lifecycle stage
+    // that fails to stop and carries on stopping).
+    const logger = this.parts.logger ?? noopLogger;
+    for (const hook of onBeforeDeactivate ?? []) {
+      try {
+        await hook();
+      } catch (error) {
+        logger.error("pre-deactivation stop hook failed", { error });
+      }
+    }
     // `selfProbeWorker` keeps ticking through `shutdown.drain()`'s grace
     // period rather than stopping here alongside the other workers: it reads
     // `HealthCheck.isDraining()` to no-op its own flip once `drain()` sets
@@ -262,17 +308,36 @@ export class SiloHost {
   /** React to membership view changes: rebuild the ring and refresh health. */
   private watchMembership(): void {
     const { node, health, membership, reminderService, onOwnershipChange } = this.parts;
+    const logger = this.parts.logger ?? noopLogger;
     const abort = new AbortController();
     this.membershipWatch = abort;
     void (async () => {
       for await (const snapshot of membership.updates()) {
         if (abort.signal.aborted) return;
-        node.updateView();
-        // Ring changed: take over (or release) reminder ranges and stream queues.
-        const updated = node.ownedHashRanges();
-        await this.runHooks(onOwnershipChange, updated);
-        await reminderService?.refreshOwnership(updated);
-        health.update({ membershipHealthy: snapshot.silos.length > 0 });
+        try {
+          node.updateView();
+          // Ring changed: take over (or release) reminder ranges and stream queues.
+          const updated = node.ownedHashRanges();
+          await this.runHooks(onOwnershipChange, updated);
+          await reminderService?.refreshOwnership(updated);
+          health.update({ membershipHealthy: snapshot.silos.length > 0 });
+        } catch (error) {
+          // Never let a failed view change END the watch. `updates()` yields
+          // forever, so a rejection here would take this silo off membership for
+          // the rest of the process's life: no further ring rebuild, no
+          // reminder/stream-queue re-adoption, and health left reporting whatever
+          // the last view it managed to apply said (issue #70). `updateView()`
+          // applies the view before any hook below runs, so a failure here costs
+          // this view's adoption work, which the next view change retries — and
+          // the hooks do real I/O against Postgres/Redis/Kafka (durable-job
+          // shard claims, pulling-stream queue ownership), so a store blip is
+          // the expected trigger. Deliberately NOT flipping `membershipHealthy`:
+          // the watch is connected and the view is current, and flipping
+          // readiness would pull a serving silo out of the service over a
+          // transient store error. (`LocalReminderService.refreshOwnership`
+          // already swallows its own store errors and logs them.)
+          logger.error("membership view update failed", { version: snapshot.version, error });
+        }
       }
     })();
   }
@@ -284,10 +349,9 @@ export function buildSiloHost(
 ): SiloHost {
   const shutdown =
     parts.shutdown ??
-    new GracefulShutdown(
-      parts.health,
-      parts.node,
-      parts.gracefulShutdownMs !== undefined ? { graceMs: parts.gracefulShutdownMs } : {},
-    );
+    new GracefulShutdown(parts.health, parts.node, {
+      ...(parts.gracefulShutdownMs !== undefined ? { graceMs: parts.gracefulShutdownMs } : {}),
+      ...(parts.stopBudgetMs !== undefined ? { stopBudgetMs: parts.stopBudgetMs } : {}),
+    });
   return new SiloHost({ ...parts, shutdown });
 }

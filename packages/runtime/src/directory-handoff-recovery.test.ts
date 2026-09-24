@@ -4,12 +4,14 @@ import { Grain } from "@thresh/core/grain";
 import { GrainId } from "@thresh/core/grain-id";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
 import type { GrainKey } from "@thresh/core/key-kinds";
+import type { Logger } from "@thresh/core/logger";
 import type { MembershipService } from "@thresh/core/membership";
 import { SiloAddress } from "@thresh/core/silo-address";
 import { RejectionError } from "@thresh/core/errors";
 import { ConsistentHashRing } from "@thresh/directory/consistent-hash-ring";
 import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
 import { InProcessNetwork, InProcessTransport } from "@thresh/messaging/in-process-transport";
+import type { Message } from "@thresh/messaging/message";
 import type {
   Connection,
   ConnectionAcceptHandler,
@@ -18,7 +20,7 @@ import type {
   MessageHandler,
   Transport,
 } from "@thresh/messaging/transport";
-import { ClusterNode } from "@thresh/runtime/cluster-node";
+import { ClusterNode, type ClusterNodeOptions } from "@thresh/runtime/cluster-node";
 import { StaticMembershipService } from "@thresh/runtime/static-membership";
 
 interface ICounter extends GrainKey<string> {
@@ -73,13 +75,14 @@ function counterKeyMovingThrough(
 }
 
 /**
- * Wraps an `InProcessTransport` so inbound directory requests from `holdFrom`
- * are parked instead of delivered, until `release()` hands them to the real
- * handler. This is the seam that makes the "membership changes while a
- * recovery pull is in flight" interleaving deterministic: parking the pull
- * REQUEST at the source keeps the puller's `beginRecovery` continuation
- * pending across as many `updateView()` calls as the test wants to drive,
- * with no timers and no sleeping.
+ * Wraps an `InProcessTransport` so inbound messages from `holdFrom` that `holds`
+ * accepts are parked instead of delivered, until `release()` hands them to the
+ * real handler. This is the seam that makes an interleaving around a recovery
+ * pull deterministic, with no timers and no sleeping. Two are driven with it:
+ * parking the pull REQUEST at the source (default) keeps the puller's
+ * `beginRecovery` continuation pending across as many `updateView()` calls as the
+ * test wants to drive; parking the pull's RESPONSE at the puller keeps it from
+ * adopting — and from ACKing what it adopted — for just as long.
  */
 class GatedTransport implements Transport {
   private readonly parked: Array<() => void> = [];
@@ -87,6 +90,10 @@ class GatedTransport implements Transport {
   constructor(
     private readonly inner: Transport,
     private readonly holdFrom: SiloAddress,
+    private readonly holds: (message: Message) => boolean = (message) =>
+      message.direction === "request" &&
+      message.system === "directory" &&
+      message.targetGrain.type === "$directory",
   ) {}
   async listen(
     address: SiloAddress,
@@ -94,13 +101,8 @@ class GatedTransport implements Transport {
     onAccept?: ConnectionAcceptHandler,
   ): Promise<Listener> {
     const gated: MessageHandler = (message, from) => {
-      const isHeldPull =
-        !this.open &&
-        message.direction === "request" &&
-        message.system === "directory" &&
-        message.targetGrain.type === "$directory" &&
-        from.equals(this.holdFrom);
-      if (!isHeldPull) return onMessage(message, from);
+      const isHeld = !this.open && from.equals(this.holdFrom) && this.holds(message);
+      if (!isHeld) return onMessage(message, from);
       this.parked.push(() => void onMessage(message, from));
       return undefined;
     };
@@ -416,6 +418,421 @@ describe("directory handoff recovery (ACK-delete, retry, expiry)", () => {
       expect(node1.isActive(grainId)).toBe(true);
     } finally {
       await node3?.stop();
+      await node2?.stop();
+      await node1.stop();
+      await node0.stop();
+    }
+  });
+});
+
+describe("range recovery on a view change (a range that comes back)", () => {
+  beforeEach(() => undefined);
+
+  it("adopts back a range it re-acquires from its own retained snapshot instead of stranding the entry", async () => {
+    // Interleaving under test: a silo whose range is taken away keeps the entry
+    // in its own handoffSnapshot, and the range then comes back to it. Orleans
+    // runs AcquireRangeAsync for the added range on every partition on every
+    // view change; here recovery ran only on the JOIN transition, so an
+    // incumbent that regained a range never looked — not even at the entry it
+    // was still holding itself — and the next call built a second activation
+    // while the retained copy quietly expired.
+    const network = new InProcessNetwork();
+    const addresses = [silo(0), silo(1)];
+    const membership = new StaticMembershipService(addresses[0]!, addresses);
+    // silo-0 places locally (first candidate); silo-1's own placement would land
+    // on itself (last candidate), which is what makes a missed lookup diverge
+    // into a second activation rather than a forward to the original one.
+    const makeNode = (local: SiloAddress, random: () => number) => {
+      const node = new ClusterNode({
+        local,
+        clusterId: CLUSTER,
+        membership: new MembershipView(membership, local),
+        transport: new InProcessTransport(network, CLUSTER),
+        random,
+      });
+      node.registerGrain(CounterGrain, { interfaces: [ICounter] });
+      return node;
+    };
+    const node0 = makeNode(silo(0), () => 0);
+    const node1 = makeNode(silo(1), () => 0.99);
+    await node0.start();
+    await node1.start();
+
+    // silo-1 owns the entry; silo-2 owns the range once it appears in the view.
+    const key = counterKeyMovingThrough([
+      { ring: new ConsistentHashRing(addresses), owner: silo(1) },
+      { ring: new ConsistentHashRing([...addresses, silo(2)]), owner: silo(2) },
+    ]);
+    const grainId = new GrainId("Counter", key);
+
+    try {
+      expect(await node0.getGrain(ICounter, key).increment(5)).toBe(5);
+      expect(node1.partition.lookup(grainId)?.silo.equals(silo(0))).toBe(true);
+
+      // silo-2 joins the view but never starts: silo-1 hands the range off into
+      // its snapshot and nobody is there to pull it.
+      membership.addSilo(silo(2));
+      node0.updateView();
+      node1.updateView();
+      expect(node1.pendingHandoffCount()).toBe(1);
+
+      // silo-2 leaves again and the range returns to silo-1, which is already
+      // active — and still holding the entry in its own snapshot.
+      membership.removeSilo(silo(2));
+      node0.updateView();
+      node1.updateView();
+
+      // The entry is back in the live partition, and no longer retained as a
+      // handoff for a successor that will never come.
+      expect(node1.partition.lookup(grainId)?.silo.equals(silo(0))).toBe(true);
+      expect(node1.pendingHandoffCount()).toBe(0);
+
+      // A call reaches the original activation with its state intact, rather
+      // than building a second activation of a grain that never stopped running.
+      expect(await node1.getGrain(ICounter, key).increment(2)).toBe(7);
+      expect(node0.isActive(grainId)).toBe(true);
+      expect(node1.isActive(grainId)).toBe(false);
+    } finally {
+      await node0.stop();
+      await node1.stop();
+    }
+  });
+
+  it("pulls a range it gains when a peer leaves the ring, from the peer still holding the entries", async () => {
+    // The same gap on the other side, and the one a rolling update hits: nobody
+    // joins, so no join recovery runs — a peer leaves the ring instead (here by
+    // starting to drain, which is how a readiness flip presents), the range it
+    // gives up lands on a silo that was already active, and that incumbent never
+    // went looking for the entries. The departing peer keeps them for a
+    // successor that will never ask, and they expire where they sit.
+    const network = new InProcessNetwork();
+    const addresses = [silo(0), silo(1), silo(2)];
+    const membership = new StaticMembershipService(addresses[0]!, addresses);
+    // silo-0 places locally (first candidate); silo-1's own placement would land
+    // on the last candidate, so a lookup that misses ends in a fresh activation
+    // rather than a forward to the original one.
+    const makeNode = (local: SiloAddress, random: () => number) => {
+      const node = new ClusterNode({
+        local,
+        clusterId: CLUSTER,
+        membership: new MembershipView(membership, local),
+        transport: new InProcessTransport(network, CLUSTER),
+        random,
+      });
+      node.registerGrain(CounterGrain, { interfaces: [ICounter] });
+      return node;
+    };
+    const node0 = makeNode(silo(0), () => 0);
+    const node1 = makeNode(silo(1), () => 0.99);
+    const node2 = makeNode(silo(2), () => 0);
+    await node0.start();
+    await node1.start();
+    await node2.start();
+
+    // silo-2 owns the entry at three silos; silo-1 inherits its range when
+    // silo-2 leaves the ring.
+    const key = counterKeyMovingThrough([
+      { ring: new ConsistentHashRing(addresses), owner: silo(2) },
+      { ring: new ConsistentHashRing([silo(0), silo(1)]), owner: silo(1) },
+    ]);
+    const grainId = new GrainId("Counter", key);
+
+    try {
+      expect(await node0.getGrain(ICounter, key).increment(5)).toBe(5);
+      expect(node2.partition.lookup(grainId)?.silo.equals(silo(0))).toBe(true);
+
+      // silo-2 starts to drain: out of the ring, still in the view and still
+      // holding the entry — which its successor now has to come and get.
+      membership.setStatus(silo(2), "draining");
+      node0.updateView();
+      node1.updateView();
+      node2.updateView();
+      await settle();
+
+      expect(node1.partition.lookup(grainId)?.silo.equals(silo(0))).toBe(true);
+      expect(node2.pendingHandoffCount()).toBe(0);
+
+      expect(await node1.getGrain(ICounter, key).increment(2)).toBe(7);
+      expect(node0.isActive(grainId)).toBe(true);
+      expect(node1.isActive(grainId)).toBe(false);
+    } finally {
+      await node0.stop();
+      await node1.stop();
+      await node2.stop();
+    }
+  });
+});
+
+describe("recovery gating is per source (a slow peer holds only its own ranges)", () => {
+  beforeEach(() => undefined);
+
+  it("serves an op for a range another source owed while a source's pull is still out", async () => {
+    // `awaitRecovered` awaited the WHOLE multi-source pull, so one slow-but-present
+    // peer blocked every owned directory operation on this silo — each attempt
+    // bounded by the call timeout, the whole budget by the retry count, ~90s in
+    // all — and remote registers into those ranges failed on the caller's own
+    // deadline. A grain's entry can only come from the source that owned its range
+    // before the change, so that is the only pull its operation has to wait for.
+    const network = new InProcessNetwork();
+    const addresses = [silo(0), silo(1), silo(2)];
+    const membership = new StaticMembershipService(addresses[0]!, addresses);
+    // Park silo-3's directory pulls arriving at silo-1.
+    const gate = new GatedTransport(new InProcessTransport(network, CLUSTER), silo(3));
+    const makeNode = (
+      local: SiloAddress,
+      transport: Transport = new InProcessTransport(network, CLUSTER),
+    ) => {
+      const node = new ClusterNode({
+        local,
+        clusterId: CLUSTER,
+        membership: new MembershipView(membership, local),
+        transport,
+        // random -> 0 places every activation on silo-0 (the first candidate).
+        random: () => 0,
+      });
+      node.registerGrain(CounterGrain, { interfaces: [ICounter] });
+      return node;
+    };
+    // The gate is silo-1's listener, parking the pulls silo-3 sends it.
+    const nodes = [makeNode(silo(0)), makeNode(silo(1), gate), makeNode(silo(2))];
+    for (const n of nodes) await n.start();
+
+    const ring4 = new ConsistentHashRing([...addresses, silo(3)]);
+    // Two grains whose entries sit with different owners, both moving to silo-3.
+    const keyA = counterKeyMovingThrough([
+      { ring: new ConsistentHashRing(addresses), owner: silo(1) },
+      { ring: ring4, owner: silo(3) },
+    ]);
+    const keyB = counterKeyMovingThrough([
+      { ring: new ConsistentHashRing(addresses), owner: silo(2) },
+      { ring: ring4, owner: silo(3) },
+    ]);
+    const grainA = new GrainId("Counter", keyA);
+    let node3: ClusterNode | undefined;
+
+    try {
+      expect(await nodes[0]!.getGrain(ICounter, keyA).increment(5)).toBe(5);
+      expect(await nodes[0]!.getGrain(ICounter, keyB).increment(5)).toBe(5);
+      expect(nodes[1]!.partition.lookup(grainA)?.silo.equals(silo(0))).toBe(true);
+      expect(nodes[2]!.partition.lookup(new GrainId("Counter", keyB))?.silo.equals(silo(0))).toBe(
+        true,
+      );
+
+      // silo-3 joins: both ranges move to it and both owners retain their entry for
+      // it. Its pull from silo-2 is answered and adopted; the one from silo-1 stays
+      // parked, so that source is still outstanding.
+      membership.addSilo(silo(3));
+      node3 = makeNode(silo(3));
+      const started = node3.start();
+      for (const n of nodes) n.updateView();
+      await started;
+      await settle();
+      expect(nodes[1]!.pendingHandoffCount()).toBe(1);
+      expect(nodes[2]!.pendingHandoffCount()).toBe(0);
+
+      let completedA = false;
+      const callA = node3.getGrain(ICounter, keyA).increment(2);
+      void callA.finally(() => (completedA = true));
+      let completedB = false;
+      const callB = node3.getGrain(ICounter, keyB).increment(1);
+      void callB.finally(() => (completedB = true));
+      await settle();
+
+      // The op for silo-2's range is served at once, and reaches the original
+      // activation with its state intact.
+      expect(completedB).toBe(true);
+      expect(await callB).toBe(6);
+
+      // The one whose entry silo-1 is still holding waits for that pull — and gets
+      // its entry as soon as it lands.
+      expect(completedA).toBe(false);
+      gate.release();
+      await settle();
+      expect(await callA).toBe(7);
+      expect(nodes[1]!.pendingHandoffCount()).toBe(0);
+    } finally {
+      await node3?.stop();
+      for (const n of nodes) await n.stop();
+    }
+  });
+});
+
+describe("recovery exhaustion (one shot for the process lifetime, silently swallowed)", () => {
+  beforeEach(() => undefined);
+
+  it("re-arms on a backoff, and counts and logs the exhaustion, instead of abandoning the range", async () => {
+    // A peer merely slow to accept connections at join time used to cost the joiner
+    // those ranges for the rest of the process's life — a few attempts and ~400ms
+    // of tolerance, one shot, with the failure swallowed by a bare `catch`, so
+    // nothing at runtime said the ranges had degraded to lazy reactivation.
+    const network = new InProcessNetwork();
+    const membership = new StaticMembershipService(silo(0), [silo(0), silo(1)]);
+    const time = new FakeTimeProvider();
+    const warnings: string[] = [];
+    const logger: Logger = {
+      debug() {},
+      info() {},
+      warn: (message) => void warnings.push(message),
+      error() {},
+    };
+    // Exactly the in-pass budget's worth of connection failures (two attempts):
+    // the join pull exhausts, and only the re-armed one gets through.
+    const flaky = new FlakyTransport(new InProcessTransport(network, CLUSTER), silo(1), 2);
+    const makeNode = (
+      local: SiloAddress,
+      transport: Transport,
+      extra: Partial<ClusterNodeOptions>,
+    ) => {
+      const node = new ClusterNode({
+        local,
+        clusterId: CLUSTER,
+        membership: new MembershipView(membership, local),
+        transport,
+        time,
+        random: () => 0.99,
+        // This test's fault injection counts exactly two connection failures
+        // to silo(1) via `flaky`; the periodic client/load gossip timers would
+        // spend that budget on unrelated background traffic instead.
+        loadPublishIntervalMs: 0,
+        clientDropTimeoutMs: 0,
+        clientDirectoryRefreshMs: 0,
+        ...extra,
+      });
+      node.registerGrain(CounterGrain, { interfaces: [ICounter] });
+      return node;
+    };
+    const node0 = makeNode(silo(0), new InProcessTransport(network, CLUSTER), {});
+    const node1 = makeNode(silo(1), new InProcessTransport(network, CLUSTER), {});
+    await node0.start();
+    await node1.start();
+
+    // The entry sits with silo-1 at two silos and moves to silo-2 on the join.
+    const key = counterKeyMovingThrough([
+      { ring: new ConsistentHashRing([silo(0), silo(1)]), owner: silo(1) },
+      { ring: new ConsistentHashRing([silo(0), silo(1), silo(2)]), owner: silo(2) },
+    ]);
+    const grainId = new GrainId("Counter", key);
+    let node2: ClusterNode | undefined;
+
+    try {
+      expect(await node0.getGrain(ICounter, key).increment(5)).toBe(5);
+      membership.addSilo(silo(2));
+      node2 = makeNode(silo(2), flaky, {
+        recovery: { maxAttempts: 2, backoffMs: 1_000, retryMs: 1_000 },
+        activationOptions: { logger },
+      });
+      const started = node2.start();
+      node0.updateView();
+      node1.updateView();
+
+      // Pump microtasks and advance the fake clock in lockstep so the in-pass
+      // retries' backoff elapses: both attempts fail and the pull exhausts.
+      for (let i = 0; i < 8; i++) {
+        await Promise.resolve();
+        await Promise.resolve();
+        time.advance(1_000);
+      }
+      await started;
+      expect(node2.directoryRecoveryStats().exhausted).toBe(1);
+      expect(warnings).toHaveLength(1);
+      expect(node1.pendingHandoffCount()).toBe(1); // still retained at the source
+
+      // The re-arm runs on its own backoff and gets the range through after all.
+      for (let i = 0; i < 8; i++) {
+        await Promise.resolve();
+        await Promise.resolve();
+        time.advance(1_000);
+      }
+      await settle();
+      expect(node1.pendingHandoffCount()).toBe(0);
+      expect(await node2.getGrain(ICounter, key).increment(2)).toBe(7);
+      expect(node2.isActive(grainId)).toBe(false);
+      // Counted per exhausted source, not per re-arm.
+      expect(node2.directoryRecoveryStats().exhausted).toBe(1);
+      await node2.stop();
+    } finally {
+      await node0.stop();
+      await node1.stop();
+    }
+  });
+});
+
+describe("recovery ACK identity (a late ACK for an entry that has been replaced)", () => {
+  beforeEach(() => undefined);
+
+  it("does not delete a newer entry registered for the same grain in the meantime", async () => {
+    // The ACK names what the puller adopted, but the source deleted BY GRAIN ID:
+    // a delayed ACK deleted whatever currently sat under that key — including an
+    // entry registered since, which the puller never saw and which exists nowhere
+    // else once it is gone.
+    const network = new InProcessNetwork();
+    const membership = new StaticMembershipService(silo(0), [silo(0), silo(1)]);
+    // Hold the pull's RESPONSE at the puller: silo-2 has been served silo-1's
+    // entry, but has neither adopted nor ACKed it yet.
+    const gate = new GatedTransport(
+      new InProcessTransport(network, CLUSTER),
+      silo(1),
+      (message) => message.direction === "response",
+    );
+    const makeNode = (
+      local: SiloAddress,
+      transport: Transport = new InProcessTransport(network, CLUSTER),
+    ) => {
+      const node = new ClusterNode({
+        local,
+        clusterId: CLUSTER,
+        membership: new MembershipView(membership, local),
+        transport,
+        random: () => 0,
+      });
+      node.registerGrain(CounterGrain, { interfaces: [ICounter] });
+      return node;
+    };
+
+    const node0 = makeNode(silo(0));
+    const node1 = makeNode(silo(1));
+    await node0.start();
+    await node1.start();
+
+    // silo-1 owns K's entry at two silos; silo-2 owns the range once it joins.
+    const ring3 = new ConsistentHashRing([silo(0), silo(1), silo(2)]);
+    const key = counterKeyOwnedBy(ring3, silo(2));
+    const grainId = new GrainId("Counter", key);
+    let node2: ClusterNode | undefined;
+
+    try {
+      expect(await node0.getGrain(ICounter, key).increment(5)).toBe(5);
+      expect(node1.partition.lookup(grainId)?.silo.equals(silo(0))).toBe(true);
+
+      // silo-2 joins: silo-1 hands its entry off to the snapshot, and answers
+      // silo-2's join pull with it — into the parked response.
+      membership.addSilo(silo(2));
+      node2 = makeNode(silo(2), gate);
+      const started = node2.start();
+      node0.updateView();
+      node1.updateView();
+      await started;
+      await settle();
+      expect(node1.pendingHandoffCount()).toBe(1);
+
+      // A fresh registration for the same grain reaches silo-1's partition (a
+      // registration that raced the view change), and the next view change hands
+      // it off too — the newer entry replaces the served one under the same key.
+      node1.partition.register({ grainId, silo: silo(0), activationId: "activation-2" });
+      node1.updateView();
+      expect(node1.pendingHandoffCount()).toBe(1);
+
+      // The response is finally delivered: silo-2 adopts the entry it was served
+      // and ACKs exactly that one.
+      gate.release();
+      await settle();
+
+      // That ACK names an entry silo-1 no longer holds, so it must leave the newer
+      // one alone — the newer entry is the only copy of that pointer left. (That
+      // an ACK which DOES still match deletes is the first test in this file.)
+      expect(node1.pendingHandoffCount()).toBe(1);
+      expect(node2.isActive(grainId)).toBe(false);
+    } finally {
       await node2?.stop();
       await node1.stop();
       await node0.stop();

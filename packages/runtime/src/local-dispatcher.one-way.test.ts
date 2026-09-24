@@ -175,7 +175,10 @@ describe("LocalDispatcher one-way failure logging", () => {
 
   it("logs the detached turn's failure — the caller, by definition, cannot see it", async () => {
     const failure = new Error("callee exploded");
-    const activation = { invoke: vi.fn().mockRejectedValue(failure) };
+    const activation = {
+      invoke: vi.fn().mockRejectedValue(failure),
+      isRerouteRejection: () => false,
+    };
     const catalog = {
       isStatelessWorkerType: () => false,
       getOrCreate: async () => activation,

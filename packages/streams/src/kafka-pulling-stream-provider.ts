@@ -16,6 +16,7 @@ import {
 import type { StreamFailureHandler } from "@thresh/streams/queue-pulling-agent";
 import { ownedQueueIndices, type HashRange } from "@thresh/streams/queue-ownership";
 import { KafkaStreamQueue, KafkaTopicQueues } from "@thresh/streams/kafka-stream-queue";
+import { KafkaPartitionOwner } from "@thresh/streams/kafka-partition-owner";
 import type { StreamCursorStore } from "@thresh/streams/stream-cursor-store";
 import type { StreamDeliver } from "@thresh/streams/stream-deliver";
 import { StreamProviderConfigurationError } from "@thresh/streams/stream-provider-config-error";
@@ -53,6 +54,21 @@ export interface KafkaPullingStreamProviderOptions {
    * below its earliest available offset).
    */
   failureHandler?: StreamFailureHandler;
+  /**
+   * Total time (ms) to keep retrying delivery to ONE subscriber before
+   * skipping it and notifying `failureHandler` — every other subscriber of
+   * the same event is retried and timed out independently (Orleans
+   * `MaxEventDeliveryTime`; default 1 minute).
+   */
+  maxEventDeliveryTimeMs?: number;
+  /**
+   * Bounds a single delivery attempt to one subscriber (Orleans
+   * `ResponseTimeout`; default 30s) so a hung `onNext` cannot stall this
+   * provider's queues, or silo shutdown, forever.
+   */
+  deliveryResponseTimeoutMs?: number;
+  /** Backoff between retries to the same subscriber; defaults to 2^attempt * 50ms, capped at 5s. */
+  retryBackoffMs?: (attempt: number) => number;
   /** In-memory per-partition buffer size before the partition is paused (defaults to 1000). */
   highWaterMark?: number;
 }
@@ -81,7 +97,7 @@ export class KafkaPullingStreamProvider implements ActivationBoundStreamProvider
   private readonly cursorStore: StreamCursorStore;
   private readonly queueCount: number;
   readonly topic: string;
-  private owned = new Set<number>();
+  private readonly owner: KafkaPartitionOwner;
 
   constructor(
     kafka: Kafka,
@@ -104,6 +120,18 @@ export class KafkaPullingStreamProvider implements ActivationBoundStreamProvider
     this.core = new PullingStreamProviderCore(name, queues, this.registry, {
       ...(options.pollIntervalMs !== undefined ? { pollIntervalMs: options.pollIntervalMs } : {}),
       ...(options.failureHandler !== undefined ? { failureHandler: options.failureHandler } : {}),
+      ...(options.maxEventDeliveryTimeMs !== undefined
+        ? { maxEventDeliveryTimeMs: options.maxEventDeliveryTimeMs }
+        : {}),
+      ...(options.deliveryResponseTimeoutMs !== undefined
+        ? { deliveryResponseTimeoutMs: options.deliveryResponseTimeoutMs }
+        : {}),
+      ...(options.retryBackoffMs !== undefined ? { retryBackoffMs: options.retryBackoffMs } : {}),
+    });
+    this.owner = new KafkaPartitionOwner(this.client, (owned) => this.core.startAgentsFor(owned), {
+      onAcquireError: (idx, err) => {
+        console.error(`kafka stream provider ${this.name}: failed to acquire queue ${idx}`, err);
+      },
     });
   }
 
@@ -159,34 +187,22 @@ export class KafkaPullingStreamProvider implements ActivationBoundStreamProvider
    * Run pulling agents for exactly these queue indices (idempotent); stop the
    * rest. Releases the corresponding Kafka partitions immediately (pausing
    * them); newly wanted partitions are acquired (seek to durable cursor +
-   * resume) asynchronously, and their agents only start once that completes —
-   * a later successor re-seeks from the durably committed cursor, so handoff
-   * loses nothing.
+   * resume) asynchronously, and their agents only start once that completes.
+   * `KafkaPartitionOwner` (issue #113) re-checks each acquire against the
+   * *current* desired set once it resolves — not the set captured when it
+   * started — so a membership change that arrives mid-acquire can't leave a
+   * partition owned here after this silo has already given it up on the
+   * ring, and retries a failed acquire (a cursor-store or admin blip) with
+   * backoff instead of leaving it ownerless until the next membership
+   * change.
    */
   startAgentsFor(indices: Iterable<number>): void {
-    const wanted = new Set(indices);
-
-    for (const i of this.owned) {
-      if (!wanted.has(i)) {
-        this.owned.delete(i);
-        this.client.release(i);
-      }
-    }
-    this.core.startAgentsFor(this.owned);
-
-    const toAcquire = [...wanted].filter((i) => !this.owned.has(i));
-    if (toAcquire.length === 0) return;
-    void Promise.all(toAcquire.map((i) => this.client.acquire(i).then(() => this.owned.add(i))))
-      .catch((err) => {
-        console.error(`kafka stream provider ${this.name}: failed to acquire queue`, err);
-      })
-      .finally(() => {
-        this.core.startAgentsFor(this.owned);
-      });
+    this.owner.setWanted(indices);
   }
 
   /** Stop every agent (silo shutdown). Cursors and subscriptions stay in the metadata store. */
   async stop(): Promise<void> {
+    this.owner.stop();
     await this.core.stop();
   }
 

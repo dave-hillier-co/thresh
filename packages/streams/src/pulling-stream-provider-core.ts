@@ -1,7 +1,9 @@
 import { keyToString, type GrainKey } from "@thresh/core/grain-key";
 import type { GrainId } from "@thresh/core/grain-id";
 import type { GrainType } from "@thresh/core/grain-type";
+import { raceSignal } from "@thresh/core/abort";
 import { stableHash32 } from "@thresh/core/hash";
+import type { TimeProvider } from "@thresh/core/time-provider";
 import type {
   ActivationBoundStreamProvider,
   AsyncStream,
@@ -13,6 +15,7 @@ import type {
   StreamSubscriptionHandle,
   SubscribeOptions,
 } from "@thresh/core/stream";
+import { FanOutDelivery } from "@thresh/streams/fan-out-delivery";
 import { implicitSubscriberIds } from "@thresh/streams/implicit-subscriptions";
 import {
   QueuePullingAgent,
@@ -50,11 +53,27 @@ export interface SubscriptionRegistry {
 export interface PullingStreamProviderCoreOptions {
   pollIntervalMs?: number;
   /**
-   * Notified when a pulling agent exhausts its retry budget on a delivery
-   * (Orleans `IStreamFailureHandler`), forwarded to every queue's agent this
-   * provider starts.
+   * Notified when a subscriber's delivery exhausts its retry budget (Orleans
+   * `IStreamFailureHandler`), forwarded to every queue's fan-out.
    */
   failureHandler?: StreamFailureHandler;
+  /**
+   * Total time (ms) to keep retrying delivery to ONE subscriber before
+   * skipping it — every other subscriber of the same event is retried and
+   * timed out independently (Orleans `MaxEventDeliveryTime`; default 1
+   * minute — see `FanOutDelivery`).
+   */
+  maxEventDeliveryTimeMs?: number;
+  /**
+   * Bounds a single delivery attempt to one subscriber (Orleans
+   * `ResponseTimeout`; default 30s) so a hung `onNext` cannot stall this
+   * queue's pump, and therefore `stop()`/silo shutdown, forever.
+   */
+  deliveryResponseTimeoutMs?: number;
+  /** Backoff between retries to the same subscriber; defaults to 2^attempt * 50ms, capped at 5s. */
+  retryBackoffMs?: (attempt: number) => number;
+  /** Clock driving delivery deadlines and backoff sleeps — a true boundary, fake it in tests. */
+  time?: TimeProvider;
 }
 
 /** Validates `queueCount` (Orleans-style fail-fast config check); defaults to 8. */
@@ -96,9 +115,16 @@ export function validatePollIntervalMs(
  */
 export class PullingStreamProviderCore implements ActivationBoundStreamProvider {
   private readonly pollIntervalMs: number;
-  private readonly failureHandler: StreamFailureHandler | undefined;
   private readonly agents = new Map<number, QueuePullingAgent>();
+  /**
+   * Set by `stop()` and never cleared: the host stops this provider before
+   * deactivating activations, so a membership refresh already in flight (or a
+   * late partition acquisition) can still call `startAgentsFor` afterwards —
+   * an agent started then would never be stopped.
+   */
+  private stopped = false;
   private readonly producers = new StreamProducerRegistry();
+  private readonly fanOutDelivery: FanOutDelivery;
   private deliver: StreamDeliver = async () => undefined;
   private implicitTypesFor: (namespace: string) => Iterable<GrainType> = () => [];
 
@@ -109,7 +135,22 @@ export class PullingStreamProviderCore implements ActivationBoundStreamProvider 
     options: PullingStreamProviderCoreOptions = {},
   ) {
     this.pollIntervalMs = validatePollIntervalMs(name, options.pollIntervalMs);
-    this.failureHandler = options.failureHandler;
+    // Bound to `this.deliver` through a closure (rather than captured by value)
+    // so a later `setDeliver` call still reaches every subsequent fan-out.
+    this.fanOutDelivery = new FanOutDelivery(
+      (subscriber, streamKey, event, token) => this.deliver(subscriber, streamKey, event, token),
+      {
+        ...(options.failureHandler !== undefined ? { failureHandler: options.failureHandler } : {}),
+        ...(options.maxEventDeliveryTimeMs !== undefined
+          ? { maxEventDeliveryTimeMs: options.maxEventDeliveryTimeMs }
+          : {}),
+        ...(options.deliveryResponseTimeoutMs !== undefined
+          ? { deliveryResponseTimeoutMs: options.deliveryResponseTimeoutMs }
+          : {}),
+        ...(options.retryBackoffMs !== undefined ? { retryBackoffMs: options.retryBackoffMs } : {}),
+        ...(options.time !== undefined ? { time: options.time } : {}),
+      },
+    );
   }
 
   /** Total physical queues; queue ownership is assigned over `[0, physicalQueueCount)`. */
@@ -143,6 +184,7 @@ export class PullingStreamProviderCore implements ActivationBoundStreamProvider 
 
   /** Run pulling agents for exactly these queue indices (idempotent); stop the rest. */
   startAgentsFor(indices: Iterable<number>): void {
+    if (this.stopped) return;
     const wanted = new Set(indices);
     for (const [i, agent] of this.agents) {
       if (!wanted.has(i)) {
@@ -156,11 +198,8 @@ export class PullingStreamProviderCore implements ActivationBoundStreamProvider 
       if (this.agents.has(i)) continue;
       const agent = new QueuePullingAgent(
         this.queues[i]!,
-        (streamKey, event, token) => this.fanOut(streamKey, event, token),
-        {
-          pollIntervalMs: this.pollIntervalMs,
-          ...(this.failureHandler !== undefined ? { failureHandler: this.failureHandler } : {}),
-        },
+        (streamKey, event, token, signal) => this.fanOut(streamKey, event, token, signal),
+        { pollIntervalMs: this.pollIntervalMs },
       );
       this.agents.set(i, agent);
       agent.start();
@@ -173,6 +212,7 @@ export class PullingStreamProviderCore implements ActivationBoundStreamProvider 
    * subscriptions stay in the backing store.
    */
   async stop(): Promise<void> {
+    this.stopped = true;
     const agents = [...this.agents.values()];
     this.agents.clear();
     await Promise.all(agents.map((agent) => agent.stop()));
@@ -191,19 +231,32 @@ export class PullingStreamProviderCore implements ActivationBoundStreamProvider 
     return this.producers.register(this.name, namespace, key);
   }
 
-  private async fanOut(streamKey: string, event: unknown, token: number): Promise<void> {
+  /**
+   * Resolve this event's subscribers, then hand them to `FanOutDelivery`,
+   * which delivers to all of them concurrently and retries/skips each one
+   * independently (issues #97, #98, #111) — so a failing or slow subscriber
+   * never delays or drops the event for the rest.
+   */
+  private async fanOut(
+    streamKey: string,
+    event: unknown,
+    token: number,
+    signal: AbortSignal,
+  ): Promise<void> {
     // Explicit subscribers (from the durable registry) plus implicit ones (grain
     // types bound to the stream's namespace), deduplicated so a grain that is both
     // gets the event once.
-    const explicit = await this.registry.subscribers(streamKey);
+    const explicit = await raceSignal(this.registry.subscribers(streamKey), signal);
     const implicit = implicitSubscriberIds(streamKey, this.implicitTypesFor);
     const seen = new Set<string>();
+    const subscribers: GrainId[] = [];
     for (const subscriber of [...explicit, ...implicit]) {
       const id = subscriber.toString();
       if (seen.has(id)) continue;
       seen.add(id);
-      await this.deliver(subscriber, streamKey, event, token);
+      subscribers.push(subscriber);
     }
+    await this.fanOutDelivery.deliverToAll(subscribers, streamKey, event, token, signal);
   }
 
   private streamFor<T>(

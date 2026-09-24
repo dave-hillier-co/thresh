@@ -3,7 +3,9 @@ import type { Duration } from "./duration";
 /**
  * A non-durable, per-activation timer. Its callback fires as a turn (so it
  * respects single-threaded execution) and it is cancelled when the activation
- * deactivates. A timer does not keep a grain alive by itself.
+ * deactivates. A timer does not keep a grain alive by itself unless registered
+ * with `keepAlive`. Periodic ticks are fixed-delay: the next tick is armed only
+ * once the previous one has finished, so ticks of one timer never overlap.
  */
 export interface GrainTimer {
   change(due: Duration, period?: Duration): void;
@@ -20,4 +22,14 @@ export interface TimerOptions {
    * self-disposing timer), which would otherwise deadlock a non-reentrant grain.
    */
   interleave?: boolean;
+  /**
+   * Treat each tick as activity that keeps the activation alive for idle
+   * collection, the same as an ordinary grain call (Orleans'
+   * `GrainTimerCreationOptions.KeepAlive`, via the tick message's
+   * `IsKeepAlive` — see `ActivationData.OnCompletedRequest`,
+   * ActivationData.cs:1486). Defaults to `false`: a timer's own ticks do NOT
+   * by themselves postpone collection, matching this class's default doc
+   * above and Orleans' own `KeepAlive` default.
+   */
+  keepAlive?: boolean;
 }

@@ -62,8 +62,11 @@ describe("DefaultCluster.Tests.TimerTests.TimerOrleansTest", () => {
       for (let i = 0; i < 10; i++) {
         const grain = cluster.getGrain(ITimerGrain, randomIntegerKey());
         const periodMs = durationToMs(await grain.getTimerPeriod());
-        time.advance(periodMs * 10);
-        await flush();
+        // Fixed-delay timers (`GrainTimer.OnTickCompleted`) arm the next period
+        // only once the previous tick's turn settles — a microtask `advance`'s
+        // synchronous sweep doesn't drain — so stepping one period at a time
+        // is needed to observe all ten ticks.
+        await advanceStepped(time, periodMs * 10, periodMs);
         const last = await grain.getCounter();
         expect(last >= 10 && last <= 12, String(last)).toBe(true);
 
@@ -87,8 +90,10 @@ describe("DefaultCluster.Tests.TimerTests.TimerOrleansTest", () => {
         periodMs = durationToMs(await grain.getTimerPeriod()); // activate the grain
       }
 
-      time.advance(periodMs * 10);
-      await flush();
+      // Fixed-delay timers arm the next period only once the previous tick's
+      // turn settles, which a single synchronous `advance` sweep can't drain
+      // for every one of the ten grains' timers — step one period at a time.
+      await advanceStepped(time, periodMs * 10, periodMs);
 
       for (const grain of grains) {
         const last = await grain.getCounter();

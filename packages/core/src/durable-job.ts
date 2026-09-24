@@ -181,4 +181,13 @@ export interface DurableJobsOptions {
    * (unlimited budget immediately); must not be negative.
    */
   shardClaimRampUpDuration?: Duration;
+  /**
+   * How often the manager re-checks shard ownership on its own, independent of
+   * membership changes (Orleans' `PeriodicShardCheck`). Without it, a shard
+   * left orphaned beyond the claim ramp-up budget — or a claim that failed on
+   * a store error — is retried only at the next membership view change, so it
+   * can be stranded indefinitely in a stable cluster. Default 10 minutes; 0
+   * disables the periodic check.
+   */
+  periodicShardCheckInterval?: Duration;
 }

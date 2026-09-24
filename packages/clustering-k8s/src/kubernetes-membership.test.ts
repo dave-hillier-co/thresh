@@ -3,7 +3,7 @@ import { activeSilos } from "@thresh/core/membership";
 import { SiloAddress } from "@thresh/core/silo-address";
 import {
   metadataFromSlices,
-  readySilosFromSlices,
+  siloMembersFromSlices,
   type EndpointSlice,
 } from "@thresh/clustering-k8s/endpoint-slice";
 import {
@@ -43,18 +43,28 @@ class FakeWatch implements EndpointWatch {
   }
 }
 
-describe("readySilosFromSlices", () => {
-  it("includes only ready endpoints, with pod name and uid from targetRef", () => {
-    const silos = readySilosFromSlices([
+describe("siloMembersFromSlices", () => {
+  it("keeps every endpoint as a member, with pod name and uid from targetRef", () => {
+    const silos = siloMembersFromSlices([
       slice([
         { ip: "10.0.0.1", name: "silo-0", uid: "uid-0", ready: true },
         { ip: "10.0.0.2", name: "silo-1", uid: "uid-1", ready: false },
       ]),
     ]);
-    expect(silos).toHaveLength(1);
-    expect(silos[0]!.podName).toBe("silo-0");
-    expect(silos[0]!.podUid).toBe("uid-0");
-    expect(silos[0]!.endpoint).toBe("10.0.0.1:11111");
+    expect(silos).toHaveLength(2);
+    expect(silos[0]!.address.podName).toBe("silo-0");
+    expect(silos[0]!.address.podUid).toBe("uid-0");
+    expect(silos[0]!.address.endpoint).toBe("10.0.0.1:11111");
+  });
+
+  it("marks a ready endpoint active and a present-but-not-ready one draining", () => {
+    const silos = siloMembersFromSlices([
+      slice([
+        { ip: "10.0.0.1", name: "silo-0", uid: "uid-0", ready: true },
+        { ip: "10.0.0.2", name: "silo-1", uid: "uid-1", ready: false },
+      ]),
+    ]);
+    expect(silos.map((s) => s.status)).toEqual(["active", "draining"]);
   });
 
   it("prefers the named service port when present", () => {
@@ -71,7 +81,7 @@ describe("readySilosFromSlices", () => {
         },
       ],
     };
-    expect(readySilosFromSlices([s], "silo")[0]!.endpoint).toBe("10.0.0.1:11111");
+    expect(siloMembersFromSlices([s], "silo")[0]!.address.endpoint).toBe("10.0.0.1:11111");
   });
 });
 
@@ -153,7 +163,7 @@ describe("KubernetesMembership", () => {
     expect(activeSilos(value)).toHaveLength(1);
   });
 
-  it("drops a silo when its endpoint is no longer ready", () => {
+  it("takes a not-ready silo out of the ring but keeps it in the view as draining", () => {
     const watch = new FakeWatch();
     const membership = new KubernetesMembership(local, watch, { portName: "silo" });
     watch.emit([
@@ -168,8 +178,30 @@ describe("KubernetesMembership", () => {
         { ip: "10.0.0.2", name: "silo-1", uid: "uid-1", ready: false },
       ]),
     ]);
+    // Out of the ring: it must take no new placements and own no new ranges.
     expect(activeSilos(membership.current()).map((s) => s.ringKey)).toEqual(["silo-0"]);
+    // Still a member: its grains are still running there, so peers must not
+    // treat its directory entries as pointers to a silo that will never answer.
+    expect(
+      membership
+        .current()
+        .silos.map((s) => `${s.address.ringKey}:${s.status}`)
+        .sort(),
+    ).toEqual(["silo-0:active", "silo-1:draining"]);
     expect(membership.current().version).toBe(2);
+  });
+
+  it("drops a silo once its endpoint is removed, not merely not ready", () => {
+    const watch = new FakeWatch();
+    const membership = new KubernetesMembership(local, watch, { portName: "silo" });
+    watch.emit([
+      slice([
+        { ip: "10.0.0.1", name: "silo-0", uid: "uid-0", ready: true },
+        { ip: "10.0.0.2", name: "silo-1", uid: "uid-1", ready: false },
+      ]),
+    ]);
+    watch.emit([slice([{ ip: "10.0.0.1", name: "silo-0", uid: "uid-0", ready: true }])]);
+    expect(membership.current().silos.map((s) => s.address.ringKey)).toEqual(["silo-0"]);
   });
 
   it("recognises a restarted pod by its new uid", () => {
@@ -179,6 +211,55 @@ describe("KubernetesMembership", () => {
     watch.emit([slice([{ ip: "10.0.0.6", name: "silo-2", uid: "uid-new", ready: true }])]);
     const silo2 = activeSilos(membership.current()).find((s) => s.ringKey === "silo-2");
     expect(silo2?.podUid).toBe("uid-new");
+  });
+
+  describe("the local silo's own membership", () => {
+    const ringKeys = (membership: KubernetesMembership): string[] =>
+      activeSilos(membership.current())
+        .map((s) => s.ringKey)
+        .sort();
+
+    it("keeps itself in the view while the watch does not report it at all", () => {
+      const watch = new FakeWatch();
+      const membership = new KubernetesMembership(local, watch, { portName: "silo" });
+
+      // Joining: the watch shows a peer but not this silo's own endpoint yet. It
+      // must still be a member of its own view, or it would never consider itself
+      // active — and readiness, which gates its endpoint, waits on membership.
+      watch.emit([slice([{ ip: "10.0.0.2", name: "silo-1", uid: "uid-1", ready: true }])]);
+      expect(ringKeys(membership)).toEqual(["silo-0", "silo-1"]);
+
+      // A transient empty watch must not read as "the whole cluster vanished".
+      watch.emit([]);
+      expect(ringKeys(membership)).toEqual(["silo-0"]);
+
+      // Nor may it, once back, need the watch to vouch for it before it counts
+      // itself as a member again.
+      watch.emit([slice([{ ip: "10.0.0.2", name: "silo-1", uid: "uid-1", ready: true }])]);
+      expect(ringKeys(membership)).toEqual(["silo-0", "silo-1"]);
+    });
+
+    it("keeps itself in the view once the watch has dropped it (issue #72)", () => {
+      const watch = new FakeWatch();
+      const membership = new KubernetesMembership(local, watch, { portName: "silo" });
+      watch.emit([
+        slice([
+          { ip: "10.0.0.1", name: "silo-0", uid: "uid-0", ready: true },
+          { ip: "10.0.0.2", name: "silo-1", uid: "uid-1", ready: true },
+        ]),
+      ]);
+      expect(ringKeys(membership)).toEqual(["silo-0", "silo-1"]);
+
+      // PINNED GAP, not desired behaviour: this silo drains (readiness off) or is
+      // removed from the service, so every peer drops it — while it goes on
+      // considering itself a member, a ring divergence the directory's
+      // `staleView` guard cannot detect. The unconditional self-injection is
+      // deliberate for now; see caveat 2 in `KubernetesMembership`'s class doc
+      // for what a fix has to settle first (placement candidates and the
+      // self-probe both ride on this view). Change it there, not here.
+      watch.emit([slice([{ ip: "10.0.0.2", name: "silo-1", uid: "uid-1", ready: true }])]);
+      expect(ringKeys(membership)).toEqual(["silo-0", "silo-1"]);
+    });
   });
 
   describe("metadata from pod labels", () => {

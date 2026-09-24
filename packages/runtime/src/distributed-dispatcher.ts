@@ -1,5 +1,5 @@
 import { newActivationId } from "@thresh/core/activation-id";
-import { RejectionError } from "@thresh/core/errors";
+import { isStaleActivationRejection, RejectionError } from "@thresh/core/errors";
 import type { GrainAddress } from "@thresh/core/grain-address";
 import type { GrainId } from "@thresh/core/grain-id";
 import type { GrainType } from "@thresh/core/grain-type";
@@ -27,6 +27,9 @@ import type {
   PlacementContext,
   PlacementStrategy,
 } from "@thresh/runtime/placement/placement-strategy";
+
+/** Orleans `SiloMessagingOptions.MaxForwardCount` — see `forwardTo`. */
+const MAX_FORWARD_COUNT = 2;
 
 /** Sends a request to a remote silo and awaits its response. */
 export interface RemoteInvoker {
@@ -162,7 +165,10 @@ export class DistributedDispatcher implements Dispatcher {
     // the single-winner directory CAS below has no way to represent. Route
     // straight to the catalog's pick-or-scale instead of the cache/directory
     // funnel; this also means a stateless-worker call always resolves on
-    // whichever silo makes it, exactly like Orleans.
+    // whichever silo makes it, exactly like Orleans. `deliverLocal` — the path
+    // every request that arrived over a connection takes, including a client's
+    // — makes the same diversion, so a wire-arrived call joins the receiving
+    // silo's own pool rather than being pinned to it by a directory entry.
     if (this.deps.catalog.isStatelessWorkerType(withDeadline.target.type)) {
       return this.deps.catalog.pickOrScaleWorker(withDeadline.target).invoke(withDeadline, opts);
     }
@@ -172,22 +178,54 @@ export class DistributedDispatcher implements Dispatcher {
       try {
         return await this.routeTo(cached, withDeadline, opts);
       } catch (err) {
-        if (!isStaleRejection(err)) throw err;
+        if (!isStaleActivationRejection(err)) throw err;
         this.deps.cache.invalidate(withDeadline.target); // stale entry: re-resolve below
       }
     }
 
-    const found = await this.deps.directory.lookup(withDeadline.target);
-    if (found !== undefined) {
-      this.deps.cache.put(found);
-      return this.routeTo(found, withDeadline, opts);
-    }
+    return this.lookupAndInvoke(withDeadline, opts);
+  }
 
-    return this.placeAndInvoke(withDeadline, opts);
+  /**
+   * Directory lookup, then route — retried once against a fresh lookup when
+   * the resolved target turns out stale. A deactivating or migrating
+   * activation HOLDS a call reaching it and only reroutes (throws a
+   * `noActivation`-kind `RejectionError`, see `ActivationData.invoke`) once
+   * it has fully settled, so by the time that reroute fires here, a fresh
+   * lookup reflects the outcome (the migrated activation's new host, or
+   * nothing at all) rather than racing it — one retry is enough, and it
+   * converges rather than looping. Falls through to placement only when the
+   * directory genuinely has nothing for this id.
+   */
+  private async lookupAndInvoke(
+    req: InvocationRequest,
+    opts?: InvokeCallOptions,
+    retrying = false,
+  ): Promise<unknown> {
+    const found = await this.deps.directory.lookup(req.target);
+    if (found === undefined) return this.placeAndInvoke(req, opts);
+    this.deps.cache.put(found);
+    try {
+      return await this.routeTo(found, req, opts);
+    } catch (err) {
+      if (!isStaleActivationRejection(err) || retrying) throw err;
+      this.deps.cache.invalidate(req.target);
+      return this.lookupAndInvoke(req, opts, true);
+    }
   }
 
   /** A request that arrived here: ensure a local activation, or forward to the CAS winner. */
   async deliverLocal(req: InvocationRequest, opts?: InvokeCallOptions): Promise<unknown> {
+    // [StatelessWorker] grains bypass the directory funnel here too (see
+    // `deliver`): a call that arrived over a connection is already confined to
+    // this silo, and its activations are interchangeable, so it joins this
+    // silo's local pool rather than registering an ordinary single activation
+    // — which would pin the grain here and serve every later call, from every
+    // silo, from that one activation.
+    if (this.deps.catalog.isStatelessWorkerType(req.target.type)) {
+      return this.deps.catalog.pickOrScaleWorker(req.target).invoke(req, opts);
+    }
+
     const existing = await this.deps.catalog.resolveLive(req.target);
     if (existing !== undefined) return existing.invoke(req, opts);
 
@@ -324,8 +362,34 @@ export class DistributedDispatcher implements Dispatcher {
       }
 
       admitted(); // the grain lives elsewhere: nothing is coming up here
-      return this.deps.remote.send(winner.silo, req);
+      return this.forwardTo(winner.silo, req, opts);
     });
+  }
+
+  /**
+   * Forward a request this silo just discovered it doesn't own to the CAS
+   * winner, capped the way Orleans caps `MessageCenter.TryForwardMessage`
+   * (`MaxForwardCount` = 2): an inconsistent directory view otherwise turns
+   * this into a loop bounded only by the call timeout (issue #110). Also
+   * fires `opts.onForward`, which `ClusterNode.receiveRequest` uses to tell
+   * the ORIGINAL caller to evict its `LocationCache` entry for `req.target`
+   * (Orleans `MessageCenter.AddToCacheInvalidationHeader`) instead of that
+   * caller routing to this now-wrong silo forever.
+   */
+  private forwardTo(
+    to: SiloAddress,
+    req: InvocationRequest,
+    opts?: InvokeCallOptions,
+  ): Promise<unknown> {
+    const forwardCount = (req.forwardCount ?? 0) + 1;
+    if (forwardCount > MAX_FORWARD_COUNT) {
+      throw new RejectionError(
+        `forward count exceeded (${MAX_FORWARD_COUNT}) resolving ${req.target.toString()}`,
+        "noActivation",
+      );
+    }
+    opts?.onForward?.(to);
+    return this.deps.remote.send(to, { ...req, forwardCount });
   }
 
   /**
@@ -436,11 +500,4 @@ export class DistributedDispatcher implements Dispatcher {
         : this.deps.remote.send(targetSilo, req);
     });
   }
-}
-
-function isStaleRejection(err: unknown): boolean {
-  return (
-    err instanceof RejectionError &&
-    (err.kind === "noActivation" || err.kind === "unknownTarget" || err.kind === "staleView")
-  );
 }

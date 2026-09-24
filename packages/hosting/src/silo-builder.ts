@@ -64,8 +64,7 @@ import type { JournalStorage } from "@thresh/core/journal-storage";
 import { MemoryJournalStorage } from "@thresh/journaling/memory-journal-storage";
 import { RedisJournalStorage } from "@thresh/journaling/redis-journal-storage";
 import { JournalStorageRegistry } from "@thresh/journaling/journal-storage-registry";
-import { bindDurableStates } from "@thresh/journaling/durable-state-activator";
-import { bindJournaledGrain } from "@thresh/journaling/journaled-grain-binder";
+import { bindJournalFacets } from "@thresh/journaling/journal-facets-binder";
 import type { BroadcastChannelOptions } from "@thresh/core/broadcast-channel";
 import type { StreamFilter, StreamProvider } from "@thresh/core/stream";
 import type { DurableJobsOptions } from "@thresh/core/durable-job";
@@ -179,6 +178,25 @@ export interface SiloConfig {
   defaultPlacementStrategy?: PlacementStrategy;
   /** How often the idle-collection sweep runs (defaults to 60s). */
   collectionIntervalSeconds?: number;
+  /**
+   * How often this silo pushes its load snapshot to every peer (Orleans
+   * `DeploymentLoadPublisherOptions.DeploymentLoadPublisherRefreshTime`,
+   * defaults to 1s); see `ClusterNodeOptions.loadPublishIntervalMs`.
+   */
+  loadPublishIntervalMs?: number;
+  /**
+   * How long a disconnected client stays registered on this gateway before
+   * being dropped (Orleans `SiloMessagingOptions.ClientDropTimeout`, defaults
+   * to 1 minute); see `ClusterNodeOptions.clientDropTimeoutMs`.
+   */
+  clientDropTimeoutMs?: number;
+  /**
+   * How often this silo republishes its locally connected clients to every
+   * peer, on top of the immediate republish a membership change triggers
+   * (Orleans `SiloMessagingOptions.ClientRegistrationRefresh`, defaults to 5
+   * minutes); see `ClusterNodeOptions.clientDirectoryRefreshMs`.
+   */
+  clientDirectoryRefreshMs?: number;
   /** Injectable RNG for deterministic placement in examples/tests. */
   random?: () => number;
   /** How often each silo re-reads its reminder ranges from the table (defaults to 60s). */
@@ -194,6 +212,14 @@ export interface SiloConfig {
    * configured here or on the method itself.
    */
   defaultResponseTimeout?: Duration;
+  /**
+   * How long a caller waits for a cross-silo reply before failing the call
+   * with a timeout (Orleans `SiloMessagingOptions.ResponseTimeout`). It is
+   * also the time-to-live every request carries: a request still queued at
+   * its target once this has passed is dropped rather than run, since its
+   * caller is no longer waiting. Defaults to 30s.
+   */
+  callTimeout?: Duration;
   /**
    * Load-shedding config (Orleans `Configure<LoadSheddingOptions>`). Defaults
    * to shedding disabled; see `ClusterNodeOptions.loadShedding`.
@@ -211,7 +237,12 @@ export interface SiloConfig {
     maxEnqueuedRequestsSoftLimit?: number;
     /** Reject a newly scheduled turn once an activation's queue is at this length. Default 10,000. */
     maxEnqueuedRequestsHardLimit?: number;
-    /** Warn once a running turn exceeds this duration. Default 30s. */
+    /**
+     * Orleans `SiloMessagingOptions.MaxRequestProcessingTime`: a turn running
+     * longer than this is logged, and once a request is waiting behind it the
+     * activation is deactivated as stuck and its waiting requests rerouted.
+     * Default 2h, as upstream.
+     */
     maxRequestProcessingTime?: Duration;
   };
   /**
@@ -244,6 +275,15 @@ export interface SiloConfig {
    * no external routing plane to wait for.
    */
   gracefulShutdownMs?: number;
+  /**
+   * `GracefulShutdown`'s overall stop budget — `gracefulShutdownMs` plus the
+   * node's own deactivation sweep together fit inside this, so a slow
+   * `onDeactivate` hook can't push the total stop past the process's own
+   * termination grace period (e.g. Kubernetes' `terminationGracePeriodSeconds`)
+   * and get the pod SIGKILLed mid-stop. Unset defaults to
+   * `DEFAULT_STOP_BUDGET_MS` (`graceful-shutdown.ts`).
+   */
+  stopBudgetMs?: number;
   /**
    * Self-probe liveness (docs/design-notes-parity-gaps.md item 9, option A):
    * periodically call a no-op system grain on THIS silo and flip readiness
@@ -278,7 +318,14 @@ export interface SiloConfig {
  */
 const DEFAULT_MAX_ENQUEUED_REQUESTS_SOFT_LIMIT = 1_000;
 const DEFAULT_MAX_ENQUEUED_REQUESTS_HARD_LIMIT = 10_000;
-const DEFAULT_MAX_REQUEST_PROCESSING_TIME_MS = 30_000;
+/**
+ * Orleans `SiloMessagingOptions.DEFAULT_MAX_REQUEST_PROCESSING_TIME` (2h).
+ * Exceeding it deactivates the activation as stuck once a request waits on
+ * it, so it must stay well above any legitimate queueing time -- in
+ * particular above the call timeout, or a request merely queued behind a
+ * long turn would be rerouted to a fresh activation.
+ */
+const DEFAULT_MAX_REQUEST_PROCESSING_TIME_MS = 2 * 60 * 60 * 1000;
 const DEFAULT_DEACTIVATION_TIMEOUT_MS = 30_000;
 
 /**
@@ -353,6 +400,13 @@ export class SiloBuilder {
     | undefined;
   private readonly starters: Array<() => Promise<void>> = [];
   private readonly closers: Array<() => Promise<void>> = [];
+  /**
+   * Stops run BEFORE the node deactivates activations (`SiloHost.stop`'s
+   * `onBeforeDeactivate`) — stream providers and the durable-job manager,
+   * matching Orleans' own ordering (see that field's doc). Everything else
+   * still stops via `closers`, after deactivation.
+   */
+  private readonly preDeactivateClosers: Array<() => Promise<void>> = [];
   private readonly startupTasks: Array<(grains: GrainFactoryAccess) => Promise<void>> = [];
   private readonly pullingStreams: PullingStreamProviderHost[] = [];
   private readonly memoryStreams: Array<{
@@ -614,10 +668,20 @@ export class SiloBuilder {
    * `IStreamFailureHandler`) is forwarded to every queue's pulling agent,
    * defaulting to a handler backed by `useDurableStreamFailureStore`'s store
    * when one was registered and this call supplies none of its own.
+   * `options.maxEventDeliveryTimeMs`/`deliveryResponseTimeoutMs`/`retryBackoffMs`
+   * tune per-subscriber delivery retry (Orleans `MaxEventDeliveryTime`/
+   * `ResponseTimeout`; see `PullingStreamProviderCoreOptions`).
    */
   addRedisStreams(
     name: string,
-    options: { url: string; keyPrefix?: string; failureHandler?: StreamFailureHandler },
+    options: {
+      url: string;
+      keyPrefix?: string;
+      failureHandler?: StreamFailureHandler;
+      maxEventDeliveryTimeMs?: number;
+      deliveryResponseTimeoutMs?: number;
+      retryBackoffMs?: (attempt: number) => number;
+    },
   ): this {
     const client = createClient({ url: options.url });
     client.on("error", () => {});
@@ -629,14 +693,22 @@ export class SiloBuilder {
     const provider = new RedisPullingStreamProvider(client, name, {
       ...toConfigOption("keyPrefix", options.keyPrefix),
       ...toConfigOption("failureHandler", failureHandler),
+      ...toConfigOption("maxEventDeliveryTimeMs", options.maxEventDeliveryTimeMs),
+      ...toConfigOption("deliveryResponseTimeoutMs", options.deliveryResponseTimeoutMs),
+      ...toConfigOption("retryBackoffMs", options.retryBackoffMs),
       serviceId: this.serviceIdentity,
     });
     this.pullingStreams.push(provider);
     this.starters.push(async () => {
       await client.connect();
     });
-    this.closers.push(async () => {
+    // Stop polling before deactivateAll, or it keeps delivering into
+    // activations that are (or are about to be) deactivating; the client
+    // connection itself can close after.
+    this.preDeactivateClosers.push(async () => {
       await provider.stop();
+    });
+    this.closers.push(async () => {
       await client.close();
     });
     return this.addStreamProvider(name, provider);
@@ -656,7 +728,9 @@ export class SiloBuilder {
    * defaulting to a handler backed by `useDurableStreamFailureStore`'s store
    * when one was registered and this call supplies none of its own.
    * `options.retainFor` keeps a replay window of delivered rows instead of
-   * trimming them eagerly on commit.
+   * trimming them eagerly on commit. `options.maxEventDeliveryTimeMs`/
+   * `deliveryResponseTimeoutMs`/`retryBackoffMs` tune per-subscriber delivery
+   * retry (Orleans `MaxEventDeliveryTime`/`ResponseTimeout`).
    */
   addPostgresStreams(
     name: string,
@@ -667,6 +741,9 @@ export class SiloBuilder {
       tablePrefix?: string;
       failureHandler?: StreamFailureHandler;
       retainFor?: Duration;
+      maxEventDeliveryTimeMs?: number;
+      deliveryResponseTimeoutMs?: number;
+      retryBackoffMs?: (attempt: number) => number;
     },
   ): this {
     const pool = new Pool({ connectionString: options.connectionString });
@@ -682,14 +759,21 @@ export class SiloBuilder {
       ...toConfigOption("tablePrefix", options.tablePrefix),
       ...toConfigOption("failureHandler", failureHandler),
       ...toConfigOption("retainFor", options.retainFor),
+      ...toConfigOption("maxEventDeliveryTimeMs", options.maxEventDeliveryTimeMs),
+      ...toConfigOption("deliveryResponseTimeoutMs", options.deliveryResponseTimeoutMs),
+      ...toConfigOption("retryBackoffMs", options.retryBackoffMs),
       serviceId: this.serviceIdentity,
     });
     this.pullingStreams.push(provider);
     this.starters.push(async () => {
       await provider.start();
     });
-    this.closers.push(async () => {
+    // Stop polling before deactivateAll (see `addRedisStreams`); the pool
+    // itself can close after.
+    this.preDeactivateClosers.push(async () => {
       await provider.stop();
+    });
+    this.closers.push(async () => {
       await pool.end();
     });
     return this.addStreamProvider(name, provider);
@@ -716,7 +800,9 @@ export class SiloBuilder {
    * `IStreamFailureHandler`) is forwarded to every queue's pulling agent —
    * and to the retention-gap edge case — defaulting to a handler backed by
    * `useDurableStreamFailureStore`'s store when one was registered and this
-   * call supplies none of its own.
+   * call supplies none of its own. `options.maxEventDeliveryTimeMs`/
+   * `deliveryResponseTimeoutMs`/`retryBackoffMs` tune per-subscriber delivery
+   * retry (Orleans `MaxEventDeliveryTime`/`ResponseTimeout`).
    */
   addKafkaStreams(
     name: string,
@@ -726,6 +812,9 @@ export class SiloBuilder {
       pollIntervalMs?: number;
       topicPrefix?: string;
       failureHandler?: StreamFailureHandler;
+      maxEventDeliveryTimeMs?: number;
+      deliveryResponseTimeoutMs?: number;
+      retryBackoffMs?: (attempt: number) => number;
       metadata:
         | { postgres: { connectionString: string; tablePrefix?: string } }
         | { redis: { url: string; keyPrefix?: string } };
@@ -775,13 +864,20 @@ export class SiloBuilder {
       ...toConfigOption("pollIntervalMs", options.pollIntervalMs),
       ...toConfigOption("topicPrefix", options.topicPrefix),
       ...toConfigOption("failureHandler", failureHandler),
+      ...toConfigOption("maxEventDeliveryTimeMs", options.maxEventDeliveryTimeMs),
+      ...toConfigOption("deliveryResponseTimeoutMs", options.deliveryResponseTimeoutMs),
+      ...toConfigOption("retryBackoffMs", options.retryBackoffMs),
     });
     this.pullingStreams.push(provider);
     this.starters.push(async () => {
       await provider.start();
     });
-    this.closers.push(async () => {
+    // Stop polling before deactivateAll (see `addRedisStreams`); the Kafka
+    // client can disconnect after.
+    this.preDeactivateClosers.push(async () => {
       await provider.stop();
+    });
+    this.closers.push(async () => {
       await provider.disconnect();
     });
     return this.addStreamProvider(name, provider);
@@ -803,7 +899,8 @@ export class SiloBuilder {
   ): this {
     const provider = new GeneratorPullingStreamProvider(name, config, options);
     this.pullingStreams.push(provider);
-    this.closers.push(async () => {
+    // Stop before deactivateAll (see `addRedisStreams`).
+    this.preDeactivateClosers.push(async () => {
       await provider.stop();
     });
     return this.addStreamProvider(name, provider);
@@ -1362,8 +1459,20 @@ export class SiloBuilder {
       ...(this.config.collectionIntervalSeconds !== undefined
         ? { collectionIntervalSeconds: this.config.collectionIntervalSeconds }
         : {}),
+      ...(this.config.loadPublishIntervalMs !== undefined
+        ? { loadPublishIntervalMs: this.config.loadPublishIntervalMs }
+        : {}),
+      ...(this.config.clientDropTimeoutMs !== undefined
+        ? { clientDropTimeoutMs: this.config.clientDropTimeoutMs }
+        : {}),
+      ...(this.config.clientDirectoryRefreshMs !== undefined
+        ? { clientDirectoryRefreshMs: this.config.clientDirectoryRefreshMs }
+        : {}),
       ...(this.config.defaultResponseTimeout !== undefined
         ? { defaultResponseTimeoutMs: durationToMs(this.config.defaultResponseTimeout) }
+        : {}),
+      ...(this.config.callTimeout !== undefined
+        ? { callTimeoutMs: durationToMs(this.config.callTimeout) }
         : {}),
       ...(this.config.random !== undefined ? { random: this.config.random } : {}),
       // Calling useVersioning() enables versioning with resolved defaults, so the
@@ -1415,16 +1524,17 @@ export class SiloBuilder {
           await bindReducerStates(instance, grainId, storage);
         }
         if (journalStorage !== undefined) {
-          // One manager per grain owns the log; replay rebuilds all durable
-          // structures. On rehydration skip replay (parity with persistent state).
-          await bindDurableStates(instance, grainId, journalStorage, {
-            replay: mode !== "rehydrate",
-            ...(snapshotThreshold !== undefined ? { snapshotThreshold } : {}),
-          });
-          // A `JournaledGrain` owns its own single-machine log (the confirmed
-          // event sequence); install its adaptor and replay it the same way.
-          await bindJournaledGrain(instance, grainId, journalStorage, {
-            replay: mode !== "rehydrate",
+          // One manager per grain owns the log: a grain's `@durableState`
+          // fields and (if it is one) its `JournaledGrain` log-view adaptor
+          // share a single `StateMachineManager`, so replay rebuilds every
+          // durable structure from the one log they all append to. Unlike
+          // persistent state, no journaling component is a migration
+          // participant (Orleans has none either -- only `StateStorageBridge`
+          // is), so nothing carries durable/journalled state across a
+          // migration in the rehydration bag: always replay, even on
+          // rehydrate, or the target comes up empty.
+          await bindJournalFacets(instance, grainId, journalStorage, {
+            replay: true,
             ...(snapshotThreshold !== undefined ? { snapshotThreshold } : {}),
           });
         }
@@ -1466,6 +1576,7 @@ export class SiloBuilder {
       const unregister = registerRuntimeMetrics({
         activationCount: () => node.activationCount(),
         directoryCache: () => node.directoryCacheStats(),
+        directoryRecovery: () => node.directoryRecoveryStats(),
       });
       this.closers.push(async () => unregister());
     }
@@ -1561,8 +1672,10 @@ export class SiloBuilder {
           activeRingKeys: activeSilos(membership.current()).map((s) => s.ringKey),
         });
       });
-      // Graceful drain releases this silo's shards so a successor can claim them.
-      this.closers.push(async () => manager.stop());
+      // Graceful drain releases this silo's shards so a successor can claim
+      // them — stopped before deactivateAll, or it keeps delivering jobs
+      // into activations that are (or are about to be) deactivating.
+      this.preDeactivateClosers.push(async () => manager.stop());
     }
     for (const provider of this.pullingStreams) {
       provider.setDeliver((grainId, streamKey, event, token) =>
@@ -1591,7 +1704,11 @@ export class SiloBuilder {
       if (filter !== undefined) provider.setStreamFilter(filter);
       // Cancel every stream's inactivity timer on shutdown so none leak past
       // this silo's lifetime (a leaked `setTimeout`/fake-clock timer would
-      // otherwise hang a test worker).
+      // otherwise hang a test worker). Unlike the pulling providers this
+      // stays AFTER deactivation: `stop()` here only cancels timers (there is
+      // no agent to stop — delivery is a direct push on `publish`), and a
+      // publish from an `onDeactivate` hook re-arms one, so stopping earlier
+      // would leak exactly the timer this is here to cancel.
       this.closers.push(async () => provider.stop());
     }
 
@@ -1655,13 +1772,16 @@ export class SiloBuilder {
       gracefulShutdownMs:
         this.config.gracefulShutdownMs ??
         (this.membership instanceof KubernetesMembership ? DEFAULT_GRACE_MS : 0),
+      ...(this.config.stopBudgetMs !== undefined ? { stopBudgetMs: this.config.stopBudgetMs } : {}),
       membership: this.membership,
       reminderService,
       rebalancerWorker,
       selfProbeWorker,
       onStart: this.starters,
       onOwnershipChange,
+      onBeforeDeactivate: this.preDeactivateClosers,
       onStop: this.closers,
+      ...(this.logger !== undefined ? { logger: this.logger } : {}),
       startupTasks: this.startupTasks.map((fn) => async () => {
         await ensureEmbeddedClient(); // no-op without an in-process network
         await fn(grainFactoryAccess);

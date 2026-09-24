@@ -96,6 +96,13 @@ export interface TestClusterOptions {
    * `FakeTimeProvider` via `time` to drive it deterministically in tests.
    */
   defaultResponseTimeout?: Duration;
+  /**
+   * How long a caller waits for a cross-silo reply, and so the time-to-live
+   * every request carries, forwarded to every silo (Orleans
+   * `SiloMessagingOptions.ResponseTimeout`; see `SiloConfig.callTimeout`).
+   * Defaults to 30s.
+   */
+  callTimeout?: Duration;
   /** Load-shedding config applied to every silo in this cluster (Orleans `Configure<LoadSheddingOptions>`). */
   loadShedding?: Partial<LoadSheddingOptions>;
   /** Injectable RNG forwarded to every silo, for deterministic placement in tests. */
@@ -119,6 +126,27 @@ export interface TestClusterOptions {
   defaultPlacementStrategy?: PlacementStrategy;
   /** How often the idle-collection sweep runs on every silo (defaults to 60s). */
   collectionIntervalSeconds?: number;
+  /**
+   * How often every silo pushes its load snapshot to its peers (Orleans
+   * `DeploymentLoadPublisherOptions`, defaults to 1s). Lower it in a test that
+   * needs cross-silo load visibility without waiting a full period, or pass
+   * `0` to disable the periodic push and rely only on the test hooks'
+   * forced pushes.
+   */
+  loadPublishIntervalMs?: number;
+  /**
+   * How long a disconnected client stays registered on its gateway before
+   * being dropped, forwarded to every silo (Orleans
+   * `SiloMessagingOptions.ClientDropTimeout`, defaults to 1 minute).
+   */
+  clientDropTimeoutMs?: number;
+  /**
+   * How often every silo republishes its locally connected clients to its
+   * peers, on top of the immediate republish a membership change triggers
+   * (Orleans `SiloMessagingOptions.ClientRegistrationRefresh`, defaults to 5
+   * minutes).
+   */
+  clientDirectoryRefreshMs?: number;
   /**
    * The shared transport network silos are built on. Defaults to a plain
    * `InProcessNetwork`; pass a subclass (e.g. one that counts messages) for
@@ -146,6 +174,11 @@ export class TestCluster {
   private disposed = false;
   // One membership authority for the whole cluster (silos see it through
   // per-silo `localSilo()` views) so every silo agrees on the view version.
+  // That agreement is a property of this fixture, not of membership in general:
+  // each production silo numbers its views from its own Kubernetes watch, so
+  // there identical versions denote unrelated views (issue #72). Tests rely on
+  // version equality meaning view equality — e.g. the directory's `staleView`
+  // guard — and must keep sharing one service to do so.
   private shared: StaticMembershipService | undefined;
 
   // Cluster-wide "durable" backends, shared by every silo.
@@ -399,6 +432,7 @@ export class TestCluster {
       ...(this.options.defaultResponseTimeout !== undefined
         ? { defaultResponseTimeout: this.options.defaultResponseTimeout }
         : {}),
+      ...(this.options.callTimeout !== undefined ? { callTimeout: this.options.callTimeout } : {}),
       ...(this.options.loadShedding !== undefined
         ? { loadShedding: this.options.loadShedding }
         : {}),
@@ -414,6 +448,15 @@ export class TestCluster {
         : {}),
       ...(this.options.collectionIntervalSeconds !== undefined
         ? { collectionIntervalSeconds: this.options.collectionIntervalSeconds }
+        : {}),
+      ...(this.options.loadPublishIntervalMs !== undefined
+        ? { loadPublishIntervalMs: this.options.loadPublishIntervalMs }
+        : {}),
+      ...(this.options.clientDropTimeoutMs !== undefined
+        ? { clientDropTimeoutMs: this.options.clientDropTimeoutMs }
+        : {}),
+      ...(this.options.clientDirectoryRefreshMs !== undefined
+        ? { clientDirectoryRefreshMs: this.options.clientDirectoryRefreshMs }
         : {}),
     })
       .useMembership(membership)

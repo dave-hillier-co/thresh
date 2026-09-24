@@ -34,6 +34,15 @@ export interface TransactionCommitOperation<TService> {
  * upstream test this exists for
  * (`TocFaultTransactionMemoryTests.MultiGrainWriteTransactionWithCommitException`)
  * only exercises the in-process commit-time failure path, not crash recovery.
+ *
+ * Being memory-only also makes it a resource and nothing more: it implements
+ * `TransactionParticipant` (Orleans `ITransactionalResource`) but not
+ * {@link TransactionManager}, so `TransactionAgent` never elects it the
+ * transaction manager. Upstream's committer registers a real, storage-backed
+ * `TransactionManager` in the grain context and can therefore be elected; this
+ * one has no durable commit record to write and no `status` to answer a
+ * recovering participant with, so the manager is elected from the grain-hosted
+ * resources instead.
  */
 export class TransactionCommitter<TService> implements TransactionParticipant {
   private readonly pending = new Map<string, TransactionCommitOperation<TService>>();
@@ -87,10 +96,5 @@ export class TransactionCommitter<TService> implements TransactionParticipant {
 
   abort(transactionId: string): void {
     this.pending.delete(transactionId);
-  }
-
-  /** This committer is never the elected manager in the ported test scenarios. */
-  recordCommit(): void {
-    // no-op: see class doc — no durable commit record of its own.
   }
 }

@@ -144,6 +144,125 @@ describe("GrainTimerImpl", () => {
     timer.dispose();
   });
 
+  it("arms the next tick only once the previous callback settles (fixed-delay), never overlapping or queuing", async () => {
+    // Orleans arms the next tick only after the callback completes
+    // (`GrainTimer.OnTickCompleted`), so ticks of one timer never overlap or
+    // queue even when a callback outlasts the period.
+    const time = new FakeTimeProvider();
+    let armCount = 0;
+    const originalSetTimer = time.setTimer.bind(time);
+    time.setTimer = (handler, delayMs) => {
+      armCount++;
+      return originalSetTimer(handler, delayMs);
+    };
+    let resolveCallback: (() => void) | undefined;
+    const callback = () =>
+      new Promise<void>((resolve) => {
+        resolveCallback = resolve;
+      });
+    const timer = new GrainTimerImpl(time, (cb) => cb(), callback, { ms: 5 }, { ms: 5 });
+
+    expect(armCount).toBe(1); // the initial due-time schedule from the constructor
+
+    time.advance(5);
+    await flush();
+    // The callback is still pending — the next tick must not have been armed yet.
+    expect(armCount).toBe(1);
+
+    resolveCallback?.();
+    await flush();
+    // Only now that the callback settled is the next period armed.
+    expect(armCount).toBe(2);
+
+    timer.dispose();
+  });
+
+  it("defers a change() made during a tick until that tick settles, leaving one armed timer", async () => {
+    // Orleans' `GrainTimer.Change` only records the new due/period while the
+    // timer is firing (`_firing`), and `OnTickCompleted` then arms exactly one
+    // next tick from the changed due time. Arming immediately AND again when
+    // the tick settles would leave two independent tick chains running.
+    const time = new FakeTimeProvider();
+    let ticks = 0;
+    let resolveFirst: (() => void) | undefined;
+    const callback = () => {
+      ticks++;
+      if (ticks === 1) {
+        timer.change({ ms: 100 }, { ms: 100 });
+        return new Promise<void>((resolve) => {
+          resolveFirst = resolve;
+        });
+      }
+      return Promise.resolve();
+    };
+    const timer = new GrainTimerImpl(time, (cb) => cb(), callback, { ms: 10 }, { ms: 10 });
+
+    time.advance(10);
+    await flush();
+    expect(ticks).toBe(1);
+
+    // Still inside the first tick: the change must not have fired a tick yet.
+    time.advance(100);
+    await flush();
+    expect(ticks).toBe(1);
+
+    resolveFirst?.();
+    await flush();
+
+    for (let i = 0; i < 5; i++) {
+      time.advance(100);
+      await flush();
+    }
+    // One tick per 100ms period after the first tick settled — not two chains.
+    expect(ticks).toBe(6);
+
+    timer.dispose();
+  });
+
+  it("never fires for an infinite (-1ms) due time", async () => {
+    const time = new FakeTimeProvider();
+    let ticks = 0;
+    const timer = new GrainTimerImpl(
+      time,
+      (cb) => cb(),
+      async () => {
+        ticks++;
+      },
+      { ms: -1 },
+      { ms: 10 },
+    );
+
+    time.advance(1000);
+    await flush();
+    expect(ticks).toBe(0);
+
+    timer.dispose();
+  });
+
+  it("fires once and stops for an infinite (-1ms) period", async () => {
+    // Orleans treats `Timeout.InfiniteTimeSpan` as "disabled": a -1ms period
+    // is a one-shot timer, not a re-arm at (clamped) zero delay.
+    const time = new FakeTimeProvider();
+    let ticks = 0;
+    const timer = new GrainTimerImpl(
+      time,
+      (cb) => cb(),
+      async () => {
+        ticks++;
+      },
+      { ms: 10 },
+      { ms: -1 },
+    );
+
+    for (let i = 0; i < 5; i++) {
+      time.advance(10);
+      await flush();
+    }
+    expect(ticks).toBe(1);
+
+    timer.dispose();
+  });
+
   it("leaves prior scheduling untouched when change() rejects an invalid value", () => {
     const time = new FakeTimeProvider();
     let fired = false;

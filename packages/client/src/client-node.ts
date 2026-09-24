@@ -55,7 +55,7 @@ import {
 } from "@thresh/messaging/message";
 import { MessagePackSerializer } from "@thresh/messaging/msgpack-serializer";
 import type { Serializer } from "@thresh/messaging/serializer";
-import type { Transport } from "@thresh/messaging/transport";
+import type { Transport, Connection } from "@thresh/messaging/transport";
 import { BroadcastChannelProviderImpl } from "@thresh/runtime/broadcast-channel-provider";
 import { ICancellationSourcesExtension } from "@thresh/runtime/cancellation-extension";
 import type { Dispatcher } from "@thresh/runtime/dispatcher";
@@ -402,6 +402,14 @@ export class ClientNode implements Dispatcher {
           sendingGrain: req.sender,
           interfaceId: req.interfaceId,
           method: req.method,
+          // Both RELATIVE to this client's clock, like Orleans' wire
+          // `TimeToLive`: the gateway re-bases them on its own clock. The
+          // time-to-live is what is left of this call's budget -- the point
+          // this client stops waiting -- so the gateway does not run a request
+          // nobody is waiting for any more (Orleans
+          // `OutsideRuntimeClient.SendRequest`; issue #90).
+          ...(req.deadline !== undefined ? { deadlineInMs: req.deadline - this.now() } : {}),
+          ...(req.options.oneWay ? {} : { timeToLiveMs: deadline - this.now() }),
           requestContext: {
             reentrancyId: req.reentrancyId,
             ...(req.headers !== undefined ? { headers: req.headers } : {}),
@@ -414,8 +422,7 @@ export class ClientNode implements Dispatcher {
         }
         const perAttemptTimeout = deadline - this.now();
         if (perAttemptTimeout <= 0) throw timeoutError();
-        const pending = this.correlation.register(correlationId, perAttemptTimeout);
-        conn.send(message);
+        const pending = this.sendAndAwait(conn, message, perAttemptTimeout);
         response = await pending;
       } catch (err) {
         if (this.now() >= deadline) throw timeoutError();
@@ -430,6 +437,24 @@ export class ClientNode implements Dispatcher {
       // We have a response: its kind decides success or an application error.
       return this.interpretResponse(response);
     }
+  }
+
+  /**
+   * Register this attempt's correlation entry, put the request on the wire, and
+   * hand back the promise its reply will complete. When the send itself throws —
+   * a gateway that stopped listening mid-attempt — the entry is released with the
+   * send's error rather than left armed: the caller's failover loop moves on to
+   * another gateway, and a request that never left can never be answered.
+   */
+  private sendAndAwait(conn: Connection, message: Message, timeoutMs: number): Promise<Message> {
+    const pending = this.correlation.register(message.correlationId, timeoutMs);
+    try {
+      conn.send(message);
+    } catch (err) {
+      this.correlation.fail(message.correlationId, err);
+      throw err;
+    }
+    return pending;
   }
 
   private onMessage(message: Message): void {

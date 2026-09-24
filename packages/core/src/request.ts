@@ -41,10 +41,32 @@ export interface InvocationRequest {
    * Absolute deadline (epoch ms) for this call chain, if one is ambient
    * (Orleans has no direct analogue — JS-only ambient cancellation; see
    * `docs/deviations.md`). Wire-safe (a plain timestamp, unlike an
-   * `AbortSignal`), so it rides a cross-silo forward and each hop derives its
-   * own local `AbortSignal` from it (`@thresh/runtime/dispatcher`). Propagated
+   * `AbortSignal`), so it rides a cross-silo forward -- re-based onto each
+   * receiving silo's own clock via the wire's relative `deadlineInMs` -- and
+   * each hop derives its own local `AbortSignal` from it
+   * (`@thresh/runtime/dispatcher`). Propagated
    * unchanged down a call chain like `transaction`, so the FIRST deadline set
    * on a chain governs every downstream hop.
    */
   deadline?: number;
+  /**
+   * Local-clock instant (ms, on the RECEIVING silo's `TimeProvider`) after
+   * which this request must not start running, because its caller has
+   * already given up waiting for the reply (Orleans `Message.TimeToLive`,
+   * checked in `InsideRuntimeClient.Invoke`). Set by `ClusterNode.toRequest`
+   * from the wire `timeToLiveMs`; checked once, at turn start, by
+   * `ActivationData.invoke`. Unlike `deadline` it is NOT ambient: calls the
+   * turn makes get their own time-to-live from their own caller timeout
+   * (issue #90).
+   */
+  expiresAt?: number;
+  /**
+   * How many times this exact call has already been forwarded silo-to-silo
+   * because the receiving silo's directory CAS named a different owner
+   * (Orleans `Message.ForwardCount`). Absent/0 on the caller's original
+   * dispatch; incremented by `DistributedDispatcher.forwardTo` on each hop
+   * and capped there (`MaxForwardCount`), so an inconsistent directory view
+   * cannot loop forever between silos (issue #110).
+   */
+  forwardCount?: number;
 }

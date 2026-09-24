@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { QueuePullingAgent, type StreamFailureHandler } from "@thresh/streams/queue-pulling-agent";
+import { QueuePullingAgent } from "@thresh/streams/queue-pulling-agent";
 import type { QueueEntry, RedisStreamQueue } from "@thresh/streams/redis-stream-queue";
+import { RecoverableStreamDeliveryError } from "@thresh/streams/stream-recovery";
 
 /**
  * In-memory fake of `RedisStreamQueue` — Redis is the only true boundary in this
@@ -51,94 +52,75 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2000): Promise<void
 }
 
 describe("QueuePullingAgent failure handling", () => {
-  it("skips a permanently failing event after the retry budget and continues delivering subsequent events", async () => {
+  // Per-subscriber retry-then-skip (issues #97/#98/#111) is `deliver`'s own
+  // job now (`PullingStreamProviderCore.fanOut` → `FanOutDelivery`; see
+  // `fan-out-delivery.test.ts`) — `deliver` never rejects for an ordinary
+  // subscriber failure. What the agent itself still owns is: (a) a
+  // queue-wide failure (deliver rejecting outright) is retried, unbounded,
+  // by the ordinary poll loop, same as a queue read/commit failure; (b) a
+  // `RecoverableStreamDeliveryError` seeks the queue's cursor back.
+
+  it("retries a queue-wide delivery failure via the poll loop, unbounded, and continues once it stops failing", async () => {
     const queue = new FakeQueue();
-    queue.append("room/bad", "poison");
     queue.append("room/good", "next-a");
-    queue.append("room/good", "next-b");
 
     const delivered: Delivered[] = [];
-    const failures: Array<{ streamKey: string; token: number; attempts: number }> = [];
-
-    const failureHandler: StreamFailureHandler = {
-      async onDeliveryFailure(streamKey, _event, token, _error, attempts) {
-        failures.push({ streamKey, token, attempts });
-      },
-    };
-
-    let attempts = 0;
+    let calls = 0;
     const agent = new QueuePullingAgent(
       queue as unknown as RedisStreamQueue,
       async (streamKey, event, token) => {
-        if (streamKey === "room/bad") {
-          attempts++;
-          throw new Error("always fails");
-        }
+        calls++;
+        // The whole entry fails outright the first two polls (e.g. the
+        // subscriber registry read itself failed) — not a per-subscriber
+        // failure `fanOut` would have already absorbed.
+        if (calls <= 2) throw new Error("registry unavailable");
         delivered.push({ streamKey, event, token });
       },
-      {
-        pollIntervalMs: 1,
-        maxAttempts: 3,
-        // Keep backoff tight so the test stays fast.
-        retryBackoffMs: () => 1,
-        failureHandler,
-      },
+      { pollIntervalMs: 1 },
     );
 
     agent.start();
     try {
-      await waitFor(() => delivered.length === 2);
+      await waitFor(() => delivered.length === 1);
     } finally {
       agent.stop();
     }
 
-    // (a) cursor advanced past the bad event
-    expect(await queue.getCursor()).toBe(3);
-    // (a) handler tried exactly `maxAttempts` times before skipping
-    expect(attempts).toBe(3);
-    // (b) other events were delivered
-    expect(delivered.map((d) => d.event)).toEqual(["next-a", "next-b"]);
-    // failure was reported via the seam exactly once
-    expect(failures).toEqual([{ streamKey: "room/bad", token: 1, attempts: 3 }]);
+    // The cursor never advanced past the failing entry until it succeeded —
+    // no skip, no bound on how many polls it took.
+    expect(await queue.getCursor()).toBe(1);
+    expect(delivered).toEqual([{ streamKey: "room/good", event: "next-a", token: 1 }]);
+    expect(calls).toBeGreaterThanOrEqual(3);
   });
 
-  it("does not skip a transient failure that succeeds within the retry budget", async () => {
+  it("seeks the queue back to the checkpoint on a RecoverableStreamDeliveryError, redelivering from there instead of skipping ahead", async () => {
     const queue = new FakeQueue();
     queue.append("s", "x");
+    queue.append("s", "y");
 
-    let attempts = 0;
-    const failures: unknown[] = [];
+    const events: unknown[] = [];
+    let firstAttempt = true;
     const agent = new QueuePullingAgent(
       queue as unknown as RedisStreamQueue,
-      async () => {
-        attempts++;
-        if (attempts < 2) throw new Error("transient");
+      async (_streamKey, event) => {
+        if (event === "x" && firstAttempt) {
+          firstAttempt = false;
+          throw new RecoverableStreamDeliveryError("resync", 0);
+        }
+        events.push(event);
       },
-      {
-        pollIntervalMs: 1,
-        maxAttempts: 3,
-        retryBackoffMs: () => 1,
-        failureHandler: {
-          async onDeliveryFailure(...args) {
-            failures.push(args);
-          },
-        },
-      },
+      { pollIntervalMs: 1 },
     );
 
     agent.start();
     try {
-      await waitFor(() => attempts >= 2);
-      const start = Date.now();
-      while ((await queue.getCursor()) !== 1) {
-        if (Date.now() - start > 2000) throw new Error("cursor never advanced");
-        await new Promise((r) => setTimeout(r, 5));
-      }
+      await waitFor(() => events.length === 2);
     } finally {
       agent.stop();
     }
 
-    expect(await queue.getCursor()).toBe(1);
-    expect(failures).toEqual([]);
+    // "x" was rewound-and-redelivered (not permanently skipped), then "y".
+    expect(events).toEqual(["x", "y"]);
+    expect(await queue.getCursor()).toBe(2);
   });
 });

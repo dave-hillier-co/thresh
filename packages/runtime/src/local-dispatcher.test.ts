@@ -12,7 +12,7 @@ import { LocalDispatcher } from "@thresh/runtime/local-dispatcher";
 // `Catalog`/scheduler stack.
 function fakeCatalog(target: GrainId): { catalog: Catalog; invoke: ReturnType<typeof vi.fn> } {
   const invoke = vi.fn().mockResolvedValue("ok");
-  const activation = { invoke };
+  const activation = { invoke, isStuckRejection: () => false };
   const catalog = {
     isStatelessWorkerType: () => false,
     getOrCreate: async (id: GrainId) => {

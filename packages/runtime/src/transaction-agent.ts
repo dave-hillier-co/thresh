@@ -8,11 +8,24 @@ import type {
   EnlistedParticipant,
   ParticipantId,
   TransactionInfo,
+  TransactionManager,
 } from "@thresh/core/transaction-info";
+import { isTransactionManager } from "@thresh/core/transaction-info";
 import { TransactionResourceInterface } from "@thresh/core/transaction-resource";
 import { CausalClock } from "@thresh/runtime/causal-clock";
 import type { Dispatcher } from "@thresh/runtime/dispatcher";
 import type { TimeProvider } from "@thresh/runtime/time-provider";
+
+/**
+ * The participant elected to manage the transaction. `local` carries its live
+ * object when it is enlisted on this silo (the agent drives the manager methods
+ * directly); absent when the manager was merged back from another silo and is
+ * reached over the dispatcher instead.
+ */
+interface ElectedManager {
+  readonly id: ParticipantId;
+  readonly local?: TransactionManager | undefined;
+}
 
 /**
  * The per-silo transaction agent (Orleans `TransactionAgent`). It begins a
@@ -46,12 +59,22 @@ export class TransactionAgent {
       timeStamp: this.clock.utcNow(),
       readOnly,
       participants: new Map(),
+      status: "active",
       pendingCalls: 0,
     };
   }
 
   /** Commit the transaction across its participants, or abort all and throw. */
   async resolve(info: TransactionInfo): Promise<void> {
+    // Close the participant set *before* the snapshot below, not after the
+    // round: preparing and committing await durable writes, so there is a
+    // window in which a detached caller — a `oneWay` `supported` call whose
+    // originator resolved the moment its call returned — is still running and
+    // would otherwise enlist into the set this round is already working from.
+    // Such a resource would never be prepared, committed or aborted, and the
+    // lock it took would be held until deactivation; `requireTransaction`
+    // refuses it instead (`TransactionAlreadyResolvedError`).
+    info.status = "resolving";
     // Orleans `TransactionInfo.MustAbort`: a call forked off this transaction
     // (see `forkTransaction`, `@thresh/core/transaction-info`) that never
     // completed leaves the transaction's true read/write set unknowable, so it
@@ -62,10 +85,14 @@ export class TransactionAgent {
       throw new TransactionOrphanCallError(info.id, info.pendingCalls);
     }
     const enlisted = [...info.participants.values()];
-    if (enlisted.length === 0) return;
+    if (enlisted.length === 0) {
+      info.status = "committed";
+      return;
+    }
 
     // Elect the transaction manager from the writers (Orleans: the first write
-    // participant). In-process the agent coordinates the rounds directly.
+    // participant that supports the Manager role). In-process the agent
+    // coordinates the rounds directly.
     const manager = this.electManager(enlisted);
     const writeParticipants = enlisted.filter((e) => e.access.writes > 0).map((e) => e.id);
 
@@ -82,7 +109,11 @@ export class TransactionAgent {
     if (prepared.every((ok) => ok)) {
       // The TM durably records the commit before any participant commits — the
       // atomic commit point. A crash after this leaves participants in-doubt,
-      // and recovery resolves them to commit by querying the TM.
+      // and recovery resolves them to commit by querying the TM. A transaction
+      // whose writers are all resource-only has no such point to record: its
+      // participants still commit (the port's `TransactionCommitter` is
+      // memory-only, with no durable prepare record to recover either), but
+      // nothing is left claiming a commit record exists.
       if (manager !== undefined) {
         try {
           await this.recordCommit(manager, info, writeParticipants);
@@ -96,6 +127,9 @@ export class TransactionAgent {
           throw new TransactionInDoubtError(info.id, { cause: error });
         }
       }
+      // The commit is now decided (the TM has recorded it, or there was no
+      // writer to record it) — participants only have to apply it.
+      info.status = "committed";
       // Past this point the commit is durably decided: every participant's
       // write *will* eventually apply. A participant whose own commit step
       // throws here (e.g. an external, non-grain resource enlisted via
@@ -118,6 +152,10 @@ export class TransactionAgent {
 
   /** Abort: discard every enlisted participant's tentative writes and release locks. */
   async abort(info: TransactionInfo): Promise<void> {
+    // Closed before the round runs, for the same reason as `resolve`: an abort
+    // releases the locks held for the participants it knows about, so a
+    // resource that slipped in behind the snapshot would keep its own.
+    info.status = "aborted";
     await Promise.all([...info.participants.values()].map((e) => this.abortOne(e, info)));
   }
 
@@ -139,12 +177,12 @@ export class TransactionAgent {
 
   /** Have the elected TM durably record the commit (locally or over the dispatcher). */
   private async recordCommit(
-    manager: EnlistedParticipant,
+    manager: ElectedManager,
     info: TransactionInfo,
     writeParticipants: ParticipantId[],
   ): Promise<void> {
-    if (manager.participant !== undefined) {
-      await manager.participant.recordCommit(info.id, info.timeStamp, writeParticipants);
+    if (manager.local !== undefined) {
+      await manager.local.recordCommit(info.id, info.timeStamp, writeParticipants);
       return;
     }
     await this.route(manager.id, "recordCommit", [
@@ -183,8 +221,27 @@ export class TransactionAgent {
     });
   }
 
-  /** The elected manager (first writer), or undefined for a read-only transaction. */
-  private electManager(enlisted: readonly EnlistedParticipant[]): EnlistedParticipant | undefined {
-    return enlisted.find((e) => e.access.writes > 0);
+  /**
+   * The elected manager (Orleans' first write participant that supports the
+   * Manager role), or undefined when no writer can manage the transaction.
+   *
+   * A locally-enlisted participant must implement the manager half of the
+   * contract to be elected: electing one that cannot record a commit — a
+   * `TransactionCommitter`, say — would leave the transaction with no durable
+   * commit point at all, and `recordCommit` would route the recovery `status`
+   * query to a resource that has no answer for it. A participant merged back
+   * from another silo carries no role of its own (the reply's
+   * `SerializedParticipant` is just `{id, access}`), so it is taken at its
+   * word: it is reached through `TransactionResource`, whose contract covers
+   * the manager methods too.
+   */
+  private electManager(enlisted: readonly EnlistedParticipant[]): ElectedManager | undefined {
+    for (const e of enlisted) {
+      if (e.access.writes === 0) continue;
+      const local = e.participant;
+      if (local === undefined) return { id: e.id };
+      if (isTransactionManager(local)) return { id: e.id, local };
+    }
+    return undefined;
   }
 }

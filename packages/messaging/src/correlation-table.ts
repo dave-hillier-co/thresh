@@ -24,6 +24,14 @@ interface Pending {
  * correlation id. Response interpretation (success vs error vs rejection) is
  * the dispatcher's job; this only resolves on arrival, rejects on timeout, and
  * fails everything outstanding when a connection drops.
+ *
+ * Every promise this hands out carries a catch-all of its own (see `register`),
+ * because a caller is free to stop awaiting one: a call abandoned during a
+ * shutdown, or one whose send threw before the `await` was reached, leaves an
+ * armed entry behind, and the deadline firing on it must not become a
+ * process-level unhandled rejection — under Node's default
+ * `--unhandled-rejections=throw` that terminates the process. Abandonment is
+ * the caller's business; ending the process is not.
  */
 export class CorrelationTable {
   private readonly pending = new Map<string, Pending>();
@@ -33,7 +41,7 @@ export class CorrelationTable {
   /** `peer` tags the call with the connection it went out on, for `rejectFor`. */
   register(correlationId: bigint, timeoutMs?: number, peer?: string): Promise<Message> {
     const key = correlationId.toString();
-    return new Promise<Message>((resolve, reject) => {
+    const promise = new Promise<Message>((resolve, reject) => {
       let handle: unknown;
       if (timeoutMs !== undefined) {
         handle = this.timer.set(() => {
@@ -48,6 +56,11 @@ export class CorrelationTable {
         ...(peer !== undefined ? { peer } : {}),
       });
     });
+    // Marks this promise as handled so its rejection can never surface unobserved. A caller that
+    // awaits it still sees the error exactly as before — the extra handler observes nothing and
+    // swallows only what nobody else was ever going to look at.
+    void promise.catch(() => undefined);
+    return promise;
   }
 
   /** Resolve the pending promise for this response. Returns false if unknown. */
@@ -58,6 +71,22 @@ export class CorrelationTable {
     this.pending.delete(key);
     this.clearTimer(entry);
     entry.resolve(message);
+    return true;
+  }
+
+  /**
+   * Fail one outstanding call whose request never left this process — the send
+   * threw after `register` armed the entry, so no reply can ever complete it.
+   * Releases the entry rather than leaving it to fire its deadline on a call
+   * nobody is waiting for. Returns false if the call is not outstanding.
+   */
+  fail(correlationId: bigint, err: unknown): boolean {
+    const key = correlationId.toString();
+    const entry = this.pending.get(key);
+    if (entry === undefined) return false;
+    this.pending.delete(key);
+    this.clearTimer(entry);
+    entry.reject(err);
     return true;
   }
 

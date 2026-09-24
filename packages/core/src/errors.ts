@@ -1,3 +1,5 @@
+import type { ResolvedStatus } from "./transaction-info";
+
 /**
  * The catch-all base beneath the grain-call failure family — Thresh's answer to
  * Orleans' `OrleansException`, which is the base of `SiloUnavailableException`,
@@ -108,7 +110,21 @@ export type RejectionKind =
   | "deserialization"
   | "noActivation"
   | "noCandidates"
-  | "staleView";
+  | "staleView"
+  /**
+   * A pooled connection to the target peer was lost mid-call (Orleans
+   * `SiloUnavailableException`, raised locally only — it never crosses the
+   * wire). Distinct from `unknownTarget`, which a perfectly live peer can
+   * also send back (`routeToClient` with no gateway, a dangling directory
+   * pointer): those are safe to treat as a stale cache/directory entry and
+   * resend, because the callee never started the turn. A dropped connection
+   * gives no such guarantee — the callee may already be mid-turn — so this
+   * kind is deliberately NOT stale (`isStaleActivationRejection` must not
+   * admit it): it surfaces to the
+   * caller instead of being silently resent, which is what let a lost
+   * connection re-run an already-executing call (issue #88).
+   */
+  | "siloUnavailable";
 
 /** A runtime-level refusal the caller can inspect to decide whether to retry. */
 export class RejectionError extends ThreshRuntimeError {
@@ -119,6 +135,29 @@ export class RejectionError extends ThreshRuntimeError {
     super(message);
     this.name = "RejectionError";
   }
+}
+
+/**
+ * Whether `err` is a `RejectionError` whose kind means "the target moved,
+ * disappeared, or is momentarily out of view" — a stale routing artifact a
+ * caller should re-resolve and retry against, rather than a genuine
+ * application-level refusal. Shared by every dispatcher (`LocalDispatcher`,
+ * `DistributedDispatcher`) so a held call that a deactivating/migrating
+ * activation reroutes (see `ActivationData.invoke`'s "noActivation" throw)
+ * is retried the same way everywhere it can surface.
+ *
+ * Only kinds whose callee never started the turn belong here, so a resend
+ * cannot duplicate work. Deliberately excludes `"siloUnavailable"` (issue
+ * #88): that kind means the pooled CONNECTION died, not that the address was
+ * wrong, and the callee may already be mid-turn when it fires — resending it
+ * would re-run a call already executing. Do not add it here without a test
+ * asserting this set by name (see `docs/design-notes-parity-gaps.md`).
+ */
+export function isStaleActivationRejection(err: unknown): boolean {
+  return (
+    err instanceof RejectionError &&
+    (err.kind === "noActivation" || err.kind === "unknownTarget" || err.kind === "staleView")
+  );
 }
 
 /** A grain call that did not receive a response within its deadline. */
@@ -150,6 +189,15 @@ export class GrainExtensionNotInstalledException extends ThreshRuntimeError {
  * incarnation has written in between.
  */
 export class InconsistentStateError extends Error {
+  /**
+   * Whether this error is still in the activation it originated in (Orleans'
+   * `InconsistentStateException.IsSourceActivation`). The runtime deactivates
+   * that activation when the error escapes one of its calls, then clears this
+   * flag so a caller that merely propagates the error — in-process or on
+   * another silo, since it crosses the wire — is not deactivated as well.
+   */
+  isSourceActivation = true;
+
   constructor(
     message: string,
     readonly expectedEtag: string | undefined,
@@ -293,6 +341,33 @@ export class TransactionAbortedError extends Error {
   ) {
     super(`transaction ${transactionId} aborted: ${reason}`, options);
     this.name = "TransactionAbortedError";
+  }
+}
+
+/**
+ * Raised when a transactional resource tries to enlist in a transaction whose
+ * boundary has already resolved it — committed, aborted, or still resolving —
+ * rather than enlisting into a live one. The agent resolves from a snapshot of
+ * the participant set taken when the round begins, so a resource that joined
+ * afterwards would never be prepared, committed or aborted: its lock would be
+ * held until the activation deactivated (wedging the resource for every other
+ * transaction) and its write silently discarded. Refusing before it takes
+ * anything keeps the resource usable and tells the caller its work is lost
+ * instead. Orleans has no exact analogue — the closest is the
+ * `TransactionInfo.MustAbort` check the agent applies to orphaned calls. A
+ * subtype of {@link TransactionAbortedError} because the late work can never
+ * commit: the boundary has already decided, or is deciding, without it.
+ */
+export class TransactionAlreadyResolvedError extends TransactionAbortedError {
+  constructor(
+    transactionId: string,
+    readonly status: ResolvedStatus,
+  ) {
+    super(
+      transactionId,
+      `cannot enlist in a transaction that is already ${status === "resolving" ? "being resolved" : status}`,
+    );
+    this.name = "TransactionAlreadyResolvedError";
   }
 }
 

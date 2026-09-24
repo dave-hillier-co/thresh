@@ -4,15 +4,19 @@ import type { ParticipantId } from "./transaction-info";
 /**
  * Durable storage for transactional state, ported from Orleans
  * `ITransactionalStateStorage<TState>`.
- * Distinct from `GrainStorage`: it keeps a committed version with a dense local
- * sequence id, a list of prepared-but-uncommitted pending states, and a
+ * Distinct from `GrainStorage`: it keeps a committed version with a monotonic
+ * local sequence id, a list of prepared-but-uncommitted pending states, and a
  * commit-records log, so a commit is a single atomic `store` and recovery can
  * resolve in-doubt transactions.
  */
 
 /** A prepared, not-yet-committed transaction's state, kept until commit or abort. */
 export interface PendingTransactionState<T> {
-  /** Dense local sequence number (1,2,3…); a re-prepare with the same id replaces it. */
+  /**
+   * Local sequence number, unique to the record for as long as it is staged
+   * (minting may skip values, so the ids need not be dense); a re-prepare with
+   * the same id replaces it.
+   */
   sequenceId: number;
   transactionId: string;
   /** Logical commit timestamp. */

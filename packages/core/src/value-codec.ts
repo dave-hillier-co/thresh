@@ -40,6 +40,65 @@ const T = "$thresh";
 const V = "$tsvv";
 const CURRENT_VERSION = 1;
 
+/**
+ * Every tag this build decodes with a shape of its own — i.e. every `case` in
+ * `decodeValue`'s tagged branch, plus every tag in the surrogate registry. A
+ * version gate cannot ask that switch what it knows, so this set and the switch
+ * have to be kept in step: a tag missing here is a tag whose version is not
+ * checked (see the gate in `decodeValue` for why only these need checking).
+ */
+const builtInTags = new Set([
+  "bigint",
+  "date",
+  "bytes",
+  "guid",
+  "grainId",
+  "cancellationToken",
+  "undefined",
+  "domException",
+  "callAborted",
+  "taskCanceled",
+  "error",
+  "silo",
+  "map",
+  "set",
+  "grainRef",
+  "typedArray",
+  "negZero",
+]);
+
+/**
+ * Every `ArrayBuffer`-backed view this build round-trips through the
+ * `typedArray` envelope, keyed by `constructor.name`. `Uint8Array` is
+ * deliberately absent — it is carried untagged (see the note on
+ * `EncodeValueOptions`) — and `DataView` is deliberately absent too: it has
+ * no element type of its own to decode elements as, only raw bytes, so it
+ * falls through to the unrepresentable-value check below rather than being
+ * silently misread as one of these.
+ */
+type TypedArrayCtor = new (values: readonly (number | bigint)[]) => object;
+const TYPED_ARRAY_CTORS: Record<string, TypedArrayCtor> = {
+  Int8Array: Int8Array as unknown as TypedArrayCtor,
+  Uint8Array: Uint8Array as unknown as TypedArrayCtor,
+  Uint8ClampedArray: Uint8ClampedArray as unknown as TypedArrayCtor,
+  Int16Array: Int16Array as unknown as TypedArrayCtor,
+  Uint16Array: Uint16Array as unknown as TypedArrayCtor,
+  Int32Array: Int32Array as unknown as TypedArrayCtor,
+  Uint32Array: Uint32Array as unknown as TypedArrayCtor,
+  Float32Array: Float32Array as unknown as TypedArrayCtor,
+  Float64Array: Float64Array as unknown as TypedArrayCtor,
+  BigInt64Array: BigInt64Array as unknown as TypedArrayCtor,
+  BigUint64Array: BigUint64Array as unknown as TypedArrayCtor,
+};
+
+function typedArrayKind(view: ArrayBufferView): string {
+  for (const [kind, ctor] of Object.entries(TYPED_ARRAY_CTORS)) {
+    if (view instanceof (ctor as unknown as abstract new (...args: never[]) => object)) return kind;
+  }
+  // Unreachable for a same-realm typed array; a foreign-realm one falls back to its own name.
+  return view.constructor.name;
+}
+
 export interface CodecContext {
   /** Rehydrate a grain reference identity into a working proxy on receive. */
   resolveGrainReference?: (identity: GrainReferenceIdentity) => unknown;
@@ -62,6 +121,67 @@ export class CircularReferenceError extends Error {
     );
     this.name = "CircularReferenceError";
   }
+}
+
+/**
+ * Thrown by `encodeValue` for a value it has no faithful way to represent —
+ * a `RegExp` (its compiled pattern state has no serializable form here), a
+ * sparse array (a hole has no JSON/MessagePack analogue), or another exotic
+ * built-in (a function, a symbol, a `Promise`, a `WeakMap`/`WeakSet`, a raw
+ * `ArrayBuffer`/`DataView`). Issue #119: these previously fell through to the
+ * generic plain-object branch and were silently flattened to `{}` or `null`
+ * — this turns that silent corruption into a clear, immediate failure.
+ * Register a surrogate (`registerSurrogate`) for a type that genuinely needs
+ * to cross the wire.
+ */
+export class UnsupportedValueError extends Error {
+  constructor(
+    public readonly path: string,
+    public readonly reason: string,
+  ) {
+    super(
+      `encodeValue: cannot represent ${reason} at "${path}" (register a surrogate if it must cross the wire)`,
+    );
+    this.name = "UnsupportedValueError";
+  }
+}
+
+/**
+ * Thrown by `decodeValue` for an envelope stamped with a schema version newer
+ * than this build knows how to read. The stamp exists so a reader can tell
+ * shapes apart, and the only honest answer to "this shape is not one I have
+ * field rules for" is to refuse: decoding it with today's rules would hand the
+ * caller a value assembled from fields that mean something else, with nothing
+ * to say so. A build that bumps `CURRENT_VERSION` is therefore saying its
+ * payloads need the branch this error tells an older reader to add.
+ *
+ * Not registered in `knownErrors`: that table is closed over the classes
+ * `@thresh/core/errors` declares, and crossing a silo boundary as itself is not
+ * this error's job — it says a payload could not be read, and the read fails
+ * where it happened.
+ */
+export class UnsupportedSchemaVersionError extends Error {
+  constructor(
+    public readonly tag: string,
+    public readonly version: number,
+    public readonly supportedVersion: number,
+  ) {
+    super(
+      `decodeValue: "${tag}" envelope is stamped schema version ${version}, but this build decodes version ${supportedVersion}`,
+    );
+    this.name = "UnsupportedSchemaVersionError";
+  }
+}
+
+/**
+ * The schema version an envelope was written with: its stamped `V`, or 1 for a
+ * payload written before the field existed. Anything else parked under `V` is
+ * read as 1 as well — the stamp selects a decode shape, so a value that is not a
+ * version is not a way for a payload to opt out of being read.
+ */
+function versionOf(envelope: Record<string, unknown>): number {
+  const stamped = envelope[V];
+  return typeof stamped === "number" && Number.isInteger(stamped) && stamped >= 1 ? stamped : 1;
 }
 
 /**
@@ -161,16 +281,16 @@ registerKnownError(
 registerKnownError("TransactionsDisabledError", TransactionsDisabledError, (m) =>
   withMessage(new TransactionsDisabledError(), m),
 );
-registerKnownError(
-  "InconsistentStateError",
-  InconsistentStateError,
-  (m, p) =>
-    new InconsistentStateError(
-      m,
-      p.expectedEtag as string | undefined,
-      p.storedEtag as string | undefined,
-    ),
-);
+registerKnownError("InconsistentStateError", InconsistentStateError, (m, p) => {
+  const error = new InconsistentStateError(
+    m,
+    p.expectedEtag as string | undefined,
+    p.storedEtag as string | undefined,
+  );
+  // Absent (an older sender) reads as the constructor default, `true`.
+  if (p.isSourceActivation === false) error.isSourceActivation = false;
+  return error;
+});
 registerKnownError("TransactionAbortedError", TransactionAbortedError, (m, p) =>
   withMessage(new TransactionAbortedError(p.transactionId as string, ""), m),
 );
@@ -194,6 +314,11 @@ registerKnownError("TransactionInDoubtError", TransactionInDoubtError, (m, p) =>
 );
 registerKnownError("CircularReferenceError", CircularReferenceError, (m, p) =>
   withMessage(new CircularReferenceError(p.path as string), m),
+);
+registerKnownError(
+  "UnsupportedValueError",
+  UnsupportedValueError,
+  (m, p) => new UnsupportedValueError(p.path as string, p.reason as string),
 );
 
 // JavaScript's built-in error classes, the analogue of Orleans rebuilding the `System.*` namespace
@@ -386,6 +511,26 @@ function encodeInner(
     // Binary (e.g. a Message body) passes through unless the caller's transport cannot carry it.
     return options.binaryAsBase64 ? tagged("bytes", { value: bytesToBase64(value) }) : value;
   }
+  // Every other TypedArray kind (issue #119): `ArrayBuffer.isView` also matches `DataView`, which
+  // has no element type to decode elements as, so that one falls through instead — the generic
+  // object branch far below rejects it as unrepresentable, same as a raw `ArrayBuffer`.
+  if (ArrayBuffer.isView(value) && !(value instanceof DataView)) {
+    // The built-in base kind, not `constructor.name`: a subclass (`class Samples extends
+    // Float64Array`) would otherwise stamp a kind no decoder can resolve.
+    const kind = typedArrayKind(value);
+    const source = value as unknown as ArrayLike<number | bigint>;
+    const values: unknown[] = [];
+    for (let i = 0; i < source.length; i++) {
+      values.push(encodeElement(source[i] as number | bigint, seen, `${path}[${i}]`, options));
+    }
+    return tagged("typedArray", { kind, values });
+  }
+  // `Object.is(-0, 0)` is false but `-0 === 0` is true and `JSON.stringify(-0) === "0"` — a plain
+  // number loses the sign of zero on both transports (MessagePack's own integer fast path does
+  // too), so it needs the same explicit tagging as any other runtime type this codec preserves
+  // exactly. Nested occurrences (inside an object, an array, a typed array) hit this same check via
+  // the `encodeInner`/`encodeElement` recursion, so they are covered without a branch of their own.
+  if (typeof value === "number" && Object.is(value, -0)) return tagged("negZero", {});
   if (value instanceof Date) return tagged("date", { value: value.getTime() });
   if (typeof value === "bigint") return tagged("bigint", { value: value.toString() });
   if (value instanceof Guid) return tagged("guid", { value: value.toString() });
@@ -457,6 +602,22 @@ function encodeInner(
     }
   }
 
+  // Issue #119: built-ins with no faithful plain-object form. Each one has no (or the wrong)
+  // enumerable own properties, so without this check the generic object/other branches further
+  // down would silently flatten it to `{}` (a RegExp, a Promise, a WeakMap/WeakSet) or hand back
+  // the live reference unchanged (a function, a symbol) — neither of which is what was sent.
+  // Checked AFTER `findSurrogate`, so a caller with a genuine need to carry one of these (the
+  // remedy `UnsupportedValueError`'s own message names) can register a surrogate for it; the
+  // default, with none registered, is to fail loudly.
+  if (value instanceof RegExp) throw new UnsupportedValueError(path, "a RegExp");
+  if (value instanceof Promise) throw new UnsupportedValueError(path, "a Promise");
+  if (value instanceof WeakMap) throw new UnsupportedValueError(path, "a WeakMap");
+  if (value instanceof WeakSet) throw new UnsupportedValueError(path, "a WeakSet");
+  if (value instanceof ArrayBuffer) throw new UnsupportedValueError(path, "an ArrayBuffer");
+  if (value instanceof DataView) throw new UnsupportedValueError(path, "a DataView");
+  if (typeof value === "function") throw new UnsupportedValueError(path, "a function");
+  if (typeof value === "symbol") throw new UnsupportedValueError(path, "a symbol");
+
   if (value instanceof Map) {
     if (seen.has(value)) throw new CircularReferenceError(path);
     seen.add(value);
@@ -484,6 +645,13 @@ function encodeInner(
   }
   if (Array.isArray(value)) {
     if (seen.has(value)) throw new CircularReferenceError(path);
+    // A hole (`[1, , 3]`) has no JSON/MessagePack analogue — `Array.prototype.map` skips the
+    // callback for it but preserves the hole in its result, so without this check it would
+    // silently reach the wire as `null` (issue #119) rather than as the index that was empty.
+    for (let i = 0; i < value.length; i++) {
+      if (!(i in value))
+        throw new UnsupportedValueError(path, `a sparse array (index ${i} is a hole)`);
+    }
     seen.add(value);
     try {
       return value.map((v, i) => encodeElement(v, seen, `${path}[${i}]`, options));
@@ -572,6 +740,15 @@ export function decodeValue(value: unknown, ctx: CodecContext = {}): unknown {
   const obj = value as Record<string, unknown>;
   const tag = obj[T];
   if (typeof tag === "string") {
+    // The version gate: a payload from a newer build, stamped with a version this one has no field
+    // rules for. Applying today's layout to it would produce a wrong value silently, so refuse.
+    // Scoped deliberately to tags whose shape this build KNOWS (`builtInTags`, or a registered
+    // surrogate) — an unknown tag has no rules to apply and so cannot be misread; it keeps
+    // degrading to a plain object below, exactly as the newer-build case there describes.
+    const version = versionOf(obj);
+    if (version > CURRENT_VERSION && (builtInTags.has(tag) || surrogates.has(tag))) {
+      throw new UnsupportedSchemaVersionError(tag, version, CURRENT_VERSION);
+    }
     switch (tag) {
       case "bigint":
         return BigInt(obj.value as string);
@@ -592,6 +769,20 @@ export function decodeValue(value: unknown, ctx: CodecContext = {}): unknown {
       case "undefined":
         // The top-level absent value `encodeValue` tags; see the note there.
         return undefined;
+      case "negZero":
+        return -0;
+      case "typedArray": {
+        const kind = obj.kind as string;
+        const ctor = TYPED_ARRAY_CTORS[kind];
+        if (ctor === undefined) {
+          throw new Error(`decodeValue: unknown typed array kind "${kind}"`);
+        }
+        if (!Array.isArray(obj.values)) {
+          throw new Error(`decodeValue: malformed typed array envelope (kind "${kind}")`);
+        }
+        const values = obj.values.map((v) => decodeValue(v, ctx));
+        return new ctor(values as (number | bigint)[]);
+      }
       case "domException":
         return new DOMException(obj.message as string, obj.name as string);
       case "callAborted":

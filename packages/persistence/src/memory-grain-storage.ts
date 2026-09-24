@@ -31,11 +31,11 @@ export class MemoryGrainStorage implements GrainStorage {
   async write<T>(stateName: string, grainId: GrainId, state: StateHolder<T>): Promise<void> {
     const key = this.key(stateName, grainId);
     const stored = this.records.get(key);
-    if (stored !== undefined && stored.etag !== state.etag) {
+    if (this.isConflict(stored, state.etag)) {
       throw new InconsistentStateError(
         `etag conflict writing ${stateName} for ${grainId.toString()}`,
         state.etag,
-        stored.etag,
+        stored?.etag,
       );
     }
     const etag = String(++this.etagCounter);
@@ -47,16 +47,28 @@ export class MemoryGrainStorage implements GrainStorage {
   async clear<T>(stateName: string, grainId: GrainId, state: StateHolder<T>): Promise<void> {
     const key = this.key(stateName, grainId);
     const stored = this.records.get(key);
-    if (stored !== undefined && stored.etag !== state.etag) {
+    if (this.isConflict(stored, state.etag)) {
       throw new InconsistentStateError(
         `etag conflict clearing ${stateName} for ${grainId.toString()}`,
         state.etag,
-        stored.etag,
+        stored?.etag,
       );
     }
     this.records.delete(key);
     state.etag = undefined;
     state.exists = false;
+  }
+
+  /**
+   * Mirrors Orleans' `MemoryStorageGrain.ValidateEtag`: a caller's etag must
+   * match the stored one when a record exists. When it does not, a blank
+   * caller etag is a legitimate first write, but a non-empty one is a
+   * conflict (issue #109) — the record can only have gone missing by being
+   * cleared or resurrected under someone else's nose, and the caller's stale
+   * etag says it does not know that.
+   */
+  private isConflict(stored: Record | undefined, expected: string | undefined): boolean {
+    return stored !== undefined ? stored.etag !== expected : Boolean(expected);
   }
 
   private key(stateName: string, grainId: GrainId): string {

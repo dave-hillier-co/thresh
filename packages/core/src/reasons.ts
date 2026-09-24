@@ -6,7 +6,15 @@ export type DeactivationReasonCode =
   | "idle"
   | "migrating"
   | "application-requested"
-  | "runtime-requested";
+  | "runtime-requested"
+  /**
+   * A grain let an `InconsistentStateError` escape from its own activation
+   * (Orleans' `DeactivationReasonCode.ApplicationError`,
+   * `InsideRuntimeClient.cs:326`): rather than leave a stale/duplicate
+   * activation stuck, the runtime deactivates it so the next call gets a
+   * fresh one.
+   */
+  | "application-error";
 
 /** Why an activation is being deactivated, mirroring Orleans' DeactivationReason. */
 export interface DeactivationReason {
@@ -28,6 +36,7 @@ const REASON_CODE_LABELS: Record<DeactivationReasonCode, string> = {
   migrating: "Migrating",
   "application-requested": "ApplicationRequested",
   "runtime-requested": "RuntimeRequested",
+  "application-error": "ApplicationError",
 };
 
 /** Format a `DeactivationReason` the way upstream's `DeactivationReason.ToString()` does. */
