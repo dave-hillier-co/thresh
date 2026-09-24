@@ -280,7 +280,18 @@ export class SiloHost {
     this.membershipWatch?.abort();
     rebalancerWorker?.stop();
     reminderService?.stop();
-    await this.runHooks(onBeforeDeactivate);
+    // Contained, unlike `onStop`: these run before the drain, so one failing
+    // provider stop must not skip deactivating every activation, closing the
+    // transport and the rest of the teardown (Orleans logs a lifecycle stage
+    // that fails to stop and carries on stopping).
+    const logger = this.parts.logger ?? noopLogger;
+    for (const hook of onBeforeDeactivate ?? []) {
+      try {
+        await hook();
+      } catch (error) {
+        logger.error("pre-deactivation stop hook failed", { error });
+      }
+    }
     // `selfProbeWorker` keeps ticking through `shutdown.drain()`'s grace
     // period rather than stopping here alongside the other workers: it reads
     // `HealthCheck.isDraining()` to no-op its own flip once `drain()` sets

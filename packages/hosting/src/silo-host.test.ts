@@ -54,4 +54,23 @@ describe("SiloHost.stop ordering (issue #108)", () => {
       "onStop",
     ]);
   });
+
+  it("still drains the node and runs onStop when an onBeforeDeactivate hook throws", async () => {
+    // These hooks now run FIRST: a provider whose stop() fails must not skip
+    // deactivating every activation, closing transport and the onStop teardown
+    // (Orleans logs a failed lifecycle stop and carries on stopping).
+    const order: string[] = [];
+    const host = buildHost(order, [
+      async () => {
+        throw new Error("provider stop failed");
+      },
+      async () => {
+        order.push("durable job manager stop");
+      },
+    ]);
+
+    await host.stop();
+
+    expect(order).toEqual(["durable job manager stop", "node.stop (deactivateAll)", "onStop"]);
+  });
 });
