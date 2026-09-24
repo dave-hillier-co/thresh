@@ -20,6 +20,9 @@ class MigratableGrain extends Grain {
     const c = ctx.get<number>("count");
     if (c !== undefined) this.count = c;
   }
+  async waitFor(gate: Promise<void>): Promise<void> {
+    await gate;
+  }
   async bump(by: number): Promise<number> {
     this.count += by;
     return this.count;
@@ -61,6 +64,48 @@ describe("activation migration mechanics", () => {
     const { activation } = makeActivation(5);
     const bag = await activation.dehydrate();
     expect(bag).toEqual({ count: 5 });
+  });
+
+  it("does not run a call queued behind the dehydrate turn on the source (GH #91)", async () => {
+    const { activation, grain } = makeActivation(5);
+    const dehydrating = activation.dehydrate();
+    // Queued while the dehydrate turn is pending: it passed the pre-schedule
+    // check, but must not mutate state that has already been handed off.
+    const queued = activation.invoke(bump(1));
+    let outcome: unknown = "pending";
+    void queued.then(
+      (v) => (outcome = v),
+      (e: unknown) => (outcome = e),
+    );
+    const bag = await dehydrating;
+    expect(bag).toEqual({ count: 5 });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(grain.count).toBe(5);
+    expect(outcome).toBe("pending"); // held until the migration settles
+
+    activation.finalizeDeactivation();
+    await expect(queued).rejects.toMatchObject({ name: "RejectionError", kind: "noActivation" });
+    expect(grain.count).toBe(5);
+  });
+
+  it("does not run a call queued ahead of a deactivation's onDeactivate turn (GH #91)", async () => {
+    const { activation, grain } = makeActivation(5);
+    await activation.invoke(bump(0)); // fully activated
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const running = activation.invoke({ ...bump(0), method: "waitFor", args: [gate] });
+    await new Promise((r) => setTimeout(r, 0)); // let its turn start
+    const queued = activation.invoke({ ...bump(1), reentrancyId: "r2" }); // queued behind it
+    const queuedOutcome = expect(queued).rejects.toMatchObject({
+      name: "RejectionError",
+      kind: "noActivation",
+    });
+    const deactivating = activation.deactivate({ code: "shutting-down", description: "test" });
+    release();
+    await running;
+    await deactivating;
+    await queuedOutcome;
+    expect(grain.count).toBe(5);
   });
 
   it("holds calls after dehydration and only rejects them as stale once the migration settles (GH #91)", async () => {

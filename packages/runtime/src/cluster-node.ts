@@ -2820,13 +2820,16 @@ export class ClusterNode {
     let moved = 0;
     for (const activation of candidates.slice(0, count)) {
       const accepted = await this.migrateActivationTo(activation, target);
-      if (accepted) {
+      // A dehydrated activation is deactivated whether or not the target took
+      // it (Orleans `FinishDeactivating`: a failed migration still completes
+      // the deactivation) — otherwise calls held on it would never be released.
+      if (accepted || activation.isDehydrated) {
         await activation.deactivate({
           code: "migrating",
-          description: "rebalanced to another silo",
+          description: accepted ? "rebalanced to another silo" : "rebalance migration failed",
         });
-        moved++;
       }
+      if (accepted) moved++;
     }
     return moved;
   }
@@ -2900,10 +2903,12 @@ export class ClusterNode {
     const activation = this.catalog.get(grainId);
     if (activation === undefined) return false;
     const accepted = await this.migrateActivationTo(activation, target);
-    if (accepted) {
+    // See `migrateRandomActivations`: a dehydrated activation must be torn
+    // down even when the hand-off failed, or calls held on it never settle.
+    if (accepted || activation.isDehydrated) {
       await activation.deactivate({
         code: "migrating",
-        description: "repartitioned to another silo",
+        description: accepted ? "repartitioned to another silo" : "repartition migration failed",
       });
     }
     return accepted;

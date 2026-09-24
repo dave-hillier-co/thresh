@@ -103,4 +103,45 @@ describe("a remote caller reaching an activation mid-migration is held and rerou
       await Promise.all(nodes.map((n) => n.stop()));
     }
   });
+
+  it("does not strand later calls when the target refuses the migrated activation", async () => {
+    const gate = deferred();
+    gate.resolve();
+    onDeactivateGate = gate.promise;
+    const network = new InProcessNetwork();
+    const addresses = [silo(0), silo(1)];
+    const nodes = addresses.map(
+      (local) =>
+        new ClusterNode({
+          local,
+          clusterId: "c1",
+          membership: new StaticMembershipService(local, addresses),
+          transport: new InProcessTransport(network, "c1"),
+          random: () => 0,
+        }),
+    );
+    // Only silo-0 hosts the type, so silo-1 cannot accept the hand-off.
+    nodes[0]!.registerGrain(SlowMigrateGrain, { interfaces: [IWorker] });
+    await Promise.all(nodes.map((n) => n.start()));
+    try {
+      await nodes[0]!.getGrain(IWorker, "h").ping();
+      const moved = await nodes[0]!.migrateRandomActivations(addresses[1]!, 1);
+      expect(moved).toBe(0);
+
+      // Orleans deactivates a migrating activation whether or not the move
+      // succeeded, so held calls reroute to a fresh placement rather than
+      // waiting forever on a dehydrated activation nothing will finalize.
+      const call = nodes[0]!.getGrain(IWorker, "h").ping();
+      const outcome = await Promise.race([
+        call.then(
+          (v) => `resolved:${String(v)}`,
+          (e: unknown) => `rejected:${String(e)}`,
+        ),
+        new Promise((r) => setTimeout(() => r("hung"), 200)),
+      ]);
+      expect(outcome).toBe("resolved:ok");
+    } finally {
+      await Promise.all(nodes.map((n) => n.stop()));
+    }
+  });
 });

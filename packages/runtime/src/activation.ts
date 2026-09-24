@@ -122,6 +122,13 @@ function parseNamespaceKey(key: string): [namespace: string, key: string] {
 }
 
 /**
+ * Thrown from inside a call's turn when the activation turned out to be
+ * deactivating or migrating by the time the turn ran; `invoke` catches it
+ * once the turn has ended and holds the call for a reroute (never escapes).
+ */
+const HOLD_FOR_REROUTE: unique symbol = Symbol("hold-for-reroute");
+
+/**
  * The runtime's per-grain bookkeeping object and the grain's `GrainContext`.
  * It owns the turn scheduler and drives the activation lifecycle.
  */
@@ -381,23 +388,24 @@ export class ActivationData implements GrainContext {
         args: req.args,
         ...(signal !== undefined ? { signal } : {}),
         run: () => {
-          // Re-checked here (rather than relying solely on the pre-schedule
-          // check above): a call already QUEUED behind the very turn that
-          // fails activation (`beginActivate`'s `onActivate` turn, or its
-          // `deactivateRequestedDuringActivation` turn) saw "activating" at
-          // schedule time, before either flag was set — this is the only way
-          // `state` can still reach "invalid" here, since an ordinary
-          // deactivation/migration is always caught pre-schedule instead (see
-          // above) and never leaves a turn queued behind it in that state.
-          if (this.state === "invalid") {
+          // Re-checked here as well as pre-schedule: a call queued behind a
+          // turn that changes this activation's fate saw "valid"/"activating"
+          // at schedule time. That turn may have failed activation
+          // (`onActivate` threw, or `deactivateRequestedDuringActivation`) —
+          // rejected outright, as Orleans does — or dehydrated it for
+          // migration, or it was queued ahead of a deactivation's
+          // `onDeactivate` turn (shutdown's `deactivateAll`, the rebalancer).
+          // Those must not run here (a dehydrated activation's state has
+          // already been handed off, so running would lose the write) and are
+          // held instead — but the hold happens AFTER this turn ends (see the
+          // `.catch` below), never inside it, for the deadlock reason given
+          // on the pre-schedule check.
+          if (this.state === "invalid" || this.state === "deactivating" || this.dehydrated) {
             if (this.didFailActivation) throw this.activationFailure;
             if (this.neverActivated) {
               throw new GrainCallError(`activation unavailable: ${this.id.toString()}`);
             }
-            throw new RejectionError(
-              `activation unavailable: ${this.id.toString()}`,
-              "noActivation",
-            );
+            throw HOLD_FOR_REROUTE;
           }
           // A fresh, mutable copy of the incoming headers so `requestContext.set`
           // during the turn does not mutate the caller's bag but does flow to
@@ -427,6 +435,10 @@ export class ActivationData implements GrainContext {
             ? invocation
             : invocation.finally(restoreReadOnlyGuard);
         },
+      })
+      .catch((err: unknown) => {
+        if (err === HOLD_FOR_REROUTE) return this.rerouteOrReject();
+        throw err;
       })
       .finally(() => {
         this.touch();
@@ -730,6 +742,11 @@ export class ActivationData implements GrainContext {
     this.migrationRequestContext = store !== undefined ? { ...store } : undefined;
   }
 
+  /** Whether `dehydrate` has run: its state has been handed off and it must not serve calls again. */
+  get isDehydrated(): boolean {
+    return this.dehydrated;
+  }
+
   get wantsMigration(): boolean {
     return this.migrationRequested;
   }
@@ -737,7 +754,8 @@ export class ActivationData implements GrainContext {
   /**
    * Gather the activation's in-memory state into a transport-safe bag by running
    * each migration participant's `onDehydrate` on a turn. Marks the activation
-   * dehydrated so no further calls run here — they re-resolve to the new host.
+   * dehydrated so no further calls run here — they are held until the move
+   * settles, then re-resolve to the new host.
    *
    * Wrapped in a `Dehydrate` span (Lifecycle source) ONLY when the activation
    * actually has migration participants — a grain with none (or one that
