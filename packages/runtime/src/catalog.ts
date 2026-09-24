@@ -455,6 +455,12 @@ export class Catalog {
       if (!a.scheduler.busy) return a;
     }
     if (list.length < maxLocalWorkers) {
+      // Same gate as `createAndStore`: a worker created once `deactivateAll`
+      // has snapshotted would be dropped by its `clear()` without its
+      // `onDeactivate` ever running.
+      if (this.stopping) {
+        throw new RejectionError(`silo stopping: cannot activate ${id.toString()}`, "siloDraining");
+      }
       const created = this.create(id);
       list.push(created);
       return created;
