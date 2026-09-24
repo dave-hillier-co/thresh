@@ -1624,10 +1624,12 @@ export class SiloBuilder {
       if (filter !== undefined) provider.setStreamFilter(filter);
       // Cancel every stream's inactivity timer on shutdown so none leak past
       // this silo's lifetime (a leaked `setTimeout`/fake-clock timer would
-      // otherwise hang a test worker) — stopped before deactivateAll, or it
-      // keeps delivering into activations that are (or are about to be)
-      // deactivating.
-      this.preDeactivateClosers.push(async () => provider.stop());
+      // otherwise hang a test worker). Unlike the pulling providers this
+      // stays AFTER deactivation: `stop()` here only cancels timers (there is
+      // no agent to stop — delivery is a direct push on `publish`), and a
+      // publish from an `onDeactivate` hook re-arms one, so stopping earlier
+      // would leak exactly the timer this is here to cancel.
+      this.closers.push(async () => provider.stop());
     }
 
     // Backs `GrainFactoryAccess.createObjectReference` for startup tasks:
