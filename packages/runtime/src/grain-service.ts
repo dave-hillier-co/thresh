@@ -1,4 +1,5 @@
 import type { GrainInterface } from "@thresh/core/grain-interface";
+import { noopLogger, type Logger } from "@thresh/core/logger";
 
 /**
  * Lifecycle phase of a {@link GrainService} instance (Orleans
@@ -38,6 +39,13 @@ export enum GrainServiceStatus {
 export abstract class GrainService {
   status: GrainServiceStatus = GrainServiceStatus.Booting;
   private readonly extensions = new Map<number, object>();
+  /**
+   * Sink for a `startInBackground()` rejection (see `start()`). A subclass
+   * that wants those reported may override; the base default discards them,
+   * matching the pre-existing (silent) behaviour for anyone who never
+   * overrides `startInBackground()` — which raises nothing.
+   */
+  protected logger: Logger = noopLogger;
 
   /**
    * Invoked once at silo startup, before `start()`. Override to run setup;
@@ -53,7 +61,14 @@ export abstract class GrainService {
    */
   start(): void {
     this.status = GrainServiceStatus.Started;
-    void this.startInBackground();
+    // Orleans does `StartInBackground().Ignore()` (GrainService.cs:95) — fire
+    // it without awaiting, but LOG a rejection rather than dropping it,
+    // matching upstream's "seen, not silent". Under Node's default an
+    // un-awaited, un-caught rejection here would otherwise crash the whole
+    // process rather than just this one background warm-up failing.
+    Promise.resolve(this.startInBackground()).catch((error: unknown) => {
+      this.logger.error("grain service startInBackground failed", { error });
+    });
   }
 
   /**
