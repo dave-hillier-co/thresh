@@ -1,6 +1,6 @@
 import * as os from "node:os";
 import { setupDepth } from "@thresh/core/define-grain";
-import { GrainCallError } from "@thresh/core/errors";
+import { GrainCallError, RejectionError } from "@thresh/core/errors";
 import type { Grain } from "@thresh/core/grain";
 import type { GrainClass } from "@thresh/core/grain-class";
 import type { IncomingGrainCallFilter } from "@thresh/core/grain-call-filter";
@@ -160,6 +160,14 @@ export interface CatalogOptions {
 
 /** Registry of live activations on this silo, keyed by grain id. */
 export class Catalog {
+  /**
+   * Set once `deactivateAll` starts (silo shutdown) — Orleans only creates
+   * new activations while `SiloStatus.Active` (`Catalog.cs` ~150); once this
+   * silo is stopping, `getOrActivate` refuses to create rather than handing
+   * out an activation `deactivateAll` has already swept past, which would
+   * otherwise never be deactivated or unregistered (issue #108).
+   */
+  private stopping = false;
   private readonly activations = new Map<string, ActivationData>();
   /**
    * `[StatelessWorker]` grain ids may have MULTIPLE local activations
@@ -253,11 +261,27 @@ export class Catalog {
     const existing = this.activations.get(key);
     if (existing !== undefined && existing.state !== "invalid") {
       if (!existing.deactivationRequestedAndIdle) return Promise.resolve(existing);
-      return this.finalizeStale(key, existing).then(() => {
-        const created = this.create(id, activationId, rehydrationBag, sourceAddr);
-        this.activations.set(key, created);
-        return created;
-      });
+      return this.finalizeStale(key, existing).then(() => this.createAndStore(key, id, activationId, rehydrationBag, sourceAddr));
+    }
+    return this.createAndStore(key, id, activationId, rehydrationBag, sourceAddr);
+  }
+
+  /**
+   * Create a fresh activation and store it — refusing while this silo is
+   * stopping (see `stopping`) instead of handing out one `deactivateAll` may
+   * never see and deactivate.
+   */
+  private createAndStore(
+    key: string,
+    id: GrainId,
+    activationId?: string,
+    rehydrationBag?: Record<string, unknown>,
+    sourceAddr?: GrainAddress,
+  ): Promise<ActivationData> {
+    if (this.stopping) {
+      return Promise.reject(
+        new RejectionError(`silo stopping: cannot activate ${id.toString()}`, "siloDraining"),
+      );
     }
     const created = this.create(id, activationId, rehydrationBag, sourceAddr);
     this.activations.set(key, created);
@@ -628,6 +652,11 @@ export class Catalog {
   }
 
   async deactivateAll(reason: DeactivationReason): Promise<void> {
+    // Set BEFORE snapshotting: `getOrActivate` is synchronous up to its first
+    // await, so this is visible to every subsequent call — including one
+    // already racing this one — before it can create and store an activation
+    // this sweep's snapshot has already missed.
+    this.stopping = true;
     const all = [...this.activations.values(), ...[...this.workerActivations.values()].flat()];
     await Promise.all(all.map((a) => a.deactivate(reason)));
     this.activations.clear();
