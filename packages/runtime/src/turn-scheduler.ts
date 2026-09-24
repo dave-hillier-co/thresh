@@ -96,6 +96,8 @@ interface QueuedTurn {
 interface RunningTurn {
   options: InvokeMethodOptions;
   reentrancyId: string | undefined;
+  method: string | undefined;
+  args: readonly unknown[] | undefined;
 }
 
 /**
@@ -105,16 +107,26 @@ interface RunningTurn {
  * - nothing running          -> admit
  * - fully reentrant grain     -> admit
  * - `alwaysInterleave`        -> admit
- * - `readOnly` and all running read-only -> admit
+ * - no blocking turn running (only `alwaysInterleave` turns are running) -> admit
+ * - `readOnly` and the blocking turn is also `readOnly` -> admit
  * - reentrancy id is an active call-chain section -> admit
- * - a configured `mayInterleave` predicate matches -> admit
+ * - a configured `mayInterleave` predicate matches the incoming turn OR the
+ *   blocking turn -> admit
  * - otherwise                 -> queue (FIFO for exclusive turns)
+ *
+ * "The blocking turn" is the one running turn (there is at most one, absent a
+ * matching `mayInterleave`/reentrancy admission) that is not `alwaysInterleave`
+ * — Orleans' `_blockingRequest` (`ActivationData.RecordRunning`/`MayInvokeRequest`).
+ * A running `alwaysInterleave` turn never becomes the blocking turn, so it
+ * never blocks anything else from being admitted.
  */
 export class TurnScheduler {
   private readonly reentrant: boolean;
   private mayInterleavePredicate: MayInterleavePredicate | undefined;
   private readonly queue: QueuedTurn[] = [];
   private readonly running = new Set<RunningTurn>();
+  /** Orleans' `_blockingRequest`: the one running turn that isn't `alwaysInterleave`. */
+  private blockingTurn: RunningTurn | undefined;
   private readonly reentrantSections = new Map<string, number>();
   private readonly barrierFirstTurn: boolean;
   private firstTurnSeen = false;
@@ -209,31 +221,31 @@ export class TurnScheduler {
     if (this.barrierFirstTurn && !this.firstTurnSettled) return false;
     if (this.reentrant) return true;
     if (turn.options.alwaysInterleave) return true;
-    if (turn.options.readOnly && this.allRunningReadOnly()) return true;
+    // No blocking turn running (only `alwaysInterleave` turns, if any) -> admit.
+    if (this.blockingTurn === undefined) return true;
+    if (turn.options.readOnly && this.blockingTurn.options.readOnly) return true;
     if (turn.reentrancyId !== undefined && this.reentrantSections.has(turn.reentrancyId)) {
       return true;
     }
-    if (this.mayInterleavePredicate !== undefined && this.matchesMayInterleave(turn)) {
+    if (
+      this.mayInterleavePredicate !== undefined &&
+      (this.matchesMayInterleave(turn.method, turn.args) ||
+        this.matchesMayInterleave(this.blockingTurn.method, this.blockingTurn.args))
+    ) {
       return true;
     }
     return false;
   }
 
-  private allRunningReadOnly(): boolean {
-    for (const r of this.running) {
-      if (!r.options.readOnly) return false;
-    }
-    return true;
-  }
-
   /**
-   * True when the grain's `mayInterleave` predicate admits the *incoming* turn
-   * (Orleans evaluates `[MayInterleave]` on the arriving request only — the
-   * request itself declares whether it is safe to interleave with whatever is
-   * running, not the other way around).
+   * True when the grain's `mayInterleave` predicate admits `method`/`args`.
+   * Orleans evaluates `[MayInterleave]` on the incoming request OR the
+   * currently-blocking request (`canInterleave.MayInterleave(incoming) ||
+   * canInterleave.MayInterleave(_blockingRequest)`) — either side declaring
+   * itself safe to interleave is enough.
    */
-  private matchesMayInterleave(turn: Turn<unknown>): boolean {
-    return turn.method !== undefined && this.mayInterleavePredicate!(turn.method, turn.args ?? []);
+  private matchesMayInterleave(method: string | undefined, args: readonly unknown[] | undefined): boolean {
+    return method !== undefined && this.mayInterleavePredicate!(method, args ?? []);
   }
 
   private start(item: QueuedTurn): void {
@@ -247,11 +259,19 @@ export class TurnScheduler {
     const running: RunningTurn = {
       options: item.turn.options,
       reentrancyId: item.turn.reentrancyId,
+      method: item.turn.method,
+      args: item.turn.args,
     };
     const isFirstTurn = !this.firstTurnSeen;
     this.firstTurnSeen = true;
     this.running.add(running);
     if (running.reentrancyId !== undefined) this.enterSection(running.reentrancyId);
+    // Orleans' RecordRunning: the first non-`alwaysInterleave` turn to start
+    // while none is blocking becomes `_blockingRequest`, and stays so until it
+    // (specifically) completes — even if other turns interleave after it.
+    if (this.blockingTurn === undefined && !running.options.alwaysInterleave) {
+      this.blockingTurn = running;
+    }
     const watchdog = this.armStuckTurnWatchdog(item.turn);
 
     Promise.resolve()
@@ -261,6 +281,7 @@ export class TurnScheduler {
         if (watchdog !== undefined) this.time.clearTimer(watchdog);
         this.running.delete(running);
         if (running.reentrancyId !== undefined) this.leaveSection(running.reentrancyId);
+        if (this.blockingTurn === running) this.blockingTurn = undefined;
         if (isFirstTurn) this.firstTurnSettled = true;
         this.pump();
       });

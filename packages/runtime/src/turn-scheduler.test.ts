@@ -154,6 +154,36 @@ describe("TurnScheduler", () => {
     w.resolve();
   });
 
+  it("admits an exclusive turn while only an alwaysInterleave turn runs (no blocking request)", async () => {
+    // Mirrors ActivationData.MayInvokeRequest: RecordRunning never sets
+    // _blockingRequest for an IsAlwaysInterleave message, so with only an
+    // alwaysInterleave turn running, _blockingRequest is null and an
+    // incoming exclusive turn is admitted rather than queued.
+    const sched = new TurnScheduler();
+    const log: string[] = [];
+    const ai = deferred();
+    void sched.schedule({
+      options: { alwaysInterleave: true },
+      run: async () => {
+        log.push("ai:start");
+        await ai.promise;
+        log.push("ai:end");
+      },
+    });
+    await flush();
+    expect(log).toEqual(["ai:start"]);
+
+    void sched.schedule({
+      options: {},
+      run: async () => {
+        log.push("excl:start");
+      },
+    });
+    await flush();
+    expect(log).toEqual(["ai:start", "excl:start"]);
+    ai.resolve();
+  });
+
   it("admits a turn whose call-chain reentrancy id is already active", async () => {
     const sched = new TurnScheduler();
     const log: string[] = [];
@@ -457,6 +487,33 @@ describe("TurnScheduler", () => {
       w.resolve();
       await flush();
       expect(log).toEqual(["slow1:start", "slow1:end", "slow2:start"]);
+    });
+
+    it("admits an incoming turn that doesn't match the predicate when the running (blocking) turn does", async () => {
+      // Orleans: MayInvokeRequest returns canInterleave.MayInterleave(incoming)
+      // || canInterleave.MayInterleave(_blockingRequest) — either side matching
+      // is enough, not just the incoming request.
+      const sched = new TurnScheduler({ mayInterleave: (method) => method === "goFast" });
+      const log: string[] = [];
+      const w = deferred();
+      void sched.schedule({
+        options: {},
+        method: "goFast",
+        run: async () => {
+          log.push("fast:start");
+          await w.promise;
+        },
+      });
+      void sched.schedule({
+        options: {},
+        method: "goSlow",
+        run: async () => {
+          log.push("slow:start");
+        },
+      });
+      await flush();
+      expect(log).toEqual(["fast:start", "slow:start"]);
+      w.resolve();
     });
 
     it("leaves a scheduler with no configured predicate unaffected (existing behavior)", async () => {
