@@ -2820,13 +2820,18 @@ export class ClusterNode {
     let moved = 0;
     for (const activation of candidates.slice(0, count)) {
       const accepted = await this.migrateActivationTo(activation, target);
-      if (accepted) {
-        await activation.deactivate({
-          code: "migrating",
-          description: "rebalanced to another silo",
-        });
-        moved++;
-      }
+      // `migrateActivationTo` dehydrates unconditionally before attempting the
+      // send, which poisons every future call on this activation with
+      // "activation migrated" (`ActivationData.dehydrate`) whether or not the
+      // target actually took it over. Orleans' `StartMigrationAsync` returning
+      // false still continues deactivation (`ActivationData.cs` ~2092-2123)
+      // rather than leaving the activation live but rejecting forever, so this
+      // runs unconditionally too — only whether `moved` counts it differs.
+      await activation.deactivate({
+        code: "migrating",
+        description: accepted ? "rebalanced to another silo" : "failed migration to another silo",
+      });
+      if (accepted) moved++;
     }
     return moved;
   }
@@ -2900,12 +2905,13 @@ export class ClusterNode {
     const activation = this.catalog.get(grainId);
     if (activation === undefined) return false;
     const accepted = await this.migrateActivationTo(activation, target);
-    if (accepted) {
-      await activation.deactivate({
-        code: "migrating",
-        description: "repartitioned to another silo",
-      });
-    }
+    // See the matching comment in `migrateRandomActivations`: a failed
+    // migration must still continue into deactivation, since dehydrate()
+    // already poisoned this activation regardless of outcome.
+    await activation.deactivate({
+      code: "migrating",
+      description: accepted ? "repartitioned to another silo" : "failed migration to another silo",
+    });
     return accepted;
   }
 
