@@ -6,7 +6,10 @@ import { SiloAddress } from "@thresh/core/silo-address";
 import type { Catalog } from "@thresh/runtime/catalog";
 import type { GrainDirectory } from "@thresh/directory/grain-directory";
 import type { LocationCache } from "@thresh/directory/location-cache";
-import { DistributedDispatcher, type DistributedDispatcherDeps } from "@thresh/runtime/distributed-dispatcher";
+import {
+  DistributedDispatcher,
+  type DistributedDispatcherDeps,
+} from "@thresh/runtime/distributed-dispatcher";
 
 const local = new SiloAddress("silo-0", "uid-0", "silo-0:1");
 const winner = new SiloAddress("silo-1", "uid-1", "silo-1:1");
