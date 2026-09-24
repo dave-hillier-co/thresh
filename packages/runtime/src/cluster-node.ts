@@ -178,6 +178,12 @@ const DEFAULT_RECOVERY_RETENTION_MS = 60_000;
  * `scheduleRecoveryReArm`).
  */
 const DEFAULT_RECOVERY_RETRY_MS = 2_000;
+/**
+ * Default period between `DeploymentLoadPublisher`-style load pushes (Orleans
+ * `DeploymentLoadPublisherOptions.DEFAULT_DEPLOYMENT_LOAD_PUBLISHER_REFRESH_TIME`,
+ * also 1s) — see `scheduleLoadPublish`.
+ */
+const DEFAULT_LOAD_PUBLISH_INTERVAL_MS = 1_000;
 
 export interface ClusterNodeOptions {
   local: SiloAddress;
@@ -214,6 +220,13 @@ export interface ClusterNodeOptions {
   classSpecificCollectionAgeSeconds?: Readonly<Record<GrainType, number>>;
   /** How often the idle-collection sweep runs (defaults to 60s). */
   collectionIntervalSeconds?: number;
+  /**
+   * How often this silo pushes its load snapshot to every peer (Orleans
+   * `DeploymentLoadPublisherOptions.DeploymentLoadPublisherRefreshTime`,
+   * defaults to 1s). `0` disables the periodic push entirely — only the
+   * test-only `siloTestHooks()` forced pushes populate `remoteLoadStats` then.
+   */
+  loadPublishIntervalMs?: number;
   /**
    * Bind state before `onActivate` (provided by the hosting layer). `"rehydrate"`
    * mode binds facets without reading storage so migrated state is preserved.
@@ -500,12 +513,11 @@ export class ClusterNode {
   /**
    * A peer's last-pushed load snapshot, keyed by ring key (Orleans
    * `DeploymentLoadPublisher`'s subscriber cache, fed by
-   * `SiloStatisticsChangeNotification`). There is no periodic gossip timer
-   * here — a snapshot lands only when `publishLoadStats` pushes one, which
-   * `siloTestHooks()` does synchronously after every latch/unlatch (mirrors
-   * Orleans' test-only `PropagateStatisticsToCluster`, which forces an
-   * immediate `ForceRuntimeStatisticsCollection` rather than waiting for the
-   * next periodic interval).
+   * `SiloStatisticsChangeNotification`). Kept current by `scheduleLoadPublish`'s
+   * periodic push (`loadPublishIntervalMs`, default 1s); `siloTestHooks()` also
+   * forces an immediate push after every latch/unlatch (mirrors Orleans'
+   * test-only `PropagateStatisticsToCluster`/`ForceRuntimeStatisticsCollection`)
+   * so tests see a change without waiting for the next interval.
    */
   private readonly remoteLoadStats = new Map<
     string,
@@ -551,6 +563,9 @@ export class ClusterNode {
   /** Entries adopted by recovery passes, and source pull budgets exhausted (for metrics). */
   private recoveryAdopted = 0;
   private recoveryExhausted = 0;
+  private readonly loadPublishIntervalMs: number;
+  /** The pending `scheduleLoadPublish` re-arm, cleared on `stop()`. */
+  private loadPublishTimer: TimerHandle | undefined;
 
   /** Routes directory operations to the owning silo's partition over the transport. */
   private readonly transportPeer: DirectoryPeer = {
@@ -582,6 +597,7 @@ export class ClusterNode {
     this.recoveryBackoffMs = options.recovery?.backoffMs ?? DEFAULT_RECOVERY_BACKOFF_MS;
     this.recoveryRetentionMs = options.recovery?.retentionMs ?? DEFAULT_RECOVERY_RETENTION_MS;
     this.recoveryRetryMs = options.recovery?.retryMs ?? DEFAULT_RECOVERY_RETRY_MS;
+    this.loadPublishIntervalMs = options.loadPublishIntervalMs ?? DEFAULT_LOAD_PUBLISH_INTERVAL_MS;
     this.overloadDetector = new OverloadDetector(this.environmentStatistics, {
       ...DEFAULT_LOAD_SHEDDING_OPTIONS,
       ...options.loadShedding,
@@ -1187,9 +1203,18 @@ export class ClusterNode {
         ringBeforeJoin.isEmpty ? undefined : ringBeforeJoin.ownerOf(grainId),
       );
     }
+    // Orleans `DeploymentLoadPublisher.StartAsync`: publish once immediately, then on
+    // the recurring interval — so a freshly started silo doesn't wait a full period
+    // before peers see its load, and peers' loads are visible to it immediately too.
+    if (this.loadPublishIntervalMs > 0) {
+      void this.publishLoadStats();
+      this.scheduleLoadPublish();
+    }
   }
 
   async stop(): Promise<void> {
+    if (this.loadPublishTimer !== undefined) this.time.clearTimer(this.loadPublishTimer);
+    this.loadPublishTimer = undefined;
     // Nothing will consume a re-armed pull from here on.
     for (const reArm of this.recoveryReArms.values()) {
       if (reArm.timer !== undefined) this.time.clearTimer(reArm.timer);
@@ -2412,13 +2437,28 @@ export class ClusterNode {
   /**
    * Push this silo's current load snapshot (activation count + overloaded flag)
    * to every other active silo, as `system: "loadstats"` requests, and wait for
-   * all of them to land — the test-only stand-in for Orleans'
-   * `DeploymentLoadPublisher` periodic gossip, forced immediately (mirrors
-   * `PropagateStatisticsToCluster`'s `ForceRuntimeStatisticsCollection` call)
-   * so `IActivationCountBasedPlacementTestGrain.LatchOverloaded`/`LatchCpuUsage`
-   * are immediately visible to placement decisions on every other silo.
+   * all of them to land — Orleans' `DeploymentLoadPublisher.PublishStatistics`.
+   * Called periodically by `scheduleLoadPublish` and, in tests, forced
+   * immediately by `siloTestHooks()` after every latch/unlatch (mirrors
+   * Orleans' test-only `PropagateStatisticsToCluster`'s
+   * `ForceRuntimeStatisticsCollection` call) so
+   * `IActivationCountBasedPlacementTestGrain.LatchOverloaded`/`LatchCpuUsage`
+   * are immediately visible without waiting for the next interval.
    * Best-effort: an unreachable peer is skipped rather than failing the call.
    */
+  /**
+   * Re-arm the periodic push (Orleans `DeploymentLoadPublisher`'s
+   * `RegisterTimer`-driven `PublishStatistics`). Scheduled again as soon as the
+   * timer fires, independent of how long the push itself takes, so a slow or
+   * unreachable peer cannot stretch the interval; cleared in `stop()`.
+   */
+  private scheduleLoadPublish(): void {
+    this.loadPublishTimer = this.time.setTimer(() => {
+      this.scheduleLoadPublish();
+      void this.publishLoadStats();
+    }, this.loadPublishIntervalMs);
+  }
+
   async publishLoadStats(): Promise<void> {
     const peers = activeSilos(this.options.membership.current()).filter(
       (s) => !s.equals(this.options.local),

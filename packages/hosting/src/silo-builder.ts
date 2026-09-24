@@ -179,6 +179,12 @@ export interface SiloConfig {
   defaultPlacementStrategy?: PlacementStrategy;
   /** How often the idle-collection sweep runs (defaults to 60s). */
   collectionIntervalSeconds?: number;
+  /**
+   * How often this silo pushes its load snapshot to every peer (Orleans
+   * `DeploymentLoadPublisherOptions.DeploymentLoadPublisherRefreshTime`,
+   * defaults to 1s); see `ClusterNodeOptions.loadPublishIntervalMs`.
+   */
+  loadPublishIntervalMs?: number;
   /** Injectable RNG for deterministic placement in examples/tests. */
   random?: () => number;
   /** How often each silo re-reads its reminder ranges from the table (defaults to 60s). */
@@ -1361,6 +1367,9 @@ export class SiloBuilder {
         : {}),
       ...(this.config.collectionIntervalSeconds !== undefined
         ? { collectionIntervalSeconds: this.config.collectionIntervalSeconds }
+        : {}),
+      ...(this.config.loadPublishIntervalMs !== undefined
+        ? { loadPublishIntervalMs: this.config.loadPublishIntervalMs }
         : {}),
       ...(this.config.defaultResponseTimeout !== undefined
         ? { defaultResponseTimeoutMs: durationToMs(this.config.defaultResponseTimeout) }

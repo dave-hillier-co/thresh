@@ -244,4 +244,40 @@ describe("cross-silo load-aware placement", () => {
       await cluster.dispose();
     }
   });
+
+  /**
+   * Without any test-hook-forced push, a peer's load must still become visible
+   * on its own — the periodic `DeploymentLoadPublisher`-style publisher
+   * (`scheduleLoadPublish`), not just the latch/unlatch hooks the tests above
+   * lean on. A tiny `loadPublishIntervalMs` stands in for the real 1s default
+   * so the test doesn't wait a full period.
+   */
+  it("learns a peer's load from the periodic publisher alone, with no test hook forcing it", async () => {
+    const cluster = await TestCluster.start({
+      clusterId: "cp-periodic",
+      initialSilos: 2,
+      random: () => 0,
+      loadPublishIntervalMs: 10,
+      siloMetadata: ({ index }) => ({ role: roleOf(index) }),
+      grains: [
+        { ctor: PowerOfKGrain, interfaces: [IPowerOfK] },
+        { ctor: SeedGrain, interfaces: [ISeed] },
+      ],
+    });
+    try {
+      for (let i = 0; i < 5; i += 1)
+        await cluster.silos[1]!.host.getGrain(ISeed, `peer-${i}`).ping();
+      await cluster.silos[0]!.host.getGrain(ISeed, "local").ping();
+
+      // Give the periodic publisher a few intervals to land, with no forced push.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      await cluster.silos[0]!.host.getGrain(IPowerOfK, "x").ping();
+      const hosts = hostsOf(cluster, new GrainId("PowerOfK", "x"));
+      expect(hosts).toHaveLength(1);
+      expect(hosts[0]).toBe(cluster.silos[0]);
+    } finally {
+      await cluster.dispose();
+    }
+  });
 });

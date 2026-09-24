@@ -120,6 +120,14 @@ export interface TestClusterOptions {
   /** How often the idle-collection sweep runs on every silo (defaults to 60s). */
   collectionIntervalSeconds?: number;
   /**
+   * How often every silo pushes its load snapshot to its peers (Orleans
+   * `DeploymentLoadPublisherOptions`, defaults to 1s). Lower it in a test that
+   * needs cross-silo load visibility without waiting a full period, or pass
+   * `0` to disable the periodic push and rely only on the test hooks'
+   * forced pushes.
+   */
+  loadPublishIntervalMs?: number;
+  /**
    * The shared transport network silos are built on. Defaults to a plain
    * `InProcessNetwork`; pass a subclass (e.g. one that counts messages) for
    * tests that need to observe traffic on the wire.
@@ -419,6 +427,9 @@ export class TestCluster {
         : {}),
       ...(this.options.collectionIntervalSeconds !== undefined
         ? { collectionIntervalSeconds: this.options.collectionIntervalSeconds }
+        : {}),
+      ...(this.options.loadPublishIntervalMs !== undefined
+        ? { loadPublishIntervalMs: this.options.loadPublishIntervalMs }
         : {}),
     })
       .useMembership(membership)
