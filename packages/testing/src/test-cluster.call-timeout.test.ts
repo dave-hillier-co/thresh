@@ -12,6 +12,7 @@ interface IGated extends GrainKey<string> {
 const IGated = defineGrainInterface<IGated>("IGated.testClusterCallTimeout");
 
 let runs = 0;
+let activations = 0;
 let notifyStarted!: () => void;
 let started!: Promise<void>;
 let release!: () => void;
@@ -19,6 +20,9 @@ let gate!: Promise<void>;
 
 @grain()
 class GatedGrain extends Grain implements IGated {
+  override async onActivate(): Promise<void> {
+    activations += 1;
+  }
   async run(): Promise<number> {
     runs += 1;
     notifyStarted();
@@ -55,6 +59,10 @@ describe("TestCluster callTimeout", () => {
 
       expect(await first).toBe(1);
       expect(await second).toBe(2);
+      // Served by the same activation it queued on: waiting on a busy turn
+      // for 40s is not "stuck" under Orleans' default MaxRequestProcessingTime
+      // (2h), so the activation is not deactivated and the call rerouted.
+      expect(activations).toBe(1);
     } finally {
       await cluster.dispose();
     }

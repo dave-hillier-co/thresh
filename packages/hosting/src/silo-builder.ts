@@ -237,7 +237,12 @@ export interface SiloConfig {
     maxEnqueuedRequestsSoftLimit?: number;
     /** Reject a newly scheduled turn once an activation's queue is at this length. Default 10,000. */
     maxEnqueuedRequestsHardLimit?: number;
-    /** Warn once a running turn exceeds this duration. Default 30s. */
+    /**
+     * Orleans `SiloMessagingOptions.MaxRequestProcessingTime`: a turn running
+     * longer than this is logged, and once a request is waiting behind it the
+     * activation is deactivated as stuck and its waiting requests rerouted.
+     * Default 2h, as upstream.
+     */
     maxRequestProcessingTime?: Duration;
   };
   /**
@@ -313,7 +318,14 @@ export interface SiloConfig {
  */
 const DEFAULT_MAX_ENQUEUED_REQUESTS_SOFT_LIMIT = 1_000;
 const DEFAULT_MAX_ENQUEUED_REQUESTS_HARD_LIMIT = 10_000;
-const DEFAULT_MAX_REQUEST_PROCESSING_TIME_MS = 30_000;
+/**
+ * Orleans `SiloMessagingOptions.DEFAULT_MAX_REQUEST_PROCESSING_TIME` (2h).
+ * Exceeding it deactivates the activation as stuck once a request waits on
+ * it, so it must stay well above any legitimate queueing time -- in
+ * particular above the call timeout, or a request merely queued behind a
+ * long turn would be rerouted to a fresh activation.
+ */
+const DEFAULT_MAX_REQUEST_PROCESSING_TIME_MS = 2 * 60 * 60 * 1000;
 const DEFAULT_DEACTIVATION_TIMEOUT_MS = 30_000;
 
 /**
