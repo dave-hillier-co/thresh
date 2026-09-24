@@ -95,9 +95,12 @@ class CounterGrain extends JournaledGrain<CountState, CountEvent> {
 
 const id = new GrainId("Counter", "c1");
 
-async function makeGrain(storage: MemoryJournalStorage): Promise<CounterGrain> {
+async function makeGrain(
+  storage: MemoryJournalStorage,
+  opts: { snapshotThreshold?: number } = {},
+): Promise<CounterGrain> {
   const grain = new CounterGrain();
-  await bindJournaledGrain(grain, id, new JournalStorageRegistry().add("default", storage));
+  await bindJournaledGrain(grain, id, new JournalStorageRegistry().add("default", storage), opts);
   return grain;
 }
 
@@ -217,5 +220,34 @@ describe("JournaledGrain log-consistency protocol", () => {
     expect(grain.confirmed()).toEqual({ count: 11 });
     expect(grain.confirmedVersion()).toBe(2);
     expect(grain.tentative()).toEqual({ count: 11 });
+  });
+
+  it("keeps the version monotonic across a compaction (#96)", async () => {
+    const storage = new MemoryJournalStorage();
+    const grain = await makeGrain(storage, { snapshotThreshold: 5 });
+
+    // 7 events crosses the threshold-5 compaction at least once.
+    for (let i = 0; i < 7; i++) {
+      grain.add(1);
+      await grain.confirm();
+    }
+    expect(grain.confirmed()).toEqual({ count: 7 });
+    expect(grain.confirmedVersion()).toBe(7);
+
+    // Reactivate: replay must restore the compacted state AND its version,
+    // not just count entries still in the (now-truncated) log.
+    const reactivated = await makeGrain(storage, { snapshotThreshold: 5 });
+    expect(reactivated.confirmed()).toEqual({ count: 7 });
+    expect(reactivated.confirmedVersion()).toBe(7);
+
+    // retrieveConfirmedEvents must behave sensibly (not throw) for a range
+    // that is entirely within the confirmed history after compaction.
+    expect(reactivated["retrieveConfirmedEvents"](7, 7)).toEqual([]);
+
+    // A further event advances the version from where it left off, not from 0.
+    reactivated.add(1);
+    await reactivated.confirm();
+    expect(reactivated.confirmed()).toEqual({ count: 8 });
+    expect(reactivated.confirmedVersion()).toBe(8);
   });
 });

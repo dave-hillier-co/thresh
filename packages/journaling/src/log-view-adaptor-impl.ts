@@ -2,8 +2,15 @@ import type { DurableStateMachine, StateMachineManager } from "@thresh/core/dura
 import { InconsistentStateError } from "@thresh/core/errors";
 import type { LogViewAdaptor } from "@thresh/core/journaled-grain";
 
-/** A framed log record for a `JournaledGrain`'s single log: either a raised event, or a confirmed-state snapshot (compaction). */
-type Frame<TState, TEvent> = { t: "event"; e: TEvent } | { t: "snap"; s: TState };
+/**
+ * A framed log record for a `JournaledGrain`'s single log: either a raised
+ * event, or a confirmed-state snapshot (compaction). The snapshot frame
+ * carries the monotonic confirmed version alongside the state, mirroring
+ * Orleans' `GrainStateWithMetaData.GlobalVersion` travelling with the
+ * snapshot -- without it, compaction (which empties `confirmedEvents`) would
+ * make the version appear to reset to the post-compaction entry count.
+ */
+type Frame<TState, TEvent> = { t: "event"; e: TEvent } | { t: "snap"; s: TState; v: number };
 
 /**
  * The `LogViewAdaptor` implementation, mirroring Orleans' state-storage /
@@ -22,6 +29,13 @@ export class LogViewAdaptorImpl<TState, TEvent>
   private confirmed: TState;
   private tentative: TState;
   private confirmedEvents: TEvent[] = [];
+  /**
+   * Monotonic count of every event ever confirmed, surviving compaction --
+   * unlike `confirmedEvents.length`, which only counts entries still held
+   * in-memory since the last snapshot. Restored from the snapshot frame on
+   * replay (see `apply`).
+   */
+  private version = 0;
   private pending: TEvent[] = [];
   /**
    * Count of raised-but-not-yet-confirmed events. Tracked separately from
@@ -53,7 +67,7 @@ export class LogViewAdaptorImpl<TState, TEvent>
   }
 
   get confirmedVersion(): number {
-    return this.confirmedEvents.length;
+    return this.version;
   }
 
   get pendingCount(): number {
@@ -145,10 +159,18 @@ export class LogViewAdaptorImpl<TState, TEvent>
   }
 
   retrieveLogSegment(fromVersion: number, toVersion: number): readonly TEvent[] {
-    if (fromVersion < 0 || toVersion < fromVersion || toVersion > this.confirmedEvents.length) {
+    // `confirmedEvents` only holds events confirmed since the last snapshot;
+    // `baseVersion` is the (global) version compaction last collapsed away, so
+    // a requested range is translated into an offset into it.
+    const baseVersion = this.version - this.confirmedEvents.length;
+    if (
+      fromVersion < baseVersion ||
+      toVersion < fromVersion ||
+      toVersion > this.version
+    ) {
       throw new Error(`invalid range [${fromVersion}, ${toVersion}]`);
     }
-    return this.confirmedEvents.slice(fromVersion, toVersion);
+    return this.confirmedEvents.slice(fromVersion - baseVersion, toVersion - baseVersion);
   }
 
   async clearLog(): Promise<void> {
@@ -160,6 +182,7 @@ export class LogViewAdaptorImpl<TState, TEvent>
   reset(): void {
     this.confirmed = this.initial();
     this.confirmedEvents = [];
+    this.version = 0;
     this.pending = [];
     this.unconfirmedCount = 0;
     this.tentative = this.confirmed;
@@ -170,9 +193,11 @@ export class LogViewAdaptorImpl<TState, TEvent>
     if (frame.t === "event") {
       this.confirmed = this.transition(this.confirmed, frame.e);
       this.confirmedEvents.push(frame.e);
+      this.version += 1;
     } else {
       this.confirmed = frame.s;
       this.confirmedEvents = [];
+      this.version = frame.v;
     }
     // Recompute (don't just mirror confirmed): events may have been raised
     // concurrently with the append that triggered this `apply`.
@@ -180,6 +205,6 @@ export class LogViewAdaptorImpl<TState, TEvent>
   }
 
   snapshot(): unknown {
-    return { t: "snap", s: this.confirmed } satisfies Frame<TState, TEvent>;
+    return { t: "snap", s: this.confirmed, v: this.version } satisfies Frame<TState, TEvent>;
   }
 }
