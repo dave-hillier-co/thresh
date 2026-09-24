@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { durableList, grain } from "@thresh/core/decorators";
+import { durableDictionary, durableList, grain } from "@thresh/core/decorators";
 import { defineGrain, useDurableDictionary } from "@thresh/core/define-grain";
 import { Grain } from "@thresh/core/grain";
+import { GrainId } from "@thresh/core/grain-id";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
 import type { GrainKey } from "@thresh/core/key-kinds";
-import type { DurableList } from "@thresh/core/durable-state";
+import type { DurableDictionary, DurableList } from "@thresh/core/durable-state";
 import { SiloAddress } from "@thresh/core/silo-address";
+import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
 import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
 import { MemoryJournalStorage } from "@thresh/journaling/memory-journal-storage";
 import { createSilo, type SiloConfig } from "@thresh/hosting/silo-builder";
@@ -131,6 +133,101 @@ describe("durable journaling end-to-end", () => {
       expect(await silo.getGrain(ICart, "x").list()).toEqual(["only-x"]);
     } finally {
       await silo.stop();
+    }
+  });
+});
+
+// A durable-dictionary grain that can migrate to another silo, for the
+// rehydrate-replay repro in issue #94.
+interface IWarehouse extends GrainKey<string> {
+  stock(sku: string, qty: number): Promise<void>;
+  qty(sku: string): Promise<number | undefined>;
+  scheduleMigration(target: SiloAddress): Promise<void>;
+}
+const IWarehouse = defineGrainInterface<IWarehouse>("IWarehouse.migration", {
+  options: { qty: { readOnly: true } },
+});
+
+@grain()
+class WarehouseGrain extends Grain implements IWarehouse {
+  @durableDictionary("stock")
+  private stockLevels!: DurableDictionary<string, number>;
+
+  async stock(sku: string, qty: number): Promise<void> {
+    await this.stockLevels.set(sku, qty);
+  }
+
+  async qty(sku: string): Promise<number | undefined> {
+    return this.stockLevels.get(sku);
+  }
+
+  async scheduleMigration(target: SiloAddress): Promise<void> {
+    this.runtime.migrateOnIdle(target);
+  }
+}
+
+describe("durable-state migration (issue #94)", () => {
+  const local0 = new SiloAddress("silo-m0", "uid-m0", "silo-m0:11111");
+  const local1 = new SiloAddress("silo-m1", "uid-m1", "silo-m1:11112");
+  const warehouseId = new GrainId("Warehouse", "wh-1");
+
+  function buildMigrationSilo(
+    local: SiloAddress,
+    network: InProcessNetwork,
+    storage: MemoryJournalStorage,
+    time: FakeTimeProvider,
+  ) {
+    return createSilo({
+      clusterId: "c-journal-migration",
+      local,
+      time,
+      collectionAgeSeconds: 30,
+      collectionIntervalSeconds: 10,
+      random: () => 0,
+    })
+      .useStaticMembership([local0, local1])
+      .useInProcessTransport(network)
+      .useMemoryJournaling(storage)
+      .registerGrain(WarehouseGrain, { interfaces: [IWarehouse] })
+      .build();
+  }
+
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+  async function settleUntil(pred: () => boolean, max = 200): Promise<void> {
+    for (let i = 0; i < max && !pred(); i++) await flush();
+    await flush();
+  }
+
+  it("replays the journal on the target silo instead of starting empty", async () => {
+    const network = new InProcessNetwork();
+    const storage = new MemoryJournalStorage();
+    const time = new FakeTimeProvider();
+    const node0 = buildMigrationSilo(local0, network, storage, time);
+    const node1 = buildMigrationSilo(local1, network, storage, time);
+    await node0.start();
+    await node1.start();
+    try {
+      await node0.getGrain(IWarehouse, "wh-1").stock("apple", 7);
+      expect(node0.isActive(warehouseId)).toBe(true);
+
+      await node0.getGrain(IWarehouse, "wh-1").scheduleMigration(local1);
+      time.advance(31_000);
+      await settleUntil(() => node1.isActive(warehouseId));
+
+      expect(node0.isActive(warehouseId)).toBe(false);
+      expect(node1.isActive(warehouseId)).toBe(true);
+
+      // Rehydrated without a persistent-state migration participant for the
+      // durable-dictionary facet: the target must replay the journal itself
+      // rather than come up with an empty structure.
+      expect(await node1.getGrain(IWarehouse, "wh-1").qty("apple")).toBe(7);
+
+      // And further writes must succeed (no stale version/log-consistency error).
+      await node1.getGrain(IWarehouse, "wh-1").stock("pear", 3);
+      expect(await node1.getGrain(IWarehouse, "wh-1").qty("pear")).toBe(3);
+    } finally {
+      await node0.stop();
+      await node1.stop();
     }
   });
 });

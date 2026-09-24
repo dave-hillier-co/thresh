@@ -1416,15 +1416,19 @@ export class SiloBuilder {
         }
         if (journalStorage !== undefined) {
           // One manager per grain owns the log; replay rebuilds all durable
-          // structures. On rehydration skip replay (parity with persistent state).
+          // structures. Unlike persistent state, no journaling component is a
+          // migration participant (Orleans has none either -- only
+          // `StateStorageBridge` is), so nothing carries durable/journalled
+          // state across a migration in the rehydration bag: always replay,
+          // even on rehydrate, or the target comes up empty.
           await bindDurableStates(instance, grainId, journalStorage, {
-            replay: mode !== "rehydrate",
+            replay: true,
             ...(snapshotThreshold !== undefined ? { snapshotThreshold } : {}),
           });
           // A `JournaledGrain` owns its own single-machine log (the confirmed
           // event sequence); install its adaptor and replay it the same way.
           await bindJournaledGrain(instance, grainId, journalStorage, {
-            replay: mode !== "rehydrate",
+            replay: true,
             ...(snapshotThreshold !== undefined ? { snapshotThreshold } : {}),
           });
         }
