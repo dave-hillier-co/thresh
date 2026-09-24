@@ -224,16 +224,16 @@ registerKnownError(
 registerKnownError("TransactionsDisabledError", TransactionsDisabledError, (m) =>
   withMessage(new TransactionsDisabledError(), m),
 );
-registerKnownError(
-  "InconsistentStateError",
-  InconsistentStateError,
-  (m, p) =>
-    new InconsistentStateError(
-      m,
-      p.expectedEtag as string | undefined,
-      p.storedEtag as string | undefined,
-    ),
-);
+registerKnownError("InconsistentStateError", InconsistentStateError, (m, p) => {
+  const error = new InconsistentStateError(
+    m,
+    p.expectedEtag as string | undefined,
+    p.storedEtag as string | undefined,
+  );
+  // Absent (an older sender) reads as the constructor default, `true`.
+  if (p.isSourceActivation === false) error.isSourceActivation = false;
+  return error;
+});
 registerKnownError("TransactionAbortedError", TransactionAbortedError, (m, p) =>
   withMessage(new TransactionAbortedError(p.transactionId as string, ""), m),
 );

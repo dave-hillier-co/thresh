@@ -283,10 +283,12 @@ export class Catalog {
    * freshly CAS-won activation id, exactly like activating from scratch).
    */
   private async finalizeStale(key: string, existing: ActivationData): Promise<void> {
-    await existing.runDeactivateHook({
-      code: "application-requested",
-      description: "deactivateOnIdle requested",
-    });
+    await existing.runDeactivateHook(
+      existing.requestedDeactivationReason ?? {
+        code: "application-requested",
+        description: "deactivateOnIdle requested",
+      },
+    );
     existing.finalizeDeactivation();
     this.activations.delete(key);
     if (this.options.grainActivator?.disposeInstance !== undefined) {
@@ -563,7 +565,9 @@ export class Catalog {
       // No migration requested yet: run `onDeactivate` first, since a grain
       // may call `migrateOnIdle()` from within it; honour a migration it
       // asks for during the hook, then finalize.
-      await activation.runDeactivateHook({ code: "idle", description: "idle collection" });
+      await activation.runDeactivateHook(
+        activation.requestedDeactivationReason ?? { code: "idle", description: "idle collection" },
+      );
       if (activation.wantsMigration && this.options.migrate !== undefined) {
         await this.options.migrate(activation);
       }

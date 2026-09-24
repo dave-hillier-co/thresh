@@ -228,6 +228,7 @@ export class ActivationData implements GrainContext {
   private lastActiveMs: number;
   private keepAliveUntilMs = 0;
   private deactivateRequested = false;
+  private pendingDeactivationReason: DeactivationReason | undefined;
   /**
    * True when `deactivateOnIdle()` was called while this activation was still
    * `"activating"` (from within `onActivate`). Orleans rejects the triggering
@@ -391,18 +392,7 @@ export class ActivationData implements GrainContext {
                 () => this.callMethod(req),
               ),
           ).catch((error: unknown) => {
-            // Orleans deactivates the activation when a grain lets an
-            // inconsistent-state exception escape from its own activation
-            // (`InsideRuntimeClient.cs:326`) — rather than leave a stale or
-            // duplicate activation stuck, so the next call gets a fresh one.
-            // Fire-and-forget: awaiting it here would deadlock this very
-            // turn against the deactivate hook's own scheduled turn.
-            if (error instanceof InconsistentStateError) {
-              void this.deactivate({
-                code: "application-error",
-                description: error.message,
-              }).catch(() => undefined);
-            }
+            this.deactivateOnInconsistentState(error);
             throw error;
           });
           return restoreReadOnlyGuard === undefined
@@ -559,8 +549,12 @@ export class ActivationData implements GrainContext {
             // (`ActivationData.OnCompletedRequest`, ActivationData.cs:1486);
             // an ordinary (non-keep-alive) tick does not touch it, so by
             // itself it never postpones collection (see `TimerOptions.keepAlive`).
-            if (options?.keepAlive === true) return tick.finally(() => this.touch());
-            return tick;
+            const settled = tick.catch((error: unknown) => {
+              this.deactivateOnInconsistentState(error);
+              throw error;
+            });
+            if (options?.keepAlive === true) return settled.finally(() => this.touch());
+            return settled;
           },
         }),
       callback,
@@ -686,7 +680,20 @@ export class ActivationData implements GrainContext {
     this.state = "invalid";
   }
 
-  requestDeactivation(): void {
+  /**
+   * Why a pending `requestDeactivation` wants this activation gone, when the
+   * requester named a reason (e.g. `"application-error"` for an escaped
+   * `InconsistentStateError`). Undefined for a plain `deactivateOnIdle()`,
+   * which keeps each finalizer's own default reason.
+   */
+  get requestedDeactivationReason(): DeactivationReason | undefined {
+    return this.pendingDeactivationReason;
+  }
+
+  requestDeactivation(reason?: DeactivationReason): void {
+    if (reason !== undefined && this.pendingDeactivationReason === undefined) {
+      this.pendingDeactivationReason = reason;
+    }
     this.deactivateRequested = true;
     // Called during onActivate (still "activating"): don't defer to the next
     // idle sweep — the activation must never become servable (see
@@ -838,6 +845,27 @@ export class ActivationData implements GrainContext {
    */
   get deactivationRequestedAndIdle(): boolean {
     return this.state === "valid" && !this.scheduler.busy && this.deactivateRequested;
+  }
+
+  /**
+   * Orleans deactivates an activation that lets an inconsistent-state
+   * exception escape a call or timer tick (`InsideRuntimeClient.cs:326`),
+   * rather than leave a stale or duplicate activation stuck, so the next call
+   * gets a fresh one. Only the activation the error originated in: the marker
+   * is cleared before the error travels on, so a caller that merely
+   * propagates it is not deactivated too (`IsSourceActivation`,
+   * InsideRuntimeClient.cs:326-329). Routed through `requestDeactivation`,
+   * like `deactivateOnIdle()`, so the catalog finalizes it once the failing
+   * turn has settled — on the next lookup for this grain or the next idle
+   * sweep — with its full cleanup (directory unregistration, state unbinding,
+   * instance disposal), and the next call is handed a fresh activation rather
+   * than rejected by this one mid-teardown. Deactivating directly from inside
+   * the failing turn would deadlock against the deactivation's own turn.
+   */
+  private deactivateOnInconsistentState(error: unknown): void {
+    if (!(error instanceof InconsistentStateError) || !error.isSourceActivation) return;
+    error.isSourceActivation = false;
+    this.requestDeactivation({ code: "application-error", description: error.message });
   }
 
   private touch(): void {

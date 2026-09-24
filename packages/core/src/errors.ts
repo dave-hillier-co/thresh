@@ -152,6 +152,15 @@ export class GrainExtensionNotInstalledException extends ThreshRuntimeError {
  * incarnation has written in between.
  */
 export class InconsistentStateError extends Error {
+  /**
+   * Whether this error is still in the activation it originated in (Orleans'
+   * `InconsistentStateException.IsSourceActivation`). The runtime deactivates
+   * that activation when the error escapes one of its calls, then clears this
+   * flag so a caller that merely propagates the error — in-process or on
+   * another silo, since it crosses the wire — is not deactivated as well.
+   */
+  isSourceActivation = true;
+
   constructor(
     message: string,
     readonly expectedEtag: string | undefined,

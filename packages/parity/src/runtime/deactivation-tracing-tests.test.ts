@@ -296,17 +296,12 @@ describe("UnitTests.General.DeactivationTracingTests", () => {
         "test-parent-inconsistent-state",
         async () => {
           await expect(grain.throwInconsistentStateException()).rejects.toThrow();
-          // The activation deactivates itself in the background (see
-          // `ActivationData.invoke`'s catch for an escaped
-          // `InconsistentStateError` — Orleans' `InsideRuntimeClient.cs:326`),
-          // so the very next call can briefly still hit the OLD activation
-          // while it is mid-deactivation (rejected as "unavailable") before a
-          // fresh one takes over. Retry rather than assuming it has finished
-          // by the time the rejection above settles.
-          await waitFor(async () => {
-            await grain.getActivityId();
-            return true;
-          });
+          // The escaped `InconsistentStateError` flags the activation for
+          // deactivation (Orleans' `InsideRuntimeClient.cs:326`); the catalog
+          // finalizes it — running `OnDeactivate` — on this next lookup, then
+          // serves the call from a fresh activation. That stands in for
+          // upstream's `WaitForDeactivationAsync` followed by the same call.
+          await grain.getActivityId();
         },
       );
 
@@ -315,6 +310,8 @@ describe("UnitTests.General.DeactivationTracingTests", () => {
       expect(onDeactivateSpans.length).toBeGreaterThan(0);
       const onDeactivateSpan = onDeactivateSpans[0]!;
 
+      expect(onDeactivateSpan.attributes["orleans.grain.id"]).toBeDefined();
+      expect(onDeactivateSpan.attributes["orleans.grain.type"]).toBeDefined();
       const deactivationReasonTag = onDeactivateSpan.attributes["orleans.deactivation.reason"];
       expect(deactivationReasonTag as string).toContain("ApplicationError");
       expect(onDeactivateSpan.traceId).toBe(testParentTraceId);

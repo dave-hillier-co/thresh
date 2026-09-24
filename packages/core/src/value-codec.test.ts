@@ -14,6 +14,7 @@ import {
 import { GrainId } from "@thresh/core/grain-id";
 import {
   GrainCallError,
+  InconsistentStateError,
   isThreshRuntimeError,
   LimitExceededException as ThreshLimitExceededException,
   RejectionError,
@@ -26,6 +27,22 @@ describe("value-codec", () => {
   });
 
   describe("built-in types", () => {
+    it("round-trips InconsistentStateError's isSourceActivation marker", () => {
+      // Orleans serializes `IsSourceActivation` ([Id(0)]) so a caller on another
+      // silo that receives an already-handled exception does not deactivate too.
+      const handled = new InconsistentStateError("etag mismatch", "e1", "e2");
+      handled.isSourceActivation = false;
+      const decoded = decodeValue(encodeValue(handled)) as InconsistentStateError;
+      expect(decoded).toBeInstanceOf(InconsistentStateError);
+      expect(decoded.isSourceActivation).toBe(false);
+      expect(decoded.expectedEtag).toBe("e1");
+
+      const fresh = decodeValue(
+        encodeValue(new InconsistentStateError("etag mismatch", "e1", "e2")),
+      ) as InconsistentStateError;
+      expect(fresh.isSourceActivation).toBe(true);
+    });
+
     it("round-trips a Date", () => {
       const date = new Date("2026-07-24T12:00:00.000Z");
       expect(decodeValue(encodeValue(date))).toEqual(date);
