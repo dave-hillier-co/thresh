@@ -6,7 +6,7 @@ import type {
   ShouldRetry,
 } from "@thresh/core/durable-job";
 import { Guid } from "@thresh/core/guid";
-import type { TimeProvider } from "@thresh/core/time-provider";
+import type { TimeProvider, TimerHandle } from "@thresh/core/time-provider";
 import { registerDurableJobQueueDepth } from "@thresh/observability/durable-job-metrics";
 import { claimBudget, defaultShouldRetry, shardKeyFor } from "@thresh/durable-jobs/job-model";
 import type { JobShardStore } from "@thresh/durable-jobs/job-shard-store";
@@ -32,6 +32,8 @@ export interface ResolvedDurableJobsOptions {
   shardClaimMaxBudget: number;
   /** Zero disables the time-based ramp-up: falls back to the flat `claimRampUpBudget` per step. */
   shardClaimRampUpDurationMs: number;
+  /** Zero disables the periodic self-driven shard check (Orleans `PeriodicShardCheck`). */
+  periodicShardCheckMs: number;
 }
 
 /** The membership facts the manager needs to claim and adopt shards. */
@@ -59,6 +61,8 @@ export class LocalDurableJobManager {
   private readonly joinedAtMs: number;
   /** Shards claimed since join, while the ramp-up window is still active (`computeClaimBudget`'s `totalClaimedShards`). */
   private claimedSinceJoin = 0;
+  /** Timer for the periodic self-driven shard check (Orleans `PeriodicShardCheck`). */
+  private checkHandle: TimerHandle | undefined;
 
   constructor(
     private readonly store: JobShardStore,
@@ -152,6 +156,10 @@ export class LocalDurableJobManager {
    * for shards no longer claimable here, then claim newly available shards
    * (orphaned or owned by a dead silo) under the ramp-up budget and start an
    * executor for each. Idempotent — already-owned shards keep their executors.
+   * Re-arms the periodic shard check on every call (including its own ticks),
+   * so a shard left orphaned beyond the ramp-up budget, or a claim that failed
+   * on a store error, is retried on the next tick even in a stable cluster
+   * with no membership change (Orleans' `PeriodicShardCheck`).
    */
   async refreshOwnership(ownership: ShardOwnershipContext): Promise<void> {
     this.ownership = ownership;
@@ -193,6 +201,19 @@ export class LocalDurableJobManager {
     for (const shardKey of [...this.executors.keys()]) {
       if (!ownedNow.has(shardKey)) await this.stopExecutor(shardKey);
     }
+
+    this.scheduleCheck();
+  }
+
+  /** Re-arm the periodic shard check (0 disables it). */
+  private scheduleCheck(): void {
+    if (this.checkHandle !== undefined) this.time.clearTimer(this.checkHandle);
+    this.checkHandle = undefined;
+    if (this.options.periodicShardCheckMs <= 0) return;
+    this.checkHandle = this.time.setTimer(() => {
+      this.checkHandle = undefined;
+      void this.refreshOwnership(this.ownership).catch(() => undefined);
+    }, this.options.periodicShardCheckMs);
   }
 
   /**
@@ -202,6 +223,8 @@ export class LocalDurableJobManager {
    * awaiting its in-flight work). Best-effort release so a successor can claim.
    */
   async stop(): Promise<void> {
+    if (this.checkHandle !== undefined) this.time.clearTimer(this.checkHandle);
+    this.checkHandle = undefined;
     for (const shardKey of [...this.executors.keys()]) {
       await this.stopExecutor(shardKey);
       await this.store.releaseShard(shardKey, this.ownership.localRingKey).catch(() => undefined);
@@ -302,6 +325,7 @@ export function resolveOptions(options: {
   shardClaimInitialBudget?: number;
   shardClaimMaxBudget?: number;
   shardClaimRampUpDuration?: Duration;
+  periodicShardCheckInterval?: Duration;
 }): ResolvedDurableJobsOptions {
   const shardDurationMs =
     options.shardDuration !== undefined ? durationToMs(options.shardDuration) : 3_600_000;
@@ -330,6 +354,11 @@ export function resolveOptions(options: {
       options.shardClaimRampUpDuration !== undefined
         ? durationToMs(options.shardClaimRampUpDuration)
         : 0,
+    // Orleans' PeriodicShardCheck default.
+    periodicShardCheckMs:
+      options.periodicShardCheckInterval !== undefined
+        ? durationToMs(options.periodicShardCheckInterval)
+        : 600_000,
   };
 }
 

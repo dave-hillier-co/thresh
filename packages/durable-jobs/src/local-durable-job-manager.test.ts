@@ -183,6 +183,72 @@ async function flush(times = 8): Promise<void> {
   for (let i = 0; i < times; i++) await new Promise((r) => setTimeout(r, 0));
 }
 
+describe("LocalDurableJobManager periodic shard check", () => {
+  const ownership: ShardOwnershipContext = { localRingKey: "silo1", activeRingKeys: ["silo1"] };
+
+  it("retries orphaned shards beyond the claim budget in a stable cluster (no membership change)", async () => {
+    // A dead silo owned 10 shards; the single survivor can only claim 4 per
+    // step (the ramp-up budget). Without a periodic re-check, the other 6
+    // stay stranded until the next membership view change — which never
+    // comes in a cluster that stays stable.
+    const store = new MemoryJobShardStore();
+    await seedOrphanedShards(store, 10);
+
+    const time = new FakeTimeProvider();
+    const options = resolveOptions({
+      claimRampUpBudget: 4,
+      periodicShardCheckInterval: { ms: 1000 },
+    });
+    const manager = new LocalDurableJobManager(
+      store,
+      time,
+      async () => completed,
+      options,
+      ownership,
+    );
+
+    await manager.refreshOwnership(ownership); // the initial view-change reconcile
+    expect(manager.ownedShards()).toHaveLength(4);
+
+    time.advance(1000); // periodic shard check fires, no membership change
+    await flush();
+    expect(manager.ownedShards()).toHaveLength(8); // claims another budget's worth
+
+    time.advance(1000);
+    await flush();
+    expect(manager.ownedShards()).toHaveLength(10); // the last 2 orphaned shards
+
+    await manager.stop();
+  });
+
+  it("periodicShardCheckInterval: { ms: 0 } disables the periodic check", async () => {
+    const store = new MemoryJobShardStore();
+    await seedOrphanedShards(store, 10);
+
+    const time = new FakeTimeProvider();
+    const options = resolveOptions({
+      claimRampUpBudget: 4,
+      periodicShardCheckInterval: { ms: 0 },
+    });
+    const manager = new LocalDurableJobManager(
+      store,
+      time,
+      async () => completed,
+      options,
+      ownership,
+    );
+
+    await manager.refreshOwnership(ownership);
+    expect(manager.ownedShards()).toHaveLength(4);
+
+    time.advance(10 * 60_000);
+    await flush();
+    expect(manager.ownedShards()).toHaveLength(4); // no periodic re-check ran
+
+    await manager.stop();
+  });
+});
+
 describe("LocalDurableJobManager.stop draining", () => {
   it("drains an in-flight run before releasing its shard (undrained-stop regression)", async () => {
     // Ownership-handoff hazard: releasing the shard before the handler has
