@@ -38,6 +38,17 @@ export const IDeactivationWithExceptionTracingTestGrain =
     "UnitTests.GrainInterfaces.IDeactivationWithExceptionTracingTestGrain",
   );
 
+/** Deactivation tracing for an escaped `InconsistentStateError` (Orleans' `InconsistentStateException`). */
+export interface IInconsistentStateDeactivationGrain extends GrainKey<bigint> {
+  getActivityId(): Promise<string | undefined>;
+  throwInconsistentStateException(): Promise<void>;
+}
+
+export const IInconsistentStateDeactivationGrain =
+  defineGrainInterface<IInconsistentStateDeactivationGrain>(
+    "UnitTests.GrainInterfaces.IInconsistentStateDeactivationGrain",
+  );
+
 /** A grain whose constructor throws, so activation never completes. */
 export interface IActivationFailureDeactivationGrain extends GrainKey<bigint> {
   getActivityId(): Promise<string | undefined>;

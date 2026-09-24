@@ -59,9 +59,12 @@ class ContextCheckerGrain extends Grain implements IContextChecker {
 
   async startWithHeader(): Promise<void> {
     this.runtime.setRequestContext("trace", "caller-value");
-    this.timer = this.runtime.registerTimer(async () => {
-      this.header = this.runtime.getRequestContext("trace");
-    }, { ms: 10 });
+    this.timer = this.runtime.registerTimer(
+      async () => {
+        this.header = this.runtime.getRequestContext("trace");
+      },
+      { ms: 10 },
+    );
   }
   async sawHeader(): Promise<string | undefined> {
     return this.header;

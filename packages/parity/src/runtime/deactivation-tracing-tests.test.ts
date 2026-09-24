@@ -22,17 +22,15 @@
 // triggering call and the follow-up call in the SAME `harness.withParentSpan`,
 // this makes no observable difference to the trace-id assertions.
 //
-// Four cases are EXCLUDED (`orleansTest.excluded`, not `orleansTest.gap` —
+// Three cases are EXCLUDED (`orleansTest.excluded`, not `orleansTest.gap` —
 // see each call site for its precise reason):
 // `OnDeactivateSpanIsNotCreatedForNonGrainBaseGrain` (every grain here
 // extends the same `Grain` base — this framework has no analogue of Orleans'
 // "implements IGrainBase directly, not via the `Grain` base class"
 // distinction, so the negative case is untestable);
 // `OnDeactivateSpanIsParentedToAsyncEnumerableMethodCall` (no IAsyncEnumerable
-// grain-method span story); `OnDeactivateSpanIsCreatedForInconsistentStateException`
-// (no auto-deactivate-on-`InconsistentStateException` mechanism); and
-// `OnDeactivateSpanIsCreatedForGrainContextDeactivate` (no
-// `GrainContext.Deactivate(reason)` grain-facing API — only
+// grain-method span story); and `OnDeactivateSpanIsCreatedForGrainContextDeactivate`
+// (no `GrainContext.Deactivate(reason)` grain-facing API — only
 // `deactivateOnIdle()`/`IGrainManagementExtension`, which carries a fixed
 // reason, exists).
 //
@@ -78,6 +76,8 @@ import {
   IActivationFailureDeactivationGrain,
   IDeactivationMigrationTracingTestGrain,
   IDeactivationTracingTestGrain,
+  IInconsistentStateDeactivationGrain,
+  InconsistentStateDeactivationGrain,
   IDeactivationWithExceptionTracingTestGrain,
   IDeactivationWithWorkTracingTestGrain,
 } from "@thresh/parity/grains/impl/deactivation-tracing-grain";
@@ -127,6 +127,10 @@ describe("UnitTests.General.DeactivationTracingTests", () => {
           ctor: ActivationFailureDeactivationGrain,
           interfaces: [IActivationFailureDeactivationGrain],
         },
+        {
+          ctor: InconsistentStateDeactivationGrain,
+          interfaces: [IInconsistentStateDeactivationGrain],
+        },
       ],
       configureSilo: (builder) => builder.useTracing(),
     });
@@ -145,6 +149,10 @@ describe("UnitTests.General.DeactivationTracingTests", () => {
         {
           ctor: ActivationFailureDeactivationGrain,
           interfaces: [IActivationFailureDeactivationGrain],
+        },
+        {
+          ctor: InconsistentStateDeactivationGrain,
+          interfaces: [IInconsistentStateDeactivationGrain],
         },
       ],
       undefined,
@@ -278,11 +286,39 @@ describe("UnitTests.General.DeactivationTracingTests", () => {
       "method call for an `OnDeactivate` span to be parented under",
     "UnitTests.General.DeactivationTracingTests.OnDeactivateSpanIsParentedToAsyncEnumerableMethodCall",
   );
-  orleansTest.excluded(
-    "no auto-deactivate-on-`InconsistentStateException` mechanism in this " +
-      "port — deactivation only happens via `deactivateOnIdle()`/collection, " +
-      "never triggered automatically by a specific application exception type",
+  orleansTest(
     "UnitTests.General.DeactivationTracingTests.OnDeactivateSpanIsCreatedForInconsistentStateException",
+    async () => {
+      const grain = client.getGrain(IInconsistentStateDeactivationGrain, randomIntegerKey());
+      await grain.getActivityId();
+
+      const { traceId: testParentTraceId } = await harness.withParentSpan(
+        "test-parent-inconsistent-state",
+        async () => {
+          await expect(grain.throwInconsistentStateException()).rejects.toThrow();
+          // The activation deactivates itself in the background (see
+          // `ActivationData.invoke`'s catch for an escaped
+          // `InconsistentStateError` — Orleans' `InsideRuntimeClient.cs:326`),
+          // so the very next call can briefly still hit the OLD activation
+          // while it is mid-deactivation (rejected as "unavailable") before a
+          // fresh one takes over. Retry rather than assuming it has finished
+          // by the time the rejection above settles.
+          await waitFor(async () => {
+            await grain.getActivityId();
+            return true;
+          });
+        },
+      );
+
+      const spans = harness.finishedSpans();
+      const onDeactivateSpans = spans.filter((s) => s.name === ActivityNames.OnDeactivate);
+      expect(onDeactivateSpans.length).toBeGreaterThan(0);
+      const onDeactivateSpan = onDeactivateSpans[0]!;
+
+      const deactivationReasonTag = onDeactivateSpan.attributes["orleans.deactivation.reason"];
+      expect(deactivationReasonTag as string).toContain("ApplicationError");
+      expect(onDeactivateSpan.traceId).toBe(testParentTraceId);
+    },
   );
 
   orleansTest(

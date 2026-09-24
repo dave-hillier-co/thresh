@@ -4,6 +4,7 @@
 // and `ActivationFailureDeactivationGrain`.
 import { trace } from "@opentelemetry/api";
 import { grain, persistentState } from "@thresh/core/decorators";
+import { InconsistentStateError } from "@thresh/core/errors";
 import { Grain } from "@thresh/core/grain";
 import type {
   DehydrationContext,
@@ -19,6 +20,7 @@ import {
   IDeactivationTracingTestGrain,
   IDeactivationWithExceptionTracingTestGrain,
   IDeactivationWithWorkTracingTestGrain,
+  IInconsistentStateDeactivationGrain,
 } from "@thresh/parity/grains/interfaces/deactivation-tracing-grain-interfaces";
 
 export {
@@ -27,6 +29,7 @@ export {
   IDeactivationTracingTestGrain,
   IDeactivationWithExceptionTracingTestGrain,
   IDeactivationWithWorkTracingTestGrain,
+  IInconsistentStateDeactivationGrain,
 };
 
 @grain({ name: "UnitTests.Grains.DeactivationTracingTestGrain" })
@@ -79,6 +82,23 @@ export class DeactivationWithExceptionTracingTestGrain
   override onDeactivate(_reason: DeactivationReason): Promise<void> {
     throw new Error("Simulated error during deactivation");
   }
+}
+
+@grain({ name: "UnitTests.Grains.InconsistentStateDeactivationGrain" })
+export class InconsistentStateDeactivationGrain
+  extends Grain
+  implements IInconsistentStateDeactivationGrain
+{
+  async getActivityId(): Promise<string | undefined> {
+    return trace.getActiveSpan()?.spanContext().spanId;
+  }
+
+  async throwInconsistentStateException(): Promise<void> {
+    throw new InconsistentStateError("Simulated inconsistent state", undefined, undefined);
+  }
+
+  // `onDeactivate` left as the base no-op — upstream's grain has none either;
+  // this test only asserts the auto-deactivate span/reason, not app cleanup.
 }
 
 @grain({ name: "UnitTests.Grains.ActivationFailureDeactivationGrain" })
