@@ -744,6 +744,9 @@ export class Catalog {
       // before this one finished — leave it be rather than dispose/unregister
       // an activation whose own hook may still be running.
       if (a.state !== "invalid") continue;
+      // Abandoned as stuck while this sweep awaited it: `handleStuckActivation`
+      // already removed it and ran `onDeactivated`, and skips dispose hooks.
+      if (a.isDeactivatedAsStuck) continue;
       if (this.options.grainActivator?.disposeInstance !== undefined) {
         await this.options.grainActivator.disposeInstance(a.instance, a.id);
       }

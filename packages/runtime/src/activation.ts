@@ -84,7 +84,7 @@ import { deadlineSignal } from "@thresh/runtime/ambient-signal";
 import type { InvokeCallOptions } from "@thresh/runtime/dispatcher";
 import { GrainTimerImpl } from "@thresh/runtime/grain-timer-impl";
 import { invocationContext, type InvocationContext } from "@thresh/runtime/invocation-context";
-import type { TimeProvider } from "@thresh/runtime/time-provider";
+import type { TimeProvider, TimerHandle } from "@thresh/runtime/time-provider";
 import { TurnScheduler, type Turn } from "@thresh/runtime/turn-scheduler";
 import {
   withDehydrateSpan,
@@ -301,6 +301,18 @@ export class ActivationData implements GrainContext {
    * from a same-kind rejection a call's own body threw (from a nested call).
    */
   private readonly rerouteRejections = new WeakSet<RejectionError>();
+  private readonly maxRequestProcessingTimeMs: number | undefined;
+  /** When `runDeactivateHook` moved this activation to "deactivating" (Orleans `DeactivationStartTime`). */
+  private deactivationStartedAtMs: number | undefined;
+  /** Timer that declares a deactivation stuck while calls are held on it; see `watchForStuckDeactivation`. */
+  private stuckDeactivationTimer: TimerHandle | undefined;
+  /**
+   * Set when this activation was abandoned as stuck — its blocking turn
+   * (`handleStuckTurn`) or its deactivation (`abandonStuckDeactivation`) ran
+   * past `maxRequestProcessingTimeMs` — and the catalog's `onStuck` has
+   * already removed it and run `onDeactivated`.
+   */
+  private abandonedAsStuck = false;
 
   constructor(
     id: GrainId,
@@ -315,6 +327,7 @@ export class ActivationData implements GrainContext {
     this.deactivationTimeoutMs = options.deactivationTimeoutMs;
     this.logger = options.logger ?? noopLogger;
     this.onStuckHook = options.onStuck;
+    this.maxRequestProcessingTimeMs = options.maxRequestProcessingTimeMs;
     // Even a fully reentrant grain must finish activating (running state
     // binding, then `onActivate`) before any request is dispatched — Orleans
     // never interleaves a request with `OnActivateAsync`.
@@ -369,11 +382,66 @@ export class ActivationData implements GrainContext {
       "noActivation",
     );
     this.stuckRejection = rejection;
+    this.abandonedAsStuck = true;
+    this.clearStuckDeactivationTimer();
     // Release any call held for a reroute while this activation was
     // deactivating: it will never reach `finalizeDeactivation` now.
     this.releaseFinalizationWaiters();
     this.onStuckHook?.(this);
     return rejection;
+  }
+
+  /**
+   * Orleans `ProcessRequestsToInvalidActivation`'s Deactivating branch: a call
+   * is being held on this deactivating activation (see `rerouteOrReject`), so
+   * once the deactivation has run past `maxRequestProcessingTimeMs` it is
+   * declared stuck (`IsStuckDeactivating`) and abandoned. Held calls sit
+   * outside the turn scheduler (#91), so its own stuck-turn detection never
+   * sees them waiting on a wedged `onDeactivate`; this is that check for them.
+   * No-op without `maxRequestProcessingTimeMs` or an `onStuck` hook.
+   */
+  private watchForStuckDeactivation(): void {
+    if (this.maxRequestProcessingTimeMs === undefined || this.onStuckHook === undefined) return;
+    if (this.state !== "deactivating" || this.deactivationStartedAtMs === undefined) return;
+    if (this.stuckDeactivationTimer !== undefined) return;
+    const remainingMs =
+      this.deactivationStartedAtMs + this.maxRequestProcessingTimeMs - this.time.now();
+    if (remainingMs <= 0) {
+      this.abandonStuckDeactivation();
+      return;
+    }
+    this.stuckDeactivationTimer = this.time.setTimer(() => {
+      this.stuckDeactivationTimer = undefined;
+      if (this.state === "deactivating" && this.finalizationWaiters.length > 0) {
+        this.abandonStuckDeactivation();
+      }
+    }, remainingMs);
+  }
+
+  /**
+   * Orleans `AbandonStuckDeactivatingActivation`: give up on a deactivation
+   * whose `onDeactivate` is wedged — mark this activation invalid, let the
+   * catalog remove it and unregister it (`onStuck`, as for a stuck turn), and
+   * release every held call to reroute to a fresh activation. The wedged hook
+   * keeps running in the background; whoever started the deactivation still
+   * awaits it, and finds this activation already abandoned when it returns.
+   */
+  private abandonStuckDeactivation(): void {
+    this.logger.warn("activation is stuck deactivating; abandoning it", {
+      grainId: this.id.toString(),
+      maxRequestProcessingTimeMs: this.maxRequestProcessingTimeMs,
+    });
+    this.state = "invalid";
+    this.abandonedAsStuck = true;
+    this.clearStuckDeactivationTimer();
+    this.onStuckHook?.(this);
+    this.releaseFinalizationWaiters();
+  }
+
+  private clearStuckDeactivationTimer(): void {
+    if (this.stuckDeactivationTimer !== undefined)
+      this.time.clearTimer(this.stuckDeactivationTimer);
+    this.stuckDeactivationTimer = undefined;
   }
 
   /**
@@ -400,9 +468,13 @@ export class ActivationData implements GrainContext {
     );
   }
 
-  /** True once this activation has deactivated itself as stuck (see `handleStuckTurn`). */
+  /**
+   * True once this activation was abandoned as stuck (see `handleStuckTurn`
+   * and `abandonStuckDeactivation`): the catalog's `onStuck` already removed
+   * it and ran `onDeactivated`, so no later sweep may dispose or report it again.
+   */
   get isDeactivatedAsStuck(): boolean {
-    return this.stuckRejection !== undefined;
+    return this.abandonedAsStuck;
   }
 
   /** Schedule `onActivate` as the first turn, so it precedes any message. */
@@ -747,6 +819,10 @@ export class ActivationData implements GrainContext {
   async runDeactivateHook(reason: DeactivationReason, signal?: AbortSignal): Promise<void> {
     if (this.state === "invalid" || this.state === "deactivating") return;
     this.state = "deactivating";
+    this.deactivationStartedAtMs = this.time.now();
+    // Calls already held while this was dehydrating for a migration wait on
+    // this deactivation too; watch it for them.
+    if (this.finalizationWaiters.length > 0) this.watchForStuckDeactivation();
     for (const timer of this.timers) timer.dispose();
     this.timers.clear();
     const hookPromise = this.scheduler
@@ -832,6 +908,7 @@ export class ActivationData implements GrainContext {
   /** Complete a deactivation whose hook already ran via `runDeactivateHook`. */
   finalizeDeactivation(): void {
     this.state = "invalid";
+    this.clearStuckDeactivationTimer();
     this.releaseFinalizationWaiters();
   }
 
@@ -849,7 +926,9 @@ export class ActivationData implements GrainContext {
    */
   private awaitFinalized(): Promise<void> {
     if (this.state === "invalid") return Promise.resolve();
-    return new Promise((resolve) => this.finalizationWaiters.push(resolve));
+    const finalized = new Promise<void>((resolve) => this.finalizationWaiters.push(resolve));
+    this.watchForStuckDeactivation();
+    return finalized;
   }
 
   /**

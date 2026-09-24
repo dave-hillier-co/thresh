@@ -6,6 +6,7 @@ import { getGrainMetadata } from "@thresh/core/grain-metadata";
 import { Catalog, type RegisteredGrain } from "@thresh/runtime/catalog";
 import type { ActivationData } from "@thresh/runtime/activation";
 import { GrainFactory } from "@thresh/runtime/grain-factory";
+import { LocalDispatcher } from "@thresh/runtime/local-dispatcher";
 import { FakeTimeProvider } from "@thresh/runtime/test-support/fake-time-provider";
 
 function deferred<T = void>() {
@@ -174,6 +175,92 @@ describe("Catalog stuck-activation deactivation (Orleans DeactivateStuckActivati
     await sweep;
 
     expect(catalog.get(id)).toBe(second);
+    expect(deactivated).toEqual([first]);
+  });
+
+  // Orleans `ProcessRequestsToInvalidActivation`: a request waiting on an
+  // activation that has been Deactivating for longer than
+  // MaxRequestProcessingTime declares it stuck (`IsStuckDeactivating`),
+  // abandons it (`AbandonStuckDeactivatingActivation`: forced unregister) and
+  // reroutes the waiting requests -- even though they are held outside the
+  // turn scheduler (#91), never queued behind the wedged onDeactivate turn.
+  function buildHangingCatalog(
+    time: FakeTimeProvider,
+    onDeactivated: (activation: ActivationData) => void,
+  ): Catalog {
+    return new Catalog({
+      grainTypes: new Map<string, RegisteredGrain>([
+        [hangingMetadata.grainType, { ctor: HangingDeactivateGrain, metadata: hangingMetadata }],
+      ]),
+      factory: new GrainFactory(() => hangingMetadata.grainType, time),
+      time,
+      defaultCollectionAgeSeconds: 1,
+      onDeactivated,
+      activationOptions: { maxRequestProcessingTimeMs: 1000 },
+    });
+  }
+
+  const ping = (id: GrainId, reentrancyId: string) => ({
+    target: id,
+    interfaceId: 0,
+    method: "ping",
+    args: [],
+    options: {},
+    reentrancyId,
+  });
+
+  it("serves a call held on a stuck-deactivating activation from a fresh one", async () => {
+    HangingDeactivateGrain.gate = deferred();
+    const time = new FakeTimeProvider();
+    const deactivated: ActivationData[] = [];
+    const catalog = buildHangingCatalog(time, (a) => deactivated.push(a));
+    const dispatcher = new LocalDispatcher(catalog);
+    const id = new GrainId(hangingMetadata.grainType, "d");
+    const first = await catalog.getOrCreate(id);
+    await flush();
+    time.advance(2000);
+
+    const sweep = catalog.collectIdle(); // onDeactivate hangs
+    await flush();
+    const held = dispatcher.invoke(ping(id, "r-d"));
+    let settled = false;
+    held.then(
+      () => (settled = true),
+      () => (settled = true),
+    );
+    await flush();
+    expect(settled).toBe(false); // held while the deactivation is still young
+
+    time.advance(1000); // deactivating past MaxRequestProcessingTime: stuck
+    await expect(held).resolves.toBe("pong");
+    expect(catalog.get(id)).not.toBe(first);
+    expect(deactivated).toEqual([first]);
+
+    HangingDeactivateGrain.gate.resolve();
+    await sweep;
+    expect(deactivated).toEqual([first]);
+  });
+
+  it("does not report a stuck-abandoned activation deactivated a second time when shutdown's sweep finishes", async () => {
+    HangingDeactivateGrain.gate = deferred();
+    const time = new FakeTimeProvider();
+    const deactivated: ActivationData[] = [];
+    const catalog = buildHangingCatalog(time, (a) => deactivated.push(a));
+    const id = new GrainId(hangingMetadata.grainType, "e");
+    const first = await catalog.getOrCreate(id);
+    await flush();
+
+    const stopping = catalog.deactivateAll({ code: "shutting-down", description: "test" });
+    await flush();
+    const held = first.invoke(ping(id, "r-e"));
+    held.catch(() => undefined);
+    await flush();
+    time.advance(1000); // stuck: abandoned, the held call released
+    await expect(held).rejects.toMatchObject({ kind: "noActivation" });
+    expect(deactivated).toEqual([first]);
+
+    HangingDeactivateGrain.gate.resolve();
+    await stopping;
     expect(deactivated).toEqual([first]);
   });
 });
