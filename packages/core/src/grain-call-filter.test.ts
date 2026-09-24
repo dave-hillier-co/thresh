@@ -123,4 +123,24 @@ describe("call-filter pipeline", () => {
     expect((caught as Error).message).toBe("boom");
     expect(result).toBe("recovered");
   });
+
+  it("re-runs every inner filter when an outer filter calls invoke() a second time", async () => {
+    // Orleans' `GrainMethodInvoker.Invoke` does `stage--` in a `finally`, so a
+    // retry filter that invokes twice re-runs the downstream chain (auth,
+    // tracing, the grain's own filter) both times rather than skipping
+    // straight to the method on the second call.
+    const order: string[] = [];
+    const retry: GrainCallFilter = async (ctx) => {
+      await ctx.invoke();
+      order.push("retry");
+      await ctx.invoke();
+    };
+    const auth: GrainCallFilter = async (ctx) => {
+      order.push("auth");
+      await ctx.invoke();
+    };
+    const ctx = context([]);
+    await runCallFilters([retry, auth], ctx, async () => "ok");
+    expect(order).toEqual(["auth", "retry", "auth"]);
+  });
 });
