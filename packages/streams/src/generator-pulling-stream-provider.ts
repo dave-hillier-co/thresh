@@ -48,6 +48,13 @@ export class GeneratorPullingStreamProvider
   private readonly pollIntervalMs: number;
   private readonly queues: GeneratorStreamQueue[];
   private readonly agents = new Map<number, QueuePullingAgent>();
+  /**
+   * Set by `stop()` and never cleared: the host stops this provider before
+   * deactivating activations, so a membership refresh already in flight (or a
+   * late partition acquisition) can still call `startAgentsFor` afterwards —
+   * an agent started then would never be stopped.
+   */
+  private stopped = false;
   private deliver: StreamDeliver = async () => undefined;
   private implicitTypesFor: (namespace: string) => Iterable<GrainType> = () => [];
 
@@ -116,6 +123,7 @@ export class GeneratorPullingStreamProvider
   }
 
   startAgentsFor(indices: Iterable<number>): void {
+    if (this.stopped) return;
     const wanted = new Set(indices);
     for (const [i, agent] of this.agents) {
       if (!wanted.has(i)) {
@@ -137,6 +145,7 @@ export class GeneratorPullingStreamProvider
   }
 
   async stop(): Promise<void> {
+    this.stopped = true;
     const agents = [...this.agents.values()];
     this.agents.clear();
     await Promise.all(agents.map((agent) => agent.stop()));

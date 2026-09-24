@@ -98,6 +98,13 @@ export class PullingStreamProviderCore implements ActivationBoundStreamProvider 
   private readonly pollIntervalMs: number;
   private readonly failureHandler: StreamFailureHandler | undefined;
   private readonly agents = new Map<number, QueuePullingAgent>();
+  /**
+   * Set by `stop()` and never cleared: the host stops this provider before
+   * deactivating activations, so a membership refresh already in flight (or a
+   * late partition acquisition) can still call `startAgentsFor` afterwards —
+   * an agent started then would never be stopped.
+   */
+  private stopped = false;
   private readonly producers = new StreamProducerRegistry();
   private deliver: StreamDeliver = async () => undefined;
   private implicitTypesFor: (namespace: string) => Iterable<GrainType> = () => [];
@@ -143,6 +150,7 @@ export class PullingStreamProviderCore implements ActivationBoundStreamProvider 
 
   /** Run pulling agents for exactly these queue indices (idempotent); stop the rest. */
   startAgentsFor(indices: Iterable<number>): void {
+    if (this.stopped) return;
     const wanted = new Set(indices);
     for (const [i, agent] of this.agents) {
       if (!wanted.has(i)) {
@@ -173,6 +181,7 @@ export class PullingStreamProviderCore implements ActivationBoundStreamProvider 
    * subscriptions stay in the backing store.
    */
   async stop(): Promise<void> {
+    this.stopped = true;
     const agents = [...this.agents.values()];
     this.agents.clear();
     await Promise.all(agents.map((agent) => agent.stop()));
