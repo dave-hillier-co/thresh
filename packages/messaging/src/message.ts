@@ -78,6 +78,17 @@ export interface Message {
   responseKind?: ResponseKind | undefined;
   requestContext?: RequestContext | undefined;
 
+  /**
+   * Absolute deadline (epoch ms) for this call chain, if one is ambient
+   * (Orleans `Message.TimeToLive`, mirrored here since a plain timestamp,
+   * unlike an `AbortSignal`, IS wire-safe). Carried by `ClusterNode.sendRemote`
+   * from `InvocationRequest.deadline` and read back by `toRequest` on the
+   * receiving end, so the deadline governs the remote turn too instead of
+   * stopping at the `RemoteInvoker` boundary (issue #90). Forwarded unchanged
+   * on a subsequent hop, same as `requestContext.transaction`.
+   */
+  deadline?: number | undefined;
+
   /** On a reply: participants the callee enlisted, for the caller to merge. */
   transactionParticipants?: SerializedParticipant[] | undefined;
 

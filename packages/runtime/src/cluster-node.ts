@@ -2060,6 +2060,7 @@ export class ClusterNode {
       interfaceId: req.interfaceId,
       ...(req.interfaceVersion !== undefined ? { interfaceVersion: req.interfaceVersion } : {}),
       method: req.method,
+      ...(req.deadline !== undefined ? { deadline: req.deadline } : {}),
       requestContext: {
         reentrancyId: req.reentrancyId,
         ...(req.headers !== undefined ? { headers: req.headers } : {}),
@@ -2140,6 +2141,7 @@ export class ClusterNode {
       interfaceId: req.interfaceId,
       ...(req.interfaceVersion !== undefined ? { interfaceVersion: req.interfaceVersion } : {}),
       method: req.method,
+      ...(req.deadline !== undefined ? { deadline: req.deadline } : {}),
       requestContext: {
         reentrancyId: req.reentrancyId,
         ...(req.transaction !== undefined
@@ -3153,6 +3155,7 @@ export class ClusterNode {
       reentrancyId: message.requestContext?.reentrancyId ?? newChainId(),
       ...(message.sendingGrain !== undefined ? { sender: message.sendingGrain } : {}),
       ...(transaction !== undefined ? { transaction } : {}),
+      ...(message.deadline !== undefined ? { deadline: message.deadline } : {}),
       ...(message.requestContext?.headers !== undefined
         ? { headers: message.requestContext.headers }
         : {}),
