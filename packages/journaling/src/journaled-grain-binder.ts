@@ -1,9 +1,31 @@
 import type { GrainId } from "@thresh/core/grain-id";
+import type { StateMachineManager } from "@thresh/core/durable-state-machine";
 import { isCustomStorageHost, JournaledGrain } from "@thresh/core/journaled-grain";
 import type { JournalStorageRegistry } from "@thresh/journaling/journal-storage-registry";
 import { StateMachineManagerImpl } from "@thresh/journaling/state-machine-manager-impl";
 import { LogViewAdaptorImpl } from "@thresh/journaling/log-view-adaptor-impl";
 import { CustomStorageLogViewAdaptorImpl } from "@thresh/journaling/custom-storage-log-view-adaptor-impl";
+
+/**
+ * Registers a `LogViewAdaptorImpl` for `instance` on `manager` and installs it,
+ * without replaying. Shared by `bindJournaledGrain` (which owns the manager
+ * outright) and `bindJournalFacets` (which shares one manager with the
+ * grain's `@durableState` fields -- see its module doc). Only for the
+ * journal-substrate case: a `CustomStorageInterface` host bypasses the
+ * journal substrate entirely and is not affected by manager sharing.
+ */
+export function installJournalViewAdaptor<TState, TEvent>(
+  instance: JournaledGrain<TState, TEvent>,
+  manager: StateMachineManager,
+): void {
+  const adaptor = new LogViewAdaptorImpl<TState, TEvent>(
+    () => instance.initialState(),
+    (state, event) => instance.transitionState(state, event),
+    manager,
+  );
+  manager.register(adaptor);
+  instance.installLogViewAdaptor(adaptor);
+}
 
 /**
  * Installs a `LogViewAdaptor` on a `JournaledGrain` instance and replays its
@@ -48,14 +70,7 @@ export async function bindJournaledGrain(
     ...(opts.snapshotThreshold !== undefined ? { snapshotThreshold: opts.snapshotThreshold } : {}),
   });
 
-  const adaptor = new LogViewAdaptorImpl(
-    () => instance.initialState(),
-    (state, event) => instance.transitionState(state, event),
-    manager,
-  );
-
-  manager.register(adaptor);
-  instance.installLogViewAdaptor(adaptor);
+  installJournalViewAdaptor(instance, manager);
 
   if (opts.replay ?? true) await manager.replay();
 }

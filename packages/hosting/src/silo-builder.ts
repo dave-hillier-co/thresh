@@ -64,8 +64,7 @@ import type { JournalStorage } from "@thresh/core/journal-storage";
 import { MemoryJournalStorage } from "@thresh/journaling/memory-journal-storage";
 import { RedisJournalStorage } from "@thresh/journaling/redis-journal-storage";
 import { JournalStorageRegistry } from "@thresh/journaling/journal-storage-registry";
-import { bindDurableStates } from "@thresh/journaling/durable-state-activator";
-import { bindJournaledGrain } from "@thresh/journaling/journaled-grain-binder";
+import { bindJournalFacets } from "@thresh/journaling/journal-facets-binder";
 import type { BroadcastChannelOptions } from "@thresh/core/broadcast-channel";
 import type { StreamFilter, StreamProvider } from "@thresh/core/stream";
 import type { DurableJobsOptions } from "@thresh/core/durable-job";
@@ -1454,16 +1453,17 @@ export class SiloBuilder {
           await bindReducerStates(instance, grainId, storage);
         }
         if (journalStorage !== undefined) {
-          // One manager per grain owns the log; replay rebuilds all durable
-          // structures. On rehydration skip replay (parity with persistent state).
-          await bindDurableStates(instance, grainId, journalStorage, {
-            replay: mode !== "rehydrate",
-            ...(snapshotThreshold !== undefined ? { snapshotThreshold } : {}),
-          });
-          // A `JournaledGrain` owns its own single-machine log (the confirmed
-          // event sequence); install its adaptor and replay it the same way.
-          await bindJournaledGrain(instance, grainId, journalStorage, {
-            replay: mode !== "rehydrate",
+          // One manager per grain owns the log: a grain's `@durableState`
+          // fields and (if it is one) its `JournaledGrain` log-view adaptor
+          // share a single `StateMachineManager`, so replay rebuilds every
+          // durable structure from the one log they all append to. Unlike
+          // persistent state, no journaling component is a migration
+          // participant (Orleans has none either -- only `StateStorageBridge`
+          // is), so nothing carries durable/journalled state across a
+          // migration in the rehydration bag: always replay, even on
+          // rehydrate, or the target comes up empty.
+          await bindJournalFacets(instance, grainId, journalStorage, {
+            replay: true,
             ...(snapshotThreshold !== undefined ? { snapshotThreshold } : {}),
           });
         }

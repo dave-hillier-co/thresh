@@ -134,23 +134,32 @@ export class StateMachineManagerImpl implements StateMachineManager {
     machine.apply(payload);
     this.liveEntryCount += 1;
     // Keep the threshold above the machine count so we don't recompact on every append.
-    if (this.liveEntryCount >= Math.max(this.snapshotThreshold, this.machines.size + 1))
-      await this.compact();
+    if (this.liveEntryCount >= Math.max(this.snapshotThreshold, this.machines.size + 1)) {
+      // The entry above is already durable and applied by the time we get
+      // here; a failure compacting it must not propagate into `append`'s
+      // caller, or a retrying caller (e.g. `DurableList.add`) would re-append
+      // and apply the same entry twice. `liveEntryCount` (and thus this
+      // threshold check) is left as-is, so the next append tries the
+      // compaction again.
+      await this.compact().catch(() => {});
+    }
   }
 
   async compact(): Promise<void> {
     const frames = [...this.machines.values()].map((machine) =>
       serializeValue({ m: machine.name, k: "snap", p: machine.snapshot() } satisfies LogEnvelope),
     );
+    // Work out the retirement bookkeeping this compaction implies, but only
+    // commit it once the replace is durable: a failed compaction (swallowed by
+    // the in-turn path in `append`, then retried) wrote nothing, so it must not
+    // spend any grace period or drop buffered data from memory.
+    const nextRetiring = new Map<string, RetirementRecord>();
     for (const [name, record] of this.retiring) {
       const count = record.compactionsSinceOrphaned + 1;
-      if (count >= this.retirementGraceCompactions) {
-        // Grace period elapsed while still unregistered: purge for good by
-        // simply not writing a frame for it.
-        this.retiring.delete(name);
-        continue;
-      }
-      record.compactionsSinceOrphaned = count;
+      // Grace period elapsed while still unregistered: purge for good by
+      // simply not writing a frame for it.
+      if (count >= this.retirementGraceCompactions) continue;
+      nextRetiring.set(name, { ops: record.ops, compactionsSinceOrphaned: count });
       frames.push(
         serializeValue({
           m: name,
@@ -161,6 +170,8 @@ export class StateMachineManagerImpl implements StateMachineManager {
     }
     this.version = await this.storage.replace(this.logName, this.grainId, frames, this.version);
     this.liveEntryCount = frames.length;
+    this.retiring.clear();
+    for (const [name, record] of nextRetiring) this.retiring.set(name, record);
   }
 
   async clear(): Promise<void> {
