@@ -297,6 +297,32 @@ export class Catalog {
   }
 
   /**
+   * `ActivationOptions.onStuck`: an activation has deactivated itself because
+   * its blocking turn is stuck (Orleans `DeactivateStuckActivation`) and
+   * already marked itself `invalid`. Remove it from whichever map holds it
+   * (ordinary or stateless-worker) and run the same `onDeactivated` hook an
+   * ordinary deactivation gets (directory unregister, cache invalidation) —
+   * so the wedged turn is left dangling on its own, orphaned activation
+   * object, while the NEXT call for this grain id activates a fresh one.
+   * Deliberately skips `disposeCollected`'s `disposeInstance`/`deactivateState`
+   * hooks: those assume `onDeactivate` ran cleanly, which it did not here.
+   */
+  private handleStuckActivation(activation: ActivationData): void {
+    const key = activation.id.toString();
+    if (this.activations.get(key) === activation) {
+      this.activations.delete(key);
+    } else {
+      const list = this.workerActivations.get(key);
+      if (list !== undefined) {
+        const remaining = list.filter((a) => a !== activation);
+        if (remaining.length === 0) this.workerActivations.delete(key);
+        else this.workerActivations.set(key, remaining);
+      }
+    }
+    this.options.onDeactivated?.(activation);
+  }
+
+  /**
    * Return the live (non-invalid) activation for `id` if one exists, WITHOUT
    * creating one — called directly by `DistributedDispatcher`
    * (`routeTo`/`deliverLocal`), which resolve an already-cached/directory-
@@ -477,7 +503,10 @@ export class Catalog {
       ageSeconds * 1000,
       reg.metadata.reentrant,
       activationId,
-      this.options.activationOptions ?? {},
+      {
+        ...this.options.activationOptions,
+        onStuck: (a) => this.handleStuckActivation(a),
+      },
     );
     activation.runtime = new GrainRuntimeImpl(this.options.factory, activation, {
       time: this.options.time,

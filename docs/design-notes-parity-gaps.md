@@ -38,7 +38,18 @@ Read [`deviations.md`](deviations.md) for what stays Orleans-faithful and what i
 
 ## 2. Turn-scheduler back-pressure and deactivation timeout
 
-**Problem.** Per-activation queue is unbounded. A grain that stops draining its queue grows memory without limit; `onDeactivate` has no upper bound so silo shutdown can stall on a single hung activation. There is no stuck-turn detection — an infinite loop in user code wedges the activation silently.
+**Shipped.** All three of (A)/(B)/(C) below are implemented. (B) landed as: the watchdog (already
+present for the warning) now, on the SAME timer firing, marks the activation `invalid`, evicts and
+rejects every turn still queued behind the wedged one and every turn scheduled from then on
+(`RejectionError("noActivation")`, so a cached caller re-resolves and lands on a fresh activation —
+Orleans' reroute), and unregisters it from the catalog and directory
+(`TurnScheduler`'s `onStuck` → `ActivationData.handleStuckTurn` → `Catalog.handleStuckActivation`).
+It does NOT wait for cancellation (#1) first: like upstream, it never interrupts the wedged turn
+itself (JS has no thread to preempt any more than a stuck native thread can be force-killed) — it
+only stops treating the activation as alive, leaving the one wedged turn to finish, or never finish,
+on its own. See `packages/runtime/src/turn-scheduler.ts`, `activation.ts`, `catalog.ts`.
+
+**Problem (historical).** Per-activation queue is unbounded. A grain that stops draining its queue grows memory without limit; `onDeactivate` has no upper bound so silo shutdown can stall on a single hung activation. There is no stuck-turn detection — an infinite loop in user code wedges the activation silently.
 
 **Orleans.** `WorkItemGroup` has `MaxEnqueuedRequestsSoftLimit` (warn) and `MaxEnqueuedRequestsHardLimit` (reject with a transient rejection). `ActivationData` tracks the current turn's start time and deactivates if `MaxRequestProcessingTime` is exceeded. Deactivation uses `CollectionOptions.DeactivationTimeout` via `CancelAfter`.
 

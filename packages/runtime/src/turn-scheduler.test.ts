@@ -545,4 +545,81 @@ describe("TurnScheduler", () => {
       expect(log).toEqual(["w:start", "w:end", "fast:start"]);
     });
   });
+
+  describe("stuck-activation deactivation (Orleans DeactivateStuckActivation)", () => {
+    it("evicts every queued turn with onStuck's rejection once the blocking turn exceeds the limit, and rejects future schedules the same way", async () => {
+      const time = new FakeTimeProvider();
+      const stuckCalls: Array<string | undefined> = [];
+      const sched = new TurnScheduler({
+        maxRequestProcessingTimeMs: 1000,
+        time,
+        onStuck: (turn) => {
+          stuckCalls.push(turn.method);
+          return new Error("activation is stuck");
+        },
+      });
+      const w = deferred();
+      void sched.schedule({ options: {}, method: "wedged", run: () => w.promise });
+      const queued = sched.schedule({ options: {}, method: "later", run: async () => "never" });
+      await flush();
+
+      time.advance(1000);
+      await expect(queued).rejects.toThrow("activation is stuck");
+      expect(stuckCalls).toEqual(["wedged"]);
+
+      // Every NEW schedule() after the activation is stuck is rejected the
+      // same way rather than queuing forever behind the wedged turn.
+      await expect(sched.schedule({ options: {}, run: async () => "also never" })).rejects.toThrow(
+        "activation is stuck",
+      );
+
+      w.resolve(); // the wedged turn is left dangling, but let it settle so the test cleans up
+    });
+
+    it("does not call onStuck for a long-running interleaved turn — only the blocking one", async () => {
+      const time = new FakeTimeProvider();
+      const stuckCalls: string[] = [];
+      const sched = new TurnScheduler({
+        maxRequestProcessingTimeMs: 1000,
+        time,
+        onStuck: () => {
+          stuckCalls.push("stuck");
+          return new Error("stuck");
+        },
+      });
+      const ai = deferred();
+      // An alwaysInterleave turn never becomes the blocking turn (see mayAdmit's
+      // doc), so it running long must not trigger stuck-activation handling.
+      void sched.schedule({ options: { alwaysInterleave: true }, run: () => ai.promise });
+      await flush();
+      time.advance(1000);
+      expect(stuckCalls).toEqual([]);
+      ai.resolve();
+    });
+
+    it("leaves the wedged turn itself running to completion — it is not aborted", async () => {
+      const time = new FakeTimeProvider();
+      const log: string[] = [];
+      const sched = new TurnScheduler({
+        maxRequestProcessingTimeMs: 1000,
+        time,
+        onStuck: () => new Error("stuck"),
+      });
+      const w = deferred();
+      const wedged = sched.schedule({
+        options: {},
+        run: async () => {
+          log.push("start");
+          await w.promise;
+          log.push("end");
+          return "done";
+        },
+      });
+      await flush();
+      time.advance(1000);
+      w.resolve();
+      await expect(wedged).resolves.toBe("done");
+      expect(log).toEqual(["start", "end"]);
+    });
+  });
 });

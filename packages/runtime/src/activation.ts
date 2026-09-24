@@ -81,7 +81,7 @@ import type { InvokeCallOptions } from "@thresh/runtime/dispatcher";
 import { GrainTimerImpl } from "@thresh/runtime/grain-timer-impl";
 import { invocationContext, type InvocationContext } from "@thresh/runtime/invocation-context";
 import type { TimeProvider } from "@thresh/runtime/time-provider";
-import { TurnScheduler } from "@thresh/runtime/turn-scheduler";
+import { TurnScheduler, type Turn } from "@thresh/runtime/turn-scheduler";
 import {
   withDehydrateSpan,
   withOnDeactivateSpan,
@@ -113,6 +113,17 @@ export interface ActivationOptions {
   deactivationTimeoutMs?: number;
   /** Sink for soft-limit/stuck-turn/deactivation-timeout warnings; defaults to discarding them. */
   logger?: Logger;
+  /**
+   * Called once this activation has deactivated itself because its blocking
+   * turn is stuck (`maxRequestProcessingTimeMs` exceeded — Orleans
+   * `DeactivateStuckActivation`/`ActivationUnresponsive`). By the time this
+   * fires `state` is already `"invalid"` and every turn queued behind the
+   * wedged one has been rejected; wired by the `Catalog` to remove this
+   * activation from its own maps and unregister it from the directory, the
+   * same way it does for an ordinary deactivation, so the next call for this
+   * grain id activates a fresh one instead of finding this one again.
+   */
+  onStuck?: (activation: ActivationData) => void;
 }
 
 /** Split a `namespace/key` string; with no slash the whole string is the namespace and key is empty. */
@@ -242,6 +253,7 @@ export class ActivationData implements GrainContext {
 
   private readonly deactivationTimeoutMs: number | undefined;
   private readonly logger: Logger;
+  private readonly onStuckHook: ((activation: ActivationData) => void) | undefined;
 
   constructor(
     id: GrainId,
@@ -255,6 +267,7 @@ export class ActivationData implements GrainContext {
     this.activationId = activationId;
     this.deactivationTimeoutMs = options.deactivationTimeoutMs;
     this.logger = options.logger ?? noopLogger;
+    this.onStuckHook = options.onStuck;
     // Even a fully reentrant grain must finish activating (running state
     // binding, then `onActivate`) before any request is dispatched — Orleans
     // never interleaves a request with `OnActivateAsync`.
@@ -271,10 +284,40 @@ export class ActivationData implements GrainContext {
         ? { maxEnqueuedRequestsHardLimit: options.maxEnqueuedRequestsHardLimit }
         : {}),
       ...(options.maxRequestProcessingTimeMs !== undefined
-        ? { maxRequestProcessingTimeMs: options.maxRequestProcessingTimeMs }
+        ? {
+            maxRequestProcessingTimeMs: options.maxRequestProcessingTimeMs,
+            onStuck: (turn) => this.handleStuckTurn(turn),
+          }
         : {}),
     });
     this.lastActiveMs = time.now();
+  }
+
+  /**
+   * Orleans `ActivationData.DeactivateStuckActivation`: the blocking turn has
+   * been running past `maxRequestProcessingTimeMs` and cannot be preempted
+   * (JS has no thread to interrupt — see `Turn.signal`'s doc), so this
+   * activation is unrecoverable. Marks it `invalid` directly, WITHOUT
+   * scheduling the `onDeactivate` hook — scheduling it would only queue
+   * another turn behind the wedged one, which would never run either
+   * (`docs/design-notes-parity-gaps.md`'s "(B) Stuck-turn watcher" already
+   * settled on this outcome: "marked invalid and re-created"). Returns the
+   * rejection the `TurnScheduler` uses for every turn still queued behind
+   * the wedged one and every turn scheduled from now on; `onStuck` (wired by
+   * the `Catalog`) removes this activation from the catalog and directory so
+   * the next call activates a fresh one.
+   */
+  private handleStuckTurn(turn: Turn<unknown>): unknown {
+    this.state = "invalid";
+    this.logger.warn("activation is stuck processing a request; deactivating", {
+      grainId: this.id.toString(),
+      ...(turn.method !== undefined ? { method: turn.method } : {}),
+    });
+    this.onStuckHook?.(this);
+    return new RejectionError(
+      `activation ${this.id.toString()} is stuck and has been deactivated`,
+      "noActivation",
+    );
   }
 
   /** Schedule `onActivate` as the first turn, so it precedes any message. */

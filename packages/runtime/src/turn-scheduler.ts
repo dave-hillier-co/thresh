@@ -71,14 +71,31 @@ export interface TurnSchedulerOptions {
    */
   maxEnqueuedRequestsHardLimit?: number;
   /**
-   * Log a warning if a running turn is still in flight past this many ms
-   * (Orleans `ActivationData`'s `MaxRequestProcessingTime` stuck-turn
-   * detection). Advisory only, like upstream: JS has no thread-interruption
-   * primitive, so this cannot abort the turn — it only flags it so an
-   * operator (or a future cancellation-aware caller) notices. `undefined`
-   * (the default) disables the watchdog.
+   * Warn once the running BLOCKING turn (see the class doc) is still in
+   * flight past this many ms (Orleans `ActivationData`'s
+   * `MaxRequestProcessingTime` stuck-turn detection). JS has no
+   * thread-interruption primitive, so this never aborts the wedged turn
+   * itself — Orleans can't force-kill a thread either, and leaves it
+   * "dangling, stuck processing the current request until it eventually
+   * completes" (`DeactivateStuckActivation`'s comment). When `onStuck` is
+   * also given, the scheduler additionally acts on it (see `onStuck`).
+   * `undefined` (the default) disables the watchdog entirely.
    */
   maxRequestProcessingTimeMs?: number;
+  /**
+   * Called once, synchronously, the moment the blocking turn is judged stuck
+   * (`maxRequestProcessingTimeMs` exceeded) — Orleans
+   * `ActivationData.DeactivateStuckActivation`. Its return value is used to
+   * reject every turn currently QUEUED behind the wedged one (Orleans
+   * `RerouteAllQueuedMessages`) and every turn `schedule()`d from this point
+   * on (this activation cannot recover, so nothing should ever queue behind
+   * it again) — only the already-running blocking turn is left alone, since
+   * it cannot be preempted. Never called for a long-running turn that is NOT
+   * the blocking one (an interleaved turn running long is merely diagnostic
+   * upstream too — `AnalyzeWorkload` — not grounds for deactivation).
+   * Ignored when `maxRequestProcessingTimeMs` is unset.
+   */
+  onStuck?: (turn: Turn<unknown>) => unknown;
   /** Clock the stuck-turn watchdog schedules against; defaults to the system clock. */
   time?: TimeProvider;
   /** Sink for soft-limit/stuck-turn warnings; defaults to discarding them. */
@@ -134,6 +151,14 @@ export class TurnScheduler {
   private readonly softLimit: number | undefined;
   private readonly hardLimit: number | undefined;
   private readonly maxRequestProcessingTimeMs: number | undefined;
+  private readonly onStuck: ((turn: Turn<unknown>) => unknown) | undefined;
+  /**
+   * Set once `onStuck` has fired (Orleans' activation going `Invalid`): every
+   * turn still queued was rejected with this at that moment, and every turn
+   * `schedule()`d afterward is rejected with it immediately instead of
+   * queuing behind a blocking turn that will never finish being waited on.
+   */
+  private stuck: { readonly rejection: unknown } | undefined;
   private readonly time: TimeProvider;
   private readonly logger: Logger;
   private readonly grainId: string | undefined;
@@ -145,6 +170,7 @@ export class TurnScheduler {
     this.softLimit = options.maxEnqueuedRequestsSoftLimit;
     this.hardLimit = options.maxEnqueuedRequestsHardLimit;
     this.maxRequestProcessingTimeMs = options.maxRequestProcessingTimeMs;
+    this.onStuck = options.onStuck;
     this.time = options.time ?? systemTimeProvider;
     this.logger = options.logger ?? noopLogger;
     this.grainId = options.grainId;
@@ -175,6 +201,13 @@ export class TurnScheduler {
   }
 
   schedule<R>(turn: Turn<R>): Promise<R> {
+    if (this.stuck !== undefined) {
+      // This activation has already been judged stuck and deactivated
+      // (Orleans: `ProcessRequestsToInvalidActivation` treats every message,
+      // waiting or newly arriving, the same way once invalid) — never queue
+      // another turn behind a blocking one that will never finish.
+      return Promise.reject(this.stuck.rejection);
+    }
     if (this.hardLimit !== undefined && this.queue.length >= this.hardLimit) {
       return Promise.reject(
         new LimitExceededException(
@@ -244,7 +277,10 @@ export class TurnScheduler {
    * canInterleave.MayInterleave(_blockingRequest)`) — either side declaring
    * itself safe to interleave is enough.
    */
-  private matchesMayInterleave(method: string | undefined, args: readonly unknown[] | undefined): boolean {
+  private matchesMayInterleave(
+    method: string | undefined,
+    args: readonly unknown[] | undefined,
+  ): boolean {
     return method !== undefined && this.mayInterleavePredicate!(method, args ?? []);
   }
 
@@ -272,7 +308,7 @@ export class TurnScheduler {
     if (this.blockingTurn === undefined && !running.options.alwaysInterleave) {
       this.blockingTurn = running;
     }
-    const watchdog = this.armStuckTurnWatchdog(item.turn);
+    const watchdog = this.armStuckTurnWatchdog(item.turn, running);
 
     Promise.resolve()
       .then(() => item.turn.run())
@@ -290,13 +326,16 @@ export class TurnScheduler {
   /**
    * Schedule a one-shot warning if `turn` is still running once
    * `maxRequestProcessingTimeMs` elapses (Orleans' `MaxRequestProcessingTime`
-   * stuck-turn detection). There is no way to actually abort a running
-   * `async` function from outside it in JS — Orleans itself can't
-   * force-kill a thread either — so this only ever logs; the caller is
-   * responsible for interrupting long-running work cooperatively (e.g. via a
-   * cancellation token).
+   * stuck-turn detection), and — only when `turn` is the BLOCKING turn (see
+   * the class doc) and `onStuck` is configured — deactivate this activation
+   * (Orleans `DeactivateStuckActivation`): evict and reject every currently
+   * queued turn with `onStuck`'s return value, and reject every future
+   * `schedule()` the same way. There is no way to actually abort a running
+   * `async` function from outside it in JS — Orleans itself can't force-kill
+   * a thread either, hence upstream leaving the blocking request "dangling"
+   * — so the wedged turn itself keeps running to completion regardless.
    */
-  private armStuckTurnWatchdog(turn: Turn<unknown>): TimerHandle | undefined {
+  private armStuckTurnWatchdog(turn: Turn<unknown>, running: RunningTurn): TimerHandle | undefined {
     if (this.maxRequestProcessingTimeMs === undefined) return undefined;
     const startedAtMs = this.time.now();
     return this.time.setTimer(() => {
@@ -306,6 +345,12 @@ export class TurnScheduler {
         elapsedMs: this.time.now() - startedAtMs,
         maxRequestProcessingTimeMs: this.maxRequestProcessingTimeMs,
       });
+      if (this.onStuck === undefined || this.stuck !== undefined) return;
+      if (this.blockingTurn !== running) return; // only the blocking turn triggers deactivation
+      const rejection = this.onStuck(turn);
+      this.stuck = { rejection };
+      const queued = this.queue.splice(0, this.queue.length);
+      for (const item of queued) item.reject(rejection);
     }, this.maxRequestProcessingTimeMs);
   }
 
