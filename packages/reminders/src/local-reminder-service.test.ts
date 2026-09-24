@@ -229,6 +229,50 @@ describe("LocalReminderService — catch-up after downtime (initial due time)", 
   });
 });
 
+describe("LocalReminderService — reconcile picks up updates from a non-owner", () => {
+  it("replaces the locally scheduled reminder when the table etag differs", async () => {
+    // A non-owner silo updates the reminder directly in the table (as
+    // register() on that silo would, since it schedules locally only when it
+    // owns the grain). The owner must pick up the new schedule on its next
+    // reconcile instead of continuing to fire the stale one.
+    const time = new FakeTimeProvider();
+    const table = new MemoryReminderTable();
+    const fires: number[] = [];
+    const onFire = async (): Promise<void> => {
+      fires.push(time.now());
+    };
+
+    const service = new LocalReminderService(table, time, onFire, [WHOLE], 0, {
+      minimumPeriod: { ms: 0 },
+    });
+    await service.register(billing, "tick", { ms: 1000 }, { ms: 1000 }); // owner: period 1000, first tick at t=1000
+
+    // A non-owner writes a much shorter period straight to the table (it
+    // doesn't own the grain, so it can't reschedule the owner's timer).
+    await table.upsert({
+      grainId: billing,
+      name: "tick",
+      startAt: new Date(time.now()),
+      period: { ms: 100 },
+    });
+
+    // The owner's periodic reconcile runs (or refreshOwnership on a view
+    // change) before the stale timer would have fired at t=1000.
+    await service.refreshOwnership([WHOLE]);
+    await flush();
+    expect(fires).toEqual([]); // no spurious fire from replacing the schedule
+
+    time.advance(100); // the new period's first tick, not the old t=1000
+    await flush();
+    expect(fires).toEqual([100]);
+
+    const entry = await service.getReminder(billing, "tick");
+    expect(entry?.period).toEqual({ ms: 100 });
+
+    service.stop();
+  });
+});
+
 describe("LocalReminderService — double-fire on rebalance", () => {
   it("does not fire immediately when a fresh instance reconciles the same table after a tick", async () => {
     // Ownership-handoff hazard: without a persisted last-fired instant, a new

@@ -122,9 +122,14 @@ export class LocalReminderService implements ReminderRegistry {
 
   /**
    * Bring the schedule in line with the table for the ranges we own: schedule
-   * reminders we don't have yet, and cancel ones we no longer own or that were
-   * removed. Idempotent — already-scheduled reminders keep their timers, so a
-   * periodic refresh never resets a running fixed-rate reminder.
+   * reminders we don't have yet, replace ones whose table etag has moved on
+   * (an update from a silo that isn't the owner — issue: reconcile leaves the
+   * owner on the old schedule), and cancel ones we no longer own or that were
+   * removed. Idempotent for unchanged entries — already-scheduled reminders
+   * with a matching etag keep their timers, so a periodic refresh never
+   * resets a running fixed-rate reminder. Mirrors Orleans'
+   * `ReadTableAndStartTimers`, which replaces the local reminder whenever the
+   * table's etag differs from the one it has.
    */
   private async reconcile(): Promise<void> {
     const owned = new Map<string, ReminderEntry>();
@@ -137,7 +142,8 @@ export class LocalReminderService implements ReminderRegistry {
       if (!owned.has(key)) this.cancel(key);
     }
     for (const [key, entry] of owned) {
-      if (!this.scheduled.has(key)) this.scheduleEntry(entry);
+      const current = this.scheduled.get(key);
+      if (current === undefined || current.entry.etag !== entry.etag) this.scheduleEntry(entry);
     }
   }
 
