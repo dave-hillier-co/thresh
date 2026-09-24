@@ -249,6 +249,141 @@ describe("LocalDurableJobManager periodic shard check", () => {
   });
 });
 
+/** A shard store whose `listShards` can be made to fail, or to wait on a gate, and counts overlapping calls. */
+class ControllableShardStore extends MemoryJobShardStore {
+  failures = 0;
+  gate: Promise<void> | undefined;
+  listCalls = 0;
+  inFlight = 0;
+  maxInFlight = 0;
+
+  override async listShards(): ReturnType<MemoryJobShardStore["listShards"]> {
+    this.listCalls += 1;
+    this.inFlight += 1;
+    this.maxInFlight = Math.max(this.maxInFlight, this.inFlight);
+    try {
+      if (this.gate !== undefined) await this.gate;
+      if (this.failures > 0) {
+        this.failures -= 1;
+        throw new Error("store unavailable");
+      }
+      return await super.listShards();
+    } finally {
+      this.inFlight -= 1;
+    }
+  }
+}
+
+describe("LocalDurableJobManager periodic shard check robustness", () => {
+  const ownership: ShardOwnershipContext = { localRingKey: "silo1", activeRingKeys: ["silo1"] };
+  const options = resolveOptions({
+    claimRampUpBudget: 4,
+    periodicShardCheckInterval: { ms: 1000 },
+  });
+
+  it("keeps checking after a check fails on a store error", async () => {
+    // Orleans' PeriodicShardCheck logs and carries on after an error; a
+    // failed check must not end the periodic re-check for good.
+    const store = new ControllableShardStore();
+    await seedOrphanedShards(store, 10);
+    const time = new FakeTimeProvider();
+    const manager = new LocalDurableJobManager(
+      store,
+      time,
+      async () => completed,
+      options,
+      ownership,
+    );
+
+    store.failures = 1;
+    await expect(manager.refreshOwnership(ownership)).rejects.toThrow("store unavailable");
+    expect(manager.ownedShards()).toHaveLength(0);
+
+    time.advance(1000);
+    await flush();
+    expect(manager.ownedShards()).toHaveLength(4);
+
+    store.failures = 1; // the next periodic check fails too...
+    time.advance(1000);
+    await flush();
+    expect(manager.ownedShards()).toHaveLength(4);
+
+    time.advance(1000); // ...and the one after still runs
+    await flush();
+    expect(manager.ownedShards()).toHaveLength(8);
+
+    await manager.stop();
+  });
+
+  it("stop() during an in-flight periodic check claims nothing and leaves no check armed", async () => {
+    const store = new ControllableShardStore();
+    await seedOrphanedShards(store, 10);
+    const time = new FakeTimeProvider();
+    const manager = new LocalDurableJobManager(
+      store,
+      time,
+      async () => completed,
+      options,
+      ownership,
+    );
+    await manager.refreshOwnership(ownership);
+    expect(manager.ownedShards()).toHaveLength(4);
+
+    let release: () => void = () => undefined;
+    store.gate = new Promise<void>((r) => {
+      release = r;
+    });
+    time.advance(1000); // the periodic check starts and blocks in listShards
+    await flush();
+    const stopping = manager.stop();
+    store.gate = undefined;
+    release();
+    await stopping;
+    await flush();
+
+    expect(manager.ownedShards()).toHaveLength(0); // no shard claimed after shutdown
+    const callsAfterStop = store.listCalls;
+    time.advance(10_000);
+    await flush();
+    expect(store.listCalls).toBe(callsAfterStop); // and no check re-armed
+  });
+
+  it("never runs a periodic check concurrently with a membership-driven one", async () => {
+    // Before the periodic check, refreshOwnership only ran from the
+    // sequential membership watch; the timer must not overlap it (an
+    // overlapping run can stop an executor the other just started).
+    const store = new ControllableShardStore();
+    await seedOrphanedShards(store, 10);
+    const time = new FakeTimeProvider();
+    const manager = new LocalDurableJobManager(
+      store,
+      time,
+      async () => completed,
+      options,
+      ownership,
+    );
+    await manager.refreshOwnership(ownership);
+
+    let release: () => void = () => undefined;
+    store.gate = new Promise<void>((r) => {
+      release = r;
+    });
+    store.maxInFlight = 0;
+    time.advance(1000); // periodic check blocks in listShards
+    await flush();
+    const viewChange = manager.refreshOwnership(ownership); // membership change meanwhile
+    await flush();
+    store.gate = undefined;
+    release();
+    await viewChange;
+    await flush();
+
+    expect(store.maxInFlight).toBe(1);
+    expect(manager.ownedShards()).toHaveLength(10);
+    await manager.stop();
+  });
+});
+
 describe("LocalDurableJobManager.stop draining", () => {
   it("drains an in-flight run before releasing its shard (undrained-stop regression)", async () => {
     // Ownership-handoff hazard: releasing the shard before the handler has

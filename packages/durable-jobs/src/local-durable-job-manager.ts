@@ -63,6 +63,14 @@ export class LocalDurableJobManager {
   private claimedSinceJoin = 0;
   /** Timer for the periodic self-driven shard check (Orleans `PeriodicShardCheck`). */
   private checkHandle: TimerHandle | undefined;
+  /**
+   * Serialises ownership reconciliation: the periodic check and
+   * membership-driven calls run one at a time, as Orleans' single
+   * PeriodicShardCheck loop does, so one run never stops an executor another
+   * has just started from a stale snapshot.
+   */
+  private reconciling: Promise<void> = Promise.resolve();
+  private stopped = false;
 
   constructor(
     private readonly store: JobShardStore,
@@ -159,10 +167,34 @@ export class LocalDurableJobManager {
    * Re-arms the periodic shard check on every call (including its own ticks),
    * so a shard left orphaned beyond the ramp-up budget, or a claim that failed
    * on a store error, is retried on the next tick even in a stable cluster
-   * with no membership change (Orleans' `PeriodicShardCheck`).
+   * with no membership change (Orleans' `PeriodicShardCheck`). Calls are
+   * serialised with each other and with the periodic check; a no-op after
+   * `stop()`.
    */
-  async refreshOwnership(ownership: ShardOwnershipContext): Promise<void> {
-    this.ownership = ownership;
+  refreshOwnership(ownership: ShardOwnershipContext): Promise<void> {
+    if (!this.stopped) this.ownership = ownership;
+    return this.enqueueReconcile();
+  }
+
+  /** Queue one reconciliation against the latest known membership view. */
+  private enqueueReconcile(): Promise<void> {
+    const run = this.reconciling.then(() => this.reconcileNow());
+    this.reconciling = run.catch(() => undefined);
+    return run;
+  }
+
+  private async reconcileNow(): Promise<void> {
+    if (this.stopped) return;
+    try {
+      await this.reconcileOwnership(this.ownership);
+    } finally {
+      // Re-arm even when this run failed on a store error, so the periodic
+      // check keeps retrying (Orleans' loop logs the error and carries on).
+      this.scheduleCheck();
+    }
+  }
+
+  private async reconcileOwnership(ownership: ShardOwnershipContext): Promise<void> {
     const shards = await this.store.listShards();
     const active = new Set(ownership.activeRingKeys);
 
@@ -170,6 +202,7 @@ export class LocalDurableJobManager {
     // as owner, but the process lost its in-memory executor, so start one (no
     // re-claim needed) to reload and fire the persisted jobs.
     for (const shard of shards) {
+      if (this.stopped) return;
       if (shard.owner === ownership.localRingKey && !this.executors.has(shard.shardKey)) {
         await this.startExecutor(shard.shardKey);
       }
@@ -185,6 +218,7 @@ export class LocalDurableJobManager {
     );
     const toClaim = this.claimBudgetForThisStep(claimable.length);
     for (const shard of claimable.slice(0, toClaim)) {
+      if (this.stopped) return;
       // A dead-owner shard is adopted; an unclaimed one is just claimed.
       const deadOwner = shard.owner !== undefined && !active.has(shard.owner) ? [shard.owner] : [];
       const started = await this.claimAndStart(shard.shardKey, deadOwner);
@@ -201,18 +235,16 @@ export class LocalDurableJobManager {
     for (const shardKey of [...this.executors.keys()]) {
       if (!ownedNow.has(shardKey)) await this.stopExecutor(shardKey);
     }
-
-    this.scheduleCheck();
   }
 
   /** Re-arm the periodic shard check (0 disables it). */
   private scheduleCheck(): void {
     if (this.checkHandle !== undefined) this.time.clearTimer(this.checkHandle);
     this.checkHandle = undefined;
-    if (this.options.periodicShardCheckMs <= 0) return;
+    if (this.stopped || this.options.periodicShardCheckMs <= 0) return;
     this.checkHandle = this.time.setTimer(() => {
       this.checkHandle = undefined;
-      void this.refreshOwnership(this.ownership).catch(() => undefined);
+      void this.enqueueReconcile().catch(() => undefined);
     }, this.options.periodicShardCheckMs);
   }
 
@@ -223,8 +255,12 @@ export class LocalDurableJobManager {
    * awaiting its in-flight work). Best-effort release so a successor can claim.
    */
   async stop(): Promise<void> {
+    this.stopped = true;
     if (this.checkHandle !== undefined) this.time.clearTimer(this.checkHandle);
     this.checkHandle = undefined;
+    // Let an in-flight reconciliation finish (it bails at its next step once
+    // stopped), so it can't start an executor after the drain below.
+    await this.reconciling;
     for (const shardKey of [...this.executors.keys()]) {
       await this.stopExecutor(shardKey);
       await this.store.releaseShard(shardKey, this.ownership.localRingKey).catch(() => undefined);
