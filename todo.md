@@ -15,7 +15,9 @@ deadline API, keepalive unbind on deactivation, and full-facet `@readOnly` guard
 ported from the Orleans implementation — is the first production consumer, and the gaps it hits
 land here. Closed so far: custom-storage log consistency, custom placement strategies,
 `raceAbort` for cancellation-as-clean-exit, a service dimension in the Postgres and Redis storage
-keys, and the observer seam on a `WebSocketTransport`-hosted silo. [`docs/orleans-to-thresh-port.md`](docs/orleans-to-thresh-port.md)
+keys, the observer seam on a `WebSocketTransport`-hosted silo, Postgres journal storage, storage
+backends (the host names providers, Thresh picks the database), and a conditional append that
+never lets a later confirm apply an event its caller was told failed. [`docs/orleans-to-thresh-port.md`](docs/orleans-to-thresh-port.md)
 is the mechanical Orleans→Thresh reference that port maintains.
 
 The service dimension is an **upgrade break for Redis**, recorded here because nothing else does.

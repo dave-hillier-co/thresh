@@ -28,8 +28,9 @@ for how the design differs from Orleans.
 - **Durable journaling (`DurableGrain`)** — a per-grain `StateMachineManager` over
   `DurableValue`/`DurableDictionary`/`DurableList`/`DurableQueue`/`DurableSet` that journals each
   mutation to an append-only log
-  and replays it on activation, with snapshot/compaction; a `JournalStorage` seam (memory + Redis),
-  `useDurable*` hooks + `@durable*` decorators, and `useMemoryJournaling()`/`addRedisJournaling()`.
+  and replays it on activation, with snapshot/compaction; a `JournalStorage` seam (memory, Redis,
+  Postgres), `useDurable*` hooks + `@durable*` decorators, and
+  `useMemoryJournaling()`/`addRedisJournaling()`/`addPostgresJournaling()`.
   Separate from the reducer snapshot facet and `PersistentState`.
 - **Grain migration** — live activation move with state preserved (`IGrainMigrationParticipant`,
   `MigrateOnIdle`, directed placement).
@@ -41,6 +42,10 @@ for how the design differs from Orleans.
   `CustomStorageInterface` owns its own log persistence (per-version rows, snapshots,
   compaction) and the binder routes it past the journal substrate, mirroring Orleans'
   `ICustomStorageInterface<TState, TDelta>` and its `CustomStorageAdaptor`.
+- **Storage backends** — `useStorageBackend` serves every grain-storage and journal provider name a
+  silo uses, and its reminder table, from one memory, Postgres or Redis backend that
+  `storageBackendFromEnvironment()` reads from `THRESH_STORAGE_URL`; in-memory is refused on a
+  multi-silo view unless opted into. `TestCluster`'s `storageBackend` option runs a cluster on one.
 - **Custom placement strategies** — named strategies registered with
   `addPlacementStrategy(name, strategy)` and selected by `{ placement: "custom", strategy }`,
   the whole-strategy counterpart of the existing placement-filter registry (Orleans
