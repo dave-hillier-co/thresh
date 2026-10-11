@@ -27,4 +27,26 @@ grain state; keep them short and avoid unrelated external side effects.
 
 Journaling stores events, periodically snapshots state, and truncates the log. `useDurableState`,
 `useDurableDictionary`, `useDurableList`, `useDurableQueue`, and `useDurableSet` expose journaled
-collections. Configure memory or Redis journaling under the same provider name used by the grain.
+collections. Configure memory, Redis or Postgres journaling (`addPostgresJournaling`) under the same
+provider name used by the grain.
+
+## Choosing where state lives
+
+An application should name its providers and leave the database to the host. `useStorageBackend`
+takes one backend — memory, Postgres or Redis — and uses it for every grain-storage and journal
+provider name the silo does not register explicitly, and for the reminder table when
+`useReminders()` names none. `storageBackendFromEnvironment()` reads it from `THRESH_STORAGE_URL`
+(`postgres://…` or `redis://…`; unset means memory), so a deployment changes backend without code:
+
+```ts
+createSilo(config)
+  .useStorageBackend(storageBackendFromEnvironment())
+  .useReminders()
+  .registerGrain(/* … */);
+```
+
+A Postgres backend shares one pool across its `thresh_grain_state`, `thresh_journal_*` and
+`thresh_reminders` tables, created on start. In-memory storage is refused at build for anything but
+a static view of the silo alone, because each silo would hold its own store and a grain reactivating
+elsewhere would start empty; set `THRESH_STORAGE_ALLOW_IN_MEMORY_CLUSTER=true` only for a cluster
+whose state is disposable. A blank `THRESH_STORAGE_URL` is refused rather than read as memory.
