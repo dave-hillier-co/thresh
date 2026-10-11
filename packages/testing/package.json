@@ -20,6 +20,7 @@
     "@thresh/transactions": "workspace:*"
   },
   "devDependencies": {
+    "pg": "^8.21.0",
     "vitest": "^4.1.7"
   }
 }

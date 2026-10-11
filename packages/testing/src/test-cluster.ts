@@ -13,6 +13,7 @@ import type { TimeProvider } from "@thresh/core/time-provider";
 import { InProcessNetwork, InProcessTransport } from "@thresh/messaging/in-process-transport";
 import { ICancellationSourcesExtension } from "@thresh/runtime/cancellation-extension";
 import { MemoryJobShardStore } from "@thresh/durable-jobs/memory-job-shard-store";
+import type { StorageBackend } from "@thresh/hosting/storage-backend";
 import { MemoryJournalStorage } from "@thresh/journaling/memory-journal-storage";
 import { MemoryGrainStorage } from "@thresh/persistence/memory-grain-storage";
 import { MemoryReminderTable } from "@thresh/reminders/memory-reminder-table";
@@ -70,6 +71,16 @@ export interface TestClusterOptions {
    * from `configureSilo` via `builder.useReminders(table)`.
    */
   reminders?: boolean;
+  /**
+   * Keep grain state, journals and reminders in this backend instead of the
+   * cluster's shared in-memory providers: every silo calls
+   * `useStorageBackend(storageBackend)` in place of the memory defaults. A
+   * DURABLE backend lets a test prove recovery across a WHOLE-cluster restart
+   * (dispose one cluster, start another with the same `serviceId` over the same
+   * backend), which shared memory cannot. `storage`, `journalStorage` and
+   * `reminderTable` on the cluster stay unused.
+   */
+  storageBackend?: StorageBackend;
   /**
    * Per-silo overrides, applied after the defaults. `cluster` is the
    * `TestCluster` under construction — use `cluster.streamProvider(name)` to
@@ -461,17 +472,23 @@ export class TestCluster {
     })
       .useMembership(membership)
       .useInProcessTransport(this.network)
-      .useMemoryStorage(this.storage)
       .useMemoryStreams("default", undefined, this.streamProvider("default"))
       .useBroadcastChannels()
-      .useMemoryJournaling(this.journalStorage)
       .useMemoryDurableJobs(this.jobShardStore);
+    const backend = this.options.storageBackend;
+    if (backend === undefined) {
+      builder.useMemoryStorage(this.storage).useMemoryJournaling(this.journalStorage);
+    } else {
+      builder.useStorageBackend(backend);
+    }
     // Orleans expresses "this deployment has no reminder service" by simply not
     // calling `UseInMemoryReminderService()`, so `reminders: false` must leave
     // the builder's table undefined rather than install a no-op one — that is
     // what makes the silo build with no `reminderRegistry` at all.
     if (this.options.reminders ?? true) {
-      builder.useReminders(this.reminderTable);
+      // With a backend, `useReminders()` takes the backend's table.
+      if (backend === undefined) builder.useReminders(this.reminderTable);
+      else builder.useReminders();
     }
     if (this.options.transactions ?? true) {
       builder.useMemoryTransactionalStorage(this.transactionalStorage);

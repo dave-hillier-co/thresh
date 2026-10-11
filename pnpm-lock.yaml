@@ -273,6 +273,9 @@ importers:
       '@thresh/core':
         specifier: workspace:*
         version: link:../core
+      pg:
+        specifier: ^8.21.0
+        version: 8.21.0
       redis:
         specifier: ^5.12.1
         version: 5.12.1(@opentelemetry/api@1.9.1)
@@ -469,6 +472,9 @@ importers:
         specifier: workspace:*
         version: link:../transactions
     devDependencies:
+      pg:
+        specifier: ^8.21.0
+        version: 8.21.0
       vitest:
         specifier: ^4.1.7
         version: 4.1.7(@opentelemetry/api@1.9.1)(@types/node@25.9.1)(vite@8.0.14(@types/node@25.9.1))
