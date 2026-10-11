@@ -62,6 +62,7 @@ import { TransactionalStorageRegistry } from "@thresh/transactions/transactional
 import type { TransactionalStateStorage } from "@thresh/core/transactional-storage";
 import type { JournalStorage } from "@thresh/core/journal-storage";
 import { MemoryJournalStorage } from "@thresh/journaling/memory-journal-storage";
+import { PostgresJournalStorage } from "@thresh/journaling/postgres-journal-storage";
 import { RedisJournalStorage } from "@thresh/journaling/redis-journal-storage";
 import { JournalStorageRegistry } from "@thresh/journaling/journal-storage-registry";
 import { bindJournalFacets } from "@thresh/journaling/journal-facets-binder";
@@ -1182,6 +1183,33 @@ export class SiloBuilder {
         serviceId: this.serviceIdentity,
       }),
     );
+  }
+
+  /**
+   * Register a Postgres-backed journal provider for durable-journalling facets
+   * and `JournaledGrain`s. The connection pool is created here, the backing
+   * tables are created on silo start, and the pool is closed on stop;
+   * `tablePrefix` names the `{prefix}_logs` / `{prefix}_entries` tables
+   * (defaults to `"thresh_journal"`), and this silo's `serviceId` is part of
+   * every row key, so two services sharing the tables stay partitioned.
+   */
+  addPostgresJournaling(
+    name: string,
+    options: { connectionString: string; tablePrefix?: string },
+  ): this {
+    const pool = new Pool({ connectionString: options.connectionString });
+    pool.on("error", () => {}); // surfaced by start()/queries; don't crash the process
+    const provider = new PostgresJournalStorage(pool, {
+      ...toConfigOption("tablePrefix", options.tablePrefix),
+      serviceId: this.serviceIdentity,
+    });
+    this.starters.push(async () => {
+      await provider.start();
+    });
+    this.closers.push(async () => {
+      await pool.end();
+    });
+    return this.addJournaling(name, provider);
   }
 
   useStaticMembership(
