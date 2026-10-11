@@ -13,6 +13,8 @@ import { StateMachineManagerImpl } from "@thresh/journaling/state-machine-manage
 class FlakyJournal implements JournalStorage {
   failAppends = 0;
   landThenFail = false;
+  /** Every append that reached storage, by its entry count. */
+  readonly appended: number[] = [];
 
   constructor(private readonly inner: JournalStorage = new MemoryJournalStorage()) {}
 
@@ -31,6 +33,7 @@ class FlakyJournal implements JournalStorage {
       throw new Error("injected append failure");
     }
     const version = await this.inner.append(logName, grainId, entries, expectedVersion);
+    this.appended.push(entries.length);
     if (this.landThenFail) {
       this.landThenFail = false;
       throw new Error("injected failure after the append landed");
@@ -108,5 +111,56 @@ describe("LogViewAdaptorImpl.tryAppend on a failed write", () => {
     // The activation is back in step with storage: the next append does not conflict.
     expect(await adaptor.tryAppend(1)).toBe(true);
     expect((await adaptorOver(journal)).confirmedView).toBe(8);
+  });
+});
+
+describe("LogViewAdaptorImpl batched appends", () => {
+  it("writes every pending event in one storage append", async () => {
+    const journal = new FlakyJournal();
+    const adaptor = await adaptorOver(journal);
+
+    adaptor.submitRange([1, 2, 3]);
+    await adaptor.confirmSubmittedEntries();
+
+    expect(journal.appended).toEqual([3]);
+    expect(adaptor.confirmedView).toBe(6);
+    expect(adaptor.confirmedVersion).toBe(3);
+    expect((await adaptorOver(journal)).confirmedView).toBe(6);
+  });
+
+  it("appends a conditional range atomically in one write", async () => {
+    const journal = new FlakyJournal();
+    const adaptor = await adaptorOver(journal);
+
+    expect(await adaptor.tryAppendRange([1, 2])).toBe(true);
+
+    expect(journal.appended).toEqual([2]);
+    expect(adaptor.confirmedView).toBe(3);
+    expect(adaptor.pendingCount).toBe(0);
+  });
+
+  it("withdraws every event of a range whose write keeps failing", async () => {
+    const journal = new FlakyJournal();
+    const adaptor = await adaptorOver(journal);
+
+    journal.failAppends = Number.MAX_SAFE_INTEGER;
+    expect(await adaptor.tryAppendRange([1, 2])).toBe(false);
+    expect(adaptor.pendingCount).toBe(0);
+    expect(adaptor.tentativeView).toBe(0);
+
+    journal.failAppends = 0;
+    expect(await adaptor.tryAppendRange([10])).toBe(true);
+    expect((await adaptorOver(journal)).confirmedView).toBe(10);
+  });
+
+  it("reports a range as appended when re-reading shows its write landed", async () => {
+    const journal = new FlakyJournal();
+    const adaptor = await adaptorOver(journal);
+
+    journal.landThenFail = true;
+    expect(await adaptor.tryAppendRange([4, 5])).toBe(true);
+    expect(adaptor.confirmedView).toBe(9);
+    expect(adaptor.pendingCount).toBe(0);
+    expect((await adaptorOver(journal)).confirmedView).toBe(9);
   });
 });

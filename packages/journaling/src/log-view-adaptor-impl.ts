@@ -105,9 +105,19 @@ export class LogViewAdaptorImpl<TState, TEvent>
    * cannot even be re-read rethrows. In every unsuccessful outcome the event leaves the pending
    * queue, so no later confirm can apply a write its caller was told failed.
    */
-  async tryAppend(event: TEvent): Promise<boolean> {
-    this.submit(event);
-    // The confirmed version once this event is appended: everything already pending lands first.
+  tryAppend(event: TEvent): Promise<boolean> {
+    return this.tryAppendRange([event]);
+  }
+
+  /**
+   * {@link tryAppend} for several events: they are submitted together and written by one confirm
+   * pass (one storage append), so they land together or not at all, and every outcome above holds
+   * for the whole range.
+   */
+  async tryAppendRange(events: readonly TEvent[]): Promise<boolean> {
+    if (events.length === 0) return true;
+    this.submitRange(events);
+    // The confirmed version once these events are appended: everything already pending lands first.
     const landsAt = this.version + this.pending.length;
     for (let attempt = 1; ; attempt++) {
       try {
@@ -116,23 +126,23 @@ export class LogViewAdaptorImpl<TState, TEvent>
       } catch (error) {
         if (error instanceof InconsistentStateError) return false;
         // A failed write, as the custom-storage adaptor and Orleans treat it: re-read storage,
-        // which decides whether the write landed after all, and retry on top of it. The event
-        // must never stay pending past a `false` or a throw: its caller is told the append
-        // failed, and a later confirm silently applying it would land a write the caller was
+        // which decides whether the write landed after all, and retry on top of it. The events
+        // must never stay pending past a `false` or a throw: their caller is told the append
+        // failed, and a later confirm silently applying them would land a write the caller was
         // told failed.
         try {
           await this.resync();
         } catch {
           // Storage cannot even be read: whether the write landed is unknowable here.
-          this.withdraw(event);
+          this.withdraw(events);
           throw error;
         }
         if (this.version >= landsAt) {
-          this.withdraw(event);
+          this.withdraw(events);
           return true;
         }
         if (attempt >= MAX_APPEND_ATTEMPTS) {
-          this.withdraw(event);
+          this.withdraw(events);
           return false;
         }
       }
@@ -151,12 +161,14 @@ export class LogViewAdaptorImpl<TState, TEvent>
     this.tentative = this.pending.reduce(this.transition, this.confirmed);
   }
 
-  /** Takes `event` back out of the pending queue and the tentative view. */
-  private withdraw(event: TEvent): void {
-    const index = this.pending.lastIndexOf(event);
-    if (index < 0) return;
-    this.pending.splice(index, 1);
-    this.unconfirmedCount -= 1;
+  /** Takes `events` back out of the pending queue and the tentative view. */
+  private withdraw(events: readonly TEvent[]): void {
+    for (const event of events) {
+      const index = this.pending.lastIndexOf(event);
+      if (index < 0) continue;
+      this.pending.splice(index, 1);
+      this.unconfirmedCount -= 1;
+    }
     this.tentative = this.pending.reduce(this.transition, this.confirmed);
   }
 
@@ -180,40 +192,43 @@ export class LogViewAdaptorImpl<TState, TEvent>
     // (between two `await`s), and those must be confirmed too before any
     // joined caller's promise settles.
     //
-    // Mirrors Orleans (`LogViewAdaptor.cs`): an event is removed from `pending`
-    // only once it is actually persisted, one at a time, so a failed append
-    // leaves it (and everything queued after it) in place for a later
+    // Each pass writes EVERYTHING pending as one storage append (group
+    // commit: N raised events cost one write, not N). Mirrors Orleans
+    // (`LogViewAdaptor.cs`), which also writes its pending batch together: a
+    // batch leaves `pending` only once it is actually persisted, so a failed
+    // append leaves it (and everything queued after it) in place for a later
     // `confirmSubmittedEntries` to re-read and retry -- never silently
     // dropped. The one documented exception is `InconsistentStateError` (the
     // substrate's version CAS): that is `tryAppend`'s conditional-conflict
     // signal, which Orleans drops rather than retries on the moved base --
-    // see its doc comment above.
+    // see its doc comment above. The conflicting write is the whole batch,
+    // so the whole batch is dropped.
     while (this.pending.length > 0) {
-      // Removed up front, not after: `manager.append` calls this machine's own
-      // `apply` synchronously on success, which recomputes `tentative` by
-      // folding `pending` over `confirmed` -- it must no longer see this event
-      // there, or it would be applied twice (once via `confirmed`, once via
-      // the recompute).
-      const event = this.pending.shift()!;
+      // Removed up front, not after: `manager.appendRange` calls this
+      // machine's own `apply` synchronously on success, which recomputes
+      // `tentative` by folding `pending` over `confirmed` -- it must no longer
+      // see these events there, or they would be applied twice (once via
+      // `confirmed`, once via the recompute).
+      const batch = this.pending.splice(0);
       try {
-        await this.manager.append(this.name, { t: "event", e: event } satisfies Frame<
-          TState,
-          TEvent
-        >);
+        await this.manager.appendRange(
+          this.name,
+          batch.map((event) => ({ t: "event", e: event }) satisfies Frame<TState, TEvent>),
+        );
       } catch (error) {
         if (!(error instanceof InconsistentStateError)) {
           // Put it back at the front, ahead of anything concurrently raised,
           // for a later `confirmSubmittedEntries` to re-read and retry.
-          this.pending.unshift(event);
+          this.pending.unshift(...batch);
           throw error;
         }
         // Dropped for good: take it out of the tentative view as well, or
-        // `tentativeView` would keep showing an event nothing will apply.
-        this.unconfirmedCount -= 1;
+        // `tentativeView` would keep showing events nothing will apply.
+        this.unconfirmedCount -= batch.length;
         this.tentative = this.pending.reduce(this.transition, this.confirmed);
         throw error;
       }
-      this.unconfirmedCount -= 1;
+      this.unconfirmedCount -= batch.length;
     }
   }
 

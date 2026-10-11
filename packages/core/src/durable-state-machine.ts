@@ -34,6 +34,11 @@ export interface StateMachineManager {
    * crosses the configured threshold.
    */
   append(machineName: string, payload: unknown): Promise<void>;
+  /**
+   * Append several mutations for `machineName`, in order, as ONE storage write: they land together
+   * under one version CAS or not at all.
+   */
+  appendRange(machineName: string, payloads: readonly unknown[]): Promise<void>;
   /** Force a snapshot + truncate now. */
   compact(): Promise<void>;
   /**

@@ -123,16 +123,23 @@ export class StateMachineManagerImpl implements StateMachineManager {
     }
   }
 
-  async append(machineName: string, payload: unknown): Promise<void> {
+  append(machineName: string, payload: unknown): Promise<void> {
+    return this.appendRange(machineName, [payload]);
+  }
+
+  async appendRange(machineName: string, payloads: readonly unknown[]): Promise<void> {
     const machine = this.machines.get(machineName);
     if (machine === undefined) throw new Error(`unknown durable state machine "${machineName}"`);
-    const entry = serializeValue({ m: machineName, k: "op", p: payload } satisfies LogEnvelope);
+    if (payloads.length === 0) return;
+    const entries = payloads.map((payload) =>
+      serializeValue({ m: machineName, k: "op", p: payload } satisfies LogEnvelope),
+    );
     // Persist first; only on success apply to memory (a conflicting write leaves
     // the structure untouched and fails the call). The manager owns the apply so
     // that an in-turn compaction below snapshots up-to-date in-memory state.
-    this.version = await this.storage.append(this.logName, this.grainId, [entry], this.version);
-    machine.apply(payload);
-    this.liveEntryCount += 1;
+    this.version = await this.storage.append(this.logName, this.grainId, entries, this.version);
+    for (const payload of payloads) machine.apply(payload);
+    this.liveEntryCount += payloads.length;
     // Keep the threshold above the machine count so we don't recompact on every append.
     if (this.liveEntryCount >= Math.max(this.snapshotThreshold, this.machines.size + 1)) {
       // The entry above is already durable and applied by the time we get

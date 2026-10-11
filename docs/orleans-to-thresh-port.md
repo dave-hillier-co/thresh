@@ -100,6 +100,12 @@ budget exhausts with the position NOT stale (flaky storage, version unmoved), th
 entry is also dropped and reported `false` rather than retried forever, for the same
 told-failed-then-applied reason.
 
+`RaiseConditionalEvents(events)` maps to `raiseConditionalEvents(events)` (adaptor engine
+`tryAppendRange`) with the same semantics over the whole range: one write, all confirmed or all
+dropped. Orleans writes a confirm's pending events together, and so does Thresh: one
+`confirmEvents()` (or one conditional range) is one journal append however many events it
+carries, so a grain that batches its events into one confirm gets group commit for free.
+
 Supply `readStateFromStorage()` (returning `{ version, state }`),
 `applyUpdatesToStorage(updates, expectedVersion)` (returning whether the CAS held) and
 `clearStoredState()`. Two things differ from Orleans and both are deliberate:
