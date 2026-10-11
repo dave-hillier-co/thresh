@@ -64,6 +64,11 @@ import type { JournalStorage } from "@thresh/core/journal-storage";
 import { MemoryJournalStorage } from "@thresh/journaling/memory-journal-storage";
 import { PostgresJournalStorage } from "@thresh/journaling/postgres-journal-storage";
 import { RedisJournalStorage } from "@thresh/journaling/redis-journal-storage";
+import {
+  STORAGE_ALLOW_IN_MEMORY_CLUSTER_ENV,
+  STORAGE_URL_ENV,
+  type StorageBackend,
+} from "@thresh/hosting/storage-backend";
 import { JournalStorageRegistry } from "@thresh/journaling/journal-storage-registry";
 import { bindJournalFacets } from "@thresh/journaling/journal-facets-binder";
 import type { BroadcastChannelOptions } from "@thresh/core/broadcast-channel";
@@ -381,6 +386,11 @@ export class SiloBuilder {
   private placementFilters: PlacementFilterRegistry | undefined;
   private placementStrategies: PlacementStrategyRegistry | undefined;
   private reminderTable: ReminderTable | undefined;
+  private remindersRequested = false;
+  private storageBackend: StorageBackend | undefined;
+  private backendReminderTable: ReminderTable | undefined;
+  /** Whether membership is a static view of this silo alone (the in-memory backend's safe case). */
+  private singleSiloView = false;
   private reminderServiceOptions: ReminderServiceOptions | undefined;
   private jobShardStore: JobShardStore | undefined;
   private durableJobsOptions: DurableJobsOptions = {};
@@ -464,11 +474,11 @@ export class SiloBuilder {
    * Enable durable reminders backed by the given table (in-memory by default).
    * `options` mirrors Orleans `ReminderOptions` (e.g. `minimumPeriod`).
    */
-  useReminders(
-    table: ReminderTable = new MemoryReminderTable(),
-    options?: ReminderServiceOptions,
-  ): this {
-    this.reminderTable = table;
+  useReminders(table?: ReminderTable, options?: ReminderServiceOptions): this {
+    // With no table, the storage backend's (else an in-memory one) is chosen at build, so
+    // `useReminders()` and `useStorageBackend()` may be called in either order.
+    if (table !== undefined) this.reminderTable = table;
+    this.remindersRequested = true;
     this.reminderServiceOptions = options;
     return this;
   }
@@ -488,6 +498,7 @@ export class SiloBuilder {
       ...toConfigOption("keyPrefix", options.keyPrefix),
       serviceId: this.serviceIdentity,
     });
+    this.remindersRequested = true;
     this.reminderServiceOptions = serviceOptions;
     return this;
   }
@@ -511,6 +522,7 @@ export class SiloBuilder {
       await pool.end();
     });
     this.reminderTable = table;
+    this.remindersRequested = true;
     return this;
   }
 
@@ -940,6 +952,75 @@ export class SiloBuilder {
     return this.storage?.tryGet(name);
   }
 
+  /**
+   * Keep this silo's durable state in `backend`: it serves every grain-storage
+   * and journal provider name the silo uses and does not register explicitly,
+   * and the reminder table when `useReminders()` names none. The application
+   * names its providers; the backend — usually `storageBackendFromEnvironment()`
+   * — decides where they live. A Postgres backend shares one pool across its
+   * `{prefix}_grain_state`, `{prefix}_journal_*` and `{prefix}_reminders`
+   * tables, created on start; a Redis backend shares one client. In-memory is
+   * refused at build for anything but a static view of this silo alone, unless
+   * `allowInCluster` says the state is disposable: each silo would hold its own
+   * store, so a grain reactivating elsewhere would silently start empty.
+   */
+  useStorageBackend(backend: StorageBackend): this {
+    if (this.storageBackend !== undefined) throw new Error("silo: storage backend already set");
+    this.storageBackend = backend;
+    let storage: GrainStorage;
+    let journal: JournalStorage;
+    switch (backend.kind) {
+      case "memory":
+        storage = new MemoryGrainStorage();
+        journal = new MemoryJournalStorage();
+        this.backendReminderTable = new MemoryReminderTable();
+        break;
+      case "postgres": {
+        const prefix = backend.tablePrefix ?? "thresh";
+        const pool = new Pool({ connectionString: backend.connectionString });
+        pool.on("error", () => {}); // surfaced by start()/queries; don't crash the process
+        const grainStorage = new PostgresGrainStorage(pool, {
+          tableName: `${prefix}_grain_state`,
+          serviceId: this.serviceIdentity,
+        });
+        const journalStorage = new PostgresJournalStorage(pool, {
+          tablePrefix: `${prefix}_journal`,
+          serviceId: this.serviceIdentity,
+        });
+        const reminders = new PostgresReminderTable(pool, {
+          tableName: `${prefix}_reminders`,
+          serviceId: this.serviceIdentity,
+        });
+        this.starters.push(async () => {
+          await grainStorage.start();
+          await journalStorage.start();
+          await reminders.start();
+        });
+        this.closers.push(async () => {
+          await pool.end();
+        });
+        storage = grainStorage;
+        journal = journalStorage;
+        this.backendReminderTable = reminders;
+        break;
+      }
+      case "redis": {
+        const client = this.createManagedRedisClient({ url: backend.url });
+        const keyPrefix = backend.keyPrefix ?? "thresh";
+        const options = { keyPrefix, serviceId: this.serviceIdentity };
+        storage = new RedisGrainStorage(client, options);
+        journal = new RedisJournalStorage(client, options);
+        this.backendReminderTable = new RedisReminderTable(client, options);
+        break;
+      }
+      default:
+        return assertNeverBackend(backend);
+    }
+    (this.storage ??= new StorageRegistry()).setFallback(storage);
+    (this.journalStorage ??= new JournalStorageRegistry()).setFallback(journal);
+    return this;
+  }
+
   /** Convenience: register an in-memory "default" provider (dev/tests). */
   useMemoryStorage(provider: GrainStorage = new MemoryGrainStorage()): this {
     return this.addStorage("default", provider);
@@ -1217,6 +1298,7 @@ export class SiloBuilder {
     metadata?: (silo: SiloAddress) => Readonly<Record<string, string>> | undefined,
   ): this {
     this.membership = new StaticMembershipService(this.config.local, silos, metadata);
+    this.singleSiloView = silos.length === 1 && silos[0]!.equals(this.config.local);
     return this;
   }
 
@@ -1228,6 +1310,7 @@ export class SiloBuilder {
    */
   useMembership(service: MembershipService): this {
     this.membership = service;
+    this.singleSiloView = false;
     return this;
   }
 
@@ -1241,6 +1324,7 @@ export class SiloBuilder {
    */
   useKubernetesMembership(watch: EndpointWatch, options?: KubernetesMembershipOptions): this {
     this.membership = new KubernetesMembership(this.config.local, watch, options);
+    this.singleSiloView = false;
     const lifecycle = watch as Partial<{ start(): Promise<void>; stop(): void }>;
     if (typeof lifecycle.start === "function") {
       this.starters.push(() => lifecycle.start!());
@@ -1411,6 +1495,20 @@ export class SiloBuilder {
   build(): SiloHost {
     if (this.membership === undefined) throw new Error("silo: no membership configured");
     if (this.transport === undefined) throw new Error("silo: no transport configured");
+    if (
+      this.storageBackend?.kind === "memory" &&
+      this.storageBackend.allowInCluster !== true &&
+      !this.singleSiloView
+    ) {
+      throw new Error(
+        `silo: in-memory storage on a multi-silo cluster loses state when a grain reactivates ` +
+          `on another silo; set ${STORAGE_URL_ENV} to a durable backend, or set ` +
+          `${STORAGE_ALLOW_IN_MEMORY_CLUSTER_ENV}=true if this cluster's state is disposable`,
+      );
+    }
+    if (this.remindersRequested && this.reminderTable === undefined) {
+      this.reminderTable = this.backendReminderTable ?? new MemoryReminderTable();
+    }
     const classSpecificCollectionAgeSeconds = this.resolvedClassSpecificCollectionAges;
     validateClassSpecificCollectionAges(classSpecificCollectionAgeSeconds);
     const health = new HealthCheck();
@@ -1842,4 +1940,8 @@ function validateClassSpecificCollectionAges(
 
 export function createSilo(config: SiloConfig): SiloBuilder {
   return new SiloBuilder(config);
+}
+
+function assertNeverBackend(backend: never): never {
+  throw new Error(`silo: unknown storage backend ${JSON.stringify(backend)}`);
 }
