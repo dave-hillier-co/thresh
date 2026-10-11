@@ -2,14 +2,11 @@
  * Orleans' `ClusterOptions.DefaultServiceId`
  * (`src/Orleans.Core/Configuration/Options/ClusterOptions.cs:19`).
  *
- * Shared rather than redeclared per module because THREE independent places have
+ * Shared rather than redeclared per module because two independent places have
  * to agree on it or durable state is silently stranded: the value a silo
- * advertises when its config names no `serviceId`, the value each storage
- * provider falls back to, and the value `PostgresGrainStorage`'s migration
- * backfills pre-service rows to. A silo that defaulted to something else would
- * stamp existing rows with this literal and then read them back under the other
- * one, matching nothing — the grain activates empty and its next write orphans
- * the original row.
+ * advertises when its config names no `serviceId`, and the value each storage
+ * provider falls back to. A provider built directly (with no silo) and one built
+ * by a silo with no `serviceId` must read the same rows.
  *
  * Orleans keeps `ServiceId` independent of `ClusterId` deliberately: it "should
  * survive deployment and redeployment, where as ClusterId might not"

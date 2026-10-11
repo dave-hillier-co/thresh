@@ -3,7 +3,6 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { Pool } from "pg";
 import { GrainId } from "@thresh/core/grain-id";
 import { Guid } from "@thresh/core/guid";
-import { serializeValue } from "@thresh/core/value-codec";
 import { PostgresSubscriptionRegistry } from "@thresh/streams/postgres-subscription-registry";
 
 const PG_URL = process.env.PG_URL ?? "postgres://localhost:5432/postgres";
@@ -101,10 +100,7 @@ describe.skipIf(pool === undefined)("PostgresSubscriptionRegistry", () => {
 // Issue #64: PostgresSubscriptionRegistry partitions only by table name and
 // provider, so two services sharing one table with the same provider name
 // silently share subscriptions — the same collision #59 fixed for grain
-// state. This mirrors #59's two-halved coverage: the partitioning a
-// `serviceId` buys, and the in-place migration that keeps a table written
-// under the pre-service_id shape readable, with its backfill value agreeing
-// with what a no-`serviceId` reader sees.
+// state.
 describe.skipIf(pool === undefined)(
   "PostgresSubscriptionRegistry service partitioning (issue #64)",
   () => {
@@ -124,69 +120,19 @@ describe.skipIf(pool === undefined)(
       expect(ids(await beta.subscribers("s"))).toEqual(["ChatUser/bob"]);
     });
 
-    it("migrates a table written under the pre-service_id schema and still reads it", async () => {
-      const legacy = `${prefix}_legacy`;
-      await pool!.query(
-        `CREATE TABLE ${legacy}_subscriptions (
-           provider TEXT NOT NULL,
-           stream_key TEXT NOT NULL,
-           subscriber TEXT NOT NULL,
-           PRIMARY KEY (provider, stream_key, subscriber)
-         )`,
-      );
+    it("survives several instances starting concurrently over a fresh table", async () => {
+      const fresh = `${prefix}_race`;
       try {
-        const alice = new GrainId("ChatUser", "alice");
-        await pool!.query(
-          `INSERT INTO ${legacy}_subscriptions (provider, stream_key, subscriber) VALUES ($1, $2, $3)`,
-          ["default", "room/general", serializeValue(alice)],
-        );
-
-        const migrated = new PostgresSubscriptionRegistry(pool!, legacy, "default");
-        await migrated.start(); // must ALTER the existing table, not skip it
-        expect(ids(await migrated.subscribers("room/general"))).toEqual(["ChatUser/alice"]);
-
-        // Also confirm the row is still writable under the (defaulted) service id.
-        await migrated.subscribe("room/general", new GrainId("ChatUser", "bob"));
-        expect(ids(await migrated.subscribers("room/general"))).toEqual([
-          "ChatUser/alice",
-          "ChatUser/bob",
-        ]);
-      } finally {
-        await pool!.query(`DROP TABLE IF EXISTS ${legacy}_subscriptions`);
-      }
-    });
-
-    it("survives several instances racing the migration concurrently", async () => {
-      // Several concurrent starts (not just two) widen the window so the
-      // run reliably lands instances between the winner's DROP CONSTRAINT
-      // and its ADD PRIMARY KEY, exercising isAlreadyAbsent() (42704) and
-      // isAlreadyPresent() (42P16) — the two benign codes addServiceIdColumn()
-      // can see when it loses either half of that race.
-      const legacy = `${prefix}_race`;
-      await pool!.query(
-        `CREATE TABLE ${legacy}_subscriptions (
-           provider TEXT NOT NULL,
-           stream_key TEXT NOT NULL,
-           subscriber TEXT NOT NULL,
-           PRIMARY KEY (provider, stream_key, subscriber)
-         )`,
-      );
-      try {
-        const alice = new GrainId("ChatUser", "alice");
-        await pool!.query(
-          `INSERT INTO ${legacy}_subscriptions (provider, stream_key, subscriber) VALUES ($1, $2, $3)`,
-          ["default", "room/general", serializeValue(alice)],
-        );
-
         const instances = Array.from(
           { length: 5 },
-          () => new PostgresSubscriptionRegistry(pool!, legacy, "default"),
+          () => new PostgresSubscriptionRegistry(pool!, fresh, "default"),
         );
         await Promise.all(instances.map((instance) => instance.start()));
 
-        expect(ids(await instances[0]!.subscribers("room/general"))).toEqual(["ChatUser/alice"]);
+        await instances[0]!.subscribe("room/general", new GrainId("ChatUser", "alice"));
+        expect(ids(await instances[1]!.subscribers("room/general"))).toEqual(["ChatUser/alice"]);
       } finally {
-        await pool!.query(`DROP TABLE IF EXISTS ${legacy}_subscriptions`);
+        await pool!.query(`DROP TABLE IF EXISTS ${fresh}_subscriptions`);
       }
       // Five concurrent Postgres round-trips can occasionally run past
       // vitest's default 5s timeout under host load; the longer timeout is

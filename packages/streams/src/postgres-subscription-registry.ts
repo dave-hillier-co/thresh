@@ -11,31 +11,6 @@ function isDuplicate(err: unknown): boolean {
   return code === "23505" || code === "42P07" || code === "42710" || code === "42701";
 }
 
-// The mirror image of isDuplicate() above: two instances racing
-// addServiceIdColumn() can both read the same old primary-key constraint
-// name from pg_constraint before either has dropped it, so the loser's
-// `DROP CONSTRAINT` targets a name the winner already removed. Postgres
-// reports that as 42704 undefined_object — "already absent", not
-// "already created" — which is a distinct benign outcome from isDuplicate().
-function isAlreadyAbsent(err: unknown): boolean {
-  const code = (err as { code?: string }).code;
-  return code === "42704";
-}
-
-// The next link in the same race isAlreadyAbsent() covers: once the winner
-// has dropped the old primary key, both instances proceed to `ADD PRIMARY
-// KEY` (the loser's DROP having failed benignly, or having raced past the
-// `oldKey === undefined` check because the winner had already dropped it
-// before the loser's own `pg_constraint` SELECT). Whichever instance loses
-// that second race is adding a primary key the other has already added.
-// Postgres reports that as 42P16 invalid_table_definition ("multiple
-// primary keys for table ... are not allowed") — the loser's desired end
-// state is already in place, so it's benign too.
-function isAlreadyPresent(err: unknown): boolean {
-  const code = (err as { code?: string }).code;
-  return code === "42P16";
-}
-
 /**
  * Durable pub-sub registry mapping a stream (`namespace/key`) to the set of
  * grains subscribed to it, backed by one row per `(service_id, provider,
@@ -73,53 +48,6 @@ export class PostgresSubscriptionRegistry implements SubscriptionRegistry {
            PRIMARY KEY (service_id, provider, stream_key, subscriber)
          )`,
       );
-    } catch (err) {
-      if (!isDuplicate(err)) throw err;
-    }
-    await this.addServiceIdColumn();
-  }
-
-  /**
-   * Bring a table created before issue #64 up to the service-partitioned
-   * shape, mirroring `PostgresGrainStorage.addServiceIdColumn()` (#59).
-   */
-  private async addServiceIdColumn(): Promise<void> {
-    const existing = await this.pool.query(
-      `SELECT 1 FROM information_schema.columns
-       WHERE table_schema = current_schema() AND table_name = $1 AND column_name = 'service_id'`,
-      [this.table],
-    );
-    if (existing.rowCount !== 0) return;
-    try {
-      await this.pool.query(
-        `ALTER TABLE ${this.table}
-           ADD COLUMN IF NOT EXISTS service_id text NOT NULL DEFAULT '${DEFAULT_SERVICE_ID}'`,
-      );
-      await this.pool.query(`ALTER TABLE ${this.table} ALTER COLUMN service_id DROP DEFAULT`);
-      const pk = await this.pool.query<{ conname: string }>(
-        `SELECT conname FROM pg_constraint WHERE contype = 'p' AND conrelid = to_regclass($1)`,
-        [this.table],
-      );
-      const oldKey = pk.rows[0]?.conname;
-      if (oldKey !== undefined) {
-        try {
-          await this.pool.query(`ALTER TABLE ${this.table} DROP CONSTRAINT "${oldKey}"`);
-        } catch (err) {
-          // See isAlreadyAbsent(): a concurrent instance can have already
-          // dropped this exact constraint between our SELECT and this
-          // statement.
-          if (!isAlreadyAbsent(err)) throw err;
-        }
-      }
-      try {
-        await this.pool.query(
-          `ALTER TABLE ${this.table} ADD PRIMARY KEY (service_id, provider, stream_key, subscriber)`,
-        );
-      } catch (err) {
-        // See isAlreadyPresent(): a concurrent instance can have already
-        // added this exact primary key.
-        if (!isAlreadyPresent(err)) throw err;
-      }
     } catch (err) {
       if (!isDuplicate(err)) throw err;
     }

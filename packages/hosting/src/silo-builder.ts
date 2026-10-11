@@ -445,9 +445,8 @@ export class SiloBuilder {
    * one Postgres or Redis, and `buildSiloHost` advertises it.
    *
    * The default MUST agree with what the storage providers themselves fall back
-   * to, because `PostgresGrainStorage`'s migration backfills pre-service rows to
-   * that same literal: a default of `clusterId` here would stamp existing rows
-   * `"default"` and then read them back under the cluster id, matching nothing.
+   * to, so a provider built directly and one built by this silo read the same
+   * rows. It is never `clusterId`, which may change across a redeployment.
    */
   private get serviceIdentity(): string {
     return this.config.serviceId ?? DEFAULT_SERVICE_ID;

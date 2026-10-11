@@ -14,7 +14,6 @@ import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
 import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
 import { MemoryGrainStorage } from "@thresh/persistence/memory-grain-storage";
 import { PostgresGrainStorage } from "@thresh/persistence/postgres-grain-storage";
-import { serializeValue } from "@thresh/core/value-codec";
 import { constructGrain } from "@thresh/runtime/construct-grain";
 import { createSilo, type Registration } from "@thresh/hosting/silo-builder";
 
@@ -448,48 +447,6 @@ describe.skipIf(sharedPool === undefined)(
         await alphaHost.stop();
         await betaHost.stop();
         await sharedPool!.query(`DROP TABLE IF EXISTS ${table}`);
-      }
-    }, 20_000);
-
-    // The case a real deployment actually hits: a silo configured with only a
-    // `clusterId`, over a table that predates the service column. The migration
-    // backfills existing rows to DEFAULT_SERVICE_ID, so the builder's default
-    // MUST be that same literal — a default of `clusterId` would stamp the rows
-    // "default" and then read them back under the cluster id, matching nothing:
-    // the grain activates empty and its next write orphans the original row.
-    it("reads rows migrated from the pre-service_id schema on a silo with no serviceId", async () => {
-      const legacy = `thresh_hosting_legacy_${randomUUID().replace(/-/g, "")}`;
-      await sharedPool!.query(
-        `CREATE TABLE ${legacy} (
-           grain_id text NOT NULL,
-           state_name text NOT NULL,
-           data text NOT NULL,
-           etag text NOT NULL,
-           PRIMARY KEY (grain_id, state_name)
-         )`,
-      );
-      const id = new GrainId("Datastore", "0");
-      await sharedPool!.query(
-        `INSERT INTO ${legacy} (grain_id, state_name, data, etag) VALUES ($1, $2, $3, $4)`,
-        [id.toString(), "balance", serializeValue({ cents: 77 }), "legacy-etag"],
-      );
-
-      const address = new SiloAddress("silo-legacy", "uid-legacy", "silo-legacy:11111");
-      const builder = createSilo({ clusterId: "prod", local: address })
-        .useStaticMembership([address])
-        .useInProcessTransport(new InProcessNetwork())
-        .addPostgresStorage("datastore", { connectionString: PG_URL, tableName: legacy });
-      const host = builder.build();
-      await host.start();
-      try {
-        const storage = builder.storageProvider("datastore")!;
-        const state = { value: { cents: 0 }, etag: undefined as string | undefined, exists: false };
-        await storage.read("balance", id, state);
-        expect(state.exists).toBe(true);
-        expect(state.value.cents).toBe(77);
-      } finally {
-        await host.stop();
-        await sharedPool!.query(`DROP TABLE IF EXISTS ${legacy}`);
       }
     }, 20_000);
 
