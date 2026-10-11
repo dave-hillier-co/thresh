@@ -13,6 +13,13 @@ import type { LogViewAdaptor } from "@thresh/core/journaled-grain";
 type Frame<TState, TEvent> = { t: "event"; e: TEvent } | { t: "snap"; s: TState; v?: number };
 
 /**
+ * How many times `tryAppend` re-reads and retries a failed write before reporting `false` -- the
+ * custom-storage adaptor's bounded CAS budget, for the same reason: Orleans retries until storage
+ * recovers, which would park the caller indefinitely.
+ */
+const MAX_APPEND_ATTEMPTS = 5;
+
+/**
  * The `LogViewAdaptor` implementation, mirroring Orleans' state-storage /
  * log-storage adaptors collapsed into one: it maintains the confirmed view (by
  * folding confirmed events through `transitionState`, starting from
@@ -90,19 +97,67 @@ export class LogViewAdaptorImpl<TState, TEvent>
    * writer through its `StateMachineManager`, so the raise cannot lose a race to another log
    * writer the way the custom-storage adaptor's version CAS can; the one conflict left is the
    * substrate's own storage CAS (a duplicate activation), which surfaces as an
-   * `InconsistentStateError` from the append. That conflict reports `false` -- and `runConfirmLoop` does not requeue the
-   * conflicting event, so it is dropped (from the tentative view too), never applied by a later
-   * confirm. Anything else is a genuine storage failure and propagates.
+   * `InconsistentStateError` from the append. That conflict reports `false` -- and `runConfirmLoop`
+   * does not requeue the conflicting event, so it is dropped (from the tentative view too), never
+   * applied by a later confirm. Any other failure is a failed write: the log is re-read, which
+   * decides whether the write landed after all (then `true`), and the append is retried up to
+   * {@link MAX_APPEND_ATTEMPTS} times before the event is dropped and `false` reported. A log that
+   * cannot even be re-read rethrows. In every unsuccessful outcome the event leaves the pending
+   * queue, so no later confirm can apply a write its caller was told failed.
    */
   async tryAppend(event: TEvent): Promise<boolean> {
     this.submit(event);
-    try {
-      await this.confirmSubmittedEntries();
-      return true;
-    } catch (error) {
-      if (error instanceof InconsistentStateError) return false;
-      throw error;
+    // The confirmed version once this event is appended: everything already pending lands first.
+    const landsAt = this.version + this.pending.length;
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await this.confirmSubmittedEntries();
+        return true;
+      } catch (error) {
+        if (error instanceof InconsistentStateError) return false;
+        // A failed write, as the custom-storage adaptor and Orleans treat it: re-read storage,
+        // which decides whether the write landed after all, and retry on top of it. The event
+        // must never stay pending past a `false` or a throw: its caller is told the append
+        // failed, and a later confirm silently applying it would land a write the caller was
+        // told failed.
+        try {
+          await this.resync();
+        } catch {
+          // Storage cannot even be read: whether the write landed is unknowable here.
+          this.withdraw(event);
+          throw error;
+        }
+        if (this.version >= landsAt) {
+          this.withdraw(event);
+          return true;
+        }
+        if (attempt >= MAX_APPEND_ATTEMPTS) {
+          this.withdraw(event);
+          return false;
+        }
+      }
     }
+  }
+
+  /**
+   * Re-reads the log through the manager, keeping whatever is still pending: `replay` resets
+   * every machine (this one's pending events included) before applying storage's entries.
+   */
+  private async resync(): Promise<void> {
+    const pending = this.pending;
+    await this.manager.replay();
+    this.pending = pending;
+    this.unconfirmedCount = pending.length;
+    this.tentative = this.pending.reduce(this.transition, this.confirmed);
+  }
+
+  /** Takes `event` back out of the pending queue and the tentative view. */
+  private withdraw(event: TEvent): void {
+    const index = this.pending.lastIndexOf(event);
+    if (index < 0) return;
+    this.pending.splice(index, 1);
+    this.unconfirmedCount -= 1;
+    this.tentative = this.pending.reduce(this.transition, this.confirmed);
   }
 
   /**
