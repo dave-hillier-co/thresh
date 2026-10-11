@@ -25,39 +25,13 @@ export interface PostgresGrainStorageOptions {
 // them against anything but a plain SQL identifier; all other inputs are bound.
 const IDENTIFIER = /^[a-z_][a-z0-9_]*$/;
 
-// Concurrent silos can race `CREATE TABLE IF NOT EXISTS` and the migration
-// below; the loser sees a duplicate error even though the object now exists,
+// Concurrent silos can race `CREATE TABLE IF NOT EXISTS`; the loser sees a duplicate error even though the object now exists,
 // which is the desired state. 42P07 duplicate_table, 42710 duplicate_object
 // (a constraint), 42701 duplicate_column, 23505 unique_violation (the
 // catalogue's own index).
 function isDuplicate(err: unknown): boolean {
   const code = (err as { code?: string }).code;
   return code === "23505" || code === "42P07" || code === "42710" || code === "42701";
-}
-
-// The mirror image of isDuplicate() above: two silos racing
-// addServiceIdColumn() can both read the same old primary-key constraint
-// name from pg_constraint before either has dropped it, so the loser's
-// `DROP CONSTRAINT` targets a name the winner already removed. Postgres
-// reports that as 42704 undefined_object — "already absent", not
-// "already created" — which is a distinct benign outcome from isDuplicate().
-function isAlreadyAbsent(err: unknown): boolean {
-  const code = (err as { code?: string }).code;
-  return code === "42704";
-}
-
-// The next link in the same race isAlreadyAbsent() covers: once the winner
-// has dropped the old primary key, both silos proceed to `ADD PRIMARY KEY`
-// (the loser's DROP having failed benignly, or having raced past the
-// `oldKey === undefined` check because the winner had already dropped it
-// before the loser's own `pg_constraint` SELECT). Whichever silo loses that
-// second race is adding a primary key the other has already added. Postgres
-// reports that as 42P16 invalid_table_definition ("multiple primary keys
-// for table ... are not allowed") — the loser's desired end state is
-// already in place, so it's benign too.
-function isAlreadyPresent(err: unknown): boolean {
-  const code = (err as { code?: string }).code;
-  return code === "42P16";
 }
 
 /**
@@ -93,67 +67,6 @@ export class PostgresGrainStorage implements GrainStorage {
            PRIMARY KEY (service_id, grain_id, state_name)
          )`,
       );
-    } catch (err) {
-      if (!isDuplicate(err)) throw err;
-    }
-    await this.addServiceIdColumn();
-  }
-
-  /**
-   * Bring a table created before issue #59 up to the service-partitioned shape.
-   * `CREATE TABLE IF NOT EXISTS` above does nothing to an EXISTING table, so a
-   * pre-#59 table would silently keep `PRIMARY KEY (grain_id, state_name)` and
-   * every statement here would fail (`ON CONFLICT (service_id, ...)` with 42P10,
-   * the rest with "column service_id does not exist"). Existing rows backfill to
-   * `DEFAULT_SERVICE_ID`, which is also what a provider configured with no
-   * `serviceId` reads, so a single-cluster deployment sees no change.
-   *
-   * Idempotent, and safe for two silos racing it: each statement either no-ops
-   * or raises a duplicate error, which is the state we wanted.
-   */
-  private async addServiceIdColumn(): Promise<void> {
-    const existing = await this.pool.query(
-      `SELECT 1 FROM information_schema.columns
-       WHERE table_schema = current_schema() AND table_name = $1 AND column_name = 'service_id'`,
-      [this.table],
-    );
-    if (existing.rowCount !== 0) return;
-    try {
-      // The default backfills existing rows, then goes away: a fresh table has
-      // no default on the column, and neither should a migrated one.
-      await this.pool.query(
-        `ALTER TABLE ${this.table}
-           ADD COLUMN IF NOT EXISTS service_id text NOT NULL DEFAULT '${DEFAULT_SERVICE_ID}'`,
-      );
-      await this.pool.query(`ALTER TABLE ${this.table} ALTER COLUMN service_id DROP DEFAULT`);
-      // The old key was `(grain_id, state_name)`. Look its constraint name up
-      // rather than assuming Postgres' implicit `<table>_pkey`, which it
-      // truncates past 63 characters — a guess that missed would leave the old
-      // key in place and fail the ADD below.
-      const pk = await this.pool.query<{ conname: string }>(
-        `SELECT conname FROM pg_constraint WHERE contype = 'p' AND conrelid = to_regclass($1)`,
-        [this.table],
-      );
-      const oldKey = pk.rows[0]?.conname;
-      if (oldKey !== undefined) {
-        try {
-          await this.pool.query(`ALTER TABLE ${this.table} DROP CONSTRAINT "${oldKey}"`);
-        } catch (err) {
-          // See isAlreadyAbsent(): a concurrent silo can have already
-          // dropped this exact constraint between our SELECT and this
-          // statement.
-          if (!isAlreadyAbsent(err)) throw err;
-        }
-      }
-      try {
-        await this.pool.query(
-          `ALTER TABLE ${this.table} ADD PRIMARY KEY (service_id, grain_id, state_name)`,
-        );
-      } catch (err) {
-        // See isAlreadyPresent(): a concurrent silo can have already added
-        // this exact primary key.
-        if (!isAlreadyPresent(err)) throw err;
-      }
     } catch (err) {
       if (!isDuplicate(err)) throw err;
     }

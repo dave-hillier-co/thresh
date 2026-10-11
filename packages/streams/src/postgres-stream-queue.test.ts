@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { Pool } from "pg";
 import { PostgresStreamQueue } from "@thresh/streams/postgres-stream-queue";
-import { FakePgPool } from "@thresh/streams/test-support/fake-pg-pool";
 
 const PG_URL = process.env.PG_URL ?? "postgres://localhost:5432/postgres";
 
@@ -134,10 +133,7 @@ describe.skipIf(pool === undefined)("PostgresStreamQueue", () => {
 // Issue #64: PostgresStreamQueue partitions only by table prefix, provider
 // and queue index, so two services sharing one table would still cross-
 // deliver events even if their subscriptions/cursors were partitioned —
-// service B's agent would read service A's events. This mirrors #59's
-// two-halved coverage: the partitioning a `serviceId` buys, and the in-place
-// migration that keeps a table written under the pre-service_id shape
-// readable.
+// service B's agent would read service A's events.
 describe.skipIf(pool === undefined)("PostgresStreamQueue service partitioning (issue #64)", () => {
   beforeEach(async () => {
     if (pool === undefined) return;
@@ -157,63 +153,5 @@ describe.skipIf(pool === undefined)("PostgresStreamQueue service partitioning (i
 
     expect((await alpha.readAfter(0)).map((e) => e.event)).toEqual(["for-alpha"]);
     expect((await beta.readAfter(0)).map((e) => e.event)).toEqual(["for-beta"]);
-  });
-
-  it("migrates a legacy events table and a default-configured queue reads its rows", async () => {
-    const legacy = `${prefix}_legacy`;
-    await pool!.query(
-      `CREATE TABLE ${legacy}_events (
-         id BIGSERIAL PRIMARY KEY,
-         provider TEXT NOT NULL,
-         queue_idx INT NOT NULL,
-         stream_key TEXT NOT NULL,
-         payload TEXT NOT NULL,
-         created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-       )`,
-    );
-    try {
-      await pool!.query(
-        `INSERT INTO ${legacy}_events (provider, queue_idx, stream_key, payload) VALUES ($1, $2, $3, $4)`,
-        ["p", 0, "s", JSON.stringify("legacy-event")],
-      );
-
-      const migrated = new PostgresStreamQueue(pool!, legacy, "p", 0);
-      await migrated.start(); // must ALTER the existing events table, not skip it
-      expect((await migrated.readAfter(0)).map((e) => e.event)).toEqual(["legacy-event"]);
-
-      const scoped = new PostgresStreamQueue(pool!, legacy, "p", 0, undefined, "beta");
-      expect(await scoped.readAfter(0)).toEqual([]);
-    } finally {
-      await pool!.query(`DROP TABLE IF EXISTS ${legacy}_events`);
-      await pool!.query(`DROP TABLE IF EXISTS ${legacy}_cursors`);
-    }
-  });
-});
-
-// Regression for the ordering bug in start(): `CREATE INDEX IF NOT EXISTS`
-// validates its column list before the `IF NOT EXISTS` skip applies, so
-// issuing it against a legacy (pre-#64) events table — which has no
-// `service_id` column yet — must raise 42703 undefined_column unless
-// `addServiceIdColumn()` has already run. This does not need a live
-// Postgres: a scripted fake client reproduces that one piece of real
-// Postgres behaviour, so the ordering is asserted directly and always runs.
-describe("PostgresStreamQueue start() migration ordering (issue #64)", () => {
-  it("adds service_id before creating any index that references it", async () => {
-    const fake = new FakePgPool();
-    // Model a table created before #64: no service_id column yet.
-    fake.seedTable("legacy_events", [
-      "id",
-      "provider",
-      "queue_idx",
-      "stream_key",
-      "payload",
-      "created_at",
-    ]);
-
-    const queue = new PostgresStreamQueue(fake as never, "legacy", "p", 0);
-
-    // Would throw 42703 if the index is created before the migration adds
-    // service_id to the legacy table.
-    await expect(queue.start()).resolves.toBeUndefined();
   });
 });

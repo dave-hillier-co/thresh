@@ -20,27 +20,9 @@ backends (the host names providers, Thresh picks the database), and a conditiona
 never lets a later confirm apply an event its caller was told failed. [`docs/orleans-to-thresh-port.md`](docs/orleans-to-thresh-port.md)
 is the mechanical Orleans→Thresh reference that port maintains.
 
-The service dimension is an **upgrade break for Redis**, recorded here because nothing else does.
-`RedisGrainStorage`'s key gained a service segment (`{keyPrefix}:{serviceId}:state:…`, was
-`{keyPrefix}:state:…`) and Redis has no `ALTER`, so state written under the old shape is orphaned
-rather than corrupted — unreferenced keys that will never expire. Taken deliberately: Thresh has no
-production deployments, and leaving the segment out keeps two services sharing one Redis silently
-colliding, which is the bug. Postgres is **not** breaking: `start()` migrates an existing table in
-place, backfilling to `DEFAULT_SERVICE_ID`, and a silo that names no `serviceId` reads exactly that
-literal — the two must agree or every pre-existing row goes invisible on the next restart, which is
-the failure this migration exists to avoid.
-
-#64 carried the same dimension to every other durable store that only partitioned by table name or
-key prefix (`PostgresReminderTable`, `RedisReminderTable`, `RedisJournalStorage`,
-`RedisTransactionalStorage`, the Postgres/Redis stream registries, cursor stores and queues), so the
-Redis upgrade break above now also orphans: reminder index/grain/entry keys, journal logs and their
-version counters, transactional records — including in-doubt (`PENDING`) ones, so **drain in-flight
-transactions before upgrading** a Redis-backed transactional deployment — stream subscriptions,
-stream cursors, and stream queue entries. A Redis-streams deployment should similarly **drain queues
-before upgrading**: undelivered entries and committed cursors both orphan together (not just the
-cursor), so there is no double-delivery risk — the stream simply restarts empty under the new key
-shape. The Postgres stores in this list migrate in place the same way `PostgresGrainStorage` does, so
-they carry no such break.
+Storage layouts carry no migrations. Thresh has no production deployments, so a layout change (the
+service dimension of #59/#64 in every durable store, the reminder table's `last_fired_at`) is a
+clean break on both Postgres and Redis: state written under an older layout is not read.
 
 `PostgresStreamFailureStore` (append-only poison-delivery diagnostics, surrogate PK) was left out of
 #64's scope: commingling failure records across services is cosmetic, not a correctness bug like the

@@ -4,7 +4,6 @@ import { Pool } from "pg";
 import { InconsistentStateError } from "@thresh/core/errors";
 import { GrainId } from "@thresh/core/grain-id";
 import type { GrainStorage } from "@thresh/core/grain-storage";
-import { serializeValue } from "@thresh/core/value-codec";
 import { PersistentStateImpl } from "@thresh/persistence/persistent-state-impl";
 import { PostgresGrainStorage } from "@thresh/persistence/postgres-grain-storage";
 
@@ -258,9 +257,7 @@ describe.skipIf(pool === undefined)("PostgresGrainStorage", () => {
 
 // Issue #59: Orleans' AdoNet provider keys a state row by ServiceId + GrainId
 // (`PostgreSQL-Persistence.sql`, `OrleansStorage.serviceid`), so several
-// clusters can share one database and stay partitioned. These two cases pin
-// both halves of adding that dimension here: the partitioning it buys, and the
-// in-place migration that keeps a table written under the old shape readable.
+// clusters can share one database and stay partitioned.
 describe.skipIf(pool === undefined)("PostgresGrainStorage service partitioning (issue #59)", () => {
   beforeEach(async () => {
     const storage = makeStorage() as PostgresGrainStorage;
@@ -297,78 +294,23 @@ describe.skipIf(pool === undefined)("PostgresGrainStorage service partitioning (
     expect(reBeta.value.cents).toBe(2);
   });
 
-  it("migrates a table written under the pre-service_id schema and still reads its rows", async () => {
-    const legacy = `${table}_legacy`;
-    await pool!.query(
-      `CREATE TABLE ${legacy} (
-         grain_id text NOT NULL,
-         state_name text NOT NULL,
-         data text NOT NULL,
-         etag text NOT NULL,
-         PRIMARY KEY (grain_id, state_name)
-       )`,
-    );
+  it("survives several silos starting concurrently over a fresh table", async () => {
+    const fresh = `${table}_race`;
     try {
-      await pool!.query(
-        `INSERT INTO ${legacy} (grain_id, state_name, data, etag) VALUES ($1, $2, $3, $4)`,
-        [id.toString(), "balance", serializeValue({ cents: 77 }), "legacy-etag"],
-      );
-
-      const storage = new PostgresGrainStorage(pool!, { tableName: legacy });
-      await storage.start(); // must ALTER the existing table, not skip it
-
-      const state = makeState(storage);
-      await state.read();
-      expect(state.exists).toBe(true);
-      expect(state.value.cents).toBe(77);
-      expect(state.etag).toBe("legacy-etag");
-
-      // The migrated row is still writable under its (defaulted) service id.
-      state.value.cents = 78;
-      await state.write();
-      const reread = makeState(new PostgresGrainStorage(pool!, { tableName: legacy }));
-      await reread.read();
-      expect(reread.value.cents).toBe(78);
-    } finally {
-      await pool!.query(`DROP TABLE IF EXISTS ${legacy}`);
-    }
-  });
-
-  it("survives several silos racing the migration concurrently", async () => {
-    // Several concurrent starts (not just two) widen the window so the run
-    // reliably lands both instances between the winner's DROP CONSTRAINT and
-    // its ADD PRIMARY KEY, exercising isAlreadyAbsent() (42704) and
-    // isAlreadyPresent() (42P16) — the two benign codes addServiceIdColumn()
-    // can see when it loses either half of that race.
-    const legacy = `${table}_race`;
-    await pool!.query(
-      `CREATE TABLE ${legacy} (
-         grain_id text NOT NULL,
-         state_name text NOT NULL,
-         data text NOT NULL,
-         etag text NOT NULL,
-         PRIMARY KEY (grain_id, state_name)
-       )`,
-    );
-    try {
-      await pool!.query(
-        `INSERT INTO ${legacy} (grain_id, state_name, data, etag) VALUES ($1, $2, $3, $4)`,
-        [id.toString(), "balance", serializeValue({ cents: 77 }), "legacy-etag"],
-      );
-
       const silos = Array.from(
         { length: 5 },
-        () => new PostgresGrainStorage(pool!, { tableName: legacy }),
+        () => new PostgresGrainStorage(pool!, { tableName: fresh }),
       );
       await Promise.all(silos.map((silo) => silo.start()));
 
-      const state = makeState(new PostgresGrainStorage(pool!, { tableName: legacy }));
-      await state.read();
-      expect(state.exists).toBe(true);
-      expect(state.value.cents).toBe(77);
-      expect(state.etag).toBe("legacy-etag");
+      const state = makeState(silos[0]!);
+      state.value.cents = 77;
+      await state.write();
+      const reread = makeState(new PostgresGrainStorage(pool!, { tableName: fresh }));
+      await reread.read();
+      expect(reread.value.cents).toBe(77);
     } finally {
-      await pool!.query(`DROP TABLE IF EXISTS ${legacy}`);
+      await pool!.query(`DROP TABLE IF EXISTS ${fresh}`);
     }
     // Five concurrent Postgres round-trips can occasionally run past
     // vitest's default 5s timeout under host load; the longer timeout is a

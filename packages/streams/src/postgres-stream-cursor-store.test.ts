@@ -64,10 +64,7 @@ describe.skipIf(pool === undefined)("PostgresStreamCursorStore", () => {
 
 // Issue #64: PostgresStreamCursorStore partitions only by table prefix, so
 // two services sharing one table silently share committed cursors — the same
-// collision #59 fixed for grain state. The migration case matters most here:
-// a reset cursor silently redelivers or skips a whole queue, so the
-// migration's backfill value must agree exactly with what a no-`serviceId`
-// reader gets.
+// collision #59 fixed for grain state.
 describe.skipIf(pool === undefined)(
   "PostgresStreamCursorStore service partitioning (issue #64)",
   () => {
@@ -88,69 +85,19 @@ describe.skipIf(pool === undefined)(
       expect(await beta.getCursor("p", 0)).toBe(7);
     });
 
-    it("migrates a legacy cursor value, not resetting it to 0", async () => {
-      const legacy = `${prefix}_legacy`;
-      await pool!.query(
-        `CREATE TABLE ${legacy}_cursors (
-           provider TEXT NOT NULL,
-           queue_idx INT NOT NULL,
-           cursor BIGINT NOT NULL,
-           PRIMARY KEY (provider, queue_idx)
-         )`,
-      );
+    it("survives several instances starting concurrently over a fresh table", async () => {
+      const fresh = `${prefix}_race`;
       try {
-        await pool!.query(
-          `INSERT INTO ${legacy}_cursors (provider, queue_idx, cursor) VALUES ('p', 0, 42)`,
-        );
-
-        const migrated = new PostgresStreamCursorStore(pool!, legacy);
-        await migrated.start(); // must ALTER the existing table, not skip it
-        // A reset to 0 here would silently redeliver (or, with eager trim,
-        // silently skip) the whole queue's retained history.
-        expect(await migrated.getCursor("p", 0)).toBe(42);
-
-        // A service-scoped store over the same migrated table sees nothing.
-        const scoped = new PostgresStreamCursorStore(pool!, legacy, "beta");
-        expect(await scoped.getCursor("p", 0)).toBe(0);
-
-        // The migrated cursor still advances in place.
-        await migrated.commit("p", 0, 43);
-        expect(await migrated.getCursor("p", 0)).toBe(43);
-        expect(await scoped.getCursor("p", 0)).toBe(0);
-      } finally {
-        await pool!.query(`DROP TABLE IF EXISTS ${legacy}_cursors`);
-      }
-    });
-
-    it("survives several instances racing the migration concurrently", async () => {
-      // Several concurrent starts (not just two) widen the window so the
-      // run reliably lands instances between the winner's DROP CONSTRAINT
-      // and its ADD PRIMARY KEY, exercising isAlreadyAbsent() (42704) and
-      // isAlreadyPresent() (42P16) — the two benign codes addServiceIdColumn()
-      // can see when it loses either half of that race.
-      const legacy = `${prefix}_race`;
-      await pool!.query(
-        `CREATE TABLE ${legacy}_cursors (
-           provider TEXT NOT NULL,
-           queue_idx INT NOT NULL,
-           cursor BIGINT NOT NULL,
-           PRIMARY KEY (provider, queue_idx)
-         )`,
-      );
-      try {
-        await pool!.query(
-          `INSERT INTO ${legacy}_cursors (provider, queue_idx, cursor) VALUES ('p', 0, 42)`,
-        );
-
         const instances = Array.from(
           { length: 5 },
-          () => new PostgresStreamCursorStore(pool!, legacy),
+          () => new PostgresStreamCursorStore(pool!, fresh),
         );
         await Promise.all(instances.map((instance) => instance.start()));
 
-        expect(await instances[0]!.getCursor("p", 0)).toBe(42);
+        await instances[0]!.commit("p", 0, 42);
+        expect(await instances[1]!.getCursor("p", 0)).toBe(42);
       } finally {
-        await pool!.query(`DROP TABLE IF EXISTS ${legacy}_cursors`);
+        await pool!.query(`DROP TABLE IF EXISTS ${fresh}_cursors`);
       }
       // Five concurrent Postgres round-trips can occasionally run past
       // vitest's default 5s timeout under host load; the longer timeout is

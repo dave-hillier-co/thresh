@@ -11,8 +11,7 @@ import { PostgresStreamCursorStore } from "@thresh/streams/postgres-stream-curso
 // them against anything but a plain SQL identifier; all other inputs are bound.
 const IDENTIFIER = /^[a-z_][a-z0-9_]*$/;
 
-// Concurrent silos can race `CREATE TABLE IF NOT EXISTS` and the migration
-// below; the loser sees a duplicate error even though the object now exists,
+// Concurrent silos can race `CREATE TABLE IF NOT EXISTS`; the loser sees a duplicate error even though the object now exists,
 // which is the desired state.
 function isDuplicate(err: unknown): boolean {
   const code = (err as { code?: string }).code;
@@ -68,12 +67,6 @@ export class PostgresStreamQueue implements AppendableQueue {
     } catch (err) {
       if (!isDuplicate(err)) throw err;
     }
-    // Must run before the index below: on a legacy (pre-#64) table the
-    // `CREATE TABLE IF NOT EXISTS` above no-ops, leaving no `service_id`
-    // column, and Postgres validates an index's columns before its
-    // `IF NOT EXISTS` skip applies — so creating the index first raises
-    // 42703 undefined_column on every restart against such a table.
-    await this.addServiceIdColumn();
     try {
       await this.pool.query(
         `CREATE INDEX IF NOT EXISTS ${this.eventsTable}_provider_queue_id_idx
@@ -83,36 +76,6 @@ export class PostgresStreamQueue implements AppendableQueue {
       if (!isDuplicate(err)) throw err;
     }
     await this.cursors.start();
-  }
-
-  /**
-   * Bring an events table created before issue #64 up to the
-   * service-partitioned shape, mirroring
-   * `PostgresGrainStorage.addServiceIdColumn()` (#59). The events table has
-   * a surrogate `id` primary key already, so this only adds the column and
-   * backfills it — no primary key to swap. It also drops the old
-   * `(provider, queue_idx, id)` lookup index, which shares its name with the
-   * `service_id`-leading one `start()` (re)creates immediately after this
-   * returns, so `CREATE INDEX IF NOT EXISTS` there doesn't silently keep the
-   * stale definition.
-   */
-  private async addServiceIdColumn(): Promise<void> {
-    const existing = await this.pool.query(
-      `SELECT 1 FROM information_schema.columns
-       WHERE table_schema = current_schema() AND table_name = $1 AND column_name = 'service_id'`,
-      [this.eventsTable],
-    );
-    if (existing.rowCount !== 0) return;
-    try {
-      await this.pool.query(
-        `ALTER TABLE ${this.eventsTable}
-           ADD COLUMN IF NOT EXISTS service_id text NOT NULL DEFAULT '${DEFAULT_SERVICE_ID}'`,
-      );
-      await this.pool.query(`ALTER TABLE ${this.eventsTable} ALTER COLUMN service_id DROP DEFAULT`);
-      await this.pool.query(`DROP INDEX IF EXISTS ${this.eventsTable}_provider_queue_id_idx`);
-    } catch (err) {
-      if (!isDuplicate(err)) throw err;
-    }
   }
 
   /** Append an event for `streamKey`; returns its queue token. */

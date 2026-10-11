@@ -3,7 +3,6 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { Pool } from "pg";
 import { GrainId } from "@thresh/core/grain-id";
 import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
-import { serializeValue } from "@thresh/core/value-codec";
 import { LocalReminderService, type HashRange } from "@thresh/reminders/local-reminder-service";
 import { PostgresReminderTable } from "@thresh/reminders/postgres-reminder-table";
 
@@ -250,10 +249,7 @@ describe.skipIf(pool === undefined)("LocalReminderService over PostgresReminderT
 
 // Issue #64: PostgresReminderTable partitions only by table name, so two
 // services sharing one table with default names silently share reminder rows
-// — the same bug #59 fixed for grain state. This mirrors #59's two-halved
-// coverage: the partitioning a `serviceId` buys, and the in-place migration
-// that keeps a table written under the old (pre-service_id) shape readable —
-// with its backfill value agreeing with what a no-`serviceId` reader sees.
+// — the same bug #59 fixed for grain state.
 describe.skipIf(pool === undefined)(
   "PostgresReminderTable service partitioning (issue #64)",
   () => {
@@ -293,103 +289,25 @@ describe.skipIf(pool === undefined)(
       expect(betaRead?.etag).toBe(etag);
     });
 
-    it("migrates a table written under the pre-service_id schema, agreeing with the default reader", async () => {
-      const legacy = `${table}_legacy`;
-      await pool!.query(
-        `CREATE TABLE ${legacy} (
-         grain_id text NOT NULL,
-         name text NOT NULL,
-         hash bigint NOT NULL,
-         data text NOT NULL,
-         etag text NOT NULL,
-         PRIMARY KEY (grain_id, name)
-       )`,
-      );
+    it("survives several instances starting concurrently over a fresh table", async () => {
+      const fresh = `${table}_race`;
       try {
-        const hash = billing.getUniformHashCode();
-        await pool!.query(
-          `INSERT INTO ${legacy} (grain_id, name, hash, data, etag) VALUES ($1, $2, $3, $4, $5)`,
-          [
-            billing.toString(),
-            "invoice",
-            String(hash),
-            serializeValue({
-              grainId: billing,
-              name: "invoice",
-              startAt: new Date(0),
-              period: { hours: 1 },
-            }),
-            "legacy-etag",
-          ],
-        );
-
-        const migrated = new PostgresReminderTable(pool!, { tableName: legacy });
-        await migrated.start(); // must ALTER the existing table, not skip it
-
-        const read = await migrated.read(billing, "invoice");
-        expect(read?.etag).toBe("legacy-etag");
-        expect(read?.period).toEqual({ hours: 1 });
-
-        expect(await migrated.readRange(hash, hash + 1)).toHaveLength(1);
-
-        expect(await migrated.remove(billing, "invoice", "legacy-etag")).toBe(true);
-        const etag = await migrated.upsert({
-          grainId: billing,
-          name: "invoice",
-          startAt: new Date(0),
-          period: { hours: 3 },
-        });
-        const reread = await migrated.read(billing, "invoice");
-        expect(reread?.etag).toBe(etag);
-      } finally {
-        await pool!.query(`DROP TABLE IF EXISTS ${legacy}`);
-      }
-    });
-
-    it("survives several instances racing the migration concurrently", async () => {
-      // Several concurrent starts (not just two) widen the window so the
-      // run reliably lands instances between the winner's DROP CONSTRAINT
-      // and its ADD PRIMARY KEY, exercising isAlreadyAbsent() (42704) and
-      // isAlreadyPresent() (42P16) — the two benign codes addServiceIdColumn()
-      // can see when it loses either half of that race.
-      const legacy = `${table}_race`;
-      await pool!.query(
-        `CREATE TABLE ${legacy} (
-         grain_id text NOT NULL,
-         name text NOT NULL,
-         hash bigint NOT NULL,
-         data text NOT NULL,
-         etag text NOT NULL,
-         PRIMARY KEY (grain_id, name)
-       )`,
-      );
-      try {
-        await pool!.query(
-          `INSERT INTO ${legacy} (grain_id, name, hash, data, etag) VALUES ($1, $2, $3, $4, $5)`,
-          [
-            billing.toString(),
-            "invoice",
-            String(billing.getUniformHashCode()),
-            serializeValue({
-              grainId: billing,
-              name: "invoice",
-              startAt: new Date(0),
-              period: { hours: 1 },
-            }),
-            "legacy-etag",
-          ],
-        );
-
         const instances = Array.from(
           { length: 5 },
-          () => new PostgresReminderTable(pool!, { tableName: legacy }),
+          () => new PostgresReminderTable(pool!, { tableName: fresh }),
         );
         await Promise.all(instances.map((instance) => instance.start()));
 
-        const read = await instances[0]!.read(billing, "invoice");
-        expect(read?.etag).toBe("legacy-etag");
+        const etag = await instances[0]!.upsert({
+          grainId: billing,
+          name: "invoice",
+          startAt: new Date(0),
+          period: { hours: 1 },
+        });
+        const read = await instances[1]!.read(billing, "invoice");
+        expect(read?.etag).toBe(etag);
       } finally {
-        await pool!.query(`DROP TABLE IF EXISTS ${legacy}`);
+        await pool!.query(`DROP TABLE IF EXISTS ${fresh}`);
       }
       // Five concurrent Postgres round-trips can occasionally run past
       // vitest's default 5s timeout under host load; the longer timeout is
