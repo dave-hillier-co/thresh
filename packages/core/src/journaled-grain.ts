@@ -26,6 +26,12 @@ export interface LogViewAdaptor<TState, TEvent> {
    * first conflict (never retried on the moved base, never left pending).
    */
   tryAppend(event: TEvent): Promise<boolean>;
+  /**
+   * Conditionally append several events as one atomic sequence, mirroring Orleans'
+   * `RaiseConditionalEvents`: all are confirmed (`true`) or none is, and on `false` every one has
+   * been dropped.
+   */
+  tryAppendRange(events: readonly TEvent[]): Promise<boolean>;
   /** Persist every currently-pending event, promoting it into the confirmed view. */
   confirmSubmittedEntries(): Promise<void>;
   /** Read a slice of the confirmed event sequence. */
@@ -136,6 +142,16 @@ export abstract class JournaledGrain<TState, TEvent> extends Grain {
    */
   protected raiseConditionalEvent(event: TEvent): Promise<boolean> {
     return this.logViewAdaptor.tryAppend(event);
+  }
+
+  /**
+   * Raises several events conditionally as one atomic sequence, mirroring Orleans'
+   * `RaiseConditionalEvents`: they are appended together, in one write, only if no other event was
+   * confirmed concurrently. Returns whether they were appended and confirmed; on `false` none of
+   * them will ever be persisted.
+   */
+  protected raiseConditionalEvents(events: readonly TEvent[]): Promise<boolean> {
+    return this.logViewAdaptor.tryAppendRange(events);
   }
 
   /** Persists all previously-raised, still-pending events and confirms them. */

@@ -134,6 +134,36 @@ export class CustomStorageLogViewAdaptorImpl<TState, TEvent> implements LogViewA
   }
 
   /**
+   * {@link tryAppend} for several events, mirroring Orleans' `RaiseConditionalEvents`. They take
+   * consecutive conditional positions, so they are written in one batch and share one outcome:
+   * once one is stale, `removeStaleConditionalUpdates` drops every conditional entry after it, and
+   * budget exhaustion drops every conditional entry, so the range lands together or not at all.
+   */
+  tryAppendRange(events: readonly TEvent[]): Promise<boolean> {
+    if (events.length === 0) return Promise.resolve(true);
+    let resolveOutcome!: (appended: boolean) => void;
+    const outcome = new Promise<boolean>((resolve) => (resolveOutcome = resolve));
+    for (const event of events) {
+      this.pending.push({
+        event,
+        conditionalPosition: this.version + this.pending.length,
+        resolve: resolveOutcome,
+      });
+      this.tentative = this.transition(this.tentative, event);
+    }
+
+    const confirm = async (): Promise<boolean> => {
+      try {
+        await this.confirmSubmittedEntries();
+      } catch (error) {
+        if (!(error instanceof InconsistentStateError)) throw error;
+      }
+      return outcome;
+    };
+    return confirm();
+  }
+
+  /**
    * Persists every currently-pending event. Concurrent callers join the same in-flight loop --
    * two loops racing would each swap out `pending` and submit under the same expected version,
    * and one would necessarily lose the CAS. Same reasoning as `LogViewAdaptorImpl`.

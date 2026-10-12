@@ -208,28 +208,31 @@ describe("JournaledGrain log-consistency protocol", () => {
     expect(grain["retrieveConfirmedEvents"](1, 2)).toEqual([{ kind: "add", amount: 2 }]);
   });
 
-  it("keeps the un-appended remainder of a batch pending after a transient append failure (#95)", async () => {
+  it("keeps a batch pending after a transient append failure (#95)", async () => {
     const memory = new MemoryJournalStorage();
-    // Fail the second `append` call: the first raised event ("add 1") persists,
-    // the second ("add 10") hits a transient storage error.
+    // Fail the second `append` call: the first confirm ("add 1") persists, the
+    // second confirm's batch ("add 10", "add 100", one append) hits a transient
+    // storage error.
     const flaky = new FailingAppendStorage(memory, 2, () => new Error("transient storage blip"));
     const grain = new CounterGrain();
     await bindJournaledGrain(grain, id, new JournalStorageRegistry().add("default", flaky));
 
     grain.add(1);
+    await grain.confirm();
     grain.add(10);
+    grain.add(100);
     await expect(grain.confirm()).rejects.toThrow("transient storage blip");
 
-    // The first event persisted; the second must still be pending, not lost.
+    // The earlier confirm persisted; the failed batch must still be pending, not lost.
     expect(grain.confirmed()).toEqual({ count: 1 });
     expect(grain.confirmedVersion()).toBe(1);
-    expect(grain.tentative()).toEqual({ count: 11 });
+    expect(grain.tentative()).toEqual({ count: 111 });
 
-    // Retrying confirm (storage now healthy) must persist the surviving event.
+    // Retrying confirm (storage now healthy) must persist the whole batch.
     await grain.confirm();
-    expect(grain.confirmed()).toEqual({ count: 11 });
-    expect(grain.confirmedVersion()).toBe(2);
-    expect(grain.tentative()).toEqual({ count: 11 });
+    expect(grain.confirmed()).toEqual({ count: 111 });
+    expect(grain.confirmedVersion()).toBe(3);
+    expect(grain.tentative()).toEqual({ count: 111 });
   });
 
   it("keeps the version monotonic across a compaction (#96)", async () => {

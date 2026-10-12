@@ -285,6 +285,37 @@ describe("CustomStorageLogViewAdaptorImpl", () => {
     });
   });
 
+  // Orleans' `RaiseConditionalEvents`: several events, conditional on the version the first was
+  // raised at, appended together or not at all.
+  describe("tryAppendRange", () => {
+    it("appends every event in one write when the version has not moved", async () => {
+      const host = new FakeHost();
+      const adaptor = await adaptorOn(host);
+
+      await expect(adaptor.tryAppendRange([{ add: 1 }, { add: 2 }, { add: 3 }])).resolves.toBe(
+        true,
+      );
+
+      expect(host.applyCalls).toHaveLength(1);
+      expect(host.log).toEqual([{ add: 1 }, { add: 2 }, { add: 3 }]);
+      expect(adaptor.confirmedVersion).toBe(3);
+      expect(adaptor.confirmedView).toEqual({ total: 6 });
+      expect(adaptor.pendingCount).toBe(0);
+    });
+
+    it("drops every event and reports false when a concurrent writer moved the version", async () => {
+      const host = new FakeHost();
+      const adaptor = await adaptorOn(host);
+      host.log = [{ add: 100 }];
+
+      await expect(adaptor.tryAppendRange([{ add: 1 }, { add: 2 }])).resolves.toBe(false);
+
+      expect(host.log).toEqual([{ add: 100 }]);
+      expect(adaptor.pendingCount).toBe(0);
+      expect(adaptor.tentativeView).toEqual({ total: 100 });
+    });
+  });
+
   it("does not support retrieveLogSegment - storage owns the log, not the adaptor", async () => {
     const adaptor = await adaptorOn(new FakeHost());
 
