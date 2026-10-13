@@ -3171,6 +3171,17 @@ export class ClusterNode {
     return immovable !== "any" && immovable !== kind;
   }
 
+  /**
+   * Migrate a locally-hosted grain (by id) to `target` on request, the path Orleans'
+   * `TestCluster.MigrateAsync` drives. `false` if it is not hosted here or `target` is this silo.
+   */
+  async migrateGrain(grainId: GrainId, target: SiloAddress): Promise<boolean> {
+    if (target.equals(this.options.local)) return false;
+    const activation = this.catalog.get(grainId);
+    if (activation === undefined) return false;
+    return this.migrateThenDeactivate(activation, target, "migrated on request");
+  }
+
   /** Migrate a locally-hosted grain (by id) to `target`; `false` if not hosted here. */
   private async migrateGrainToSilo(grainId: GrainId, target: SiloAddress): Promise<boolean> {
     const activation = this.catalog.get(grainId);

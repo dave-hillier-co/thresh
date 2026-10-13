@@ -181,6 +181,42 @@ describe("TestCluster", () => {
     }
   });
 
+  it("migrate moves a live activation to the chosen silo", async () => {
+    const cluster = await TestCluster.start({
+      initialSilos: 2,
+      grains: [{ ctor: CounterGrain, interfaces: [ICounter] }],
+    });
+    try {
+      await cluster.getGrain(ICounter, "moving").increment();
+      const id = counterId("moving");
+      const source = cluster.silos.find((s) => s.host.isActive(id))!;
+      const target = cluster.silos.find((s) => s !== source)!;
+
+      expect(await cluster.migrate(id, target.address)).toBe(true);
+
+      expect(target.host.isActive(id)).toBe(true);
+      expect(source.host.isActive(id)).toBe(false);
+      await cluster.getGrain(ICounter, "moving").increment();
+      expect(target.host.isActive(id)).toBe(true);
+    } finally {
+      await cluster.dispose();
+    }
+  });
+
+  it("migrate reports false when no silo holds the activation", async () => {
+    const cluster = await TestCluster.start({
+      initialSilos: 2,
+      grains: [{ ctor: CounterGrain, interfaces: [ICounter] }],
+    });
+    try {
+      expect(await cluster.migrate(counterId("never-activated"), cluster.silos[1]!.address)).toBe(
+        false,
+      );
+    } finally {
+      await cluster.dispose();
+    }
+  });
+
   it("stopSilo gracefully removes a silo from the cluster", async () => {
     const cluster = await TestCluster.start({
       initialSilos: 2,
