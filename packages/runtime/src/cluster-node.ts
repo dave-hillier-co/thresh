@@ -400,7 +400,12 @@ type DirectoryOp =
   | { kind: "lookup"; grainId: GrainId; version: number }
   | { kind: "register"; addr: GrainAddress; previous?: GrainAddress | undefined; version: number }
   | { kind: "unregister"; addr: GrainAddress; version: number }
-  | { kind: "recover"; version: number }
+  /**
+   * A successor's recovery pull. `requester` lets the source also report its own live activations
+   * in the requester's ranges: a crashed owner hands nothing off, so those reports are the only
+   * record of where its ranges' grains are running.
+   */
+  | { kind: "recover"; version: number; requester: SiloAddress }
   /**
    * Puller's ACK that it applied a recovery batch: the source deletes exactly
    * those served entries. Carries the full `GrainAddress` of each, not just the
@@ -1391,7 +1396,11 @@ export class ClusterNode {
 
     // Done against the ring just installed, and synchronously, so no lookup can
     // slip between the ring change and the entries coming back.
-    if (live.has(local.ringKey)) this.reclaimOwnedHandoffs();
+    const peerLeftRing = oldRing.silos().some((s) => !live.has(s.ringKey));
+    if (live.has(local.ringKey)) {
+      this.reclaimOwnedHandoffs();
+      if (peerLeftRing) this.reclaimOwnActivations();
+    }
 
     // Recovery runs for a silo that has just joined the active set AND for one
     // that stayed in it while a peer left the ring — the incumbent that inherits
@@ -1400,7 +1409,6 @@ export class ClusterNode {
     // gating on the join transition alone left it never asking: the retained
     // entries expired out from under a range that had already moved. Orleans
     // acquires the added ranges on every partition on every view change.
-    const peerLeftRing = oldRing.silos().some((s) => !live.has(s.ringKey));
     if (live.has(local.ringKey) && (!wasActive || peerLeftRing)) {
       this.beginRecovery(this.recoverySources(), snapshot.version, (grainId) =>
         oldRing.isEmpty ? undefined : oldRing.ownerOf(grainId),
@@ -1512,14 +1520,24 @@ export class ClusterNode {
    * each attempt is bounded by the call timeout and the pass by the retry budget,
    * so a single flaky source could block all of this silo's directory traffic for
    * a minute or more while the ranges it did not owe were ready to serve. A grain
-   * whose entry no source can be holding waits for nothing.
+   * whose range had no previous owner waits for nothing. A grain whose previous
+   * owner crashed is the exception: no handoff exists, only the survivor hosting
+   * it can report it, so it waits on every survivor's pull.
    */
   private async awaitRecovered(grainId: GrainId): Promise<void> {
     const pass = this.recovery;
     if (pass === undefined) return;
     const previousOwner = pass.previousOwner(grainId);
     if (previousOwner === undefined) return;
-    await pass.pulls.get(previousOwner.ringKey);
+    const pull = pass.pulls.get(previousOwner.ringKey);
+    if (pull !== undefined) {
+      await pull;
+      return;
+    }
+    // The previous owner is not among the sources: it left the view without handing off (a crash).
+    // Its entry, if the grain still runs, comes back only from the survivor hosting it, so wait for
+    // every survivor's report rather than letting the operation miss and place a second activation.
+    await Promise.all(pass.pulls.values());
   }
 
   /**
@@ -1594,9 +1612,11 @@ export class ClusterNode {
     try {
       const entries = await executeWithRetries<GrainAddress[] | undefined>(
         async () =>
-          (await this.sendDirectory(source, { kind: "recover", version: pass.version })) as
-            | GrainAddress[]
-            | undefined,
+          (await this.sendDirectory(source, {
+            kind: "recover",
+            version: pass.version,
+            requester: this.options.local,
+          })) as GrainAddress[] | undefined,
         {
           maxRetries: this.recoveryMaxAttempts,
           shouldRetry: (_attempt, outcome) => outcome.kind === "error",
@@ -1704,11 +1724,44 @@ export class ClusterNode {
     return Math.round(capped / 2 + random() * (capped / 2));
   }
 
-  /** Serve a successor's recovery pull: the entries we handed off whose host is still live. */
-  private serveRecover(): GrainAddress[] {
+  /**
+   * Serve a successor's recovery pull: the entries we handed off whose host is still live, and
+   * this silo's own live activations whose range `requester` owns. The second half is what
+   * recovers a crashed owner's ranges (Orleans rebuilds them from every survivor's activations):
+   * the crash took its entries with it, and the hosts are the only ones who still know where
+   * those grains run. Adoption is a CAS that never overwrites a fresher entry, so reporting an
+   * activation the requester already has costs nothing.
+   */
+  private serveRecover(requester: SiloAddress): GrainAddress[] {
     const present = new Set(memberSilos(this.options.membership.current()).map((s) => s.ringKey));
     this.pruneHandoffSnapshot(present);
-    return [...this.handoffSnapshot.values()].map((v) => v.entry);
+    const handedOff = [...this.handoffSnapshot.values()].map((v) => v.entry);
+    if (this.ring.isEmpty) return handedOff;
+    const hosted = this.localDirectoryAddresses().filter((addr) =>
+      this.ring.ownerOf(addr.grainId).equals(requester),
+    );
+    return [...handedOff, ...hosted];
+  }
+
+  /** The directory entries this silo's live, directory-registered activations stand for. */
+  private localDirectoryAddresses(): GrainAddress[] {
+    return this.catalog
+      .liveActivations()
+      .filter((a) => !this.catalog.isStatelessWorkerType(a.id.type))
+      .map((a) => ({ grainId: a.id, silo: this.options.local, activationId: a.activationId }));
+  }
+
+  /**
+   * Re-register this silo's own live activations in the ranges it now owns. When an owner
+   * crashes, the silo inheriting a range may itself host grains in it, and no pull reaches
+   * them: recovery only asks the other silos. Synchronous, against the ring just installed, and
+   * the same never-overwrite CAS as any adoption.
+   */
+  private reclaimOwnActivations(): void {
+    if (this.ring.isEmpty) return;
+    const owned = this.localDirectoryAddresses().filter((addr) => this.ownsNow(addr.grainId));
+    if (owned.length === 0) return;
+    this.partition.acceptHandoff(owned, (addr) => this.ownsNow(addr.grainId));
   }
 
   /**
@@ -3289,7 +3342,7 @@ export class ClusterNode {
         this.partition.unregister(op.addr);
         return undefined;
       case "recover":
-        return this.serveRecover();
+        return this.serveRecover(op.requester);
       case "recoverAck":
         this.ackServedRecovery(op.addrs);
         return undefined;
