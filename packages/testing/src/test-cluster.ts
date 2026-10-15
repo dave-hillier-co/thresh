@@ -353,6 +353,17 @@ export class TestCluster {
     return silo;
   }
 
+  /**
+   * Migrate `grainId`'s live activation to `targetSilo`, with its migration state (Orleans
+   * `TestCluster.MigrateAsync`). Resolves `true` once the target accepted it; `false` when no
+   * silo holds an activation of it.
+   */
+  async migrate(grainId: GrainId, targetSilo: SiloAddress): Promise<boolean> {
+    const source = this.live.find((s) => s.host.isActive(grainId));
+    if (source === undefined) return false;
+    return source.host.migrate(grainId, targetSilo);
+  }
+
   /** Graceful shutdown: the silo drains and departs the membership view. */
   async stopSilo(handle: TestSiloHandle): Promise<void> {
     const silo = this.take(handle);

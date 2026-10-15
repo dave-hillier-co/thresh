@@ -16,8 +16,9 @@ ported from the Orleans implementation — is the first production consumer, and
 land here. Closed so far: custom-storage log consistency, custom placement strategies,
 `raceAbort` for cancellation-as-clean-exit, a service dimension in the Postgres and Redis storage
 keys, the observer seam on a `WebSocketTransport`-hosted silo, Postgres journal storage, storage
-backends (the host names providers, Thresh picks the database), and a conditional append that
-never lets a later confirm apply an event its caller was told failed. [`docs/orleans-to-thresh-port.md`](docs/orleans-to-thresh-port.md)
+backends (the host names providers, Thresh picks the database), a conditional append that
+never lets a later confirm apply an event its caller was told failed, and `TestCluster.migrate`
+(Orleans `MigrateAsync`) for moving an activation onto a chosen silo before killing it. [`docs/orleans-to-thresh-port.md`](docs/orleans-to-thresh-port.md)
 is the mechanical Orleans→Thresh reference that port maintains.
 
 Storage layouts carry no migrations. Thresh has no production deployments, so a layout change (the

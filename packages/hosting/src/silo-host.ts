@@ -1,4 +1,5 @@
 import type { GrainId } from "@thresh/core/grain-id";
+import type { SiloAddress } from "@thresh/core/silo-address";
 import type { GrainInterface } from "@thresh/core/grain-interface";
 import type { GrainKeyKind } from "@thresh/core/grain-key";
 import type { KeyTypeOf } from "@thresh/core/key-kinds";
@@ -128,6 +129,11 @@ export class SiloHost {
 
   isActive(id: GrainId): boolean {
     return this.parts.node.isActive(id);
+  }
+
+  /** Migrate this silo's activation of `id` to `target`; `false` if this silo does not hold it. */
+  migrate(id: GrainId, target: SiloAddress): Promise<boolean> {
+    return this.parts.node.migrateGrain(id, target);
   }
 
   /** The named stream provider this silo hosts, or `undefined` if none is configured by that name. */
