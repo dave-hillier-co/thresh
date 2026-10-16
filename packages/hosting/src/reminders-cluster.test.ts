@@ -60,6 +60,7 @@ describe("reminders across a cluster", () => {
       createSilo({ clusterId: "c", local, time, random: () => 0, reminderRefreshSeconds: 1 })
         .useMembership(membership)
         .useInProcessTransport(net)
+        .allowSharedInMemoryState()
         .useReminders(table)
         .registerGrain(BeaconGrain, { interfaces: [IBeacon] })
         .build(),

@@ -332,6 +332,20 @@ No store migrates data written under an earlier layout: each Postgres store crea
 its current shape, and a table or key left by an older Thresh is not read. Thresh has no deployed
 state to carry forward, so a layout change is a clean break.
 
+## A clustered silo refuses settings only one silo can hold
+
+Orleans accepts `AddMemoryGrainStorage`, `UseInMemoryReminderService` and development clustering on
+any silo and documents them as development-only. Thresh refuses them at `build()` on a silo whose
+membership is anything but a static view of itself alone, because each fails silently there: an
+in-memory grain or journal store is empty when an activation moves, a reminder registered on a silo
+that does not own its grain's range is never fired by the silo that does (that silo reads its own
+table), and a static multi-silo view keeps a departed silo `active`, so calls routed to it hang.
+Each refusal names its durable alternative and its explicit opt-in: `allowSharedInMemoryState()` for
+in-memory instances every silo shares in one process (`TestCluster`), `allowWithoutLiveness` on
+`useStaticMembership`, and `allowInCluster` on the in-memory storage backend for disposable state.
+A store the builder constructs itself is one per silo by construction, so only `allowInCluster`
+admits it.
+
 ## Additions beyond Orleans
 
 A few capabilities layer on top of the faithful model without changing it: **durable journaling**

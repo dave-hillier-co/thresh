@@ -42,8 +42,9 @@ export function buildMigrationCluster(): MigrationCluster {
       collectionIntervalSeconds: 10,
       random: () => 0,
     })
-      .useStaticMembership(addresses)
+      .useStaticMembership(addresses, undefined, { allowWithoutLiveness: true })
       .useInProcessTransport(network)
+      .allowSharedInMemoryState()
       .useMemoryStorage(storage)
       .registerGrain(CartGrain)
       .build(),

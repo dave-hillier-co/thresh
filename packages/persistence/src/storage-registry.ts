@@ -21,6 +21,11 @@ export class StorageRegistry {
     return this;
   }
 
+  /** The providers registered by name; the fallback is not among them. */
+  named(): ReadonlyMap<string, GrainStorage> {
+    return this.providers;
+  }
+
   /** The provider registered under `name` (else the fallback), or `undefined` when neither is. */
   tryGet(name: string = DEFAULT_PROVIDER): GrainStorage | undefined {
     return this.providers.get(name) ?? this.fallback;
