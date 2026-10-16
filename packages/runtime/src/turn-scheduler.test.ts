@@ -184,7 +184,9 @@ describe("TurnScheduler", () => {
     ai.resolve();
   });
 
-  it("admits a turn whose call-chain reentrancy id is already active", async () => {
+  it("does not admit a turn just because a running turn carries the same call-chain id", async () => {
+    // Orleans: call-chain reentrancy is opt-in. Carrying an id never opens a
+    // section; only `enterReentrantSection` (RequestContext.allowCallChainReentrancy) does.
     const sched = new TurnScheduler();
     const log: string[] = [];
     const root = deferred();
@@ -196,7 +198,40 @@ describe("TurnScheduler", () => {
         await root.promise;
       },
     });
-    // Same chain id: admitted concurrently (this is the deadlock-avoidance case).
+    void sched.schedule({
+      options: {},
+      reentrancyId: "chain-X",
+      run: async () => {
+        log.push("x2:start");
+      },
+    });
+    await flush();
+    expect(log).toEqual(["x1:start"]);
+    root.resolve();
+    await flush();
+    expect(log).toEqual(["x1:start", "x2:start"]);
+  });
+
+  it("admits a turn whose call-chain id has an open reentrant section, until it closes", async () => {
+    const sched = new TurnScheduler();
+    const log: string[] = [];
+    const root = deferred();
+    const sectionClosed = deferred();
+    void sched.schedule({
+      options: {},
+      run: async () => {
+        log.push("x1:start");
+        sched.enterReentrantSection("chain-X");
+        // Nested sections for the same chain are counted.
+        sched.enterReentrantSection("chain-X");
+        await sectionClosed.promise;
+        sched.exitReentrantSection("chain-X");
+        sched.exitReentrantSection("chain-X");
+        await root.promise;
+      },
+    });
+    await flush();
+    // Same chain id while the section is open: admitted concurrently.
     void sched.schedule({
       options: {},
       reentrancyId: "chain-X",
@@ -207,15 +242,60 @@ describe("TurnScheduler", () => {
     // No / different chain id: queued behind the running exclusive turn.
     void sched.schedule({
       options: {},
+      reentrancyId: "chain-Y",
       run: async () => {
         log.push("y:start");
       },
     });
     await flush();
     expect(log).toEqual(["x1:start", "x2:start"]);
+    sectionClosed.resolve();
+    await flush();
+    // Section closed: a later turn on the same chain queues again.
+    void sched.schedule({
+      options: {},
+      reentrancyId: "chain-X",
+      run: async () => {
+        log.push("x3:start");
+      },
+    });
+    await flush();
+    expect(log).toEqual(["x1:start", "x2:start"]);
     root.resolve();
     await flush();
-    expect(log).toEqual(["x1:start", "x2:start", "y:start"]);
+    expect(log).toEqual(["x1:start", "x2:start", "y:start", "x3:start"]);
+  });
+
+  it("admits an already-waiting turn on a chain as soon as its section opens", async () => {
+    const sched = new TurnScheduler();
+    const log: string[] = [];
+    const open = deferred();
+    const root = deferred();
+    void sched.schedule({
+      options: {},
+      run: async () => {
+        log.push("x1:start");
+        await open.promise;
+        sched.enterReentrantSection("chain-X");
+        await root.promise;
+        sched.exitReentrantSection("chain-X");
+      },
+    });
+    await flush();
+    void sched.schedule({
+      options: {},
+      reentrancyId: "chain-X",
+      run: async () => {
+        log.push("x2:start");
+      },
+    });
+    await flush();
+    expect(log).toEqual(["x1:start"]);
+    open.resolve();
+    await flush();
+    expect(log).toEqual(["x1:start", "x2:start"]);
+    root.resolve();
+    await flush();
   });
 
   it("interleaves everything for a fully reentrant scheduler", async () => {

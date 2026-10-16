@@ -23,10 +23,7 @@ const grainId = (key: string) => new GrainId("Account" as GrainType, key);
 
 /** Run `fn` as if it were a turn executing inside `tx`. */
 function inTransaction<R>(tx: TransactionInfo, fn: () => Promise<R>): Promise<R> {
-  return invocationContext.run(
-    { senderId: undefined, ownerId: undefined, reentrancyId: tx.id, transaction: tx },
-    fn,
-  );
+  return invocationContext.run({ senderId: undefined, ownerId: undefined, transaction: tx }, fn);
 }
 
 describe("TransactionalStateImpl (Slice 2)", () => {

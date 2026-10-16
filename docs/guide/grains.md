@@ -34,6 +34,56 @@ Each normal method call is one serialized turn. `readOnly` interface options dec
 not mutate state and enable runtime optimizations; violating read-only state guards throws. Other
 method options include response timeout, transaction behavior, interleaving, and one-way delivery.
 
+## Interleaving
+
+A turn is the whole `async` method, including every continuation after an `await`. By default a
+grain runs one turn at a time: another call waits until the running turn's promise settles. These
+let a call run while another turn is suspended at an `await`:
+
+| Mechanism | Admits an incoming call while a turn is running when |
+|---|---|
+| `reentrant: true` on the grain (`@reentrant()`) | always |
+| `alwaysInterleave` on the incoming method | always, whatever is running |
+| `readOnly` on the incoming method | the running blocking turn is also `readOnly` — a `readOnly` call still waits behind a write |
+| `mayInterleave` predicate on the grain | the predicate accepts the incoming call or the running one |
+| `RequestContext.allowCallChainReentrancy(fn)` in a running turn | the incoming call is on the call chain that turn opened inside `fn` |
+
+What an interleaved call may observe is a contract, pinned by
+`packages/runtime/src/interleaving.test.ts`:
+
+- It runs only while the other turn is suspended at an `await`, never concurrently with it. The code
+  between two `await`s of a turn runs to completion before any other turn of the activation starts
+  or resumes, so everything the suspended turn wrote before its `await` happens-before the
+  interleaved call's first read.
+- It sees exactly that: the suspended turn's state as of its last `await`, including writes the turn
+  has not finished. The runtime does not hide a write's intermediate state. A grain whose
+  interleaving reads must not see one keeps the in-progress write out of the fields those reads use
+  and publishes it in one synchronous step after its last `await`. `JournaledGrain`'s `state` is
+  such a confirmed view: it moves in one step once an append is durable, never through part of a
+  batch.
+- Methods without an interleave option never interleave each other, so a sequence of them stays
+  atomic across its `await`s.
+
+### Call-chain reentrancy
+
+Call-chain reentrancy is off by default, as in Orleans. A non-reentrant grain that calls back into
+itself — directly, or through other grains (`A -> B -> A`) — waits on its own running turn and fails
+with `GrainCallTimeoutError` when the call's response timeout elapses. To allow it, wrap the calls in
+`RequestContext.allowCallChainReentrancy` (Orleans' `AllowCallChainReentrancy`):
+
+```ts
+import { RequestContext } from "@thresh/core/request-context";
+
+const total = await RequestContext.allowCallChainReentrancy(() => b.sumVia(selfKey));
+```
+
+While the callback's promise is pending, this activation admits calls on that chain, so `B`'s call
+back into `A` runs during `A`'s `await`. Only the grain that opened the section is re-enterable:
+`A -> B -> A -> B` still waits on `B` unless `B` opened its own section. The chain's id rides every
+call made inside the callback and onward from there.
+`RequestContext.suppressCallChainReentrancy(fn)` runs `fn` with no chain id, so its calls start
+afresh.
+
 ## Calls and failure
 
 Grain references are location transparent and serializable. Calls may fail because application code

@@ -149,7 +149,6 @@ describe("call deadlines cross a silo forward (issue #90)", () => {
           {
             senderId: undefined,
             ownerId: undefined,
-            reentrancyId: "r1",
             deadline: Date.now() - 1_000, // already expired before it even leaves silo-0
           },
           () => grainRef.increment(),
@@ -200,7 +199,6 @@ describe("the wire deadline is relative, not an absolute timestamp (issue #90)",
         {
           senderId: undefined,
           ownerId: undefined,
-          reentrancyId: "r-skew",
           deadline: callerTime.now() + 10_000, // 10s left, on the CALLER's clock
         },
         () => grainRef.increment(),

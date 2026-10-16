@@ -13,10 +13,7 @@ import { TransactionalStateImpl } from "@thresh/transactions/transactional-state
 const grainId = (key: string) => new GrainId("CommitterTest" as GrainType, key);
 
 function inTransaction<R>(tx: TransactionInfo, fn: () => Promise<R>): Promise<R> {
-  return invocationContext.run(
-    { senderId: undefined, ownerId: undefined, reentrancyId: tx.id, transaction: tx },
-    fn,
-  );
+  return invocationContext.run({ senderId: undefined, ownerId: undefined, transaction: tx }, fn);
 }
 
 interface Service {

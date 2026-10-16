@@ -204,6 +204,9 @@ export const ConsistencyTestGrainImpl = defineGrain<ConsistencyTestGrain>(
       },
     };
   },
+  // Upstream `[Reentrant]`: a recursive transaction can call back into a grain
+  // it is already running on.
+  { reentrant: true },
 );
 
 /** Orleans `ConsistencyTestHarness`: runs the randomized workload, then checks the recorded history for serializability. */

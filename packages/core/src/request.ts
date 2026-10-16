@@ -17,8 +17,13 @@ export interface InvocationRequest {
   method: string;
   args: unknown[];
   options: InvokeMethodOptions;
-  /** Call-chain reentrancy id, generated at the root and propagated. */
-  reentrancyId: string;
+  /**
+   * Call-chain reentrancy id (Orleans' `#CCR` request-context entry), present
+   * only when the chain opted in with `RequestContext.allowCallChainReentrancy`
+   * and propagated unchanged from there. Absent by default: call-chain
+   * reentrancy is off unless a grain asks for it.
+   */
+  reentrancyId?: string;
   sender?: GrainId;
   /**
    * The grain activation actually making THIS call (Orleans

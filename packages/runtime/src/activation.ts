@@ -1,6 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { newActivationId, type ActivationId } from "@thresh/core/activation-id";
-import { Guid } from "@thresh/core/guid";
 import {
   broadcastChannelObserver,
   BroadcastConsumerInterface,
@@ -66,9 +65,11 @@ import { guardDurableFieldForReadOnly } from "@thresh/core/durable-state-readonl
 import { guardTransactionalStateForReadOnly } from "@thresh/core/transactional-state-readonly-guard";
 import type { InvocationRequest } from "@thresh/core/request";
 import {
+  type CallChainReentrantGrainContext,
   PLACEMENT_HINT_KEY,
   RequestContext,
   requestContextStore,
+  runWithCallChain,
   runWithRequestContext,
 } from "@thresh/core/request-context";
 import {
@@ -160,6 +161,16 @@ export class ActivationData implements GrainContext {
   readonly id: GrainId;
   readonly activationId: ActivationId;
   readonly scheduler: TurnScheduler;
+  /**
+   * This activation as Orleans' `ICallChainReentrantGrainContext`: the target
+   * of a `RequestContext.allowCallChainReentrancy` section opened by one of
+   * its turns. Ambient for every turn (see `runWithCallChain`), so a section
+   * always opens on the activation whose turn opened it.
+   */
+  private readonly callChainContext: CallChainReentrantGrainContext = {
+    onEnterReentrantSection: (id) => this.scheduler.enterReentrantSection(id),
+    onExitReentrantSection: (id) => this.scheduler.exitReentrantSection(id),
+  };
 
   private _instance!: Grain;
   runtime!: GrainRuntime;
@@ -483,11 +494,15 @@ export class ActivationData implements GrainContext {
     void this.scheduler
       .schedule({
         options: {},
-        reentrancyId: this.activationId,
         run: async () => {
           try {
             if (this.preActivate !== undefined) await this.preActivate();
-            await this.instance.onActivate(reason);
+            // No call-chain id of its own (the call that triggered this
+            // activation is a different chain), but a section `onActivate`
+            // opens lands on this activation.
+            await runWithCallChain(undefined, this.callChainContext, () =>
+              this.instance.onActivate(reason),
+            );
             if (this.deactivateRequestedDuringActivation) {
               // The grain asked to deactivate from onActivate: never go valid.
               // Run the deactivate hook inline (NOT via runDeactivateHook/the
@@ -557,7 +572,7 @@ export class ActivationData implements GrainContext {
     return this.scheduler
       .schedule({
         options: req.options,
-        reentrancyId: req.reentrancyId,
+        ...(req.reentrancyId !== undefined ? { reentrancyId: req.reentrancyId } : {}),
         method: req.method,
         args: req.args,
         ...(signal !== undefined ? { signal } : {}),
@@ -602,16 +617,19 @@ export class ActivationData implements GrainContext {
           const invocation = runWithRequestContext(
             req.headers !== undefined ? { ...req.headers } : {},
             () =>
-              invocationContext.run(
-                {
-                  senderId: req.sender,
-                  ownerId: this.id,
-                  reentrancyId: req.reentrancyId,
-                  transaction: req.transaction,
-                  deadline: req.deadline,
-                  signal,
-                },
-                () => this.callMethod(req),
+              // The request's call-chain id (if its chain opted in) stays
+              // ambient so this turn's own calls carry it onward.
+              runWithCallChain(req.reentrancyId, this.callChainContext, () =>
+                invocationContext.run(
+                  {
+                    senderId: req.sender,
+                    ownerId: this.id,
+                    transaction: req.transaction,
+                    deadline: req.deadline,
+                    signal,
+                  },
+                  () => this.callMethod(req),
+                ),
               ),
           ).catch((error: unknown) => {
             this.deactivateOnInconsistentState(error);
@@ -748,7 +766,7 @@ export class ActivationData implements GrainContext {
           // never inherits the registering call's ambient state. `setTimeout`
           // otherwise carries the enclosing turn's `AsyncLocalStorage`
           // snapshot into every fire, so without this a tick would run under
-          // the ORIGINAL registering call's reentrancy id, deadline,
+          // the ORIGINAL registering call's call-chain id, deadline,
           // transaction and RequestContext headers rather than its own. Give
           // every tick a fresh, empty RequestContext and an `InvocationContext`
           // scoped to this activation with no inherited transaction, deadline
@@ -760,13 +778,10 @@ export class ActivationData implements GrainContext {
           run: () => {
             const tick = runInRootAsyncContext(() =>
               runWithRequestContext({}, () =>
-                invocationContext.run(
-                  {
-                    senderId: undefined,
-                    ownerId: this.id,
-                    reentrancyId: Guid.newGuid().toString(),
-                  },
-                  cb,
+                // No call-chain id (Orleans asserts `ReentrancyId` is empty in
+                // a tick, `GrainTimerTests`).
+                runWithCallChain(undefined, this.callChainContext, () =>
+                  invocationContext.run({ senderId: undefined, ownerId: this.id }, cb),
                 ),
               ),
             );
@@ -837,7 +852,10 @@ export class ActivationData implements GrainContext {
               activationId: this.activationId,
               reason: formatDeactivationReason(reason),
             },
-            () => this.instance.onDeactivate(reason, signal),
+            () =>
+              runWithCallChain(undefined, this.callChainContext, () =>
+                this.instance.onDeactivate(reason, signal),
+              ),
           ),
       })
       .catch((error) => {
@@ -1035,7 +1053,6 @@ export class ActivationData implements GrainContext {
       const bag = new MigrationBag();
       await this.scheduler.schedule({
         options: {},
-        reentrancyId: this.activationId,
         run: () => {
           runWithRequestContext(this.migrationRequestContext ?? {}, () => {
             for (const participant of participants) {

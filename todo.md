@@ -215,10 +215,17 @@ against the integrated tree.
 - [ ] #97 **partly fixed** — a failing subscriber no longer takes the event from the others, but
       without a cursor per consumer it still holds back later events on that queue for up to
       `maxEventDeliveryTimeMs`.
-- [ ] Needs a design decision, not attempted: #85 (clustered-silo config guards), #87 (is interleaving
-      a contract?), #99 (Postgres stream visibility — serialise appends or a snapshot watermark),
-      #112 (`startToken` / multiple subscriptions: implement or record as a deviation), #118
-      (call-chain reentrancy default).
+- [x] #118 call-chain reentrancy is opt-in, as in Orleans: `RequestContext.allowCallChainReentrancy`
+      / `suppressCallChainReentrancy`; a non-reentrant grain's callback into itself deadlocks until
+      its response timeout. The parity port of `ConsistencyTestGrain` had dropped upstream's
+      `[Reentrant]` and relied on the old always-on behaviour; it is reentrant again.
+- [x] #87 interleaving is a documented contract (`docs/guide/grains.md#interleaving`), pinned by
+      `packages/runtime/src/interleaving.test.ts`: an interleaved call runs only at another turn's
+      `await`, never concurrently, and sees that turn's writes so far — hiding intermediate state is
+      the grain's job (a confirmed view, as `JournaledGrain.state` is).
+- [ ] Needs a design decision, not attempted: #85 (clustered-silo config guards), #99 (Postgres
+      stream visibility — serialise appends or a snapshot watermark), #112 (`startToken` / multiple
+      subscriptions: implement or record as a deviation).
 
 Follow-ups surfaced while fixing them:
 
@@ -277,6 +284,10 @@ no separate Reminders test project at v10.1.0, and upstream itself skips its gol
 transaction runner (dotnet/orleans#9553), so transaction behaviour here remains covered by
 `packages/hosting`'s transactions-cluster tests.
 
+- [ ] Port `test/Orleans.Runtime.Internal.Tests/MessageScheduling` (`AllowCallChainReentrancyTests`,
+      `DisabledCallChainReentrancyTests`, `ReentrancyTests`) and their grains (`DeadlockGrain`,
+      `CallChainReentrancyGrain`, `NonReentrantGrain`, the `MayInterleave` grains). No parity suite
+      mirrors that project yet; `packages/runtime/src/reentrancy.test.ts` covers the same cases.
 - [ ] 21 ported declarations take their id from a runtime value (`for (const testClass of [...])` in
       the two cancellation-token suites), so the scorecard counts them but cannot match them to a
       vitest title — `--run` now fails on exactly that. Give each an id it can resolve (name the
