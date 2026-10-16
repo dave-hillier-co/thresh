@@ -485,7 +485,9 @@ export class TestCluster {
       .useInProcessTransport(this.network)
       .useMemoryStreams("default", undefined, this.streamProvider("default"))
       .useBroadcastChannels()
-      .useMemoryDurableJobs(this.jobShardStore);
+      .useMemoryDurableJobs(this.jobShardStore)
+      // Every in-memory store below is ONE instance shared by all of this cluster's silos.
+      .allowSharedInMemoryState();
     const backend = this.options.storageBackend;
     if (backend === undefined) {
       builder.useMemoryStorage(this.storage).useMemoryJournaling(this.journalStorage);

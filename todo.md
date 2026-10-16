@@ -215,7 +215,14 @@ against the integrated tree.
 - [ ] #97 **partly fixed** — a failing subscriber no longer takes the event from the others, but
       without a cursor per consumer it still holds back later events on that queue for up to
       `maxEventDeliveryTimeMs`.
-- [ ] Needs a design decision, not attempted: #85 (clustered-silo config guards), #87 (is interleaving
+- [x] #85 a clustered silo refuses a per-silo in-memory reminder table, grain store or journal store,
+      and a multi-silo static view with no liveness, at build. `allowSharedInMemoryState()` admits
+      in-memory instances shared in-process (`TestCluster`); `useStaticMembership`'s
+      `allowWithoutLiveness` admits a deliberately static view.
+- [ ] #85 follow-up: the same per-silo-in-memory hazard, unguarded, in the transactional-storage
+      default (a per-silo `MemoryTransactionalStorage` unless `disableTransactions()`),
+      `useMemoryDurableJobs()` and `useMemoryStreams()` with no argument.
+- [ ] Needs a design decision, not attempted: #87 (is interleaving
       a contract?), #99 (Postgres stream visibility — serialise appends or a snapshot watermark),
       #112 (`startToken` / multiple subscriptions: implement or record as a deviation), #118
       (call-chain reentrancy default).

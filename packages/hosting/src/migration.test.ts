@@ -68,8 +68,9 @@ function buildSilo(
     collectionIntervalSeconds: 10,
     random: () => 0,
   })
-    .useStaticMembership([silo(0), silo(1)])
+    .useStaticMembership([silo(0), silo(1)], undefined, { allowWithoutLiveness: true })
     .useInProcessTransport(network)
+    .allowSharedInMemoryState()
     .useMemoryStorage(storage)
     .registerGrain(AccountGrain, { interfaces: [IAccount] })
     .build();

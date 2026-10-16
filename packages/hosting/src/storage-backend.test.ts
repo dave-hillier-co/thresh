@@ -118,7 +118,7 @@ const peer = new SiloAddress("silo-sb2", "uid-sb2", "silo-sb2:11111");
 
 function buildSilo(backend: StorageBackend, silos: readonly SiloAddress[] = [local]) {
   return createSilo({ clusterId: "c-storage-backend", local })
-    .useStaticMembership(silos)
+    .useStaticMembership(silos, undefined, { allowWithoutLiveness: true })
     .useInProcessTransport(new InProcessNetwork())
     .useStorageBackend(backend)
     .useReminders()

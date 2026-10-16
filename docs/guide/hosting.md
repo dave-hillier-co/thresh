@@ -21,3 +21,10 @@ Its opt-in end-to-end test covers routing, pod loss, state survival, and rolling
 Builder groups include membership (`useStaticMembership`, `useKubernetesMembership`), transport
 (`useInProcessTransport`, `useWebSocketTransport`), operations (`useHealthEndpoints`, `useTracing`,
 `useMetrics`, `useLogging`), and memory/Redis/Postgres/Kafka providers.
+
+`useStaticMembership` lists every silo as active for good, with no liveness: a silo that exits stays
+in the view and calls routed to it hang. A view of the silo alone is exact, and is what single-silo
+development uses; a static view of several silos is refused at build unless
+`useStaticMembership(silos, metadata, { allowWithoutLiveness: true })` accepts that. Clustered
+deployments use `useKubernetesMembership`, and in-memory stores on a clustered silo follow the rule in
+[State](state.md#choosing-where-state-lives).
