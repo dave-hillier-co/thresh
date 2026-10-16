@@ -391,6 +391,19 @@ export class SiloBuilder {
   private backendReminderTable: ReminderTable | undefined;
   /** Whether membership is a static view of this silo alone (the in-memory backend's safe case). */
   private singleSiloView = false;
+  /**
+   * A multi-silo static view whose missing liveness has not been acknowledged
+   * (`useStaticMembership`'s `allowWithoutLiveness`); refused at build.
+   */
+  private staticViewWithoutLiveness = false;
+  /** `allowSharedInMemoryState()`: in-memory stores handed in are shared by every silo. */
+  private sharedInMemoryState = false;
+  /**
+   * In-memory stores this builder constructed itself (`useMemoryStorage()` and friends with no
+   * argument, the in-memory backend, `useReminders()` with neither table nor backend). Each is one
+   * per silo by construction, so no declaration can make it shared.
+   */
+  private readonly perSiloStores = new WeakSet<object>();
   private reminderServiceOptions: ReminderServiceOptions | undefined;
   private jobShardStore: JobShardStore | undefined;
   private durableJobsOptions: DurableJobsOptions = {};
@@ -470,8 +483,14 @@ export class SiloBuilder {
   }
 
   /**
-   * Enable durable reminders backed by the given table (in-memory by default).
-   * `options` mirrors Orleans `ReminderOptions` (e.g. `minimumPeriod`).
+   * Enable durable reminders backed by the given table. With no table, the
+   * storage backend's is used, else a per-silo in-memory one — which only a
+   * static view of this silo alone accepts: a reminder fires on the silo that
+   * owns its grain's hash range, reading that silo's table, so on a cluster
+   * every silo must read ONE table (`usePostgresReminders`,
+   * `useRedisReminders`, a durable `useStorageBackend`, or an in-memory table
+   * shared in-process under `allowSharedInMemoryState`). `options` mirrors
+   * Orleans `ReminderOptions` (e.g. `minimumPeriod`).
    */
   useReminders(table?: ReminderTable, options?: ReminderServiceOptions): this {
     // With no table, the storage backend's (else an in-memory one) is chosen at build, so
@@ -970,9 +989,9 @@ export class SiloBuilder {
     let journal: JournalStorage;
     switch (backend.kind) {
       case "memory":
-        storage = new MemoryGrainStorage();
-        journal = new MemoryJournalStorage();
-        this.backendReminderTable = new MemoryReminderTable();
+        storage = this.perSilo(new MemoryGrainStorage());
+        journal = this.perSilo(new MemoryJournalStorage());
+        this.backendReminderTable = this.perSilo(new MemoryReminderTable());
         break;
       case "postgres": {
         const prefix = backend.tablePrefix ?? "thresh";
@@ -1020,9 +1039,41 @@ export class SiloBuilder {
     return this;
   }
 
-  /** Convenience: register an in-memory "default" provider (dev/tests). */
-  useMemoryStorage(provider: GrainStorage = new MemoryGrainStorage()): this {
-    return this.addStorage("default", provider);
+  /**
+   * Convenience: register an in-memory "default" provider (dev/tests). With no
+   * argument the store is this silo's own, which only a static view of this
+   * silo alone accepts; a cluster sharing one instance in-process passes it
+   * here and declares `allowSharedInMemoryState()`.
+   */
+  useMemoryStorage(provider?: GrainStorage): this {
+    return this.addStorage("default", provider ?? this.perSilo(new MemoryGrainStorage()));
+  }
+
+  /**
+   * Declare that every in-memory store this silo is handed — grain storage,
+   * journal storage, the reminder table — is ONE instance shared with every
+   * other silo of the cluster, in this process. That is how `TestCluster`
+   * builds its silos, and it is the only arrangement under which in-memory
+   * state is coherent across silos: a grain reactivating elsewhere reads the
+   * same store, and the silo owning a reminder's range reads the table the
+   * registration went into. Without it, a silo whose membership is anything
+   * but a static view of itself alone refuses in-memory stores at build.
+   *
+   * It covers only instances the caller hands in. A store this builder makes
+   * itself (`useMemoryStorage()` / `useMemoryJournaling()` with no argument,
+   * `useReminders()` with neither table nor backend, the in-memory storage
+   * backend) is one per silo by construction and stays refused; the in-memory
+   * backend has its own opt-in, `allowInCluster`.
+   */
+  allowSharedInMemoryState(): this {
+    this.sharedInMemoryState = true;
+    return this;
+  }
+
+  /** Record a store this builder constructed, which is necessarily this silo's alone. */
+  private perSilo<T extends object>(store: T): T {
+    this.perSiloStores.add(store);
+    return store;
   }
 
   /**
@@ -1244,9 +1295,10 @@ export class SiloBuilder {
   /**
    * Convenience: register an in-memory "default" journal provider (dev/tests).
    * Sharing one instance across silo restarts stands in for a durable backend.
+   * The clustered-silo rule is `useMemoryStorage`'s.
    */
-  useMemoryJournaling(provider: JournalStorage = new MemoryJournalStorage()): this {
-    return this.addJournaling("default", provider);
+  useMemoryJournaling(provider?: JournalStorage): this {
+    return this.addJournaling("default", provider ?? this.perSilo(new MemoryJournalStorage()));
   }
 
   /**
@@ -1292,12 +1344,22 @@ export class SiloBuilder {
     return this.addJournaling(name, provider);
   }
 
+  /**
+   * A fixed membership view. Every listed silo is `active` for good: nothing
+   * removes one that exits, so calls routed to it hang rather than fail. That
+   * is exact for a view of this silo alone (single-silo development), and is
+   * refused at build for anything else unless `options.allowWithoutLiveness`
+   * acknowledges it; `useKubernetesMembership` is the clustered provider, and
+   * `useMembership` injects a view something else maintains.
+   */
   useStaticMembership(
     silos: readonly SiloAddress[],
     metadata?: (silo: SiloAddress) => Readonly<Record<string, string>> | undefined,
+    options?: { readonly allowWithoutLiveness?: boolean },
   ): this {
     this.membership = new StaticMembershipService(this.config.local, silos, metadata);
     this.singleSiloView = silos.length === 1 && silos[0]!.equals(this.config.local);
+    this.staticViewWithoutLiveness = !this.singleSiloView && options?.allowWithoutLiveness !== true;
     return this;
   }
 
@@ -1310,6 +1372,7 @@ export class SiloBuilder {
   useMembership(service: MembershipService): this {
     this.membership = service;
     this.singleSiloView = false;
+    this.staticViewWithoutLiveness = false;
     return this;
   }
 
@@ -1324,6 +1387,7 @@ export class SiloBuilder {
   useKubernetesMembership(watch: EndpointWatch, options?: KubernetesMembershipOptions): this {
     this.membership = new KubernetesMembership(this.config.local, watch, options);
     this.singleSiloView = false;
+    this.staticViewWithoutLiveness = false;
     const lifecycle = watch as Partial<{ start(): Promise<void>; stop(): void }>;
     if (typeof lifecycle.start === "function") {
       this.starters.push(() => lifecycle.start!());
@@ -1491,6 +1555,74 @@ export class SiloBuilder {
     };
   }
 
+  /**
+   * Refuse a setting that one silo can hold and several cannot (#85), so a clustered silo cannot
+   * be assembled with it by accident: each would otherwise fail silently — reminders that never
+   * fire, state that is empty after an activation moves, calls that hang on a departed silo. The
+   * in-memory backend is checked by `build()` itself, under its own `allowInCluster` opt-in.
+   */
+  private refuseSingleSiloSettingsOnACluster(): void {
+    if (this.staticViewWithoutLiveness) {
+      throw new Error(
+        `silo: a static membership view of several silos has no liveness — a silo that exits ` +
+          `stays in the view and calls routed to it hang; use useKubernetesMembership (or ` +
+          `useMembership with a view something maintains), or pass ` +
+          `{ allowWithoutLiveness: true } to useStaticMembership to accept that`,
+      );
+    }
+    if (this.singleSiloView) return;
+    const backendAllowsMemory =
+      this.storageBackend?.kind === "memory" && this.storageBackend.allowInCluster === true;
+    const refusal = (store: object): "perSilo" | "undeclared" | undefined => {
+      if (this.perSiloStores.has(store)) return backendAllowsMemory ? undefined : "perSilo";
+      return this.sharedInMemoryState ? undefined : "undeclared";
+    };
+    const remedy = (why: "perSilo" | "undeclared", durable: string): string =>
+      why === "perSilo"
+        ? `this silo made it for itself, so no other silo reads it; use ${durable}, or hand ` +
+          `every silo one shared instance and call allowSharedInMemoryState()`
+        : `call allowSharedInMemoryState() if every silo is handed this same instance, or use ` +
+          durable;
+    const table = this.reminderTable;
+    if (table instanceof MemoryReminderTable && table !== this.backendReminderTable) {
+      const why = refusal(table);
+      if (why !== undefined) {
+        throw new Error(
+          `silo: an in-memory reminder table on a multi-silo cluster — a reminder fires on the ` +
+            `silo owning its grain's range, reading that silo's table, so one registered ` +
+            `anywhere else never fires; ` +
+            remedy(why, "usePostgresReminders, useRedisReminders or a durable useStorageBackend"),
+        );
+      }
+    }
+    for (const [name, provider] of this.storage?.named() ?? []) {
+      const why = provider instanceof MemoryGrainStorage ? refusal(provider) : undefined;
+      if (why !== undefined) {
+        throw new Error(
+          `silo: in-memory storage provider "${name}" on a multi-silo cluster — a grain ` +
+            `reactivating on another silo would start empty; ` +
+            remedy(
+              why,
+              "a durable provider (addPostgresStorage, addRedisStorage, useStorageBackend)",
+            ),
+        );
+      }
+    }
+    for (const [name, provider] of this.journalStorage?.named() ?? []) {
+      const why = provider instanceof MemoryJournalStorage ? refusal(provider) : undefined;
+      if (why !== undefined) {
+        throw new Error(
+          `silo: in-memory journal provider "${name}" on a multi-silo cluster — a grain ` +
+            `reactivating on another silo would replay an empty log; ` +
+            remedy(
+              why,
+              "a durable provider (addPostgresJournaling, addRedisJournaling, useStorageBackend)",
+            ),
+        );
+      }
+    }
+  }
+
   build(): SiloHost {
     if (this.membership === undefined) throw new Error("silo: no membership configured");
     if (this.transport === undefined) throw new Error("silo: no transport configured");
@@ -1506,8 +1638,9 @@ export class SiloBuilder {
       );
     }
     if (this.remindersRequested && this.reminderTable === undefined) {
-      this.reminderTable = this.backendReminderTable ?? new MemoryReminderTable();
+      this.reminderTable = this.backendReminderTable ?? this.perSilo(new MemoryReminderTable());
     }
+    this.refuseSingleSiloSettingsOnACluster();
     const classSpecificCollectionAgeSeconds = this.resolvedClassSpecificCollectionAges;
     validateClassSpecificCollectionAges(classSpecificCollectionAgeSeconds);
     const health = new HealthCheck();

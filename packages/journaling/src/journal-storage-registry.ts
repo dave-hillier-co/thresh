@@ -21,6 +21,11 @@ export class JournalStorageRegistry {
     return this;
   }
 
+  /** The providers registered by name; the fallback is not among them. */
+  named(): ReadonlyMap<string, JournalStorage> {
+    return this.providers;
+  }
+
   has(name: string): boolean {
     return this.providers.has(name) || this.fallback !== undefined;
   }

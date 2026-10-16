@@ -49,4 +49,15 @@ A Postgres backend shares one pool across its `thresh_grain_state`, `thresh_jour
 `thresh_reminders` tables, created on start. In-memory storage is refused at build for anything but
 a static view of the silo alone, because each silo would hold its own store and a grain reactivating
 elsewhere would start empty; set `THRESH_STORAGE_ALLOW_IN_MEMORY_CLUSTER=true` only for a cluster
-whose state is disposable. A blank `THRESH_STORAGE_URL` is refused rather than read as memory.
+whose state is disposable — that opt-in admits the backend's per-silo reminder table too, so a
+reminder registered on a silo that does not own its grain's range never fires. A blank
+`THRESH_STORAGE_URL` is refused rather than read as memory.
+
+The same rule holds for providers registered by hand. A silo whose membership is anything but a
+static view of itself alone refuses, at build, an in-memory grain store, journal store or reminder
+table: a grain reactivating on another silo would read an empty store, and a reminder fires on the
+silo owning its grain's range, reading that silo's table. A store the builder makes itself
+(`useMemoryStorage()`, `useMemoryJournaling()` with no argument, `useReminders()` with neither table
+nor backend) is one per silo and is always refused there. An instance handed in is accepted only
+under `allowSharedInMemoryState()`, which declares that every silo of the cluster is handed that same
+instance in one process — what `TestCluster` does.

@@ -264,7 +264,18 @@ A Postgres backend shares one pool across its `thresh_grain_state`, `thresh_jour
 `thresh_reminders` tables, created on start. In-memory storage is refused at build for anything but
 a static view of the silo alone, because each silo would hold its own store and a grain reactivating
 elsewhere would start empty; set `THRESH_STORAGE_ALLOW_IN_MEMORY_CLUSTER=true` only for a cluster
-whose state is disposable. A blank `THRESH_STORAGE_URL` is refused rather than read as memory.
+whose state is disposable — that opt-in admits the backend's per-silo reminder table too, so a
+reminder registered on a silo that does not own its grain's range never fires. A blank
+`THRESH_STORAGE_URL` is refused rather than read as memory.
+
+The same rule holds for providers registered by hand. A silo whose membership is anything but a
+static view of itself alone refuses, at build, an in-memory grain store, journal store or reminder
+table: a grain reactivating on another silo would read an empty store, and a reminder fires on the
+silo owning its grain's range, reading that silo's table. A store the builder makes itself
+(`useMemoryStorage()`, `useMemoryJournaling()` with no argument, `useReminders()` with neither table
+nor backend) is one per silo and is always refused there. An instance handed in is accepted only
+under `allowSharedInMemoryState()`, which declares that every silo of the cluster is handed that same
+instance in one process — what `TestCluster` does.
 
 
 ---
@@ -334,6 +345,13 @@ Its opt-in end-to-end test covers routing, pod loss, state survival, and rolling
 Builder groups include membership (`useStaticMembership`, `useKubernetesMembership`), transport
 (`useInProcessTransport`, `useWebSocketTransport`), operations (`useHealthEndpoints`, `useTracing`,
 `useMetrics`, `useLogging`), and memory/Redis/Postgres/Kafka providers.
+
+`useStaticMembership` lists every silo as active for good, with no liveness: a silo that exits stays
+in the view and calls routed to it hang. A view of the silo alone is exact, and is what single-silo
+development uses; a static view of several silos is refused at build unless
+`useStaticMembership(silos, metadata, { allowWithoutLiveness: true })` accepts that. Clustered
+deployments use `useKubernetesMembership`, and in-memory stores on a clustered silo follow the rule in
+[State](state.md#choosing-where-state-lives).
 
 
 ---
@@ -758,6 +776,20 @@ it: a cluster-id default would strand state on a redeployment that changes the c
 No store migrates data written under an earlier layout: each Postgres store creates its table in
 its current shape, and a table or key left by an older Thresh is not read. Thresh has no deployed
 state to carry forward, so a layout change is a clean break.
+
+## A clustered silo refuses settings only one silo can hold
+
+Orleans accepts `AddMemoryGrainStorage`, `UseInMemoryReminderService` and development clustering on
+any silo and documents them as development-only. Thresh refuses them at `build()` on a silo whose
+membership is anything but a static view of itself alone, because each fails silently there: an
+in-memory grain or journal store is empty when an activation moves, a reminder registered on a silo
+that does not own its grain's range is never fired by the silo that does (that silo reads its own
+table), and a static multi-silo view keeps a departed silo `active`, so calls routed to it hang.
+Each refusal names its durable alternative and its explicit opt-in: `allowSharedInMemoryState()` for
+in-memory instances every silo shares in one process (`TestCluster`), `allowWithoutLiveness` on
+`useStaticMembership`, and `allowInCluster` on the in-memory storage backend for disposable state.
+A store the builder constructs itself is one per silo by construction, so only `allowInCluster`
+admits it.
 
 ## Additions beyond Orleans
 

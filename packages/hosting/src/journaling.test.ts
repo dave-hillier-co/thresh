@@ -214,8 +214,9 @@ describe("durable-state migration (issue #94)", () => {
       collectionIntervalSeconds: 10,
       random: () => 0,
     })
-      .useStaticMembership([local0, local1])
+      .useStaticMembership([local0, local1], undefined, { allowWithoutLiveness: true })
       .useInProcessTransport(network)
+      .allowSharedInMemoryState()
       .useMemoryJournaling(storage)
       .registerGrain(WarehouseGrain, { interfaces: [IWarehouse] })
       .registerGrain(LedgerGrain, { interfaces: [ILedger] })
@@ -281,8 +282,9 @@ describe("JournaledGrain migration (issue #94)", () => {
         collectionIntervalSeconds: 10,
         random: () => 0,
       })
-        .useStaticMembership([local0, local1])
+        .useStaticMembership([local0, local1], undefined, { allowWithoutLiveness: true })
         .useInProcessTransport(network)
+        .allowSharedInMemoryState()
         .useMemoryJournaling(storage)
         .registerGrain(LedgerGrain, { interfaces: [ILedger] })
         .build();
