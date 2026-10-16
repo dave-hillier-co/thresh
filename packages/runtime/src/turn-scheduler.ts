@@ -16,7 +16,12 @@ import {
  */
 export interface Turn<R> {
   readonly options: InvokeMethodOptions;
-  /** Call-chain reentrancy id, propagated along a chain of grain calls. */
+  /**
+   * Call-chain reentrancy id the request carries, if any (Orleans' `#CCR`
+   * request-context entry). Admits the turn while busy only when this
+   * activation has an open reentrant section for it — see
+   * `enterReentrantSection`. Carrying an id never opens a section by itself.
+   */
   readonly reentrancyId?: string;
   /** The grain method this turn dispatches, if any (system turns have none). */
   readonly method?: string;
@@ -117,7 +122,6 @@ interface QueuedTurn {
 
 interface RunningTurn {
   options: InvokeMethodOptions;
-  reentrancyId: string | undefined;
   method: string | undefined;
   args: readonly unknown[] | undefined;
   turn: Turn<unknown>;
@@ -134,7 +138,10 @@ interface RunningTurn {
  * - `alwaysInterleave`        -> admit
  * - no blocking turn running (only `alwaysInterleave` turns are running) -> admit
  * - `readOnly` and the blocking turn is also `readOnly` -> admit
- * - reentrancy id is an active call-chain section -> admit
+ * - reentrancy id is an open call-chain section on this activation -> admit
+ *   (opened by `enterReentrantSection`, i.e. a turn here running
+ *   `RequestContext.allowCallChainReentrancy`; never opened implicitly, so
+ *   call-chain reentrancy is off by default as in Orleans)
  * - a configured `mayInterleave` predicate matches the incoming turn OR the
  *   blocking turn -> admit
  * - otherwise                 -> queue (FIFO for exclusive turns)
@@ -308,7 +315,6 @@ export class TurnScheduler {
     }
     const running: RunningTurn = {
       options: item.turn.options,
-      reentrancyId: item.turn.reentrancyId,
       method: item.turn.method,
       args: item.turn.args,
       turn: item.turn,
@@ -317,7 +323,6 @@ export class TurnScheduler {
     const isFirstTurn = !this.firstTurnSeen;
     this.firstTurnSeen = true;
     this.running.add(running);
-    if (running.reentrancyId !== undefined) this.enterSection(running.reentrancyId);
     // Orleans' RecordRunning: the first non-`alwaysInterleave` turn to start
     // while none is blocking becomes `_blockingRequest`, and stays so until it
     // (specifically) completes — even if other turns interleave after it.
@@ -332,7 +337,6 @@ export class TurnScheduler {
       .finally(() => {
         if (watchdog !== undefined) this.time.clearTimer(watchdog);
         this.running.delete(running);
-        if (running.reentrancyId !== undefined) this.leaveSection(running.reentrancyId);
         if (this.blockingTurn === running) this.blockingTurn = undefined;
         if (isFirstTurn) this.firstTurnSettled = true;
         this.pump();
@@ -385,11 +389,22 @@ export class TurnScheduler {
     for (const item of queued) item.reject(rejection);
   }
 
-  private enterSection(id: string): void {
+  /**
+   * Orleans `ReentrantRequestTracker.EnterReentrantSection`: from now until
+   * the matching `exitReentrantSection`, a request carrying `id` is admitted
+   * while this activation is busy. Counted, so nested sections for the same
+   * chain stay open until the outermost exits.
+   */
+  enterReentrantSection(id: string): void {
     this.reentrantSections.set(id, (this.reentrantSections.get(id) ?? 0) + 1);
+    // A request on this chain may already be waiting (it reached this
+    // activation by another route before the section opened); admit it now
+    // rather than at the next unrelated arrival or completion.
+    this.pump();
   }
 
-  private leaveSection(id: string): void {
+  /** Orleans `ReentrantRequestTracker.LeaveReentrantSection`. */
+  exitReentrantSection(id: string): void {
     const next = (this.reentrantSections.get(id) ?? 0) - 1;
     if (next <= 0) this.reentrantSections.delete(id);
     else this.reentrantSections.set(id, next);

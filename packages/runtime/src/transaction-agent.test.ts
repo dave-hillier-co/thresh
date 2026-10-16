@@ -139,10 +139,7 @@ describe("TransactionAgent.resolve", () => {
 
 /** Run `fn` as if it were a turn executing inside `tx`. */
 function inTurn<R>(tx: TransactionInfo, fn: () => R): R {
-  return invocationContext.run(
-    { senderId: undefined, ownerId: undefined, reentrancyId: tx.id, transaction: tx },
-    fn,
-  );
+  return invocationContext.run({ senderId: undefined, ownerId: undefined, transaction: tx }, fn);
 }
 
 /** A promise plus its resolve, so a test can hold a participant mid-round. */

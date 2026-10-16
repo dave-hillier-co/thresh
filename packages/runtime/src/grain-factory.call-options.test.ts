@@ -68,7 +68,6 @@ describe("withCallOptions", () => {
       {
         senderId: undefined,
         ownerId: undefined,
-        reentrancyId: "r1",
         deadline: outerDeadline,
       },
       () => withCallOptions({ deadlineMs: 60_000 }, () => grainRef.ping()),
@@ -88,7 +87,7 @@ describe("withCallOptions", () => {
     const inner = new AbortController();
 
     await invocationContext.run(
-      { senderId: undefined, ownerId: undefined, reentrancyId: "r1", signal: outer.signal },
+      { senderId: undefined, ownerId: undefined, signal: outer.signal },
       () => withCallOptions({ signal: inner.signal }, () => grainRef.ping()),
     );
 

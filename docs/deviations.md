@@ -26,6 +26,13 @@ summary of the deliberate deviations. [`EPICS.md`](../EPICS.md) tracks what is s
 - **Transport is WebSocket over HTTP**, behind an abstraction.
 - **Single-threaded turns** are enforced by a per-activation turn scheduler. The guarantee is
   identical to Orleans; the mechanism differs because `await` yields the Node event loop.
+- **A call-chain reentrancy section is a callback, not a disposable.** Orleans'
+  `using var _ = RequestContext.AllowCallChainReentrancy();` (and `SuppressCallChainReentrancy`) is
+  `await RequestContext.allowCallChainReentrancy(() => ...)` here: the section covers the
+  callback's async extent and closes when its promise settles. The admission rule is Orleans' —
+  off by default, and only the grain that opened the section admits a callback on that chain. One
+  timing difference: opening a section admits a request on that chain that is already waiting at
+  once, where Orleans admits it at the activation's next scheduling pass.
 - The code is a **pnpm workspace of small `@thresh/*` packages** with no barrel files and standard
   TC39 decorators (no `reflect-metadata`), run straight from source.
 - **A grain call carries `undefined` back as `undefined`**, not as `null`, whether the callee is

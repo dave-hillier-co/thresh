@@ -33,13 +33,10 @@ describe("GrainRuntime transaction introspection", () => {
   it("reports no transaction outside an ambient transaction", async () => {
     const runtime = makeRuntime();
 
-    await invocationContext.run(
-      { senderId: undefined, ownerId: undefined, reentrancyId: "r1" },
-      async () => {
-        expect(runtime.isInTransaction()).toBe(false);
-        expect(runtime.getTransactionId()).toBeUndefined();
-      },
-    );
+    await invocationContext.run({ senderId: undefined, ownerId: undefined }, async () => {
+      expect(runtime.isInTransaction()).toBe(false);
+      expect(runtime.getTransactionId()).toBeUndefined();
+    });
   });
 
   it("reports the ambient transaction's id when one is in scope", async () => {
@@ -49,7 +46,6 @@ describe("GrainRuntime transaction introspection", () => {
       {
         senderId: undefined,
         ownerId: undefined,
-        reentrancyId: "r1",
         transaction: transaction("tx-1"),
       },
       async () => {

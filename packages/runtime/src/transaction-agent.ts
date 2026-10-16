@@ -217,7 +217,6 @@ export class TransactionAgent {
       method,
       args,
       options: {},
-      reentrancyId: Guid.newGuid().toString(),
     });
   }
 

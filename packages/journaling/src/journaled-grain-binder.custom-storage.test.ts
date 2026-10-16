@@ -11,6 +11,8 @@ type Event = { readonly add: number };
 
 /** A shared "database" the grain reads and appends to, standing in for real storage. */
 const store = new Map<string, Event[]>();
+/** When set, `applyUpdatesToStorage` waits on it: a write held at its storage await. */
+let appendGate: Promise<void> | undefined;
 
 class CountingGrain
   extends JournaledGrain<State, Event>
@@ -38,11 +40,15 @@ class CountingGrain
     });
   }
 
-  applyUpdatesToStorage(updates: readonly Event[], expectedVersion: number): Promise<boolean> {
+  async applyUpdatesToStorage(
+    updates: readonly Event[],
+    expectedVersion: number,
+  ): Promise<boolean> {
+    if (appendGate !== undefined) await appendGate;
     const log = this.log;
-    if (log.length !== expectedVersion) return Promise.resolve(false);
+    if (log.length !== expectedVersion) return false;
     store.set(this.key, [...log, ...updates]);
-    return Promise.resolve(true);
+    return true;
   }
 
   clearStoredState(): Promise<void> {
@@ -52,6 +58,11 @@ class CountingGrain
 
   async add(n: number): Promise<void> {
     this.raiseEvent({ add: n });
+    await this.confirmEvents();
+  }
+
+  async addBatch(events: readonly Event[]): Promise<void> {
+    for (const event of events) this.raiseEvent(event);
     await this.confirmEvents();
   }
 
@@ -109,6 +120,31 @@ describe("bindJournaledGrain with a custom-storage host", () => {
 
     expect(revived.confirmed).toEqual({ total: 15 });
     expect(revived.confirmedVersion).toBe(2);
+  });
+
+  it("holds the confirmed view at the pre-write state for the whole of a write's storage await (#87)", async () => {
+    // What a reader interleaved into a write's await sees: the confirmed view
+    // (`state`/`version`) moves in one step once the append is durable, never
+    // through a partially-applied batch. BeneDB's DatastoreGrain reads rely on it.
+    store.clear();
+    const grain = new CountingGrain();
+    await bindJournaledGrain(grain, new GrainId("Counting", "batch"), registry());
+    let open!: () => void;
+    appendGate = new Promise<void>((resolve) => (open = resolve));
+    try {
+      const write = grain.addBatch([{ add: 1 }, { add: 2 }]);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(grain.confirmed).toEqual({ total: 0 });
+      expect(grain.confirmedVersion).toBe(0);
+
+      open();
+      await write;
+      expect(grain.confirmed).toEqual({ total: 3 });
+      expect(grain.confirmedVersion).toBe(2);
+    } finally {
+      appendGate = undefined;
+    }
   });
 
   it("leaves a plain journaled grain on the substrate path", async () => {

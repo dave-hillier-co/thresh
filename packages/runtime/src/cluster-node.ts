@@ -33,7 +33,6 @@ import type {
   IncomingGrainCallFilter,
   OutgoingGrainCallFilter,
 } from "@thresh/core/grain-call-filter";
-import { Guid } from "@thresh/core/guid";
 import { type Logger, noopLogger } from "@thresh/core/logger";
 import type { GrainReferenceIdentity } from "@thresh/core/grain-reference";
 import { RemindableInterface, type ReminderRegistry, type TickStatus } from "@thresh/core/reminder";
@@ -475,7 +474,6 @@ interface ClientGossip {
   gateway: SiloAddress;
 }
 
-const newChainId = () => Guid.newGuid().toString();
 const randomPlacement = new RandomPlacement();
 
 /**
@@ -1041,7 +1039,6 @@ export class ClusterNode {
           method: "onPublished",
           args: [key, item],
           options: {},
-          reentrancyId: newChainId(),
         })
         .then(() => {
           emitBroadcastChannelEvent({
@@ -1122,7 +1119,6 @@ export class ClusterNode {
       method: "receiveReminder",
       args: [name, status],
       options: {},
-      reentrancyId: newChainId(),
     });
   }
 
@@ -1148,7 +1144,6 @@ export class ClusterNode {
         method: "runJob",
         args: [job],
         options: {},
-        reentrancyId: newChainId(),
       })) as DurableJobRunResult;
     })();
     this.inFlightDurableJobs.set(job.runId, dispatch);
@@ -1177,7 +1172,6 @@ export class ClusterNode {
       method: "deliverStreamEvent",
       args: [streamKey, event, token],
       options: {},
-      reentrancyId: newChainId(),
     });
   }
 
@@ -1197,7 +1191,6 @@ export class ClusterNode {
       method: "confirmStreamSubscription",
       args: [streamKey],
       options: {},
-      reentrancyId: newChainId(),
     })) as boolean;
   }
 
@@ -1213,7 +1206,6 @@ export class ClusterNode {
       method: "status",
       args: [manager.stateName, transactionId],
       options: {},
-      reentrancyId: newChainId(),
     })) as boolean;
   }
 
@@ -3515,7 +3507,9 @@ export class ClusterNode {
       method: message.method,
       args: this.serializer.deserialize<unknown[]>(message.body),
       options: iface?.options[message.method] ?? {},
-      reentrancyId: message.requestContext?.reentrancyId ?? newChainId(),
+      ...(message.requestContext?.reentrancyId !== undefined
+        ? { reentrancyId: message.requestContext.reentrancyId }
+        : {}),
       ...(message.sendingGrain !== undefined ? { sender: message.sendingGrain } : {}),
       ...(transaction !== undefined ? { transaction } : {}),
       ...(message.deadlineInMs !== undefined

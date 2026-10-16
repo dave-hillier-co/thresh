@@ -374,13 +374,22 @@ paged/cursor protocol. (Streaming *within* a process is fine and maps directly.)
 | `BatchWorker` / `BatchWorkerFromDelegate` | the same names from `@thresh/core/batch-worker`: `notify()`, `waitForCurrentWorkToBeServiced()`, `notifyAndWaitForWorkToBeServiced()`, `isIdle()`. The timed `Notify(DateTime)` overload and its cancellation token are not ported. Inside a grain it is the single writer: callers enqueue into a list the grain owns and `notify()`, one cycle drains the list. When a ported grain guards writes from an interleaving method with a `SemaphoreSlim` and a fire-and-forget loop, the C# is hand-rolling this; port it as a `BatchWorker` over a queue, not as a lock. |
 | `lock (x)` | delete it — a grain activation is single-threaded per turn. Keep a lock **only** if the C# guarded state shared *between* grains, which is itself a smell the port should remove. |
 | `RequestContext.Set/Get` | `ctx.runtime.setRequestContext(key, value)` / `getRequestContext(key)` inside a grain, or the static `RequestContext` from `@thresh/core/request-context` (`get`/`set`/`remove`/`clear`/`keys`) from anywhere, including non-grain code — so a C# static context helper ports shape-for-shape, and `RequestContext.Clear()` has an exact counterpart in tests. Two differences. **(1) Values are `string` only**, where Orleans takes any serializable object: anything richer must be encoded at the set and decoded at the get — and a **decode failure must be as loud as a missing key**, or a corrupted value silently becomes a default. **(2) `set` MUTATES the ambient store in place**, where Orleans' is copy-on-write (a fresh dictionary per set). So a value set inside an awaited callee **does leak back UP to the caller** after the await, which Orleans guaranteed it would not. Sibling isolation still holds only by discipline: every call site must set the values immediately before its own outgoing call and never rely on what a previous sibling left behind. Port any C# remark promising the Orleans scoping guarantee as a pinned test of the divergence, not as an assumption. |
+| `using var _ = RequestContext.AllowCallChainReentrancy();` followed by the calls it covers | `await RequestContext.allowCallChainReentrancy(async () => { ...the same calls... })` from `@thresh/core/request-context`. The section is the callback: put exactly the statements the C# `using` scope covered inside it (to the end of the enclosing block, for a `using var`), and return their result. Like Orleans, it opts in only the grain that runs it: `A -> B -> A` completes when `A` opened the section, while `A -> B -> A -> B` still deadlocks on `B` unless `B` opened one too. |
+| `using var _ = RequestContext.SuppressCallChainReentrancy();` | `await RequestContext.suppressCallChainReentrancy(async () => { ... })`, scoped the same way. |
+| `RequestContext.ReentrancyId` (read) | `RequestContext.reentrancyId` — `undefined` where Orleans has `Guid.Empty`. |
 | `GrainCancellationToken` | `GrainCancellationToken`, same shape |
 
 Note the direction of the danger: C# `async` methods can interleave at every `await` and Orleans
-grains are non-reentrant by default; TypeScript is the same. A ported grain that was
-`[Reentrant]` in C# and is not marked `reentrant` in Thresh will deadlock on self-calls, and one
-that was non-reentrant but is marked reentrant will corrupt state silently. Carry the attribute
-across deliberately.
+grains are non-reentrant by default; TypeScript is the same. Call-chain reentrancy is off by
+default too, as in Orleans: a non-reentrant grain that calls back into itself — a self-call, or
+`A -> B -> A` — deadlocks until the call's response timeout and fails with
+`GrainCallTimeoutError`. A ported grain that was `[Reentrant]` in C# and is not marked `reentrant`
+in Thresh will deadlock that way, and one that was non-reentrant but is marked reentrant will
+corrupt state silently. Where the C# made a callback work with `AllowCallChainReentrancy`,
+`[AlwaysInterleave]` or `[Reentrant]`, port that same mechanism, at the same place; where it
+relied on none of them, the C# never called back, and neither should the port. Carry the
+attribute across deliberately, and never answer a callback deadlock by raising a timeout. What an
+interleaved call may observe is set out in the [grains guide](guide/grains.md#interleaving).
 
 ## Placement
 

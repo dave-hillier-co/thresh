@@ -2,14 +2,16 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { combineSignals } from "@thresh/core/abort";
 import { TransactionAlreadyResolvedError } from "@thresh/core/errors";
 import type { GrainId } from "@thresh/core/grain-id";
-import { Guid } from "@thresh/core/guid";
 import { RequestContext, requestContextStore } from "@thresh/core/request-context";
 import { isResolved, type TransactionInfo } from "@thresh/core/transaction-info";
 
 /**
  * Ambient context for the turn currently executing on an activation. A grain
  * reference invoked during a turn reads this to propagate the caller's identity
- * and the call-chain reentrancy id onto the outgoing request.
+ * onto the outgoing request. The call-chain reentrancy id is not here: it is
+ * `@thresh/core`'s `RequestContext.reentrancyId`, set only by
+ * `RequestContext.allowCallChainReentrancy` and scoped per turn by
+ * `runWithCallChain`.
  *
  * The request-context headers bag itself is NOT stored here — it lives in
  * `@thresh/core`'s `RequestContext`, the same ambient store a non-grain (client)
@@ -35,7 +37,6 @@ export interface InvocationContext {
    * caller for THIS hop, unlike `senderId` above.
    */
   ownerId: GrainId | undefined;
-  reentrancyId: string;
   /** The transaction this turn runs inside, if any. */
   transaction?: TransactionInfo | undefined;
   /**
@@ -175,7 +176,6 @@ export function withCallOptions<T>(options: CallOptions, fn: () => Promise<T>): 
   const next: InvocationContext = {
     senderId: current?.senderId,
     ownerId: current?.ownerId,
-    reentrancyId: current?.reentrancyId ?? Guid.newGuid().toString(),
     transaction: current?.transaction,
     deadline:
       options.deadlineMs !== undefined ? Date.now() + options.deadlineMs : current?.deadline,

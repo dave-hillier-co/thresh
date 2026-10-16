@@ -43,7 +43,11 @@ import { grainReferenceIdentity, type GrainReferenceIdentity } from "@thresh/cor
 import type { GrainType } from "@thresh/core/grain-type";
 import type { KeyTypeOf } from "@thresh/core/key-kinds";
 import type { InvocationRequest } from "@thresh/core/request";
-import { requestContextStore, runWithRequestContext } from "@thresh/core/request-context";
+import {
+  requestContextStore,
+  runWithCallChain,
+  runWithRequestContext,
+} from "@thresh/core/request-context";
 import { SiloAddress } from "@thresh/core/silo-address";
 import { ConnectionManager } from "@thresh/messaging/connection-manager";
 import { CorrelationTable } from "@thresh/messaging/correlation-table";
@@ -411,7 +415,7 @@ export class ClientNode implements Dispatcher {
           ...(req.deadline !== undefined ? { deadlineInMs: req.deadline - this.now() } : {}),
           ...(req.options.oneWay ? {} : { timeToLiveMs: deadline - this.now() }),
           requestContext: {
-            reentrancyId: req.reentrancyId,
+            ...(req.reentrancyId !== undefined ? { reentrancyId: req.reentrancyId } : {}),
             ...(req.headers !== undefined ? { headers: req.headers } : {}),
           },
           body: this.serializer.serialize(req.args),
@@ -532,40 +536,43 @@ export class ClientNode implements Dispatcher {
       const result = await runWithRequestContext(
         message.requestContext?.headers !== undefined ? { ...message.requestContext.headers } : {},
         () =>
-          invocationContext.run(
-            {
-              senderId: message.sendingGrain,
-              // A client-hosted observer isn't a grain activation, so it has
-              // no id to stamp as `ownerId` for a further outgoing call.
-              ownerId: undefined,
-              reentrancyId: message.requestContext?.reentrancyId ?? "",
-            },
-            async () => {
-              // The hosted object's own filter (if it declares one), like a
-              // grain's, runs innermost — after this client's own incoming
-              // filters, just before the method (Orleans parity).
-              const own = grainIncomingFilter(entry.object);
-              const filters =
-                own === undefined ? this.incomingCallFilters : [...this.incomingCallFilters, own];
-              if (filters.length === 0) {
-                return await method.apply(entry.object, args);
-              }
-              const context: IncomingGrainCallContext = {
-                target: message.targetGrain,
-                source: message.sendingGrain,
-                interfaceId: message.interfaceId,
-                interfaceName: getGrainInterface(message.interfaceId)?.name ?? "",
-                methodName: message.method,
-                args: [...args],
-                result: undefined,
-                headers: requestContextStore() ?? {},
-                grain: entry.object,
-                invoke: () => Promise.resolve(),
-              };
-              return await runCallFilters(filters, context, () =>
-                Promise.resolve(method.apply(entry.object, context.args)),
-              );
-            },
+          // The chain's id (if it opted in) rides on to any call the
+          // observer makes; there is no activation for a section to open on.
+          runWithCallChain(message.requestContext?.reentrancyId, undefined, () =>
+            invocationContext.run(
+              {
+                senderId: message.sendingGrain,
+                // A client-hosted observer isn't a grain activation, so it has
+                // no id to stamp as `ownerId` for a further outgoing call.
+                ownerId: undefined,
+              },
+              async () => {
+                // The hosted object's own filter (if it declares one), like a
+                // grain's, runs innermost — after this client's own incoming
+                // filters, just before the method (Orleans parity).
+                const own = grainIncomingFilter(entry.object);
+                const filters =
+                  own === undefined ? this.incomingCallFilters : [...this.incomingCallFilters, own];
+                if (filters.length === 0) {
+                  return await method.apply(entry.object, args);
+                }
+                const context: IncomingGrainCallContext = {
+                  target: message.targetGrain,
+                  source: message.sendingGrain,
+                  interfaceId: message.interfaceId,
+                  interfaceName: getGrainInterface(message.interfaceId)?.name ?? "",
+                  methodName: message.method,
+                  args: [...args],
+                  result: undefined,
+                  headers: requestContextStore() ?? {},
+                  grain: entry.object,
+                  invoke: () => Promise.resolve(),
+                };
+                return await runCallFilters(filters, context, () =>
+                  Promise.resolve(method.apply(entry.object, context.args)),
+                );
+              },
+            ),
           ),
       );
       if (message.direction === "oneWay") return;

@@ -22,10 +22,9 @@ import {
 import type { GrainKey } from "@thresh/core/grain-key";
 import { GRAIN_REF, GRAIN_REF_CAST } from "@thresh/core/grain-reference";
 import type { GrainType } from "@thresh/core/grain-type";
-import { Guid } from "@thresh/core/guid";
 import type { InvokeMethodOptions } from "@thresh/core/invoke-options";
 import type { InvocationRequest } from "@thresh/core/request";
-import { requestContextStore } from "@thresh/core/request-context";
+import { RequestContext, requestContextStore } from "@thresh/core/request-context";
 import type { TransactionInfo } from "@thresh/core/transaction-info";
 import {
   GrainCallTimeoutError,
@@ -38,8 +37,6 @@ import type { Dispatcher, InvokeCallOptions } from "@thresh/runtime/dispatcher";
 import { invocationContext } from "@thresh/runtime/invocation-context";
 import { systemTimeProvider, type TimeProvider } from "@thresh/runtime/time-provider";
 import type { TransactionAgent } from "@thresh/runtime/transaction-agent";
-
-const newChainId = () => Guid.newGuid().toString();
 
 /**
  * Reduce an aggregate rejection (e.g. `AggregateError`, from `Promise.any` or
@@ -218,6 +215,7 @@ export class GrainFactory {
               for (const token of sentTokens) recordCancellationTarget(token, target);
             }
             const ambient = invocationContext.getStore();
+            const reentrancyId = RequestContext.reentrancyId;
             const { transaction, beginsHere } = this.resolveTransaction(
               prop,
               options,
@@ -245,7 +243,10 @@ export class GrainFactory {
                 method: prop,
                 args: callArgs,
                 options,
-                reentrancyId: ambient?.reentrancyId ?? newChainId(),
+                // Only a chain that opted in (`RequestContext.allowCallChainReentrancy`,
+                // here or upstream) carries an id; call-chain reentrancy is off
+                // by default, as in Orleans.
+                ...(reentrancyId !== undefined ? { reentrancyId } : {}),
                 ...(ambient?.senderId !== undefined ? { sender: ambient.senderId } : {}),
                 ...(ambient?.ownerId !== undefined ? { callingGrain: ambient.ownerId } : {}),
                 ...(transaction !== undefined ? { transaction } : {}),

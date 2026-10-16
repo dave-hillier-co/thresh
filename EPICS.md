@@ -7,7 +7,7 @@ for how the design differs from Orleans.
 ## ✅ Shipped
 
 - **Core actor model** — grains, identity, `Proxy` references, turn scheduler, activation lifecycle,
-  call-chain reentrancy.
+  opt-in call-chain reentrancy.
 - **Messaging & multi-silo** — WebSocket/in-process transport, message envelope, serializer,
   dispatcher, DHT directory + location cache with versioned lossless range handoff, static membership.
 - **Placement** — random / prefer-local / activation-count / stateless-worker / silo-role /
