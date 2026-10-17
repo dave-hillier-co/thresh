@@ -156,6 +156,10 @@ export class TurnScheduler {
   private readonly reentrant: boolean;
   private mayInterleavePredicate: MayInterleavePredicate | undefined;
   private readonly queue: QueuedTurn[] = [];
+  /** Queued `alwaysInterleave` turns (they wait only behind the first-turn barrier). */
+  private queuedAlwaysInterleave = 0;
+  /** Queued `readOnly` turns (admissible alongside a read-only blocking turn). */
+  private queuedReadOnly = 0;
   private readonly running = new Set<RunningTurn>();
   /** Orleans' `_blockingRequest`: the one running turn that isn't `alwaysInterleave`. */
   private blockingTurn: RunningTurn | undefined;
@@ -198,6 +202,7 @@ export class TurnScheduler {
    */
   setMayInterleave(predicate: MayInterleavePredicate | undefined): void {
     this.mayInterleavePredicate = predicate;
+    this.pump();
   }
 
   /** True while any turn is running or queued. */
@@ -245,14 +250,34 @@ export class TurnScheduler {
         resolve: resolve as (value: unknown) => void,
         reject,
       };
-      this.queue.push(item);
-      this.pump();
+      // Every turn already waiting was inadmissible when it last could have
+      // changed (`pump` runs whenever admission widens), and an arrival never
+      // widens it, so only the new turn needs judging -- rescanning the queue
+      // here made a deep queue quadratic (issue #129).
+      if (this.mayAdmit(item.turn)) {
+        this.start(item);
+        return;
+      }
+      this.enqueue(item);
       // Orleans runs its MaxRequestProcessingTime check from
       // `ProcessPendingRequests`, for a waiting request `MayInvokeRequest`
       // refuses: a request that has to wait behind an already-overdue
       // blocking turn is what declares the activation stuck.
-      if (this.queue.includes(item)) this.deactivateIfStuck();
+      this.deactivateIfStuck();
     });
+  }
+
+  private enqueue(item: QueuedTurn): void {
+    this.queue.push(item);
+    if (item.turn.options.alwaysInterleave) this.queuedAlwaysInterleave++;
+    if (item.turn.options.readOnly) this.queuedReadOnly++;
+  }
+
+  private dequeueAt(index: number): QueuedTurn {
+    const [item] = this.queue.splice(index, 1);
+    if (item!.turn.options.alwaysInterleave) this.queuedAlwaysInterleave--;
+    if (item!.turn.options.readOnly) this.queuedReadOnly--;
+    return item!;
   }
 
   private pump(): void {
@@ -260,14 +285,29 @@ export class TurnScheduler {
     // FIFO because they are only admissible when nothing is running; interleavers
     // (read-only / alwaysInterleave / active reentrancy id) may jump ahead.
     for (let i = 0; i < this.queue.length; ) {
+      if (this.noQueuedTurnAdmissible()) return;
       const item = this.queue[i]!;
       if (this.mayAdmit(item.turn)) {
-        this.queue.splice(i, 1);
-        this.start(item);
+        this.start(this.dequeueAt(i));
       } else {
         i++;
       }
     }
+  }
+
+  /**
+   * A cheap sufficient condition for `mayAdmit` refusing every queued turn,
+   * so `pump` can stop instead of walking a deep queue of exclusive turns
+   * behind a blocking one on every completion (issue #129). Conservative:
+   * `false` only means the scan must go on.
+   */
+  private noQueuedTurnAdmissible(): boolean {
+    if (this.running.size === 0) return false;
+    if (this.barrierFirstTurn && !this.firstTurnSettled) return true;
+    if (this.reentrant || this.blockingTurn === undefined) return false;
+    if (this.queuedAlwaysInterleave > 0) return false;
+    if (this.blockingTurn.options.readOnly && this.queuedReadOnly > 0) return false;
+    return this.reentrantSections.size === 0 && this.mayInterleavePredicate === undefined;
   }
 
   private mayAdmit(turn: Turn<unknown>): boolean {
@@ -386,6 +426,8 @@ export class TurnScheduler {
     const rejection = this.onStuck(blocking.turn);
     this.stuck = { rejection };
     const queued = this.queue.splice(0, this.queue.length);
+    this.queuedAlwaysInterleave = 0;
+    this.queuedReadOnly = 0;
     for (const item of queued) item.reject(rejection);
   }
 
