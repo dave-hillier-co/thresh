@@ -230,6 +230,12 @@ against the integrated tree.
       `packages/runtime/src/interleaving.test.ts`: an interleaved call runs only at another turn's
       `await`, never concurrently, and sees that turn's writes so far — hiding intermediate state is
       the grain's job (a confirmed view, as `JournaledGrain.state` is).
+- [x] #129 a deep turn queue drains in linear time: an arrival is judged alone rather than
+      rescanning the queue, and `pump` stops once nothing queued can be admitted. The
+      `DuplicateActivations` parity stress test (10k calls queued per activation) passes again.
+- [ ] #129 follow-up: `MsgpackSerializer` builds a new msgpack `Encoder` per message (a tenth of
+      the stress test's CPU); a reused encoder would cut per-call cost. The parity project is not
+      run in CI, which is how the regression went unnoticed.
 - [ ] Needs a design decision, not attempted: #99 (Postgres stream visibility — serialise appends or
       a snapshot watermark), #112 (`startToken` / multiple subscriptions: implement or record as a
       deviation).
