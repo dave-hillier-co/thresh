@@ -69,6 +69,27 @@ describe("TurnScheduler", () => {
     expect(log).toEqual(["A:start", "A:end", "B:start", "B:end"]);
   });
 
+  it("drains a deep queue of exclusive turns in time linear in its length (issue #129)", async () => {
+    // Each arrival and each completion used to rescan the whole waiting queue,
+    // so 50k turns cost over a billion admission checks (tens of seconds); a
+    // linear drain takes a fraction of a second. The bound sits well clear of both.
+    const scheduler = new TurnScheduler();
+    const order: number[] = [];
+    const started = performance.now();
+    await Promise.all(
+      Array.from({ length: 50_000 }, (_, i) =>
+        scheduler.schedule({
+          options: {},
+          run: async () => {
+            order.push(i);
+          },
+        }),
+      ),
+    );
+    expect(performance.now() - started).toBeLessThan(5_000);
+    expect(order).toEqual(Array.from({ length: 50_000 }, (_, i) => i));
+  }, 120_000);
+
   it("propagates the turn's result and errors to the caller", async () => {
     const sched = new TurnScheduler();
     await expect(sched.schedule({ options: {}, run: async () => 42 })).resolves.toBe(42);
