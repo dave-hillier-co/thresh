@@ -101,13 +101,14 @@ export class ActivationRebalancerWorker {
     this.scheduleNext(this.options.sessionCyclePeriodMs);
   }
 
-  /** Stop the loop and cancel any pending tick. */
+  /** Stop the loop and cancel any pending tick, and a timed suspension's auto-resume. */
   stop(): void {
     this.stopped = true;
     if (this.handle !== undefined) {
       this.options.time.clearTimer(this.handle);
       this.handle = undefined;
     }
+    this.clearSuspendTimer();
   }
 
   /**

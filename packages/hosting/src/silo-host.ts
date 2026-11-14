@@ -27,6 +27,13 @@ import type { SelfProbeWorker } from "@thresh/hosting/self-probe";
  */
 const NODE_STOP_BACKSTOP_MS = 1000;
 
+/**
+ * The membership reconcile's stage: just above `Active`, so it starts after, and stops before,
+ * every service its ownership hooks feed (reminders at `Active`, durable jobs and pulling agents
+ * at `BecomeActive`).
+ */
+export const MEMBERSHIP_RECONCILE_STAGE = ServiceLifecycleStage.Active + 1;
+
 /** The reminder service the host drives (a `LocalReminderService`). */
 export interface ReminderService {
   refreshOwnership(ranges: ReadonlyArray<readonly [number, number]>): Promise<void>;
@@ -128,6 +135,12 @@ export class SiloHost {
   private reconcileAgain = false;
   /** The applied view version the ownership hooks last ran for. */
   private hookedVersion: number | undefined;
+  /**
+   * Set once stop has begun: the reconcile runs no further ownership hook, so nothing it feeds
+   * (reminders, durable jobs, pulling agents) is told to adopt ranges while it is stopping or
+   * after it has stopped.
+   */
+  private hooksHalted = false;
 
   constructor(private readonly parts: SiloHostParts) {}
 
@@ -254,14 +267,6 @@ export class SiloHost {
     await this.parts.node.flushRepartitionBuffers();
   }
 
-  /** Run a sequence of optional hooks in order, awaiting each, with the given args. */
-  private async runHooks<A extends unknown[]>(
-    hooks: ReadonlyArray<(...args: A) => Promise<void>> | undefined,
-    ...args: A
-  ): Promise<void> {
-    for (const hook of hooks ?? []) await hook(...args);
-  }
-
   /**
    * The silo's lifecycle, one subject per start. The host's own subsystems sit at these stages
    * (Orleans' names and order), with the builder's participants around them:
@@ -275,8 +280,10 @@ export class SiloHost {
    * - `ApplicationServices`: startup tasks.
    * - `BecomeActive`: the health listener opens; pulling agents and the job manager stop here,
    *   before activations are deactivated.
-   * - `Active`: the membership reconcile (ownership hooks), the rebalancer, the self-probe and
-   *   reminders.
+   * - `Active`: the rebalancer, the self-probe and reminders.
+   * - `MEMBERSHIP_RECONCILE_STAGE` (just above `Active`): the membership reconcile, which runs the
+   *   ownership hooks. It starts after every service it feeds and stops before any of them,
+   *   waiting for a reconcile already in flight, so no hook reaches a stopping service.
    * - `Last`: readiness. It is published last on the way up and flipped first on the way down.
    */
   private buildLifecycle(): LifecycleSubject {
@@ -366,11 +373,12 @@ export class SiloHost {
     });
     subscribe({
       name: "membership reconcile",
-      stage: ServiceLifecycleStage.Active,
+      stage: MEMBERSHIP_RECONCILE_STAGE,
       start: async () => {
         const watch = new AbortController();
         this.membershipWatch = watch;
         this.hookedVersion = undefined;
+        this.hooksHalted = false;
         // Ownership hooks for the applied view, then every later one (level-triggered),
         // whichever path applies it.
         this.stopViewListener = node.onViewApplied(() => this.reconcileView());
@@ -378,10 +386,13 @@ export class SiloHost {
         await this.reconciling;
         if (this.updates !== undefined) this.watchMembership(this.updates, watch);
       },
+      // Bounded by the stop budget, like every participant's stop.
       stop: async () => {
+        this.hooksHalted = true;
         this.membershipWatch?.abort();
         this.stopViewListener?.();
         this.stopViewListener = undefined;
+        await this.reconciling;
       },
     });
     subscribe({
@@ -426,6 +437,7 @@ export class SiloHost {
     try {
       await subject.onStart();
     } catch (error) {
+      this.hooksHalted = true;
       await subject.onStop();
       throw error;
     }
@@ -441,6 +453,8 @@ export class SiloHost {
   }
 
   private async stopLifecycle(): Promise<void> {
+    // From the moment stop begins, before readiness flips: no view reaches the ownership hooks.
+    this.hooksHalted = true;
     if (this.lifecycle === undefined) {
       this.parts.shutdown.beginDrain();
       return;
@@ -508,7 +522,7 @@ export class SiloHost {
     const logger = safeLogger(this.parts.logger ?? defaultLogger);
     for (;;) {
       this.reconcileAgain = false;
-      if (this.membershipWatch?.signal.aborted === true) return;
+      if (this.hooksHalted || this.membershipWatch?.signal.aborted === true) return;
       let failed = false;
       try {
         if (node.appliedViewVersion !== membership.current().version) node.updateView();
@@ -518,7 +532,12 @@ export class SiloHost {
           // view change, not in a tight loop against a store that is down.
           this.hookedVersion = version;
           const ranges = node.ownedHashRanges();
-          await this.runHooks(onOwnershipChange, ranges);
+          // Checked before each hook: a stop that began while one ran reaches no further one.
+          for (const hook of onOwnershipChange ?? []) {
+            if (this.hooksHalted) return;
+            await hook(ranges);
+          }
+          if (this.hooksHalted) return;
           await reminderService?.refreshOwnership(ranges);
         }
       } catch (error) {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { LogFields, Logger } from "@thresh/core/logger";
 import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
+import { PendingTimerTracker } from "@thresh/core/test-support/pending-timer-tracker";
 import { HealthCheck } from "@thresh/hosting/health-check";
 import { SelfProbeWorker } from "@thresh/hosting/self-probe";
 
@@ -17,6 +18,29 @@ function pendingProbe(): { probe: () => Promise<void>; settle: (error?: Error) =
 }
 
 describe("SelfProbeWorker", () => {
+  it("leaves no timer armed once stopped with a probe in flight", async () => {
+    const clock = new FakeTimeProvider();
+    const time = new PendingTimerTracker(clock);
+    const { probe, settle } = pendingProbe();
+    const worker = new SelfProbeWorker({
+      probe,
+      health: new HealthCheck(),
+      time,
+      intervalMs: 1000,
+      timeoutMs: 5000,
+      missedThreshold: 3,
+    });
+    worker.start();
+    clock.advance(1000); // a probe is in flight, its deadline armed
+
+    worker.stop();
+    expect(time.pendingTimers()).toEqual([]);
+
+    settle(); // the probe answers after the stop: nothing is re-armed
+    await flush();
+    expect(time.pendingTimers()).toEqual([]);
+  });
+
   it("does not flip dispatcherResponsive false on misses below missedThreshold", async () => {
     const time = new FakeTimeProvider();
     const health = new HealthCheck();
