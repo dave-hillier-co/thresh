@@ -1,4 +1,5 @@
 import { Grain } from "./grain";
+import { markFrameworkGrainBase } from "./remote-method-surface";
 
 /**
  * The log-consistency protocol surface a `JournaledGrain` delegates to,
@@ -189,3 +190,5 @@ export abstract class JournaledGrain<TState, TEvent> extends Grain {
     return this.logViewAdaptor.confirmedVersion + this.logViewAdaptor.pendingCount;
   }
 }
+
+markFrameworkGrainBase(JournaledGrain);

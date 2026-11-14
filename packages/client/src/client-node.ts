@@ -11,6 +11,7 @@ import {
 } from "@thresh/core/errors";
 import { createClientId, createObserverId, isObserverGrainId } from "@thresh/core/client-grain-id";
 import type { GrainClass } from "@thresh/core/grain-class";
+import { isObserverMethod } from "@thresh/core/remote-method-surface";
 import type { GrainRegistrationSpec } from "@thresh/core/grain-registration-spec";
 import {
   mapCancellationValues,
@@ -522,7 +523,9 @@ export class ClientNode implements Dispatcher {
       // controlled by this client, BEFORE the hosted object's method runs
       // (mirrors `ActivationData.bindCancellationTokens` on the grain side).
       this.bindCancellationTokens(args);
-      const method = entry.object[message.method];
+      const method = isObserverMethod(entry.object, message.method)
+        ? entry.object[message.method]
+        : undefined;
       if (typeof method !== "function") {
         throw new GrainCallError(`hosted object has no method ${message.method}`);
       }

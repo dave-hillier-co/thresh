@@ -84,6 +84,33 @@ call made inside the callback and onward from there.
 `RequestContext.suppressCallChainReentrancy(fn)` runs `fn` with no chain id, so its calls start
 afresh.
 
+## What a caller can invoke
+
+A call names a method, so a grain type has a fixed set of remotely callable methods and only those
+names are dispatched. Anything else is rejected with a "has no method" `GrainCallError` before the
+grain instance is touched, whether the caller is another grain, a silo or an external gateway client.
+
+- Functional grains: the members of the object the factory returns.
+- Class grains: methods on the class and on any base class you wrote, plus methods declared as
+  class-field arrow functions. Members of the framework base classes (`Grain`, `JournaledGrain`)
+  are never callable, so `raiseEvent`, `clearLog`, `confirmEvents` and `installLogViewAdaptor`
+  stay inside the grain.
+- Never callable, whatever you name them: `constructor`, the runtime's own hooks (`onActivate`,
+  `onDeactivate`, `onDehydrate`, `onRehydrate`, `setContext`), the custom-storage members
+  (`readStateFromStorage`, `applyUpdatesToStorage`, `clearStoredState`) and anything inherited
+  from `Object.prototype`.
+
+TypeScript `private` and `protected` are erased at runtime, so they do not hide a method: a
+`private` method on the class is still in the callable set. What hides a helper is keeping it out
+of the set: a module-level function, a closure variable in a functional grain (not returned from
+the factory), or a `#private` method. Client-hosted observers follow the same rule: only the
+object's own and user-prototype methods.
+
+A reference never turns a JavaScript protocol name into a call: `then`, `toJSON`, `valueOf`,
+`toLocaleString`, `constructor`, `asymmetricMatch`, `nodeType` and `$$typeof` read as `undefined`,
+so `JSON.stringify`, `await` and test matchers do not reach the grain. `String(ref)` answers
+locally with the grain type and key. Do not name a grain method after one of these.
+
 ## Calls and failure
 
 Grain references are location transparent and serializable. Calls may fail because application code
