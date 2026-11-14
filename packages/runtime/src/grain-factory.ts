@@ -98,8 +98,9 @@ export class GrainFactory {
     private readonly time: TimeProvider = systemTimeProvider,
     /**
      * Silo-wide default response timeout (ms), applied when a method has no
-     * `options.responseTimeout` of its own. Off by default (`undefined`): no
-     * silo behaves differently unless this is explicitly configured.
+     * `options.responseTimeout` of its own. `undefined` here means no deadline
+     * at all; a silo passes at least its call timeout, so every call it makes,
+     * to a grain on this silo or another, has one.
      */
     private readonly defaultResponseTimeoutMs?: number,
   ) {}

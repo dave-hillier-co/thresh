@@ -246,7 +246,7 @@ describe("a request carries its caller's call timeout as a time-to-live (issue #
 
     try {
       const grainRef = node0.getGrain(IGated, "queued");
-      const first = grainRef.run();
+      const first = grainRef.run().catch((e: unknown) => e);
       await gatedStarted;
       const second = grainRef.run().catch((e: unknown) => e);
       await calleeTransport.arrived(2);
@@ -255,7 +255,8 @@ describe("a request carries its caller's call timeout as a time-to-live (issue #
       time.advance(6_000); // past the caller's 5s call timeout, on the callee's clock
       releaseGated();
 
-      expect(await first).toBe(1);
+      // The running call outlived the same deadline, so its caller gave up on it too.
+      expect(await first).toBeInstanceOf(GrainCallTimeoutError);
       expect(await second).toBeInstanceOf(GrainCallTimeoutError);
       expect(gatedRuns).toBe(1); // the queued request never ran
     } finally {

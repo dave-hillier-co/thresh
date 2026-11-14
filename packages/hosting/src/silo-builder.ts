@@ -240,8 +240,8 @@ export interface SiloConfig {
   /**
    * Silo-wide default per-method response timeout (Orleans `[ResponseTimeout]`
    * default), applied to any grain call whose interface doesn't set its own
-   * `responseTimeout`. Off by default: no call races a deadline unless one is
-   * configured here or on the method itself.
+   * `responseTimeout`, to a grain on this silo as to one on another. Defaults to
+   * `callTimeout` (30s): a call always has a deadline.
    */
   defaultResponseTimeout?: Duration;
   /**
