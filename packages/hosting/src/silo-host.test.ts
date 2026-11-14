@@ -74,9 +74,10 @@ describe("SiloHost.stop ordering (issue #108)", () => {
     await host.start();
     await host.stop();
 
+    // Within one stage the stops run in the reverse of registration order.
     expect(order).toEqual([
-      "stream provider stop",
       "durable job manager stop",
+      "stream provider stop",
       "node.stop (deactivateAll)",
       "onStop",
     ]);

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { LifecycleSubject, type LifecycleObserver } from "@thresh/runtime/lifecycle-subject";
 
 function recordingObserver(
@@ -31,6 +31,23 @@ describe("LifecycleSubject", () => {
 
     await subject.onStop();
     expect(log).toEqual(["start:a", "start:b", "start:c", "stop:c", "stop:b", "stop:a"]);
+  });
+
+  it("stops the observers within one stage in the reverse of their subscription order, even when the first is slower", async () => {
+    const log: string[] = [];
+    const subject = new LifecycleSubject();
+    subject.subscribe("a", 0, {
+      onStart: async () => void log.push("start:a"),
+      onStop: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        log.push("stop:a");
+      },
+    });
+    subject.subscribe("b", 0, recordingObserver(log, "b"));
+    subject.subscribe("c", 0, recordingObserver(log, "c"));
+    await subject.onStart();
+    await subject.onStop();
+    expect(log.filter((l) => l.startsWith("stop:"))).toEqual(["stop:c", "stop:b", "stop:a"]);
   });
 
   it("runs all observers within a stage before advancing to the next stage", async () => {
@@ -127,5 +144,87 @@ describe("LifecycleSubject failure reporting", () => {
     });
     subject.subscribe("a", 0, recordingObserver([], "a", { failOnStart: true }));
     await expect(subject.onStart()).rejects.toThrow("fail-start:a");
+  });
+
+  it("halts a start that a stop interrupts, stopping the stage in flight and never starting a later one", async () => {
+    const log: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const subject = new LifecycleSubject();
+    subject.subscribe("a", 0, recordingObserver(log, "a"));
+    subject.subscribe("slow", 1, {
+      onStart: async () => {
+        log.push("start:slow");
+        await gate;
+      },
+      onStop: async () => void log.push("stop:slow"),
+    });
+    subject.subscribe("after", 2, recordingObserver(log, "after"));
+
+    const started = subject.onStart();
+    const settled = started.then(
+      () => "resolved",
+      () => "rejected",
+    );
+    await vi.waitFor(() => expect(log).toContain("start:slow"));
+    const stopped = subject.onStop();
+    release();
+    await stopped;
+    expect(await settled).toBe("rejected");
+    expect(log).toEqual(["start:a", "start:slow", "stop:slow", "stop:a"]);
+  });
+
+  it("stops a stage whose start finishes after a stop timed out waiting for it", async () => {
+    const log: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const subject = new LifecycleSubject({
+      stopTimeoutMs: 5,
+      onError: ({ observerName }) => void log.push(`error:${observerName}`),
+    });
+    subject.subscribe("slow", 1, {
+      onStart: async () => {
+        log.push("start:slow");
+        await gate;
+      },
+      onStop: async () => void log.push("stop:slow"),
+    });
+    subject.subscribe("after", 2, recordingObserver(log, "after"));
+    const started = subject.onStart().catch(() => undefined);
+    await vi.waitFor(() => expect(log).toContain("start:slow"));
+    await subject.onStop();
+    release();
+    await started;
+    expect(log.filter((l) => l.startsWith("start:") || l.startsWith("stop:"))).toEqual([
+      "start:slow",
+      "stop:slow",
+    ]);
+  });
+
+  it("gives up on a stop that never settles, reports it, and runs the stages below", async () => {
+    const log: string[] = [];
+    const failures: string[] = [];
+    const subject = new LifecycleSubject({
+      stopTimeoutMs: 10,
+      onError: ({ observerName, phase, error }) =>
+        void failures.push(`${phase}:${observerName}:${(error as Error).message}`),
+    });
+    subject.subscribe("low", 0, recordingObserver(log, "low"));
+    subject.subscribe("hung", 1, {
+      onStart: async () => undefined,
+      onStop: () => new Promise<void>(() => undefined),
+    });
+    await subject.onStart();
+    await subject.onStop();
+    expect(log).toEqual(["start:low", "stop:low"]);
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toMatch(/^stop:hung:.*timed out/);
+  });
+
+  it("returns the same pending stop to a second caller", async () => {
+    const subject = new LifecycleSubject();
+    subject.subscribe("a", 0, { onStart: async () => undefined, onStop: async () => undefined });
+    await subject.onStart();
+    expect(subject.onStop()).toBe(subject.onStop());
   });
 });

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { grain } from "@thresh/core/decorators";
 import { Grain } from "@thresh/core/grain";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
@@ -207,6 +207,106 @@ describe("the silo lifecycle", () => {
     await host.start();
     await host.stop();
     expect(log).toEqual(["stop:agents ready=false", "stop:after-node"]);
+  });
+
+  it("stops participants sharing one stage in the reverse of their registration order", async () => {
+    const log: string[] = [];
+    const host = silo(new InProcessNetwork(), (builder) => {
+      for (const name of ["a", "b", "c"]) {
+        builder.addLifecycleParticipant(name, Stage.RuntimeInitialize, {
+          start: async () => void log.push(`start:${name}`),
+          stop: async () => {
+            if (name === "a") await new Promise((resolve) => setTimeout(resolve, 20));
+            log.push(`stop:${name}`);
+          },
+        });
+      }
+    });
+    await host.start();
+    await host.stop();
+    expect(log).toEqual(["start:a", "start:b", "start:c", "stop:c", "stop:b", "stop:a"]);
+  });
+
+  it("halts a start that stop() interrupts: no later stage starts, nothing is left bound or armed", async () => {
+    const network = new InProcessNetwork();
+    const clock = new CountingClock();
+    const log: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const host = silo(
+      network,
+      (builder) => {
+        builder.addLifecycleParticipant("slow", Stage.RuntimeStorageServices, {
+          start: async () => {
+            log.push("start:slow");
+            await gate;
+          },
+          stop: async () => void log.push("stop:slow"),
+        });
+        builder.addLifecycleParticipant("after", Stage.Active, {
+          start: async () => void log.push("start:after"),
+          stop: async () => void log.push("stop:after"),
+        });
+      },
+      { time: clock, selfProbe: { enabled: true } },
+    );
+
+    const started = host.start();
+    const outcome = started.then(
+      () => "resolved",
+      () => "rejected",
+    );
+    await vi.waitFor(() => expect(log).toContain("start:slow"));
+    const stopped = host.stop();
+    release();
+    await stopped;
+
+    expect(await outcome).toBe("rejected");
+    expect(log).toEqual(["start:slow", "stop:slow"]);
+    expect(network.lookup(local)).toBeUndefined();
+    expect(clock.pending).toBe(0);
+    expect(host.health.ready().ok).toBe(false);
+  });
+
+  it("gives up on a stop participant that never settles, logs it, and still runs the stops below", async () => {
+    const log: string[] = [];
+    const { logger, errors } = recordingLogger();
+    const host = silo(
+      new InProcessNetwork(),
+      (builder) => {
+        builder.addLifecycleParticipant("below", Stage.RuntimeInitialize, {
+          stop: async () => void log.push("stop:below"),
+        });
+        builder.addLifecycleParticipant("hung", Stage.RuntimeStorageServices, {
+          stop: () => new Promise<void>(() => undefined),
+        });
+      },
+      { logger, stopBudgetMs: 50, gracefulShutdownMs: 0 },
+    );
+    await host.start();
+    await host.stop();
+    expect(log).toEqual(["stop:below"]);
+    const failure = errors.find((e) => e.message === "silo stop hook failed");
+    expect(failure?.fields).toMatchObject({ phase: "hung" });
+    expect(String((failure?.fields as { error?: unknown }).error)).toContain("timed out");
+  });
+
+  it("rejects a start whose rollback meets a hung stop, with the original error", async () => {
+    const host = silo(
+      new InProcessNetwork(),
+      (builder) => {
+        builder.addLifecycleParticipant("hung", Stage.RuntimeInitialize, {
+          stop: () => new Promise<void>(() => undefined),
+        });
+        builder.addLifecycleParticipant("fails", Stage.Last, {
+          start: async () => {
+            throw new Error("the original failure");
+          },
+        });
+      },
+      { stopBudgetMs: 50, gracefulShutdownMs: 0 },
+    );
+    await expect(host.start()).rejects.toThrow("the original failure");
   });
 });
 

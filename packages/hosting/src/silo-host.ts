@@ -16,10 +16,16 @@ import type {
 import type { RebalancingReport } from "@thresh/runtime/placement/rebalancing/rebalancing-report";
 import type { Edge } from "@thresh/runtime/placement/repartitioning/edge";
 import { LifecycleSubject, ServiceLifecycleStage } from "@thresh/runtime/lifecycle-subject";
-import { GracefulShutdown } from "@thresh/hosting/graceful-shutdown";
+import { DEFAULT_STOP_BUDGET_MS, GracefulShutdown } from "@thresh/hosting/graceful-shutdown";
 import type { HealthCheck } from "@thresh/hosting/health-check";
 import type { HealthServer } from "@thresh/hosting/health-server";
 import type { SelfProbeWorker } from "@thresh/hosting/self-probe";
+
+/**
+ * Slack past the stop budget before the node's stop is abandoned. The node enforces the budget
+ * itself (`GracefulShutdown`), so this outer bound only catches a node stop that fails to return.
+ */
+const NODE_STOP_BACKSTOP_MS = 1000;
 
 /** The reminder service the host drives (a `LocalReminderService`). */
 export interface ReminderService {
@@ -285,7 +291,11 @@ export class SiloHost {
     } = this.parts;
     const { reminderService, shutdown, startupTasks } = this.parts;
     const logger = safeLogger(this.parts.logger ?? defaultLogger);
+    const stopBudgetMs = this.parts.stopBudgetMs ?? DEFAULT_STOP_BUDGET_MS;
     const subject = new LifecycleSubject({
+      // No participant may hold the stop past the stop budget: one whose stop has not settled by
+      // then is logged as failed and the stages below still stop.
+      stopTimeoutMs: stopBudgetMs,
       onError: ({ phase, observerName, error }) => {
         logger.error(phase === "stop" ? "silo stop hook failed" : "silo start hook failed", {
           phase: observerName,
@@ -293,10 +303,11 @@ export class SiloHost {
         });
       },
     });
-    const subscribe = (p: SiloLifecycleParticipant): void => {
+    const subscribe = (p: SiloLifecycleParticipant, stopTimeoutMs?: number): void => {
       subject.subscribe(p.name, p.stage, {
         onStart: async () => p.start?.(),
         onStop: async () => p.stop?.(),
+        ...(stopTimeoutMs !== undefined ? { stopTimeoutMs } : {}),
       });
     };
     for (const participant of this.parts.lifecycle ?? []) subscribe(participant);
@@ -304,27 +315,30 @@ export class SiloHost {
     // The membership watch's first list completes inside a `RuntimeInitialize` start (a
     // `KubernetesEndpointWatch.start()` awaits it), so the view is populated before the node
     // applies it.
-    subscribe({
-      name: "node",
-      stage: ServiceLifecycleStage.RuntimeServices,
-      start: async () => {
-        // Positioned now, before the node applies the current view: every view published from
-        // here on is yielded once the watch starts consuming, so none can fall between the
-        // start-up reconcile and the watch.
-        this.updates = membership.updates();
-        // Listens, then applies `membership.current()` — the ring, and join recovery for the
-        // ranges it gains — so a startup task can already call a grain.
-        await node.start();
-        // Finish that join recovery before the startup tasks and readiness. Every owned
-        // operation waits for it anyway, so this only moves the wait ahead of them — and keeps
-        // the node's recovery dials to members not listening yet from still being in flight (and
-        // shared by the connection pool) when the first calls go out.
-        await node.recoverySettled();
+    subscribe(
+      {
+        name: "node",
+        stage: ServiceLifecycleStage.RuntimeServices,
+        start: async () => {
+          // Positioned now, before the node applies the current view: every view published from
+          // here on is yielded once the watch starts consuming, so none can fall between the
+          // start-up reconcile and the watch.
+          this.updates = membership.updates();
+          // Listens, then applies `membership.current()` — the ring, and join recovery for the
+          // ranges it gains — so a startup task can already call a grain.
+          await node.start();
+          // Finish that join recovery before the startup tasks and readiness. Every owned
+          // operation waits for it anyway, so this only moves the wait ahead of them — and keeps
+          // the node's recovery dials to members not listening yet from still being in flight (and
+          // shared by the connection pool) when the first calls go out.
+          await node.recoverySettled();
+        },
+        // A silo that was serving waits out the grace period; one rolling back a failed start has
+        // nothing to wait for.
+        stop: async () => (this.serving ? shutdown.drain() : shutdown.stopWithoutGrace()),
       },
-      // A silo that was serving waits out the grace period; one rolling back a failed start has
-      // nothing to wait for.
-      stop: async () => (this.serving ? shutdown.drain() : shutdown.stopWithoutGrace()),
-    });
+      stopBudgetMs + NODE_STOP_BACKSTOP_MS,
+    );
     subscribe({
       name: "startupTasks",
       stage: ServiceLifecycleStage.ApplicationServices,

@@ -391,7 +391,13 @@ grain at once, so the client a grain reads must already be connected, and it mus
 the node has deactivated every activation. The readiness flip is a participant at `Last`, so it
 publishes first on stop. Orleans' `LifecycleSubject.OnStart` does not itself unwind on failure; the
 host does, calling `onStop` and rejecting with the original error, so a half-started silo leaves
-nothing listening, connected or armed.
+nothing listening, connected or armed. Three further departures keep that guarantee. Within one
+stage a stop runs the participants one at a time in the reverse of registration order, where
+Orleans stops a stage's observers concurrently, so the whole stop order is the reverse of the start
+order. A stop issued while a start is in flight halts the start (no later stage begins) and stops
+what began, where Orleans leaves the start running. And a participant whose stop has not settled
+within the stop budget is logged as failed and abandoned, so one hung stop cannot hold the rest of
+the stop (or a rollback) forever; Orleans bounds this through the host's shutdown timeout.
 
 ## A transaction resource delays deactivation, but its own protocol timers differ
 
