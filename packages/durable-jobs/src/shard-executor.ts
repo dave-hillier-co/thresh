@@ -6,7 +6,7 @@ import type {
   ShouldRetry,
 } from "@thresh/core/durable-job";
 import { Guid } from "@thresh/core/guid";
-import { noopLogger, type Logger } from "@thresh/core/logger";
+import { defaultLogger, type Logger } from "@thresh/core/logger";
 import type { TimeProvider, TimerHandle } from "@thresh/core/time-provider";
 import {
   recordJobCompleted,
@@ -108,7 +108,7 @@ export class ShardExecutor {
   ) {
     this.concurrency = Math.max(1, options.slowStartInitialConcurrency);
     this.startedAtMs = this.time.now();
-    this.logger = options.logger ?? noopLogger;
+    this.logger = options.logger ?? defaultLogger;
   }
 
   /** Log a persist failure that the executor tolerates; control flow is unchanged. */

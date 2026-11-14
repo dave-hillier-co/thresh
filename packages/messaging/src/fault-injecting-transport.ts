@@ -1,4 +1,3 @@
-import { RejectionError } from "@thresh/core/errors";
 import type { SiloAddress } from "@thresh/core/silo-address";
 import { systemTimeProvider, type TimeProvider } from "@thresh/core/time-provider";
 import type { Message } from "@thresh/messaging/message";
@@ -10,6 +9,7 @@ import type {
   MessageHandler,
   Transport,
 } from "@thresh/messaging/transport";
+import { connectFailure } from "@thresh/messaging/transport";
 
 /**
  * Names one end of a link: a `SiloAddress`, or a string matched against a silo's pod name or
@@ -112,7 +112,7 @@ export class NetworkFaults {
     return this.add(this.delays, { link, delayMs, remaining: options.count });
   }
 
-  /** Refuse connects on `link` with the transport's rejection (`unknownTarget`). */
+  /** Fail connects on `link` with the transports' `ConnectFailure` (cause `timeout`). */
   failConnects(link: Link, options: { count?: number } = {}): FaultHandle {
     return this.add(this.connectFailures, { link, remaining: options.count });
   }
@@ -214,7 +214,7 @@ export class NetworkFaults {
  * A `Transport` decorator that injects the faults a shared {@link NetworkFaults} describes into
  * everything this silo sends: on the connections it dials and on the connections it accepts (the
  * duplex path a reply to a client takes). Connects it is told to fail reject with the same
- * `RejectionError` (`unknownTarget`) the transports raise for an unreachable peer. Wraps any
+ * `ConnectFailure` the transports raise for an unreachable peer (cause `timeout`). Wraps any
  * transport, so the same faults apply over the in-process network and over WebSocket.
  */
 export class FaultInjectingTransport implements Transport {
@@ -243,9 +243,13 @@ export class FaultInjectingTransport implements Transport {
   ): Promise<Connection> {
     const from = preamble.siloAddress;
     if (this.faults.refusesConnect(from, to)) {
-      throw new RejectionError(
-        `connect from ${from.toString()} to ${to.toString()} refused (injected fault)`,
-        "unknownTarget",
+      // The transports' one connect failure. An injected network fault says nothing about
+      // whether a live silo is behind the address, so it reports as a `timeout`, never
+      // `refused` (which callers such as join recovery read as "hosts nothing").
+      throw connectFailure(
+        to,
+        `the link from ${from.toString()} is blocked (injected fault)`,
+        "timeout",
       );
     }
     return this.faulty(await this.inner.connect(to, preamble, onMessage), from, to);

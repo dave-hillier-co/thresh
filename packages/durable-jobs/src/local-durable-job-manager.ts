@@ -6,7 +6,7 @@ import type {
   ShouldRetry,
 } from "@thresh/core/durable-job";
 import { Guid } from "@thresh/core/guid";
-import { noopLogger, type Logger } from "@thresh/core/logger";
+import { defaultLogger, type Logger } from "@thresh/core/logger";
 import type { TimeProvider, TimerHandle } from "@thresh/core/time-provider";
 import {
   recordShardPoisoned,
@@ -106,7 +106,7 @@ export class LocalDurableJobManager {
      */
     private readonly forwardJob?: (ownerRingKey: string, job: DurableJob) => Promise<boolean>,
   ) {
-    this.logger = options.logger ?? noopLogger;
+    this.logger = options.logger ?? defaultLogger;
     this.limiter = new ConcurrencyLimiter(options.maxConcurrentJobsPerSilo);
     this.ownership = ownership;
     this.joinedAtMs = time.now();

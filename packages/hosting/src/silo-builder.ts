@@ -1508,12 +1508,14 @@ export class SiloBuilder {
   }
 
   useWebSocketTransport(): this {
-    // `useLogging` may come after this call, so the logger is read at log time.
+    // `useLogging` may come after this call, so the logger is read at log time; with none
+    // set it is the silo's default (warn and error to the console), never silence.
+    const current = (): Logger => safeLogger(this.logger ?? defaultLogger);
     const logger: Logger = {
-      debug: (message, fields) => this.logger?.debug(message, fields),
-      info: (message, fields) => this.logger?.info(message, fields),
-      warn: (message, fields) => this.logger?.warn(message, fields),
-      error: (message, fields) => this.logger?.error(message, fields),
+      debug: (message, fields) => current().debug(message, fields),
+      info: (message, fields) => current().info(message, fields),
+      warn: (message, fields) => current().warn(message, fields),
+      error: (message, fields) => current().error(message, fields),
     };
     this.transport = new WebSocketTransport(this.config.clusterId, { logger });
     return this;
@@ -2066,7 +2068,7 @@ export class SiloBuilder {
         (job) => node.deliverDurableJob(job),
         {
           ...resolveDurableJobOptions(this.durableJobsOptions),
-          ...(this.logger !== undefined ? { logger: this.logger } : {}),
+          logger,
         },
         {
           localRingKey: this.config.local.ringKey,
