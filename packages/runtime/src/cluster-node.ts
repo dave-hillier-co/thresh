@@ -106,6 +106,7 @@ import { Catalog, type GrainActivator, type RegisteredGrain } from "@thresh/runt
 import { withPlaceGrainSpan } from "@thresh/observability/activation-tracing";
 import { ClientDirectory } from "@thresh/runtime/client-directory";
 import type { ActivationData, ActivationOptions } from "@thresh/runtime/activation";
+import { WireSemanticsDispatcher } from "@thresh/runtime/wire-semantics-dispatcher";
 import { DistributedDispatcher } from "@thresh/runtime/distributed-dispatcher";
 import { logOneWayFailure } from "@thresh/runtime/one-way-dispatch";
 import { BroadcastChannelProviderImpl } from "@thresh/runtime/broadcast-channel-provider";
@@ -234,6 +235,8 @@ export interface ClusterNodeOptions {
    * call unless one is explicitly configured, here or per-method.
    */
   defaultResponseTimeoutMs?: number;
+  /** See `SiloConfig.wireSemanticsForLocalCalls`. Off by default. */
+  wireSemanticsForLocalCalls?: boolean;
   defaultCollectionAgeSeconds?: number;
   /**
    * Per-silo idle-deactivation ages keyed by grain type (Orleans'
@@ -913,7 +916,22 @@ export class ClusterNode {
           }
         : {}),
     });
-    this.factory.setDispatcher(this.dispatcher);
+    this.factory.setDispatcher(
+      options.wireSemanticsForLocalCalls === true
+        ? new WireSemanticsDispatcher(this.dispatcher, {
+            value: (value) => this.serializer.deserialize(this.serializer.serialize(value)),
+            // The callee's reply envelope, read back the way the caller reads a remote reply.
+            error: (error) => {
+              const { kind, body } = this.serializeError(error);
+              try {
+                return this.interpretResponse({ responseKind: kind, body } as Message);
+              } catch (rebuilt) {
+                return rebuilt;
+              }
+            },
+          })
+        : this.dispatcher,
+    );
     if (options.repartitioning !== undefined) {
       const repartitioning = options.repartitioning;
       this.repartitioner = new ActivationRepartitioner({

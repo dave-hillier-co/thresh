@@ -20,17 +20,23 @@ import type { WatchEventType } from "@thresh/clustering-k8s/watched-endpoints";
  *   list reports the global revision at the time of the list (which also moves on
  *   writes to unrelated objects — see `unrelatedWrite`);
  * - per-watcher delivery that can be held back (`hold`/`release`), standing in for a
- *   silo whose watch connection lags its peers'.
+ *   silo whose watch connection lags its peers';
+ * - a watch the API server ends (`FakeEndpointSliceSource.endWatch`), after which the
+ *   watcher re-lists and re-watches, as it does when a real watch times out;
+ * - pod labels, carried on each endpoint as the label-resolving client source does.
  */
 export interface FakePod {
   readonly name: string;
   readonly uid: string;
   readonly ip: string;
   readonly ready: boolean;
+  /** The pod's labels, surfaced on its endpoint (see `KubernetesMembershipOptions.metadataLabelPrefix`). */
+  readonly labels?: Readonly<Record<string, string>>;
 }
 
 interface Watcher {
   onEvent: (type: WatchEventType, slice: RawEndpointSlice) => void;
+  onClose: ((err?: unknown) => void) | undefined;
   held: Array<() => void> | undefined;
 }
 
@@ -39,7 +45,7 @@ const SLICE_NAME = "silo-svc-abcde";
 export class FakeEndpointSliceApi {
   private revision = 1;
   private sliceRevision = 1;
-  private readonly pods = new Map<string, FakePod>();
+  private readonly podsByName = new Map<string, FakePod>();
   private readonly watchers = new Set<Watcher>();
 
   constructor(private readonly port = 11111) {}
@@ -51,21 +57,26 @@ export class FakeEndpointSliceApi {
 
   /** Add or replace a pod's endpoint (keyed by pod name), publishing a MODIFIED event. */
   setPod(pod: FakePod): void {
-    this.pods.set(pod.name, pod);
+    this.podsByName.set(pod.name, pod);
     this.writeSlice();
   }
 
   /** Flip a pod's readiness condition. */
   setReady(name: string, ready: boolean): void {
-    const pod = this.pods.get(name);
+    const pod = this.podsByName.get(name);
     if (pod === undefined) throw new Error(`no pod ${name}`);
     this.setPod({ ...pod, ready });
   }
 
   /** Remove a pod's endpoint from the slice. */
   removePod(name: string): void {
-    this.pods.delete(name);
+    this.podsByName.delete(name);
     this.writeSlice();
+  }
+
+  /** The pods whose endpoints the slice currently lists. */
+  pods(): FakePod[] {
+    return [...this.podsByName.values()];
   }
 
   /** A write to some other object in the cluster: the global revision moves, the slice does not. */
@@ -108,10 +119,11 @@ export class FakeEndpointSliceApi {
     return {
       metadata: { name: SLICE_NAME, resourceVersion: String(this.sliceRevision) },
       ports: [{ name: "silo", port: this.port }],
-      endpoints: [...this.pods.values()].map((pod) => ({
+      endpoints: [...this.podsByName.values()].map((pod) => ({
         addresses: [pod.ip],
         conditions: { ready: pod.ready },
         targetRef: { name: pod.name, uid: pod.uid },
+        ...(pod.labels !== undefined ? { metadata: { ...pod.labels } } : {}),
       })),
     };
   }
@@ -131,8 +143,9 @@ export class FakeEndpointSliceSource implements EndpointSliceSource {
   watch(
     _resourceVersion: string | undefined,
     onEvent: (type: WatchEventType, slice: RawEndpointSlice) => void,
+    onClose?: (err?: unknown) => void,
   ): () => void {
-    const watcher: Watcher = { onEvent, held: this.holding ? [] : undefined };
+    const watcher: Watcher = { onEvent, onClose, held: this.holding ? [] : undefined };
     this.watcher = watcher;
     this.api.addWatcher(watcher);
     return () => {
@@ -153,6 +166,19 @@ export class FakeEndpointSliceSource implements EndpointSliceSource {
     const held = this.watcher?.held ?? [];
     if (this.watcher !== undefined) this.watcher.held = undefined;
     for (const deliver of held) deliver();
+  }
+
+  /**
+   * End the current watch cleanly, as the API server does when a watch times out: the watcher
+   * re-lists for a fresh snapshot (which no hold delays) and watches again. Events held for the
+   * ended watch are discarded with it; the re-list covers them.
+   */
+  endWatch(): void {
+    const watcher = this.watcher;
+    if (watcher === undefined) return;
+    this.api.removeWatcher(watcher);
+    this.watcher = undefined;
+    watcher.onClose?.();
   }
 
   /** Sever the watch for good, as a crashed pod's watch is (its process is gone). */
