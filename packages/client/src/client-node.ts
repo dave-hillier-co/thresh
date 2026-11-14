@@ -53,12 +53,7 @@ import { SiloAddress } from "@thresh/core/silo-address";
 import { ConnectionManager } from "@thresh/messaging/connection-manager";
 import { CorrelationTable } from "@thresh/messaging/correlation-table";
 import { requestEnvelope } from "@thresh/messaging/request-envelope";
-import {
-  didNotExecute,
-  mayResend,
-  neverLeft,
-  refusedBeforeExecution,
-} from "@thresh/messaging/resend-policy";
+import { mayResend, neverLeft, refusedBeforeExecution } from "@thresh/messaging/resend-policy";
 import { sendReply } from "@thresh/messaging/send-reply";
 import {
   nextCorrelationId,
@@ -699,14 +694,10 @@ export class ClientNode implements Dispatcher {
    * because there was nothing on the wire for it to rebuild from.
    */
   private serializeError(err: unknown): { kind: ResponseKind; body: Uint8Array } {
-    // As on a silo: a rejection says "refused before it ran", so a `RejectionError` the hosted
-    // object itself threw travels as an error, keeping its class and kind through the codec.
-    if (err instanceof RejectionError && didNotExecute(err)) {
-      return {
-        kind: "rejection",
-        body: this.serializer.serialize({ message: err.message, kind: err.kind }),
-      };
-    }
+    // Never a rejection: that says "refused before it ran", and every error reaching here came
+    // out of a hosted object's dispatch (or its undecodable body) — a `RejectionError` included,
+    // even one a nested call was refused with, which keeps its class and kind through the codec.
+    // This client's only refusal, no object hosted for the target, is answered where it is found.
     const message = err instanceof Error ? err.message : String(err);
     if (err instanceof Error) {
       try {

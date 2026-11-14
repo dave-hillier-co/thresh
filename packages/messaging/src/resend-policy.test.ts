@@ -6,6 +6,7 @@ import {
   mayResend,
   neverLeft,
   refusedBeforeExecution,
+  thrownByTurn,
 } from "@thresh/messaging/resend-policy";
 import { connectFailure } from "@thresh/messaging/transport";
 
@@ -25,9 +26,22 @@ describe("resend policy", () => {
   });
 
   it("never resends a stale-kind rejection that was not a refusal: a turn threw it", () => {
-    const thrownByTurn = new RejectionError("a nested call found no activation", "noActivation");
-    expect(didNotExecute(thrownByTurn)).toBe(false);
-    expect(mayResend(thrownByTurn)).toBe(false);
+    const thrown = new RejectionError("a nested call found no activation", "noActivation");
+    expect(didNotExecute(thrown)).toBe(false);
+    expect(mayResend(thrown)).toBe(false);
+  });
+
+  it("never resends a nested call's refusal that a turn let escape: the turn's mark wins", () => {
+    const nested = refusedBeforeExecution(new RejectionError("nested", "noActivation"));
+    expect(mayResend(nested)).toBe(true);
+    thrownByTurn(nested);
+    expect(didNotExecute(nested)).toBe(false);
+    expect(mayResend(nested)).toBe(false);
+    // A refusal point the error passes afterwards cannot make it a refusal again.
+    refusedBeforeExecution(nested);
+    expect(mayResend(nested)).toBe(false);
+    const dial = thrownByTurn(connectFailure(peer, "refused", "refused"));
+    expect(didNotExecute(dial)).toBe(false);
   });
 
   it("never resends a reply timeout or a connection lost mid-call", () => {

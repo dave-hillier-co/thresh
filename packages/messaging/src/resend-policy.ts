@@ -9,6 +9,14 @@ import { ConnectFailure } from "@thresh/messaging/transport";
 const didNotRun = new WeakSet<object>();
 
 /**
+ * Errors that came out of a turn: a method (or a hosted object) ran and threw them. A mark here
+ * wins over `didNotRun`, because the mark there belonged to an earlier, nested request's refusal,
+ * not to the request this error now answers: a method that lets a nested call's refusal escape
+ * has run, and its caller must not resend it.
+ */
+const ranInTurn = new WeakSet<object>();
+
+/**
  * Mark `err` as the runtime's refusal of a request before it ran — a routing refusal, an
  * admission refusal, or the hold-and-reroute path's release of a held call. Called only at those
  * refusal points; anything a turn throws is never marked, whatever its class. A refusal crosses
@@ -17,6 +25,16 @@ const didNotRun = new WeakSet<object>();
  */
 export function refusedBeforeExecution<E>(err: E): E {
   if (typeof err === "object" && err !== null) didNotRun.add(err);
+  return err;
+}
+
+/**
+ * Mark `err` as thrown out of a turn — called at the turn boundary, where the runtime knows the
+ * request was handed to the method. Whatever the error said about an earlier request (a nested
+ * call's refusal the method let escape), it now stands for a request that ran.
+ */
+export function thrownByTurn<E>(err: E): E {
+  if (typeof err === "object" && err !== null) ranInTurn.add(err);
   return err;
 }
 
@@ -30,8 +48,8 @@ export function neverLeft<E>(err: E): E {
  * (a send that threw, or a failed dial, which is a `ConnectFailure` from every transport).
  */
 export function didNotExecute(err: unknown): boolean {
-  if (err instanceof ConnectFailure) return true;
-  return typeof err === "object" && err !== null && didNotRun.has(err);
+  if (typeof err !== "object" || err === null || ranInTurn.has(err)) return false;
+  return err instanceof ConnectFailure || didNotRun.has(err);
 }
 
 /**
