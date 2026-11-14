@@ -54,6 +54,8 @@ import {
 import { defaultLogger, type Logger } from "@thresh/core/logger";
 import { setupTracePropagation, tracingFilters } from "@thresh/observability/tracing";
 import { metricsFilters } from "@thresh/observability/metrics";
+import type { MembershipWatchSource } from "@thresh/observability/membership-metrics";
+import { registerMembershipMetrics } from "@thresh/observability/membership-metrics";
 import { registerRuntimeMetrics } from "@thresh/observability/runtime-metrics";
 import { loggingFilter } from "@thresh/observability/logging";
 import { MemoryTransactionalStorage } from "@thresh/transactions/memory-transactional-storage";
@@ -1879,6 +1881,18 @@ export class SiloBuilder {
         directoryRecovery: () => node.directoryRecoveryStats(),
       });
       this.closers.push(async () => unregister());
+      const endpointWatch = this.endpointWatch as
+        | { status?: () => MembershipWatchSource }
+        | undefined;
+      const unregisterMembership = registerMembershipMetrics({
+        appliedViewVersion: () => node.appliedViewVersion,
+        memberCount: () => membership.current().silos.length,
+        activeMemberCount: () => activeSilos(membership.current()).length,
+        ...(typeof endpointWatch?.status === "function"
+          ? { watch: () => endpointWatch.status!() }
+          : {}),
+      });
+      this.closers.push(async () => unregisterMembership());
     }
 
     if (this.reminderTable !== undefined) {
