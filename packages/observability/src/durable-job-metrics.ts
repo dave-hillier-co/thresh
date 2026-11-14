@@ -15,6 +15,7 @@ interface Instruments {
   started: Counter;
   completed: Counter;
   failed: Counter;
+  shardPoisoned: Counter;
 }
 
 let instruments: Instruments | undefined;
@@ -35,6 +36,10 @@ function instrumentsOf(): Instruments {
         description: "Durable job attempts that failed",
         unit: "{job}",
       }),
+      shardPoisoned: meter.createCounter("thresh.durablejobs.shard.poisoned", {
+        description: "Durable-job shards marked poisoned after too many dead-owner adoptions",
+        unit: "{shard}",
+      }),
     };
   }
   return instruments;
@@ -50,6 +55,10 @@ export function recordJobCompleted(attrs: Attributes = {}): void {
 
 export function recordJobFailed(attrs: Attributes = {}): void {
   instrumentsOf().failed.add(1, attrs);
+}
+
+export function recordShardPoisoned(attrs: Attributes = {}): void {
+  instrumentsOf().shardPoisoned.add(1, attrs);
 }
 
 /**

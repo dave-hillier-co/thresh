@@ -6,8 +6,12 @@ import type {
   ShouldRetry,
 } from "@thresh/core/durable-job";
 import { Guid } from "@thresh/core/guid";
+import { noopLogger, type Logger } from "@thresh/core/logger";
 import type { TimeProvider, TimerHandle } from "@thresh/core/time-provider";
-import { registerDurableJobQueueDepth } from "@thresh/observability/durable-job-metrics";
+import {
+  recordShardPoisoned,
+  registerDurableJobQueueDepth,
+} from "@thresh/observability/durable-job-metrics";
 import { claimBudget, defaultShouldRetry, shardKeyFor } from "@thresh/durable-jobs/job-model";
 import type { JobShardStore } from "@thresh/durable-jobs/job-shard-store";
 import {
@@ -34,6 +38,11 @@ export interface ResolvedDurableJobsOptions {
   shardClaimRampUpDurationMs: number;
   /** Zero disables the periodic self-driven shard check (Orleans `PeriodicShardCheck`). */
   periodicShardCheckMs: number;
+  /**
+   * Receives every store failure the manager tolerates (a failed persist, release,
+   * forward or shard check) and each poisoned shard. Defaults to a no-op.
+   */
+  logger?: Logger;
 }
 
 /** The membership facts the manager needs to claim and adopt shards. */
@@ -80,6 +89,7 @@ export class LocalDurableJobManager {
    * its shard never released.
    */
   private stopped = false;
+  private readonly logger: Logger;
 
   constructor(
     private readonly store: JobShardStore,
@@ -96,6 +106,7 @@ export class LocalDurableJobManager {
      */
     private readonly forwardJob?: (ownerRingKey: string, job: DurableJob) => Promise<boolean>,
   ) {
+    this.logger = options.logger ?? noopLogger;
     this.limiter = new ConcurrencyLimiter(options.maxConcurrentJobsPerSilo);
     this.ownership = ownership;
     this.joinedAtMs = time.now();
@@ -155,7 +166,24 @@ export class LocalDurableJobManager {
     const shards = await this.store.listShards();
     const owner = shards.find((s) => s.shardKey === shardKey)?.owner;
     if (owner === undefined || owner === this.ownership.localRingKey) return;
-    await this.forwardJob(owner, job).catch(() => undefined);
+    // The job is already persisted, so a lost forward costs only latency: the
+    // owner's next shard check reads it from the store. Log it, do not throw it.
+    const accepted = await this.forwardJob(owner, job).catch((error: unknown) => {
+      this.logger.error("durable job forward failed", {
+        error,
+        shardKey,
+        jobId: job.id,
+        owner,
+      });
+      return undefined;
+    });
+    if (accepted === false) {
+      this.logger.warn("durable job forward was not accepted; the owner will find it in the store", {
+        shardKey,
+        jobId: job.id,
+        owner,
+      });
+    }
   }
 
   /** Cancel a scheduled job (best-effort): remove it from its shard and the store. */
@@ -164,7 +192,13 @@ export class LocalDurableJobManager {
     if (executor !== undefined) {
       await executor.cancel(job.id);
     } else {
-      await this.store.persistRemove(job.shardKey, job.id).catch(() => undefined);
+      await this.store.persistRemove(job.shardKey, job.id).catch((error: unknown) => {
+        this.logger.error("durable job remove failed", {
+          error,
+          shardKey: job.shardKey,
+          jobId: job.id,
+        });
+      });
     }
   }
 
@@ -188,6 +222,7 @@ export class LocalDurableJobManager {
   /** Queue one reconciliation against the latest known membership view. */
   private enqueueReconcile(): Promise<void> {
     const run = this.reconciling.then(() => this.reconcileNow());
+    // The caller of `run` sees a failure; the chain itself must not stay rejected.
     this.reconciling = run.catch(() => undefined);
     return run;
   }
@@ -244,6 +279,15 @@ export class LocalDurableJobManager {
     for (const shardKey of [...this.executors.keys()]) {
       if (!ownedNow.has(shardKey)) await this.stopExecutor(shardKey);
     }
+
+    // The store is the source of truth: pick up any job written under a shard we run
+    // that no executor here loaded (a lost forward, a scheduler on another silo).
+    for (const [shardKey, executor] of [...this.executors]) {
+      if (this.stopped) return;
+      await executor.refresh().catch((error: unknown) => {
+        this.logger.error("durable job shard refresh failed", { error, shardKey });
+      });
+    }
   }
 
   /** Re-arm the periodic shard check (0 disables it). */
@@ -253,7 +297,9 @@ export class LocalDurableJobManager {
     if (this.stopped || this.options.periodicShardCheckMs <= 0) return;
     this.checkHandle = this.time.setTimer(() => {
       this.checkHandle = undefined;
-      void this.enqueueReconcile().catch(() => undefined);
+      void this.enqueueReconcile().catch((error: unknown) => {
+        this.logger.error("durable job shard check failed", { error });
+      });
     }, this.options.periodicShardCheckMs);
   }
 
@@ -272,7 +318,7 @@ export class LocalDurableJobManager {
     await this.reconciling;
     for (const shardKey of [...this.executors.keys()]) {
       await this.stopExecutor(shardKey);
-      await this.store.releaseShard(shardKey, this.ownership.localRingKey).catch(() => undefined);
+      await this.releaseQuietly(shardKey);
     }
     this.unregisterQueueDepth();
   }
@@ -316,14 +362,31 @@ export class LocalDurableJobManager {
       adoptFromDead: deadOwners,
       maxAdoptedCount: this.options.maxAdoptedCount,
     });
-    if (claimed === undefined) return undefined; // lost the claim or poisoned
+    if (claimed === undefined) return undefined; // lost the claim, or already poisoned
+    if (claimed.poisoned) {
+      // This claim is the one that poisoned the shard: never claimed again, so say so once.
+      this.logger.error("durable job shard poisoned: adopted from dead owners too many times", {
+        shardKey,
+        adoptedCount: claimed.adoptedCount,
+        maxAdoptedCount: this.options.maxAdoptedCount,
+      });
+      recordShardPoisoned({ "thresh.job.shard": shardKey });
+      return undefined;
+    }
     if (this.stopped) {
       // `stop()` began while the claim was in flight: hand the shard straight
       // back rather than run it on a silo that is going away.
-      await this.store.releaseShard(shardKey, this.ownership.localRingKey).catch(() => undefined);
+      await this.releaseQuietly(shardKey);
       return undefined;
     }
     return this.startExecutor(shardKey);
+  }
+
+  /** Best-effort release of a shard this silo holds; a failure is logged, not thrown. */
+  private async releaseQuietly(shardKey: number): Promise<void> {
+    await this.store.releaseShard(shardKey, this.ownership.localRingKey).catch((error: unknown) => {
+      this.logger.error("durable job shard release failed", { error, shardKey });
+    });
   }
 
   private async startExecutor(shardKey: number): Promise<ShardExecutor | undefined> {
@@ -345,6 +408,7 @@ export class LocalDurableJobManager {
         slowStartIntervalMs: this.options.slowStartIntervalMs,
         overloadBackoffMs: this.options.overloadBackoffMs,
         shouldRetry: this.options.shouldRetry,
+        logger: this.logger,
       },
     );
     this.executors.set(shardKey, executor);
