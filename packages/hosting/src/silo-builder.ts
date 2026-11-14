@@ -77,7 +77,6 @@ import { bindJournalFacets } from "@thresh/journaling/journal-facets-binder";
 import type { BroadcastChannelOptions } from "@thresh/core/broadcast-channel";
 import type { StreamFilter, StreamProvider } from "@thresh/core/stream";
 import type { DurableJobsOptions } from "@thresh/core/durable-job";
-import { activeSilos } from "@thresh/core/membership";
 import {
   LocalDurableJobManager,
   resolveOptions as resolveDurableJobOptions,
@@ -629,10 +628,10 @@ export class SiloBuilder {
     jobs?: DurableJobsOptions;
   }): this {
     const client = this.createManagedRedisClient(options);
-    this.jobShardStore = new RedisJobShardStore(
-      client,
-      toConfigOption("keyPrefix", options.keyPrefix),
-    );
+    this.jobShardStore = new RedisJobShardStore(client, {
+      ...toConfigOption("keyPrefix", options.keyPrefix),
+      serviceId: this.serviceIdentity,
+    });
     this.durableJobsOptions = options.jobs ?? {};
     return this;
   }
@@ -1766,8 +1765,6 @@ export class SiloBuilder {
         grainServiceRegistry.stop();
       });
     }
-    const membership = this.membership;
-
     const activationOptions: ActivationOptions = {
       maxEnqueuedRequestsSoftLimit:
         this.config.scheduling?.maxEnqueuedRequestsSoftLimit ??
@@ -2024,17 +2021,21 @@ export class SiloBuilder {
         this.jobShardStore,
         time ?? systemTimeProvider,
         (job) => node.deliverDurableJob(job),
-        resolveDurableJobOptions(this.durableJobsOptions),
+        {
+          ...resolveDurableJobOptions(this.durableJobsOptions),
+          ...(this.logger !== undefined ? { logger: this.logger } : {}),
+        },
         {
           localRingKey: this.config.local.ringKey,
-          activeRingKeys: activeSilos(membership.current()).map((s) => s.ringKey),
+          activeRingKeys: node.appliedRingSilos().map((s) => s.ringKey),
         },
         undefined,
         // Cross-silo scheduling: forward a job this silo persisted but doesn't
         // own the shard for to whichever active silo the membership view says
-        // holds that ring key, so it still gets delivered.
+        // holds that ring key, so it still gets delivered. The node's APPLIED view,
+        // not `membership.current()`, which can be ahead of the ring it routes on.
         async (ownerRingKey, job) => {
-          const target = activeSilos(membership.current()).find((s) => s.ringKey === ownerRingKey);
+          const target = node.appliedRingSilos().find((s) => s.ringKey === ownerRingKey);
           if (target === undefined) return false;
           return node.forwardDurableJob(target, job);
         },
@@ -2043,7 +2044,7 @@ export class SiloBuilder {
       onOwnershipChange.push(async () => {
         await manager.refreshOwnership({
           localRingKey: this.config.local.ringKey,
-          activeRingKeys: activeSilos(membership.current()).map((s) => s.ringKey),
+          activeRingKeys: node.appliedRingSilos().map((s) => s.ringKey),
         });
       });
       // Graceful drain releases this silo's shards so a successor can claim

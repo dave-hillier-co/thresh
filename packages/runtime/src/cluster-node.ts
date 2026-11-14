@@ -1411,6 +1411,15 @@ export class ClusterNode {
     if (pass !== undefined) await Promise.all(pass.pulls.values());
   }
 
+  /**
+   * The silos on the ring this node routes on: the active silos of the view it has
+   * APPLIED, which `membership.current()` can run ahead of. Ownership decisions
+   * outside the directory (durable-job shards) follow this, not the live view.
+   */
+  appliedRingSilos(): SiloAddress[] {
+    return [...this.ring.silos()];
+  }
+
   /** Whether the applied view has any active silo to own ranges (an empty ring routes nothing). */
   hasAppliedView(): boolean {
     return !this.ring.isEmpty;

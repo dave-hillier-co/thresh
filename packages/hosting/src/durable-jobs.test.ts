@@ -3,12 +3,14 @@ import { defineGrain, useDurableJobHandler } from "@thresh/core/define-grain";
 import { completed, pollAfter, type DurableJob } from "@thresh/core/durable-job";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
 import { GrainId } from "@thresh/core/grain-id";
+import type { ReminderEntry, ReminderTable } from "@thresh/core/reminder";
 import type { GrainKey } from "@thresh/core/key-kinds";
 import { PLACEMENT_HINT_KEY, RequestContext } from "@thresh/core/request-context";
 import { SiloAddress } from "@thresh/core/silo-address";
 import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
 import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
 import { MemoryJobShardStore } from "@thresh/durable-jobs/memory-job-shard-store";
+import { MemoryReminderTable } from "@thresh/reminders/memory-reminder-table";
 import { StaticMembershipService } from "@thresh/runtime/static-membership";
 import { createSilo } from "@thresh/hosting/silo-builder";
 
@@ -326,6 +328,86 @@ describe("durable jobs multi-silo failover", () => {
       expect(runs.get("owned-by-a:ok")).toBe(1);
       expect(runs.get("scheduled-from-b:ok")).toBe(1);
     } finally {
+      RequestContext.clear();
+      await siloA.stop();
+      await siloB.stop();
+    }
+  });
+});
+
+/** A reminder table whose range reads (the reminder ownership hook) can be held. */
+class HoldableReminderTable extends MemoryReminderTable {
+  private gate: Promise<void> | undefined;
+  private open: (() => void) | undefined;
+
+  hold(): void {
+    this.gate = new Promise((resolve) => (this.open = resolve));
+  }
+
+  release(): void {
+    this.open?.();
+    this.gate = undefined;
+  }
+
+  override async readRange(hashBegin: number, hashEnd: number): Promise<ReminderEntry[]> {
+    if (this.gate !== undefined) await this.gate;
+    return super.readRange(hashBegin, hashEnd);
+  }
+}
+
+describe("durable jobs follow the applied membership view", () => {
+  const a = new SiloAddress("silo-a", "uid-a", "silo-a:1");
+  const b = new SiloAddress("silo-b", "uid-b", "silo-b:2");
+
+  it("forwards to the owner the node still routes to while membership is ahead of the applied view", async () => {
+    runs.clear();
+    const store = new MemoryJobShardStore();
+    const time = new FakeTimeProvider();
+    const net = new InProcessNetwork();
+    const membershipA = new StaticMembershipService(a, [a, b]);
+    const membershipB = new StaticMembershipService(b, [a, b]);
+    const reminders = new HoldableReminderTable();
+
+    const buildAt = (addr: SiloAddress, ms: StaticMembershipService, table?: ReminderTable) => {
+      const builder = createSilo({ clusterId: "c1", local: addr, time })
+        .useMembership(ms)
+        .useInProcessTransport(net)
+        .useMemoryDurableJobs(store)
+        .registerGrain(WorkerGrain.grain, { interfaces: [IWorker] })
+        .registerGrain(SchedulerGrain.grain, { interfaces: [IScheduler] });
+      if (table !== undefined) builder.useReminders(table).allowSharedInMemoryState();
+      return builder.build();
+    };
+    const siloA = buildAt(a, membershipA);
+    const siloB = buildAt(b, membershipB, reminders);
+    await siloA.start();
+    await siloB.start();
+
+    try {
+      RequestContext.set(PLACEMENT_HINT_KEY, a.toString());
+      const dueMs = time.now() + 100_000;
+      await siloA.getGrain(IScheduler, "s1").schedule("owned-by-a", "ok", dueMs);
+      await flush();
+
+      // Hold B's host part-way through a view change, then move B's membership on:
+      // B's membership now shows only itself, but the ring it routes on still has A.
+      reminders.hold();
+      membershipA.setSilos([a, b]); // same version as B's, so directory ops between them agree
+      membershipB.setSilos([a, b]);
+      await flush();
+      membershipB.setSilos([b]);
+      await flush();
+
+      RequestContext.set(PLACEMENT_HINT_KEY, b.toString());
+      await siloB.getGrain(IScheduler, "s2").schedule("from-b", "ok", dueMs);
+      await flush();
+
+      // Short of the periodic shard check, only a forward to A can have enqueued it there.
+      time.advance(100_000);
+      await flush(10);
+      expect(runs.get("from-b:ok")).toBe(1);
+    } finally {
+      reminders.release();
       RequestContext.clear();
       await siloA.stop();
       await siloB.stop();

@@ -1,6 +1,7 @@
 import type { createClient } from "redis";
 import type { DurableJob } from "@thresh/core/durable-job";
 import { deserializeValue, serializeValue } from "@thresh/core/value-codec";
+import { DEFAULT_SERVICE_ID } from "@thresh/core/default-service-id";
 import {
   type JobShardStore,
   type PersistedJob,
@@ -13,6 +14,15 @@ export type RedisClient = ReturnType<typeof createClient>;
 export interface RedisJobShardStoreOptions {
   /** Namespace for keys in the shared Redis (defaults to `"thresh"`). */
   keyPrefix?: string;
+  /**
+   * Logical service identity this store's keys belong to (Orleans'
+   * `ClusterOptions.ServiceId`), as every other Redis provider takes it: two
+   * clusters on one Redis stay partitioned by it. Defaults to `"default"`;
+   * `SiloBuilder` threads the silo's `serviceId ?? DEFAULT_SERVICE_ID`. Keys
+   * written without it are invisible to a service-partitioned reader (no
+   * migration: the project has no production deployments).
+   */
+  serviceId?: string;
 }
 
 /** The codec-serialized payload of a persisted job (its current due time + dequeue count). */
@@ -53,10 +63,13 @@ end
 redis.call('HSET', KEYS[1], 'owner', ARGV[1], 'adoptedCount', adopted, 'poisoned', '0')
 return cjson.encode({ owner = ARGV[1], adoptedCount = adopted, poisoned = false })`;
 
-// Release a shard only if this caller still owns it. KEYS[1] shard hash; ARGV owner.
+// Release a shard only if this caller still owns it. A graceful release resets
+// adoptedCount (Orleans' ReleaseOwnership removes AdoptedCount), so rolling
+// restarts never walk a healthy shard into poison. KEYS[1] shard hash; ARGV owner.
 const RELEASE = `
 if redis.call('HGET', KEYS[1], 'owner') == ARGV[1] then
   redis.call('HDEL', KEYS[1], 'owner')
+  redis.call('HSET', KEYS[1], 'adoptedCount', 0)
 end
 return 1`;
 
@@ -70,12 +83,14 @@ return 1`;
  */
 export class RedisJobShardStore implements JobShardStore {
   private readonly keyPrefix: string;
+  private readonly serviceId: string;
 
   constructor(
     private readonly client: RedisClient,
     options: RedisJobShardStoreOptions = {},
   ) {
     this.keyPrefix = options.keyPrefix ?? "thresh";
+    this.serviceId = options.serviceId ?? DEFAULT_SERVICE_ID;
   }
 
   async persistAdd(job: DurableJob): Promise<void> {
@@ -168,14 +183,14 @@ export class RedisJobShardStore implements JobShardStore {
   }
 
   private shardsKey(): string {
-    return `${this.keyPrefix}:job:shards`;
+    return `${this.keyPrefix}:${this.serviceId}:job:shards`;
   }
 
   private jobsKey(shardKey: number): string {
-    return `${this.keyPrefix}:job:s:${shardKey}`;
+    return `${this.keyPrefix}:${this.serviceId}:job:s:${shardKey}`;
   }
 
   private shardMetaKey(shardKey: number): string {
-    return `${this.keyPrefix}:job:m:${shardKey}`;
+    return `${this.keyPrefix}:${this.serviceId}:job:m:${shardKey}`;
   }
 }
