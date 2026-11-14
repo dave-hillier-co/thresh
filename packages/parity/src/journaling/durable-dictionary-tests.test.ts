@@ -37,6 +37,7 @@ describe("Orleans.Journaling.Tests.DurableDictionaryTests", () => {
       await grain.dictSet("one", 1);
       await grain.dictSet("two", 2);
       await grain.dictSet("three", 3);
+      await grain.writeState();
 
       expect(await grain.dictSize()).toBe(3);
       expect(await grain.dictGet("one")).toBe(1);
@@ -44,9 +45,11 @@ describe("Orleans.Journaling.Tests.DurableDictionaryTests", () => {
       expect(await grain.dictGet("three")).toBe(3);
 
       await grain.dictSet("two", 22);
+      await grain.writeState();
       expect(await grain.dictGet("two")).toBe(22);
 
       const removed = await grain.dictDelete("three");
+      await grain.writeState();
       expect(removed).toBe(true);
       expect(await grain.dictSize()).toBe(2);
       expect(await grain.dictHas("three")).toBe(false);
@@ -62,6 +65,7 @@ describe("Orleans.Journaling.Tests.DurableDictionaryTests", () => {
       await grain.dictSet("one", 1);
       await grain.dictSet("two", 2);
       await grain.dictSet("three", 3);
+      await grain.writeState();
 
       await cluster.restartSilo(cluster.primary);
       const grain2 = cluster.getGrain(IDurableCollectionsGrain, key);
@@ -83,6 +87,7 @@ describe("Orleans.Journaling.Tests.DurableDictionaryTests", () => {
 
       await grain.dictSet(key1, "Value1");
       await grain.dictSet(key2, "Value2");
+      await grain.writeState();
 
       expect(await grain.dictSize()).toBe(2);
       // Same object references passed back for lookup: the in-process
@@ -103,6 +108,7 @@ describe("Orleans.Journaling.Tests.DurableDictionaryTests", () => {
 
       await grain.dictSet("person1", person1);
       await grain.dictSet("person2", person2);
+      await grain.writeState();
 
       expect(await grain.dictSize()).toBe(2);
       expect(((await grain.dictGet("person1")) as typeof person1).name).toBe("John");
@@ -112,6 +118,7 @@ describe("Orleans.Journaling.Tests.DurableDictionaryTests", () => {
       // upstream's `dictionary["person1"].Age = 31` without a further Set call.
       const stored = (await grain.dictGet("person1")) as typeof person1;
       stored.age = 31;
+      await grain.writeState();
       expect(((await grain.dictGet("person1")) as typeof person1).age).toBe(31);
     },
   );
@@ -124,8 +131,10 @@ describe("Orleans.Journaling.Tests.DurableDictionaryTests", () => {
       await grain.dictSet("one", 1);
       await grain.dictSet("two", 2);
       await grain.dictSet("three", 3);
+      await grain.writeState();
 
       await grain.dictClear();
+      await grain.writeState();
 
       expect(await grain.dictSize()).toBe(0);
     },
@@ -138,6 +147,7 @@ describe("Orleans.Journaling.Tests.DurableDictionaryTests", () => {
 
       const expectedPairs: Record<string, number> = { one: 1, two: 2, three: 3 };
       for (const [k, v] of Object.entries(expectedPairs)) await grain.dictSet(k, v);
+      await grain.writeState();
 
       const actualEntries = await grain.dictEntries();
       const actualPairs = Object.fromEntries(actualEntries as [string, number][]);

@@ -1,3 +1,4 @@
+import { writeDurableState } from "@thresh/core/durable-state-metadata";
 import { durableState } from "@thresh/core/decorators";
 import type { DurableValue } from "@thresh/core/durable-state";
 import { GrainId } from "@thresh/core/grain-id";
@@ -114,7 +115,8 @@ describe("JournaledGrain history across compaction", () => {
     await bindJournalFacets(grain, id, registryOver(storage), { snapshotThreshold: 10, ...retain });
     for (let i = 1; i <= 40; i++) {
       await grain.add(i);
-      await grain.label.set(`label-${i}`);
+      grain.label.set(`label-${i}`);
+      await writeDurableState(grain);
     }
     const again = new LedgerWithLabel();
     await bindJournalFacets(again, id, registryOver(storage), { snapshotThreshold: 10, ...retain });
@@ -153,7 +155,10 @@ describe("durable collections without a JournaledGrain", () => {
     const storage = new MemoryJournalStorage();
     const grain = new OnlyCollections();
     await bindDurableStates(grain, id, registryOver(storage), { snapshotThreshold: 10 });
-    for (let i = 0; i < 95; i++) await grain.counter.set(i);
+    for (let i = 0; i < 95; i++) {
+      grain.counter.set(i);
+      await writeDurableState(grain);
+    }
 
     const { entries } = await storage.read("journal", id);
     expect(entries.length).toBeLessThan(10);

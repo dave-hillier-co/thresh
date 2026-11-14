@@ -1,7 +1,10 @@
 /**
- * The grain-facing durable-journaling facets. Each mutation is
- * journalled to the grain's append-only log and replayed on activation; reads
- * are served from memory. Mutators are async because each appends to the log.
+ * The grain-facing durable-journaling facets, mirroring Orleans.Journaling. A mutator is a
+ * synchronous in-memory operation that buffers its log entry; nothing reaches storage until the
+ * grain writes its durable state (`writeDurableState()` on the class base, the function
+ * `useWriteDurableState()` returns in a hook grain), which appends everything buffered across all
+ * of the grain's structures in ONE storage write. Reads are served from memory and see a mutation
+ * at once. On activation the log is replayed, so only written mutations survive.
  */
 
 /** A single journalled value cell. Orleans' `IDurableValue<T>`. */
@@ -9,10 +12,10 @@ export interface DurableValue<T> {
   /** Current value; `undefined` until the first `set`. */
   readonly value: T | undefined;
   get(): T | undefined;
-  /** Journal a set and update memory. */
-  set(value: T): Promise<void>;
-  /** Journal a clear back to `undefined`. */
-  clear(): Promise<void>;
+  /** Set in memory and buffer the log entry. */
+  set(value: T): void;
+  /** Clear back to `undefined` in memory and buffer the log entry. */
+  clear(): void;
 }
 
 /** A journalled scalar-keyed map. Orleans' `IDurableDictionary<K,V>`. */
@@ -23,12 +26,12 @@ export interface DurableDictionary<K, V> {
   entries(): IterableIterator<[K, V]>;
   keys(): IterableIterator<K>;
   values(): IterableIterator<V>;
-  /** Journal a set and update memory. */
-  set(key: K, value: V): Promise<void>;
-  /** Journal a delete; resolves to whether the key existed. */
-  delete(key: K): Promise<boolean>;
-  /** Journal a clear of all entries. */
-  clear(): Promise<void>;
+  /** Set in memory and buffer the log entry. */
+  set(key: K, value: V): void;
+  /** Delete in memory and buffer the log entry; returns whether the key existed. */
+  delete(key: K): boolean;
+  /** Clear all entries in memory and buffer the log entry. */
+  clear(): void;
 }
 
 /** A journalled ordered list. Orleans' `IDurableList<T>`. */
@@ -39,21 +42,21 @@ export interface DurableList<T> {
   [Symbol.iterator](): IterableIterator<T>;
   /** Whether `value` is present. Orleans' `IDurableList<T>.Contains`. */
   contains(value: T): boolean;
-  /** Journal an append and update memory. */
-  add(value: T): Promise<void>;
-  /** Journal a set-at-index and update memory. */
-  set(index: number, value: T): Promise<void>;
-  /** Journal an insert-at-index, shifting later items back, and update memory. Orleans' `IDurableList<T>.Insert`. */
-  insert(index: number, value: T): Promise<void>;
-  /** Journal a remove-at-index and update memory. */
-  removeAt(index: number): Promise<void>;
+  /** Append in memory and buffer the log entry. */
+  add(value: T): void;
+  /** Set at an index in memory and buffer the log entry. */
+  set(index: number, value: T): void;
+  /** Insert at an index, shifting later items back, in memory and buffer the log entry. Orleans' `IDurableList<T>.Insert`. */
+  insert(index: number, value: T): void;
+  /** Remove at an index in memory and buffer the log entry. */
+  removeAt(index: number): void;
   /**
-   * Journal a remove of the first occurrence of `value` and update memory;
-   * resolves to whether a matching item was found. Orleans' `IDurableList<T>.Remove`.
+   * Remove the first occurrence of `value` in memory and buffer the log entry;
+   * returns whether a matching item was found. Orleans' `IDurableList<T>.Remove`.
    */
-  remove(value: T): Promise<boolean>;
-  /** Journal a clear of all items. */
-  clear(): Promise<void>;
+  remove(value: T): boolean;
+  /** Clear all items in memory and buffer the log entry. */
+  clear(): void;
 }
 
 /** A journalled FIFO queue. Orleans' `IDurableQueue<T>`. */
@@ -68,17 +71,17 @@ export interface DurableQueue<T> {
   peekOrThrow(): T;
   toArray(): readonly T[];
   [Symbol.iterator](): IterableIterator<T>;
-  /** Journal an enqueue at the back and update memory. */
-  enqueue(value: T): Promise<void>;
-  /** Journal a dequeue from the front; resolves to the removed element, or `undefined` when empty. */
-  dequeue(): Promise<T | undefined>;
+  /** Enqueue at the back in memory and buffer the log entry. */
+  enqueue(value: T): void;
+  /** Dequeue from the front in memory and buffer the log entry; returns the removed element, or `undefined` when empty. */
+  dequeue(): T | undefined;
   /**
-   * Journal a dequeue from the front and resolve to the removed element; throws
+   * Dequeue from the front and return the removed element; throws
    * when empty. Orleans' `IDurableQueue<T>.Dequeue` (which throws `InvalidOperationException`).
    */
-  dequeueOrThrow(): Promise<T>;
-  /** Journal a clear of all elements. */
-  clear(): Promise<void>;
+  dequeueOrThrow(): T;
+  /** Clear all elements in memory and buffer the log entry. */
+  clear(): void;
 }
 
 /**
@@ -91,10 +94,10 @@ export interface DurableSet<T> {
   has(value: T): boolean;
   values(): IterableIterator<T>;
   [Symbol.iterator](): IterableIterator<T>;
-  /** Journal an add; resolves to whether the value was newly added. */
-  add(value: T): Promise<boolean>;
-  /** Journal a delete; resolves to whether the value was present. */
-  delete(value: T): Promise<boolean>;
-  /** Journal a clear of all values. */
-  clear(): Promise<void>;
+  /** Add in memory and buffer the log entry; returns whether the value was newly added. */
+  add(value: T): boolean;
+  /** Delete in memory and buffer the log entry; returns whether the value was present. */
+  delete(value: T): boolean;
+  /** Clear all values in memory and buffer the log entry. */
+  clear(): void;
 }

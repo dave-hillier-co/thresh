@@ -7,7 +7,7 @@ type QueueOp<T> = { t: "enq"; v: T } | { t: "deq" } | { t: "clear" } | { t: "loa
  * A journalled FIFO queue, implemented as a `DurableStateMachine`. Enqueues
  * append to the back and dequeues remove from the front; both replay in append
  * order, so a fresh activation reproduces the same ordering. Each mutation is
- * appended to the grain's log and then applied to memory.
+ * applied to memory at once and buffered; `writeState` appends the buffer.
  */
 export class DurableQueueImpl<T> implements DurableQueue<T>, DurableStateMachine {
   private items: T[] = [];
@@ -45,17 +45,23 @@ export class DurableQueueImpl<T> implements DurableQueue<T>, DurableStateMachine
     return this.items[Symbol.iterator]();
   }
 
-  async enqueue(value: T): Promise<void> {
-    // The manager applies the op to memory after a successful append.
-    await this.manager.append(this.name, { t: "enq", v: value } satisfies QueueOp<T>);
+  enqueue(value: T): void {
+    this.mutate({ t: "enq", v: value });
   }
 
-  async dequeue(): Promise<T | undefined> {
+  dequeue(): T | undefined {
     // An empty dequeue is a no-op: nothing to journal, nothing to return.
     if (this.items.length === 0) return undefined;
     const head = this.items[0];
-    await this.manager.append(this.name, { t: "deq" } satisfies QueueOp<T>);
+    this.mutate({ t: "deq" });
     return head;
+  }
+
+  /** Buffers the op's log entry for the next `writeState` and applies it to memory now. */
+  private mutate(op: QueueOp<T>): void {
+    // Serialised first: a payload the codec rejects leaves memory untouched, as in Orleans.
+    this.manager.buffer(this.name, op);
+    this.apply(op);
   }
 
   /**
@@ -63,15 +69,15 @@ export class DurableQueueImpl<T> implements DurableQueue<T>, DurableStateMachine
    * which throws `InvalidOperationException` on an empty queue; `dequeue()`
    * above stays the non-throwing (no-op) option.
    */
-  async dequeueOrThrow(): Promise<T> {
+  dequeueOrThrow(): T {
     if (this.items.length === 0) {
       throw new Error("Queue is empty.");
     }
-    return (await this.dequeue()) as T;
+    return this.dequeue() as T;
   }
 
-  async clear(): Promise<void> {
-    await this.manager.append(this.name, { t: "clear" } satisfies QueueOp<T>);
+  clear(): void {
+    this.mutate({ t: "clear" });
   }
 
   reset(): void {

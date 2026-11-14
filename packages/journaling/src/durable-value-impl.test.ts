@@ -17,9 +17,9 @@ describe("DurableValueImpl", () => {
   it("starts undefined and tracks set/clear in memory", async () => {
     const { value } = makeValue<number>(new MemoryJournalStorage());
     expect(value.value).toBeUndefined();
-    await value.set(7);
+    value.set(7);
     expect(value.value).toBe(7);
-    await value.clear();
+    value.clear();
     expect(value.value).toBeUndefined();
   });
 
@@ -27,9 +27,10 @@ describe("DurableValueImpl", () => {
     const storage = new MemoryJournalStorage();
     const a = makeValue<number>(storage);
     await a.manager.replay();
-    await a.value.set(1);
-    await a.value.set(2);
-    await a.value.set(3);
+    a.value.set(1);
+    a.value.set(2);
+    a.value.set(3);
+    await a.manager.writeState();
 
     const b = makeValue<number>(storage);
     await b.manager.replay();
@@ -39,8 +40,9 @@ describe("DurableValueImpl", () => {
   it("replays a clear as the final state", async () => {
     const storage = new MemoryJournalStorage();
     const a = makeValue<number>(storage);
-    await a.value.set(9);
-    await a.value.clear();
+    a.value.set(9);
+    a.value.clear();
+    await a.manager.writeState();
 
     const b = makeValue<number>(storage);
     await b.manager.replay();
@@ -51,7 +53,8 @@ describe("DurableValueImpl", () => {
     const storage = new MemoryJournalStorage();
     const when = new Date("2026-05-27T10:00:00.000Z");
     const a = makeValue<Date>(storage);
-    await a.value.set(when);
+    a.value.set(when);
+    await a.manager.writeState();
 
     const b = makeValue<Date>(storage);
     await b.manager.replay();

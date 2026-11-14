@@ -16,27 +16,28 @@ function makeQueue<T>(storage: MemoryJournalStorage) {
 describe("DurableQueueImpl", () => {
   it("tracks enqueue/dequeue/peek/clear in FIFO order", async () => {
     const { queue } = makeQueue<string>(new MemoryJournalStorage());
-    await queue.enqueue("a");
-    await queue.enqueue("b");
-    await queue.enqueue("c");
+    queue.enqueue("a");
+    queue.enqueue("b");
+    queue.enqueue("c");
     expect(queue.size).toBe(3);
     expect(queue.peek()).toBe("a");
     expect(queue.toArray()).toEqual(["a", "b", "c"]);
     expect([...queue]).toEqual(["a", "b", "c"]);
 
-    expect(await queue.dequeue()).toBe("a");
-    expect(await queue.dequeue()).toBe("b");
+    expect(queue.dequeue()).toBe("a");
+    expect(queue.dequeue()).toBe("b");
     expect(queue.peek()).toBe("c");
     expect(queue.size).toBe(1);
 
-    await queue.clear();
+    queue.clear();
     expect(queue.size).toBe(0);
   });
 
-  it("dequeue on an empty queue resolves to undefined without journaling", async () => {
+  it("dequeue on an empty queue returns undefined without journaling", async () => {
     const storage = new MemoryJournalStorage();
-    const { queue } = makeQueue<number>(storage);
-    expect(await queue.dequeue()).toBeUndefined();
+    const { manager, queue } = makeQueue<number>(storage);
+    expect(queue.dequeue()).toBeUndefined();
+    await manager.writeState();
     // A no-op dequeue must not have written a log entry.
     const replayed = makeQueue<number>(storage);
     await replayed.manager.replay();
@@ -45,8 +46,8 @@ describe("DurableQueueImpl", () => {
 
   it("peekOrThrow returns the front element without removing it", async () => {
     const { queue } = makeQueue<string>(new MemoryJournalStorage());
-    await queue.enqueue("a");
-    await queue.enqueue("b");
+    queue.enqueue("a");
+    queue.enqueue("b");
     expect(queue.peekOrThrow()).toBe("a");
     expect(queue.size).toBe(2);
   });
@@ -58,16 +59,17 @@ describe("DurableQueueImpl", () => {
 
   it("dequeueOrThrow removes and returns the front element", async () => {
     const { queue } = makeQueue<string>(new MemoryJournalStorage());
-    await queue.enqueue("a");
-    await queue.enqueue("b");
-    expect(await queue.dequeueOrThrow()).toBe("a");
+    queue.enqueue("a");
+    queue.enqueue("b");
+    expect(queue.dequeueOrThrow()).toBe("a");
     expect(queue.size).toBe(1);
   });
 
   it("dequeueOrThrow throws on an empty queue without journaling", async () => {
     const storage = new MemoryJournalStorage();
-    const { queue } = makeQueue<string>(storage);
-    await expect(queue.dequeueOrThrow()).rejects.toThrow(/empty/i);
+    const { manager, queue } = makeQueue<string>(storage);
+    expect(() => queue.dequeueOrThrow()).toThrow(/empty/i);
+    await manager.writeState();
 
     const replayed = makeQueue<string>(storage);
     await replayed.manager.replay();
@@ -77,11 +79,12 @@ describe("DurableQueueImpl", () => {
   it("rebuilds from the log on a fresh activation", async () => {
     const storage = new MemoryJournalStorage();
     const a = makeQueue<number>(storage);
-    await a.queue.enqueue(1);
-    await a.queue.enqueue(2);
-    await a.queue.enqueue(3);
-    await a.queue.dequeue(); // [2,3]
-    await a.queue.enqueue(4); // [2,3,4]
+    a.queue.enqueue(1);
+    a.queue.enqueue(2);
+    a.queue.enqueue(3);
+    a.queue.dequeue(); // [2,3]
+    a.queue.enqueue(4); // [2,3,4]
+    await a.manager.writeState();
 
     const b = makeQueue<number>(storage);
     await b.manager.replay();

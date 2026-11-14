@@ -23,15 +23,19 @@ export class RetiringCollectionsGrain extends Grain implements IRetiringCollecti
   private retire!: DurableDictionary<unknown, unknown>;
 
   async keepSet(key: unknown, value: unknown): Promise<void> {
-    await this.keep.set(key, value);
+    this.keep.set(key, value);
   }
 
   async keepGet(key: unknown): Promise<unknown> {
     return this.keep.get(key);
   }
 
+  async writeState(): Promise<void> {
+    await this.writeDurableState();
+  }
+
   async retireSet(key: unknown, value: unknown): Promise<void> {
-    await this.retire.set(key, value);
+    this.retire.set(key, value);
   }
 
   async retireGet(key: unknown): Promise<unknown> {
@@ -61,10 +65,14 @@ export class RetiringCollectionsGrainPartial
   private keep!: DurableDictionary<unknown, unknown>;
 
   async keepSet(key: unknown, value: unknown): Promise<void> {
-    await this.keep.set(key, value);
+    this.keep.set(key, value);
   }
 
   async keepGet(key: unknown): Promise<unknown> {
     return this.keep.get(key);
+  }
+
+  async writeState(): Promise<void> {
+    await this.writeDurableState();
   }
 }

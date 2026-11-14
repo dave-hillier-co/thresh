@@ -80,6 +80,7 @@ describe("Orleans.Journaling.Tests.InMemoryLogSegmentTests", () => {
       await grain.listAdd("one");
       await grain.listAdd("two");
       await grain.listAdd("three");
+      await grain.writeState();
 
       expect(await grain.listLength()).toBe(3);
       expect(await grain.listGet(0)).toBe("one");
@@ -87,9 +88,11 @@ describe("Orleans.Journaling.Tests.InMemoryLogSegmentTests", () => {
       expect(await grain.listGet(2)).toBe("three");
 
       await grain.listSet(1, "updated");
+      await grain.writeState();
       expect(await grain.listGet(1)).toBe("updated");
 
       await grain.listRemoveAt(0);
+      await grain.writeState();
       expect(await grain.listLength()).toBe(2);
       expect(await grain.listGet(0)).toBe("updated");
       expect(await grain.listGet(1)).toBe("three");
@@ -105,6 +108,7 @@ describe("Orleans.Journaling.Tests.InMemoryLogSegmentTests", () => {
       await grain.listAdd("one");
       await grain.listAdd("two");
       await grain.listAdd("three");
+      await grain.writeState();
 
       await cluster.restartSilo(cluster.primary);
       const grain2 = cluster.getGrain(IDurableCollectionsGrain, key);
@@ -127,6 +131,7 @@ describe("Orleans.Journaling.Tests.InMemoryLogSegmentTests", () => {
 
       await grain.listAdd(person1);
       await grain.listAdd(person2);
+      await grain.writeState();
 
       expect(await grain.listLength()).toBe(2);
       expect(((await grain.listGet(0)) as typeof person1).name).toBe("John");
@@ -137,6 +142,7 @@ describe("Orleans.Journaling.Tests.InMemoryLogSegmentTests", () => {
       // pattern used elsewhere), so it round-trips through persistence.
       const current = (await grain.listGet(0)) as typeof person1;
       await grain.listSet(0, { ...current, age: 31 });
+      await grain.writeState();
 
       await cluster.restartSilo(cluster.primary);
       const grain2 = cluster.getGrain(IDurableCollectionsGrain, key);
@@ -153,8 +159,10 @@ describe("Orleans.Journaling.Tests.InMemoryLogSegmentTests", () => {
       await grain.listAdd("one");
       await grain.listAdd("two");
       await grain.listAdd("three");
+      await grain.writeState();
 
       await grain.listClear();
+      await grain.writeState();
 
       expect(await grain.listLength()).toBe(0);
 
@@ -172,11 +180,13 @@ describe("Orleans.Journaling.Tests.InMemoryLogSegmentTests", () => {
       await grain.listAdd("one");
       await grain.listAdd("two");
       await grain.listAdd("three");
+      await grain.writeState();
 
       expect(await grain.listContains("two")).toBe(true);
       expect(await grain.listContains("four")).toBe(false);
 
       await grain.listRemove("two");
+      await grain.writeState();
 
       expect(await grain.listContains("two")).toBe(false);
     },
@@ -189,8 +199,10 @@ describe("Orleans.Journaling.Tests.InMemoryLogSegmentTests", () => {
 
       await grain.listAdd("one");
       await grain.listAdd("three");
+      await grain.writeState();
 
       await grain.listInsert(1, "two");
+      await grain.writeState();
 
       expect(await grain.listLength()).toBe(3);
       expect(await grain.listGet(0)).toBe("one");
@@ -198,6 +210,7 @@ describe("Orleans.Journaling.Tests.InMemoryLogSegmentTests", () => {
       expect(await grain.listGet(2)).toBe("three");
 
       const removed = await grain.listRemove("two");
+      await grain.writeState();
 
       expect(removed).toBe(true);
       expect(await grain.listLength()).toBe(2);
@@ -213,6 +226,7 @@ describe("Orleans.Journaling.Tests.InMemoryLogSegmentTests", () => {
 
       const expectedItems = ["one", "two", "three"];
       for (const item of expectedItems) await grain.listAdd(item);
+      await grain.writeState();
 
       const actualItems = await grain.listToArray();
 
@@ -229,11 +243,17 @@ describe("Orleans.Journaling.Tests.InMemoryLogSegmentTests", () => {
       const itemCount = 100;
       for (let i = 0; i < itemCount; i++) await grain.listAdd(i);
 
+      // Upstream writes five times in a row to provoke snapshotting; only the first has
+      // anything buffered, the rest are no-ops.
+      for (let j = 0; j < 5; ++j) await grain.writeState();
+
       expect(await grain.listLength()).toBe(itemCount);
 
       for (let i = 0; i < itemCount; i += 2) {
         await grain.listSet(i, ((await grain.listGet(i)) as number) * 2);
       }
+
+      for (let j = 0; j < 5; ++j) await grain.writeState();
 
       for (let i = 0; i < itemCount; i++) {
         if (i % 2 === 0) expect(await grain.listGet(i)).toBe(i * 2);

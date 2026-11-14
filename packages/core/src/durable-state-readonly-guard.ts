@@ -49,10 +49,10 @@ export function guardDurableValueForReadOnly<T>(
     get(): T | undefined {
       return guardValue(state.get(), stateName);
     },
-    async set(_value: T): Promise<void> {
+    set(_value: T): void {
       throw readOnlyViolation(stateName, "set durable value");
     },
-    async clear(): Promise<void> {
+    clear(): void {
       throw readOnlyViolation(stateName, "clear durable value");
     },
   };
@@ -82,13 +82,13 @@ export function guardDurableDictionaryForReadOnly<K, V>(
     values(): IterableIterator<V> {
       return guardIterator(state.values(), stateName);
     },
-    async set(_key: K, _value: V): Promise<void> {
+    set(_key: K, _value: V): void {
       throw readOnlyViolation(stateName, "set durable dictionary entry on");
     },
-    async delete(_key: K): Promise<boolean> {
+    delete(_key: K): boolean {
       throw readOnlyViolation(stateName, "delete durable dictionary entry on");
     },
-    async clear(): Promise<void> {
+    clear(): void {
       throw readOnlyViolation(stateName, "clear durable dictionary");
     },
   };
@@ -115,22 +115,22 @@ export function guardDurableListForReadOnly<T>(
     [Symbol.iterator](): IterableIterator<T> {
       return guardIterator(state[Symbol.iterator](), stateName);
     },
-    async add(_value: T): Promise<void> {
+    add(_value: T): void {
       throw readOnlyViolation(stateName, "add to durable list");
     },
-    async set(_index: number, _value: T): Promise<void> {
+    set(_index: number, _value: T): void {
       throw readOnlyViolation(stateName, "set durable list entry on");
     },
-    async insert(_index: number, _value: T): Promise<void> {
+    insert(_index: number, _value: T): void {
       throw readOnlyViolation(stateName, "insert into durable list");
     },
-    async removeAt(_index: number): Promise<void> {
+    removeAt(_index: number): void {
       throw readOnlyViolation(stateName, "remove from durable list");
     },
-    async remove(_value: T): Promise<boolean> {
+    remove(_value: T): boolean {
       throw readOnlyViolation(stateName, "remove from durable list");
     },
-    async clear(): Promise<void> {
+    clear(): void {
       throw readOnlyViolation(stateName, "clear durable list");
     },
   };
@@ -157,16 +157,16 @@ export function guardDurableQueueForReadOnly<T>(
     [Symbol.iterator](): IterableIterator<T> {
       return guardIterator(state[Symbol.iterator](), stateName);
     },
-    async enqueue(_value: T): Promise<void> {
+    enqueue(_value: T): void {
       throw readOnlyViolation(stateName, "enqueue onto durable queue");
     },
-    async dequeue(): Promise<T | undefined> {
+    dequeue(): T | undefined {
       throw readOnlyViolation(stateName, "dequeue from durable queue");
     },
-    async dequeueOrThrow(): Promise<T> {
+    dequeueOrThrow(): T {
       throw readOnlyViolation(stateName, "dequeue from durable queue");
     },
-    async clear(): Promise<void> {
+    clear(): void {
       throw readOnlyViolation(stateName, "clear durable queue");
     },
   };
@@ -190,13 +190,13 @@ export function guardDurableSetForReadOnly<T>(
     [Symbol.iterator](): IterableIterator<T> {
       return guardIterator(state[Symbol.iterator](), stateName);
     },
-    async add(_value: T): Promise<boolean> {
+    add(_value: T): boolean {
       throw readOnlyViolation(stateName, "add to durable set");
     },
-    async delete(_value: T): Promise<boolean> {
+    delete(_value: T): boolean {
       throw readOnlyViolation(stateName, "delete from durable set");
     },
-    async clear(): Promise<void> {
+    clear(): void {
       throw readOnlyViolation(stateName, "clear durable set");
     },
   };

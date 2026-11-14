@@ -1,3 +1,4 @@
+import { InconsistentStateError } from "@thresh/core/errors";
 import type { GrainId } from "@thresh/core/grain-id";
 import type { JournalStorage } from "@thresh/core/journal-storage";
 import type { DurableStateMachine, StateMachineManager } from "@thresh/core/durable-state-machine";
@@ -73,6 +74,12 @@ export class StateMachineManagerImpl implements StateMachineManager {
   private version: number | undefined;
   /** Entries written since the log was last compacted: what the snapshot threshold counts. */
   private liveEntryCount = 0;
+  /** Serialised entries buffered by the machines since the last successful write, in call order. */
+  private buffered: string[] = [];
+  /** Set by a lost-writer conflict: the next `writeState` re-reads the log before writing. */
+  private needsRecovery = false;
+  /** Tail of the chain that runs storage writes one at a time (they share one version CAS). */
+  private writeChain: Promise<unknown> = Promise.resolve();
 
   constructor(
     private readonly logName: string,
@@ -97,6 +104,8 @@ export class StateMachineManagerImpl implements StateMachineManager {
     const segment = await this.storage.read(this.logName, this.grainId);
     this.version = segment.version;
     this.liveEntryCount = 0;
+    this.buffered = [];
+    this.needsRecovery = false;
     this.retiring.clear();
     for (const machine of this.machines.values()) machine.reset();
     for (const raw of segment.entries) {
@@ -144,7 +153,63 @@ export class StateMachineManagerImpl implements StateMachineManager {
     return this.appendRange(machineName, [payload]);
   }
 
-  async appendRange(machineName: string, payloads: readonly unknown[]): Promise<void> {
+  buffer(machineName: string, payload: unknown): void {
+    if (!this.machines.has(machineName)) {
+      throw new Error(`unknown durable state machine "${machineName}"`);
+    }
+    this.buffered.push(
+      serializeValue({ m: machineName, k: "op", p: payload } satisfies LogEnvelope),
+    );
+  }
+
+  writeState(): Promise<void> {
+    return this.serialised(async () => {
+      // Mirrors JournaledStateManager.WorkLoop: after a lost-writer signal the next work item
+      // recovers (reset, re-read) before it does anything else.
+      if (this.needsRecovery) await this.replay();
+      if (this.buffered.length === 0) return;
+      // Take the batch now; entries buffered while the write is in flight wait for the next one.
+      const entries = this.buffered;
+      this.buffered = [];
+      try {
+        this.version = await this.storage.append(this.logName, this.grainId, entries, this.version);
+      } catch (error) {
+        // The committed buffer is not consumed on failure: the entries stay pending, ahead of
+        // anything buffered meanwhile, and memory is left as it is.
+        this.buffered = [...entries, ...this.buffered];
+        if (error instanceof InconsistentStateError) this.needsRecovery = true;
+        throw error;
+      }
+      this.liveEntryCount += entries.length;
+      await this.compactIfDue();
+    });
+  }
+
+  appendRange(machineName: string, payloads: readonly unknown[]): Promise<void> {
+    return this.serialised(() => this.appendRangeNow(machineName, payloads));
+  }
+
+  /** Runs `work` after every earlier write has settled, whether it succeeded or failed. */
+  private serialised<T>(work: () => Promise<T>): Promise<T> {
+    const run = this.writeChain.then(work, work);
+    this.writeChain = run.catch(() => {});
+    return run;
+  }
+
+  /** Compact when the live log has outgrown the threshold and no mutation is waiting to be written. */
+  private async compactIfDue(): Promise<void> {
+    // A snapshot captures every machine's memory, so it must not run while buffered mutations
+    // exist: that would make unwritten changes durable outside a `writeState`.
+    if (this.buffered.length > 0) return;
+    // Keep the threshold above the machine count so we don't recompact on every append.
+    if (this.liveEntryCount < Math.max(this.snapshotThreshold, this.machines.size + 1)) return;
+    // The entries are already durable by the time we get here; a failure compacting them must
+    // not propagate into the caller, or a retrying caller would re-append the same entries.
+    // `liveEntryCount` is left as-is, so the next write tries again.
+    await this.compactNow().catch(() => {});
+  }
+
+  private async appendRangeNow(machineName: string, payloads: readonly unknown[]): Promise<void> {
     const machine = this.machines.get(machineName);
     if (machine === undefined) throw new Error(`unknown durable state machine "${machineName}"`);
     if (payloads.length === 0) return;
@@ -157,19 +222,18 @@ export class StateMachineManagerImpl implements StateMachineManager {
     this.version = await this.storage.append(this.logName, this.grainId, entries, this.version);
     for (const payload of payloads) machine.apply(payload);
     this.liveEntryCount += payloads.length;
-    // Keep the threshold above the machine count so we don't recompact on every append.
-    if (this.liveEntryCount >= Math.max(this.snapshotThreshold, this.machines.size + 1)) {
-      // The entry above is already durable and applied by the time we get
-      // here; a failure compacting it must not propagate into `append`'s
-      // caller, or a retrying caller (e.g. `DurableList.add`) would re-append
-      // and apply the same entry twice. `liveEntryCount` (and thus this
-      // threshold check) is left as-is, so the next append tries the
-      // compaction again.
-      await this.compact().catch(() => {});
-    }
+    await this.compactIfDue();
   }
 
-  async compact(): Promise<void> {
+  /**
+   * Force a snapshot + truncate. The snapshot is of every machine's memory, so mutations still
+   * buffered become durable in it (and the buffer is emptied), as in Orleans' snapshot work item.
+   */
+  compact(): Promise<void> {
+    return this.serialised(() => this.compactNow());
+  }
+
+  private async compactNow(): Promise<void> {
     // History a machine keeps (a JournaledGrain's events) is written ahead of the snapshot frames:
     // a snapshot makes activation fast, it does not license discarding history.
     const frames: string[] = [];
@@ -209,15 +273,21 @@ export class StateMachineManagerImpl implements StateMachineManager {
     }
     this.version = await this.storage.replace(this.logName, this.grainId, frames, this.version);
     this.liveEntryCount = frames.length - historyFrames;
+    this.buffered = [];
     this.retiring.clear();
     for (const [name, record] of nextRetiring) this.retiring.set(name, record);
     for (const machine of this.machines.values()) machine.compacted?.();
   }
 
-  async clear(): Promise<void> {
+  clear(): Promise<void> {
+    return this.serialised(() => this.clearNow());
+  }
+
+  private async clearNow(): Promise<void> {
     await this.storage.clear(this.logName, this.grainId);
     this.version = undefined;
     this.liveEntryCount = 0;
+    this.buffered = [];
     this.retiring.clear();
     for (const machine of this.machines.values()) machine.reset();
   }
