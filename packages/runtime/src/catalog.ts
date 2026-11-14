@@ -4,7 +4,6 @@ import { GrainCallError, RejectionError } from "@thresh/core/errors";
 import type { Grain } from "@thresh/core/grain";
 import type { GrainClass } from "@thresh/core/grain-class";
 import type { IncomingGrainCallFilter } from "@thresh/core/grain-call-filter";
-import { noopLogger } from "@thresh/core/logger";
 import type { BroadcastChannelProvider } from "@thresh/core/broadcast-channel";
 import type { GrainAddress } from "@thresh/core/grain-address";
 import type { GrainId } from "@thresh/core/grain-id";
@@ -102,8 +101,12 @@ export interface CatalogOptions {
    * run and the activation is finalized.
    */
   deactivateState?: (instance: Grain, grainId: GrainId) => void;
-  /** Migrate an idle activation to another silo; resolves to whether it moved. */
-  migrate?: (activation: ActivationData) => Promise<boolean>;
+  /**
+   * The migration hand-off of a deactivation pipeline: dehydrate `activation`
+   * and move it to `target`, or to a placement-chosen silo when `target` is
+   * undefined; resolves to whether it moved (see `DeactivationSteps.migrate`).
+   */
+  migrate?: (activation: ActivationData, target: SiloAddress | undefined) => Promise<boolean>;
   /** Resolves the reminder registry a grain's `registerReminder` delegates to. */
   reminderRegistry?: () => ReminderRegistry | undefined;
   /** Resolves the durable-job scheduler a grain's `scheduleJob` delegates to. */
@@ -261,8 +264,8 @@ export class Catalog {
     const existing = this.activations.get(key);
     if (existing !== undefined && existing.state !== "invalid") {
       if (!existing.deactivationRequestedAndIdle) return Promise.resolve(existing);
-      return this.finalizeStale(key, existing).then(() => {
-        // A stuck-removal during `finalizeStale` may already have replaced it.
+      return this.finalizeStale(existing).then(() => {
+        // Another caller may have activated a replacement while the hook ran.
         const replacement = this.activations.get(key);
         if (replacement !== undefined && replacement.state !== "invalid") return replacement;
         return this.createAndStore(key, id, activationId, rehydrationBag, sourceAddr);
@@ -311,37 +314,23 @@ export class Catalog {
    * instead re-registers with the directory first so the replacement gets a
    * freshly CAS-won activation id, exactly like activating from scratch).
    */
-  private async finalizeStale(key: string, existing: ActivationData): Promise<void> {
-    await existing.runDeactivateHook(
+  private async finalizeStale(existing: ActivationData): Promise<void> {
+    await existing.deactivate(
       existing.requestedDeactivationReason ?? {
         code: "application-requested",
         description: "deactivateOnIdle requested",
       },
     );
-    existing.finalizeDeactivation();
-    // Removed as stuck while `onDeactivate` awaited (its cleanup already ran
-    // in `handleStuckActivation`): leave any replacement under `key` alone.
-    if (this.activations.get(key) !== existing) return;
-    this.activations.delete(key);
-    if (this.options.grainActivator?.disposeInstance !== undefined) {
-      await this.options.grainActivator.disposeInstance(existing.instance, existing.id);
-    }
-    this.options.deactivateState?.(existing.instance, existing.id);
-    this.options.onDeactivated?.(existing);
   }
 
   /**
-   * `ActivationOptions.onStuck`: an activation has deactivated itself because
-   * its blocking turn is stuck (Orleans `DeactivateStuckActivation`) and
-   * already marked itself `invalid`. Remove it from whichever map holds it
-   * (ordinary or stateless-worker) and run the same `onDeactivated` hook an
-   * ordinary deactivation gets (directory unregister, cache invalidation) —
-   * so the wedged turn is left dangling on its own, orphaned activation
-   * object, while the NEXT call for this grain id activates a fresh one.
-   * Deliberately skips `disposeCollected`'s `disposeInstance`/`deactivateState`
-   * hooks: those assume `onDeactivate` ran cleanly, which it did not here.
+   * The deactivation pipeline's removal step (`DeactivationSteps.remove`,
+   * Orleans `UnregisterMessageTarget`): drop `activation` from whichever map
+   * holds it (ordinary or stateless-worker) — only if it is still the one
+   * stored, so a fresh activation that replaced it under the same key while
+   * its hook ran is never deleted (issue #106).
    */
-  private handleStuckActivation(activation: ActivationData): void {
+  private remove(activation: ActivationData): void {
     const key = activation.id.toString();
     if (this.activations.get(key) === activation) {
       this.activations.delete(key);
@@ -353,7 +342,14 @@ export class Catalog {
         else this.workerActivations.set(key, remaining);
       }
     }
-    this.options.onDeactivated?.(activation);
+  }
+
+  /** The deactivation pipeline's disposal step: dispose the instance, then unbind its state. */
+  private async dispose(activation: ActivationData): Promise<void> {
+    if (this.options.grainActivator?.disposeInstance !== undefined) {
+      await this.options.grainActivator.disposeInstance(activation.instance, activation.id);
+    }
+    this.options.deactivateState?.(activation.instance, activation.id);
   }
 
   /**
@@ -371,7 +367,7 @@ export class Catalog {
     const existing = this.activations.get(key);
     if (existing === undefined || existing.state === "invalid") return Promise.resolve(undefined);
     if (!existing.deactivationRequestedAndIdle) return Promise.resolve(existing);
-    return this.finalizeStale(key, existing).then(() => undefined);
+    return this.finalizeStale(existing).then(() => undefined);
   }
 
   /** A live activation for `id` — for a stateless-worker id, an arbitrary one of possibly several. */
@@ -545,7 +541,12 @@ export class Catalog {
       activationId,
       {
         ...this.options.activationOptions,
-        onStuck: (a) => this.handleStuckActivation(a),
+        deactivationSteps: {
+          ...(this.options.migrate !== undefined ? { migrate: this.options.migrate } : {}),
+          unregister: (a) => this.options.onDeactivated?.(a),
+          remove: (a) => this.remove(a),
+          dispose: (a) => this.dispose(a),
+        },
       },
     );
     activation.runtime = new GrainRuntimeImpl(this.options.factory, activation, {
@@ -607,63 +608,41 @@ export class Catalog {
   }
 
   /**
-   * If stale, run `onDeactivate` (honouring a migration request before or
-   * during it) and finalize — leaving `activation.state === "invalid"` for
-   * the caller to notice and remove from whichever map it lives in.
-   * `ageLimitOverrideMs`, when given, is `ForceActivationCollection`'s
-   * caller-chosen age instead of each activation's own collection age (see
-   * `ActivationData.isStale`).
+   * If still stale, deactivate it through its pipeline — which honours a
+   * migration requested before or during `onDeactivate`, and removes,
+   * unregisters and disposes it once finished. `ageLimitOverrideMs`, when
+   * given, is `ForceActivationCollection`'s caller-chosen age instead of each
+   * activation's own collection age (see `ActivationData.isStale`).
    */
   private async collectOne(activation: ActivationData, ageLimitOverrideMs?: number): Promise<void> {
     if (!activation.isStale(ageLimitOverrideMs)) return;
-    if (activation.wantsMigration && this.options.migrate !== undefined) {
-      // Faithful to Orleans' `ActivationData.FinishDeactivating`:
-      // `OnDeactivateAsync` runs (and its span starts) BEFORE the dehydrate
-      // span/hand-off, and the "migrating" reason is committed up front —
-      // before the destination is known to have accepted the move, so it
-      // doesn't retroactively change to "idle" if the move ends up failing.
-      await activation.runDeactivateHook({
-        code: "migrating",
-        description: "migrating to another silo",
-      });
-      await this.options.migrate(activation);
-      activation.finalizeDeactivation();
-    } else {
-      // No migration requested yet: run `onDeactivate` first, since a grain
-      // may call `migrateOnIdle()` from within it; honour a migration it
-      // asks for during the hook, then finalize.
-      await activation.runDeactivateHook(
-        activation.requestedDeactivationReason ?? { code: "idle", description: "idle collection" },
-      );
-      if (activation.wantsMigration && this.options.migrate !== undefined) {
-        await this.options.migrate(activation);
-      }
-      activation.finalizeDeactivation();
-    }
+    // Faithful to Orleans' `ActivationData.FinishDeactivating`: the
+    // "migrating" reason is committed up front — before the destination is
+    // known to have accepted the move, so it doesn't retroactively change to
+    // "idle" if the move ends up failing.
+    const migrating = activation.wantsMigration && this.options.migrate !== undefined;
+    await activation.deactivate(
+      migrating
+        ? { code: "migrating", description: "migrating to another silo" }
+        : (activation.requestedDeactivationReason ?? {
+            code: "idle",
+            description: "idle collection",
+          }),
+    );
   }
 
-  /**
-   * Dispose one already-deactivated activation's instance/state hooks.
-   * Contained: a user `disposeInstance`/`deactivateState`/`onDeactivated`
-   * hook that throws is caught and logged here rather than propagating —
-   * `collectIdle` calls this once per collected activation in a sweep, and a
-   * single bad grain must not stop the rest of the sweep from running (or,
-   * since the periodic `ActivationCollector` calls `collectIdle` fire-and-
-   * forget, turn into a repeating unhandled rejection).
-   */
-  private async disposeCollected(activation: ActivationData): Promise<void> {
-    try {
-      if (this.options.grainActivator?.disposeInstance !== undefined) {
-        await this.options.grainActivator.disposeInstance(activation.instance, activation.id);
-      }
-      this.options.deactivateState?.(activation.instance, activation.id);
-      this.options.onDeactivated?.(activation);
-    } catch (error) {
-      (this.options.activationOptions?.logger ?? noopLogger).warn(
-        "activation disposal failed during idle collection",
-        { grainId: activation.id.toString(), error },
-      );
+  /** Every activation — ordinary and stateless-worker alike — that is stale now, in one pass. */
+  private selectStale(ageLimitOverrideMs?: number): ActivationData[] {
+    const stale: ActivationData[] = [];
+    for (const activation of this.activations.values()) {
+      if (activation.isStale(ageLimitOverrideMs)) stale.push(activation);
     }
+    for (const list of this.workerActivations.values()) {
+      for (const activation of list) {
+        if (activation.isStale(ageLimitOverrideMs)) stale.push(activation);
+      }
+    }
+    return stale;
   }
 
   /**
@@ -674,33 +653,8 @@ export class Catalog {
    * uses its own configured collection age (the periodic `ActivationCollector`).
    */
   async collectIdle(ageLimitOverrideMs?: number): Promise<void> {
-    for (const [key, activation] of this.activations) {
+    for (const activation of this.selectStale(ageLimitOverrideMs)) {
       await this.collectOne(activation, ageLimitOverrideMs);
-      if (activation.state === "invalid") {
-        // `collectOne` awaits the deactivate hook, so the map may no longer
-        // hold this activation by the time it returns: a `getOrCreate` in that
-        // gap may already have stored a fresh reactivation under this key
-        // (issue #106), or the activation may have been removed as stuck
-        // (`handleStuckActivation`). Only remove the entry if it's still the
-        // one just collected, so a live replacement is never deleted.
-        if (this.activations.get(key) === activation) this.activations.delete(key);
-        // A stuck removal already ran `onDeactivated` and deliberately skips
-        // the dispose hooks; every other collected activation is disposed.
-        if (!activation.isDeactivatedAsStuck) await this.disposeCollected(activation);
-      }
-    }
-    for (const [key, list] of this.workerActivations) {
-      for (const activation of list) {
-        await this.collectOne(activation, ageLimitOverrideMs);
-      }
-      // Re-read: a stuck worker may have been removed (and already disposed
-      // via `handleStuckActivation`) while `collectOne` awaited.
-      const current = this.workerActivations.get(key) ?? [];
-      const collected = current.filter((a) => a.state === "invalid");
-      const remaining = current.filter((a) => a.state !== "invalid");
-      if (remaining.length === 0) this.workerActivations.delete(key);
-      else this.workerActivations.set(key, remaining);
-      for (const activation of collected) await this.disposeCollected(activation);
     }
   }
 
@@ -726,6 +680,8 @@ export class Catalog {
     // this sweep's snapshot has already missed.
     this.stopping = true;
     const all = [...this.activations.values(), ...[...this.workerActivations.values()].flat()];
+    // Each joins a deactivation already under way (an idle sweep, a
+    // migration) rather than finalizing under its running hook.
     const deactivated = Promise.all(all.map((a) => a.deactivate(reason)));
     if (deadlineMs === undefined) {
       await deactivated;
@@ -737,21 +693,10 @@ export class Catalog {
       await Promise.race([deactivated, timedOut]);
       if (handle !== undefined) this.options.time.clearTimer(handle);
     }
+    // Every finished activation removed itself; one the deadline cut off is
+    // dropped here and finishes (unregister, disposal) on its own once its
+    // hook returns — never under it.
     this.activations.clear();
     this.workerActivations.clear();
-    for (const a of all) {
-      // Still deactivating: the overall deadline above cut this sweep off
-      // before this one finished — leave it be rather than dispose/unregister
-      // an activation whose own hook may still be running.
-      if (a.state !== "invalid") continue;
-      // Abandoned as stuck while this sweep awaited it: `handleStuckActivation`
-      // already removed it and ran `onDeactivated`, and skips dispose hooks.
-      if (a.isDeactivatedAsStuck) continue;
-      if (this.options.grainActivator?.disposeInstance !== undefined) {
-        await this.options.grainActivator.disposeInstance(a.instance, a.id);
-      }
-      this.options.deactivateState?.(a.instance, a.id);
-      this.options.onDeactivated?.(a);
-    }
   }
 }

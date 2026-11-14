@@ -83,7 +83,7 @@ describe("activation migration mechanics", () => {
     expect(grain.count).toBe(5);
     expect(outcome).toBe("pending"); // held until the migration settles
 
-    activation.finalizeDeactivation();
+    await activation.deactivate({ code: "migrating", description: "test" });
     await expect(queued).rejects.toMatchObject({ name: "RejectionError", kind: "noActivation" });
     expect(grain.count).toBe(5);
   });
@@ -122,10 +122,10 @@ describe("activation migration mechanics", () => {
     await Promise.resolve();
     expect(settled).toBe(false);
 
-    // The driving process (e.g. `ClusterNode.migrateActivationTo`) finalizes
-    // once the target has accepted the move; only THEN does the held call
+    // The deactivation pipeline that drives the move finishes once the
+    // hand-off has settled; only THEN does the held call
     // resolve, signalling the dispatcher to re-resolve to the new host.
-    activation.finalizeDeactivation();
+    await activation.deactivate({ code: "migrating", description: "test" });
     await expect(held).rejects.toMatchObject({
       name: "RejectionError",
       kind: "noActivation",

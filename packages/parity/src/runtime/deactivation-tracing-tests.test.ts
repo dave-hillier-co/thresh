@@ -7,7 +7,7 @@
 //
 // This framework now has the DEACTIVATE-path span (`OnDeactivate`, Lifecycle
 // source — `@thresh/observability/activation-tracing`'s `withOnDeactivateSpan`,
-// wired around `ActivationData.runDeactivateHook`'s `instance.onDeactivate`
+// wired around the deactivation pipeline's `instance.onDeactivate`
 // call) plus a `StorageWrite` span (Storage source) around
 // `PersistentStateImpl.write`. Both inherit the ambient OTel context the same
 // way the activation-path spans do (async-hooks context manager +
@@ -39,7 +39,7 @@
 // this framework's periodic `ActivationCollector` fires its sweep off the
 // SAME `TimeProvider` a test advances (`FakeTimeProvider.advance`), and that
 // advance call synchronously walks into the sweep's `collectIdle` →
-// `collectOne` → `runDeactivateHook`/`dehydrate` chain, entirely as ordinary
+// `collectOne` → `ActivationData.deactivate` → `dehydrate` chain, entirely as ordinary
 // async/await continuations — no new `setTimeout`/timer boundary is crossed.
 // `AsyncLocalStorageContextManager` (the harness's OTel context manager)
 // propagates through that continuation exactly like any other awaited call,
@@ -48,7 +48,7 @@
 // into the resulting `OnDeactivate`/`Dehydrate` spans — the collection sweep
 // only looks "detached" at the call-site (`forceMigrationSweep` in
 // `migration-tests.test.ts`), not at the trace-context level. `collectOne`
-// itself was reordered to run `runDeactivateHook` BEFORE
+// itself was reordered to run the hook BEFORE
 // `dehydrate`/hand-off (previously the reverse, to protect against an
 // `onDeactivate` hook clearing state before dehydration) — matching upstream
 // `ActivationData.FinishDeactivating`, which always calls

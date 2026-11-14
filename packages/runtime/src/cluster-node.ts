@@ -781,7 +781,8 @@ export class ClusterNode {
         ? { classSpecificCollectionAgeSeconds: options.classSpecificCollectionAgeSeconds }
         : {}),
       onDeactivated: (a) => this.onDeactivated(a),
-      migrate: (a) => this.migrateActivation(a),
+      migrate: (a, target) =>
+        target === undefined ? this.migrateActivation(a) : this.migrateActivationTo(a, target),
       localSilo: () => this.options.local,
       // Cascade a cancellation to a token's forwarded target wherever it
       // lives, cluster-wide, via the same extension-reference substrate
@@ -2226,12 +2227,16 @@ export class ClusterNode {
       activationId: activation.activationId,
     };
     const winner = await this.directory.register(newAddr, payload.sourceAddr);
-    this.cache.put(winner);
     if (!grainAddressEquals(winner, newAddr)) {
-      // Another silo moved or activated the grain first: discard our activation.
+      // Another silo moved or activated the grain first: discard our activation
+      // through its pipeline (removed, unregistered and disposed once), then
+      // cache the winner — the pipeline's unregister step drops this grain's
+      // cache entry.
       await activation.deactivate({ code: "runtime-requested", description: "migration lost CAS" });
+      this.cache.put(winner);
       return false;
     }
+    this.cache.put(winner);
     return true;
   }
 
@@ -3335,14 +3340,13 @@ export class ClusterNode {
   }
 
   /**
-   * Hand `activation` to `target` and deactivate it here whether or not the
-   * target accepted. `migrateActivationTo` dehydrates before attempting the
-   * send, which poisons every later call on this activation with "activation
-   * migrated" (`ActivationData.dehydrate`) whatever the outcome; Orleans'
-   * `StartMigrationAsync` returning false likewise still continues into
-   * deactivation (`ActivationData.FinishDeactivating`) rather than leaving the
-   * activation live but rejecting forever (issue #93). Returns whether the
-   * target accepted.
+   * Migrate `activation` to `target` through its deactivation pipeline — the
+   * same one idle migration runs, in Orleans' `FinishDeactivating` order:
+   * timers disposed, `onDeactivate`, then the dehydrate and hand-off
+   * (`migrateActivationTo`, with `target` as Orleans' `ForwardingAddress`),
+   * then finalization. A hand-off the target refuses still continues into
+   * deactivation rather than leaving the activation live but rejecting
+   * forever (issue #93). Returns whether the target accepted.
    */
   private async migrateThenDeactivate(
     activation: ActivationData,
@@ -3351,12 +3355,11 @@ export class ClusterNode {
   ): Promise<boolean> {
     // Holding a transaction lock or an undecided prepared record: stay put.
     if (activation.isDeactivationBlocked) return false;
-    const accepted = await this.migrateActivationTo(activation, target);
-    await activation.deactivate({
-      code: "migrating",
-      description: accepted ? description : `failed migration (${description})`,
-    });
-    return accepted;
+    const { migrated } = await activation.deactivate(
+      { code: "migrating", description },
+      { migrateTo: target },
+    );
+    return migrated;
   }
 
   /** Send an `AcceptExchangeRequest` to a peer's repartitioner, as a `system: "repartition"` request. */
