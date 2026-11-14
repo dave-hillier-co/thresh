@@ -6,6 +6,7 @@ import type { KeyTypeOf } from "./key-kinds";
 import type { SiloAddress } from "./silo-address";
 import type { BroadcastChannelProvider } from "./broadcast-channel";
 import type { DurableJob, ScheduleJobRequest } from "./durable-job";
+import type { DependencyToken } from "./grain-dependency";
 import type { GrainReminder } from "./reminder";
 import type { StreamProvider } from "./stream";
 import type { TimeProvider } from "./time-provider";
@@ -168,4 +169,10 @@ export interface GrainRuntime {
    * silo.
    */
   getGrainService<T>(name: string): T;
+  /**
+   * A dependency the silo hosting this activation registered under `token`
+   * (`SiloBuilder.addGrainDependency`). Per silo, not per cluster: two silos in
+   * one process may supply different values. Throws if this silo registered none.
+   */
+  getDependency<T>(token: DependencyToken<T>): T;
 }

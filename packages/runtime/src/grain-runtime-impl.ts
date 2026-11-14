@@ -1,4 +1,5 @@
 import { durationToMs, type Duration } from "@thresh/core/duration";
+import type { DependencyToken } from "@thresh/core/grain-dependency";
 import type { GrainInterface } from "@thresh/core/grain-interface";
 import type { GrainKey, GrainKeyKind } from "@thresh/core/grain-key";
 import type { GrainRuntime } from "@thresh/core/grain-runtime";
@@ -42,6 +43,8 @@ export interface GrainRuntimeServices {
   siloPing?: (siloAddress: SiloAddress, message?: string) => Promise<void>;
   /** Resolves this silo's grain-service registry, for `GrainRuntime.getGrainService()`. */
   grainServices?: () => GrainServiceRegistry | undefined;
+  /** This silo's per-silo dependencies, for `GrainRuntime.getDependency()`. */
+  dependencies?: ReadonlyMap<DependencyToken<unknown>, unknown>;
   /**
    * Whether this activation's grain type is a `[StatelessWorker]` (Orleans
    * `ActivationData.IsStatelessWorker`). A stateless-worker id may have several
@@ -230,6 +233,16 @@ export class GrainRuntimeImpl implements GrainRuntime {
     // (core has no dependency on `@thresh/runtime`), so the cast bridges that —
     // same shape as `getGrain`'s reliance on the caller supplying the right `T`.
     return registry.get(name) as unknown as T;
+  }
+
+  getDependency<T>(token: DependencyToken<T>): T {
+    const deps = this.services.dependencies;
+    if (deps === undefined || !deps.has(token)) {
+      throw new Error(
+        `no grain dependency "${token.name}" is registered on this silo (SiloBuilder.addGrainDependency)`,
+      );
+    }
+    return deps.get(token) as T;
   }
 
   private requireLoadShedding(): SiloLoadSheddingTestHooks {

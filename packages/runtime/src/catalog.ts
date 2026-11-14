@@ -6,6 +6,7 @@ import type { GrainClass } from "@thresh/core/grain-class";
 import type { IncomingGrainCallFilter } from "@thresh/core/grain-call-filter";
 import type { BroadcastChannelProvider } from "@thresh/core/broadcast-channel";
 import type { GrainAddress } from "@thresh/core/grain-address";
+import type { DependencyToken } from "@thresh/core/grain-dependency";
 import type { GrainId } from "@thresh/core/grain-id";
 import type { GrainMetadata } from "@thresh/core/grain-metadata";
 import type { GrainType } from "@thresh/core/grain-type";
@@ -157,6 +158,8 @@ export interface CatalogOptions {
   siloPing?: (siloAddress: SiloAddress, message?: string) => Promise<void>;
   /** Resolves this silo's grain-service registry, for a grain's `runtime.getGrainService()`. */
   grainServiceRegistry?: () => GrainServiceRegistry | undefined;
+  /** This silo's per-silo grain dependencies, for a functional grain's `useDependency`. */
+  grainDependencies?: ReadonlyMap<DependencyToken<unknown>, unknown>;
   /** Incoming call filters wrapping each grain-method dispatch (silo-wide). */
   incomingCallFilters?: readonly IncomingGrainCallFilter[];
   /**
@@ -566,6 +569,9 @@ export class Catalog {
       ...(this.options.siloPing !== undefined ? { siloPing: this.options.siloPing } : {}),
       ...(this.options.grainServiceRegistry !== undefined
         ? { grainServices: this.options.grainServiceRegistry }
+        : {}),
+      ...(this.options.grainDependencies !== undefined
+        ? { dependencies: this.options.grainDependencies }
         : {}),
       isStatelessWorker: () => reg.metadata.options.stateless === true,
     });
