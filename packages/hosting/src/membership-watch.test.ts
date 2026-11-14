@@ -73,4 +73,24 @@ describe("the membership watch", () => {
       await host.stop();
     }
   });
+
+  it("reports membership healthy only while the applied view has a silo to own ranges", async () => {
+    // A view can list silos and still give the node nothing to route on: every member
+    // draining leaves an empty ring, on which every directory route is refused.
+    const membership = new StaticMembershipService(local, [local]);
+    const host: SiloHost = createSilo({ clusterId: "c", local })
+      .useMembership(membership)
+      .useInProcessTransport(new InProcessNetwork())
+      .build();
+    await host.start();
+    try {
+      expect(host.health.ready().checks.membershipHealthy).toBe(true);
+      membership.setStatus(local, "draining");
+      await settle();
+      expect(membership.current().silos).toHaveLength(1);
+      expect(host.health.ready().checks.membershipHealthy).toBe(false);
+    } finally {
+      await host.stop();
+    }
+  });
 });

@@ -153,7 +153,10 @@ class FlakyTransport implements Transport {
   async connect(to: SiloAddress, preamble: ConnectionPreamble): Promise<Connection> {
     if (to.equals(this.failTarget) && this.remainingFailures > 0) {
       this.remainingFailures--;
-      throw new RejectionError("simulated transient network failure", "unknownTarget");
+      // `siloUnavailable`, not `unknownTarget`: a peer that is up but unreachable for
+      // now. Recovery reads "nothing listening there" (`unknownTarget` at connect) as an
+      // empty answer from a peer that hosts nothing, which is not what this simulates.
+      throw new RejectionError("simulated transient network failure", "siloUnavailable");
     }
     return this.inner.connect(to, preamble);
   }
@@ -618,14 +621,17 @@ describe("recovery gating is per source (a slow peer holds only its own ranges)"
         true,
       );
 
-      // silo-3 joins: both ranges move to it and both owners retain their entry for
-      // it. Its pull from silo-2 is answered and adopted; the one from silo-1 stays
-      // parked, so that source is still outstanding.
-      membership.addSilo(silo(3));
+      // silo-3 starts not ready (in the view, out of the ring), then joins the ring:
+      // both ranges move to it and both owners retain their entry for it. Its pull
+      // from silo-2 is answered and adopted; the one from silo-1 stays parked, so that
+      // source is still outstanding. (Starting it straight into the ring would make
+      // that its FIRST view, whose ranges have no known previous owner and so wait on
+      // every source — see the fail-closed join test in hosting.)
+      membership.addSilo(silo(3), "draining");
       node3 = makeNode(silo(3));
-      const started = node3.start();
-      for (const n of nodes) n.updateView();
-      await started;
+      await node3.start();
+      membership.setStatus(silo(3), "active");
+      for (const n of [...nodes, node3]) n.updateView();
       await settle();
       expect(nodes[1]!.pendingHandoffCount()).toBe(1);
       expect(nodes[2]!.pendingHandoffCount()).toBe(0);
