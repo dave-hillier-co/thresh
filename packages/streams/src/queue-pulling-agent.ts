@@ -1,4 +1,10 @@
 import type { GrainType } from "@thresh/core/grain-type";
+import type { Logger } from "@thresh/core/logger";
+import {
+  systemTimeProvider,
+  type TimeProvider,
+  type TimerHandle,
+} from "@thresh/core/time-provider";
 import { recordAgentPoll } from "@thresh/observability/stream-metrics";
 import type { QueueEntry } from "@thresh/streams/redis-stream-queue";
 import type { HashRange } from "@thresh/streams/queue-ownership";
@@ -80,11 +86,34 @@ export interface QueuePullingAgentOptions {
   batchSize?: number;
   /**
    * Notified when a pump fails outside delivery (cursor read, queue read,
-   * commit). The agent keeps polling — the next poll retries from the
-   * committed cursor. Defaults to `console.error`.
+   * commit), in addition to the logger. The agent keeps polling — the next poll
+   * retries from the committed cursor, after a backoff.
    */
   onPumpError?: (error: unknown) => void;
+  /**
+   * Where a poll failure is reported, once per failure. Defaults to a logger
+   * that writes errors to the console, so a provider that is not handed the
+   * silo's logger still surfaces a store outage.
+   */
+  logger?: Logger;
+  /** The clock the poll wait is taken from (defaults to the system clock). */
+  time?: TimeProvider;
+  /**
+   * The longest wait between polls while the store keeps failing (defaults to
+   * 30s). Consecutive failures double the wait from `pollIntervalMs` up to this;
+   * the first success returns it to `pollIntervalMs`.
+   */
+  maxBackoffMs?: number;
+  /** A source of [0, 1) for the backoff jitter (defaults to `Math.random`). */
+  random?: () => number;
 }
+
+const consoleLogger: Logger = {
+  debug() {},
+  info() {},
+  warn() {},
+  error: (message, fields) => console.error(message, fields),
+};
 
 /**
  * Pulls one physical queue and delivers each entry to its subscribers, then
@@ -106,8 +135,13 @@ export interface QueuePullingAgentOptions {
 export class QueuePullingAgent {
   private readonly pollIntervalMs: number;
   private readonly batchSize: number;
-  private readonly onPumpError: (error: unknown) => void;
-  private timer: ReturnType<typeof setTimeout> | undefined;
+  private readonly onPumpError: ((error: unknown) => void) | undefined;
+  private readonly logger: Logger;
+  private readonly time: TimeProvider;
+  private readonly maxBackoffMs: number;
+  private readonly random: () => number;
+  private consecutiveFailures = 0;
+  private timer: TimerHandle | undefined;
   private cursor: number | undefined;
   private pumping = false;
   private running = false;
@@ -121,8 +155,11 @@ export class QueuePullingAgent {
   ) {
     this.pollIntervalMs = options.pollIntervalMs ?? 50;
     this.batchSize = options.batchSize ?? 128;
-    this.onPumpError =
-      options.onPumpError ?? ((error) => console.error("stream pump failed", error));
+    this.onPumpError = options.onPumpError;
+    this.logger = options.logger ?? consoleLogger;
+    this.time = options.time ?? systemTimeProvider;
+    this.maxBackoffMs = Math.max(this.pollIntervalMs, options.maxBackoffMs ?? 30_000);
+    this.random = options.random ?? Math.random;
   }
 
   start(): void {
@@ -141,7 +178,7 @@ export class QueuePullingAgent {
   async stop(): Promise<void> {
     this.running = false;
     this.shutdown.abort();
-    if (this.timer !== undefined) clearTimeout(this.timer);
+    if (this.timer !== undefined) this.time.clearTimer(this.timer);
     this.timer = undefined;
     await this.inflight;
   }
@@ -160,8 +197,8 @@ export class QueuePullingAgent {
 
   private schedule(delayMs: number): void {
     if (!this.running) return;
-    if (this.timer !== undefined) clearTimeout(this.timer);
-    this.timer = setTimeout(() => {
+    if (this.timer !== undefined) this.time.clearTimer(this.timer);
+    this.timer = this.time.setTimer(() => {
       this.timer = undefined;
       this.inflight = this.pump();
     }, delayMs);
@@ -171,6 +208,7 @@ export class QueuePullingAgent {
     if (this.pumping || !this.running) return;
     this.pumping = true;
     recordAgentPoll();
+    let failed = false;
     try {
       // Resume from the durably committed cursor on first pump (covers a
       // successor that took the queue over from another silo).
@@ -186,11 +224,29 @@ export class QueuePullingAgent {
     } catch (err) {
       // A failed read/commit must not kill the poll loop (or escape as an
       // unhandled rejection); the next poll retries from the committed cursor.
-      this.onPumpError(err);
+      failed = true;
+      this.consecutiveFailures += 1;
+      this.logger.error("stream pump failed", {
+        error: err,
+        consecutiveFailures: this.consecutiveFailures,
+      });
+      this.onPumpError?.(err);
     } finally {
       this.pumping = false;
-      if (this.running) this.schedule(this.pollIntervalMs);
+      if (!failed) this.consecutiveFailures = 0;
+      if (this.running) this.schedule(failed ? this.backoffDelayMs() : this.pollIntervalMs);
     }
+  }
+
+  /**
+   * The wait after the latest of N consecutive failures: `pollIntervalMs`
+   * doubled per failure up to `maxBackoffMs`, with the upper half of each step
+   * jittered so agents that failed together do not retry together.
+   */
+  private backoffDelayMs(): number {
+    const exponent = Math.min(this.consecutiveFailures - 1, 30);
+    const ceiling = Math.min(this.maxBackoffMs, this.pollIntervalMs * 2 ** exponent);
+    return Math.round(ceiling / 2 + (ceiling / 2) * this.random());
   }
 
   /**
