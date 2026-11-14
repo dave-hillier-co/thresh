@@ -13,7 +13,7 @@ import {
   type Registrable,
 } from "@thresh/core/grain-registration";
 import type { KeyTypeOf } from "@thresh/core/key-kinds";
-import type { MembershipService } from "@thresh/core/membership";
+import { activeSilos, type MembershipService } from "@thresh/core/membership";
 import type { SiloAddress } from "@thresh/core/silo-address";
 import type { CompatibilityKind } from "@thresh/core/version-compatibility";
 import type { VersionSelectorKind } from "@thresh/core/version-selector";
@@ -1745,6 +1745,7 @@ export class SiloBuilder {
 
   build(): SiloHost {
     if (this.membership === undefined) throw new Error("silo: no membership configured");
+    const membership = this.membership;
     if (this.transport === undefined) throw new Error("silo: no transport configured");
     if (
       this.storageBackend?.kind === "memory" &&
