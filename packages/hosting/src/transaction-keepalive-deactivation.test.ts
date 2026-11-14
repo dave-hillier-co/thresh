@@ -3,7 +3,6 @@ import { grain, transactionalState } from "@thresh/core/decorators";
 import { Grain } from "@thresh/core/grain";
 import { GrainId } from "@thresh/core/grain-id";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import { IManagementGrain } from "@thresh/core/management-grain";
 import type { GrainType } from "@thresh/core/grain-type";
 import type { GrainKey } from "@thresh/core/key-kinds";
 import { SiloAddress } from "@thresh/core/silo-address";
@@ -103,23 +102,28 @@ describe("transactional keepalive lifecycle on grain deactivation (#23 follow-up
         ([, delay], index) => index >= callsBeforeActivation && delay === 1_000,
       );
       expect(confirmationCallIndex).toBeGreaterThanOrEqual(0);
-      const confirmationHandle = setTimerSpy.mock.results[confirmationCallIndex]!.value as unknown;
 
-      // An unresolved prepared record holds its activation in place (T6,
-      // Orleans `BlockDeactivation`): idle collection leaves it alone and the
-      // worker keeps running.
-      const management = silo.getGrain(IManagementGrain, 0n);
-      await management.forceActivationCollection({ ms: 0 });
-      expect(silo.isActive(accountId("a"))).toBe(true);
-      expect(clearTimerSpy).not.toHaveBeenCalledWith(confirmationHandle);
+      // An unresolved prepared record delays deactivation by at most five
+      // seconds (T6, Orleans `ActivationLifetime.OnStopAsync`): shutting the
+      // silo down waits out the bound on the silo's clock, then deactivates
+      // the activation — and the hosting wiring under test must stop its
+      // facet's confirmation worker there.
+      let stopped = false;
+      const stopping = silo.stop().then(() => (stopped = true));
+      for (let i = 0; i < 200 && !stopped; i++) {
+        time.advance(100);
+        await new Promise((r) => setTimeout(r, 0));
+      }
+      await stopping;
+      expect(silo.isActive(accountId("a"))).toBe(false);
 
-      // Shutting the silo down still deactivates it — the hosting wiring under
-      // test must stop its facet's confirmation worker there.
-      await silo.stop();
-
-      // The confirmation worker's own timer handle was cleared: it can never
-      // fire again, however far the clock moves.
-      expect(clearTimerSpy).toHaveBeenCalledWith(confirmationHandle);
+      // The confirmation worker can never fire again, however far the clock
+      // moves: nothing re-arms a timer from here on.
+      const armedAfterStop = setTimerSpy.mock.calls.length;
+      time.advance(600_000);
+      await new Promise((r) => setTimeout(r, 0));
+      expect(setTimerSpy.mock.calls.length).toBe(armedAfterStop);
+      expect(clearTimerSpy).toHaveBeenCalled();
     } finally {
       if (silo.isActive(accountId("a"))) await silo.stop();
     }

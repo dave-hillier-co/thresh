@@ -177,6 +177,15 @@ export interface DeactivationOutcome {
   migrated: boolean;
 }
 
+/**
+ * Orleans `ActivationLifetime.OnStopAsync`'s bound: a deactivation waits at
+ * most this long for a transactional resource's lock or undecided prepared
+ * record to clear, then proceeds.
+ */
+const DEACTIVATION_BLOCK_MAX_WAIT_MS = 5_000;
+/** How often that wait re-checks the block (Orleans polls every 10 ms). */
+const DEACTIVATION_BLOCK_POLL_MS = 10;
+
 /** Split a `namespace/key` string; with no slash the whole string is the namespace and key is empty. */
 function parseNamespaceKey(key: string): [namespace: string, key: string] {
   const slash = key.indexOf("/");
@@ -943,6 +952,7 @@ export class ActivationData implements GrainContext {
           : this.scheduleDeactivateHook(reason, signal);
         await this.awaitWithDeactivationTimeout(hook);
       }
+      await this.awaitDeactivationBlockCleared();
       if (
         this.migrationRequested &&
         this.steps?.migrate !== undefined &&
@@ -960,6 +970,35 @@ export class ActivationData implements GrainContext {
     }
     await this.finishDeactivation();
     return { migrated };
+  }
+
+  /**
+   * Orleans `ActivationLifetime.OnStopAsync`: while a transactional-state
+   * facet blocks deactivation (`isDeactivationBlocked`), wait for it to clear
+   * — polled every {@link DEACTIVATION_BLOCK_POLL_MS} on this activation's
+   * clock, as Orleans polls every 10 ms — but never longer than
+   * {@link DEACTIVATION_BLOCK_MAX_WAIT_MS}, then proceed regardless. Runs after
+   * `onDeactivate` and before the migration hand-off, where Orleans stops the
+   * grain lifecycle. Synchronous checks on each tick, so a fake clock drives
+   * it deterministically.
+   */
+  private awaitDeactivationBlockCleared(): Promise<void> {
+    if (!this.isDeactivationBlocked) return Promise.resolve();
+    const startedAtMs = this.time.now();
+    return new Promise<void>((resolve) => {
+      const poll = (): void => {
+        const waitedMs = this.time.now() - startedAtMs;
+        if (!this.isDeactivationBlocked || waitedMs >= DEACTIVATION_BLOCK_MAX_WAIT_MS) {
+          resolve();
+          return;
+        }
+        this.time.setTimer(
+          poll,
+          Math.min(DEACTIVATION_BLOCK_POLL_MS, DEACTIVATION_BLOCK_MAX_WAIT_MS - waitedMs),
+        );
+      };
+      poll();
+    });
   }
 
   /** Orleans `DisposeTimers`: no grain timer ticks once a deactivation has begun. */
@@ -1328,15 +1367,16 @@ export class ActivationData implements GrainContext {
     if (this.scheduler.busy) return false;
     const now = this.time.now();
     if (now < this.keepAliveUntilMs) return false;
-    if (this.isDeactivationBlocked) return false;
     if (this.deactivateRequested) return true;
     return now - this.lastActiveMs >= (ageLimitOverrideMs ?? this.collectionAgeMs);
   }
 
   /**
    * Whether a transactional-state facet holds a transaction lock or a prepared
-   * record whose outcome is unknown (Orleans `ActivationLifetime.BlockDeactivation`):
-   * the idle sweep and migration leave such an activation in place.
+   * record whose outcome is unknown (Orleans `ActivationLifetime.BlockDeactivation`).
+   * It does not keep the activation out of collection or migration: the
+   * deactivation pipeline waits a bounded time for it to clear
+   * (`awaitDeactivationBlockCleared`).
    */
   get isDeactivationBlocked(): boolean {
     const instance = this._instance as Grain | undefined;
