@@ -1115,6 +1115,10 @@ export class ActivationData implements GrainContext {
       this.finalized = true;
       this.state = "invalid";
       this.clearStuckDeactivationTimer();
+      // A timer registered after the pipeline began (by an `onActivate` still
+      // running when a silo stop arrived, or by the hook itself) never
+      // outlives the activation.
+      this.disposeTimers();
       const unregistering = this.runStep("unregister", this.steps?.unregister);
       const removing = this.runStep("remove", this.steps?.remove);
       await unregistering;
