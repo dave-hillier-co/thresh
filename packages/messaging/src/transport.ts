@@ -65,8 +65,32 @@ export const CONNECT_TIMEOUT_MS = 5_000;
  * which means an ESTABLISHED connection died mid-call and is deliberately not
  * resendable (issue #88).
  */
-export function connectFailure(to: SiloAddress, reason: string): RejectionError {
-  return new RejectionError(`unable to connect to ${to.toString()}: ${reason}`, "unknownTarget");
+export function connectFailure(
+  to: SiloAddress,
+  reason: string,
+  cause: ConnectFailureCause = "handshake",
+): ConnectFailure {
+  return new ConnectFailure(`unable to connect to ${to.toString()}: ${reason}`, cause);
+}
+
+/**
+ * Why a dial failed. `refused` means no process is serving at the address (no
+ * endpoint registered, ECONNREFUSED): the only case where the peer can be
+ * presumed to host nothing. `handshake` (the listener closed or rejected the
+ * connection, a cluster or protocol mismatch) and `timeout` say nothing about
+ * whether a live silo is behind the address, so callers that reason about what
+ * the peer holds must not treat them as `refused`.
+ */
+export type ConnectFailureCause = "refused" | "handshake" | "timeout";
+
+/** A `RejectionError` of kind `unknownTarget` carrying the `ConnectFailureCause`. */
+export class ConnectFailure extends RejectionError {
+  constructor(
+    message: string,
+    override readonly cause: ConnectFailureCause,
+  ) {
+    super(message, "unknownTarget");
+  }
 }
 
 /**
@@ -84,7 +108,7 @@ export function boundDial<T>(
   return new Promise<T>((resolve, reject) => {
     const timer = time.setTimer(() => {
       onTimeout?.();
-      reject(connectFailure(to, `timed out after ${timeoutMs}ms`));
+      reject(connectFailure(to, `timed out after ${timeoutMs}ms`, "timeout"));
     }, timeoutMs);
     dial.then(
       (value) => {

@@ -10,6 +10,7 @@ import { InProcessNetwork, InProcessTransport } from "@thresh/messaging/in-proce
 import {
   CONNECT_TIMEOUT_MS,
   PROTOCOL_VERSION,
+  type ConnectFailure,
   type ConnectionPreamble,
   type Transport,
 } from "@thresh/messaging/transport";
@@ -119,12 +120,14 @@ describe.each(harnesses)("%s: connect to an unreachable peer", (_name, make) => 
     const to = await harness.nothingListening();
     const err = await rejection(harness.transport.connect(to, preamble));
     expect(err.kind).toBe("unknownTarget");
+    expect((err as ConnectFailure).cause).toBe("refused");
   });
 
   it("rejects with the same typed rejection when the listener closes during the handshake", async () => {
     const to = await harness.closesDuringHandshake();
     const err = await rejection(harness.transport.connect(to, preamble));
     expect(err.kind).toBe("unknownTarget");
+    expect((err as ConnectFailure).cause).toBe("handshake");
   });
 
   it("rejects with the same typed rejection when the dial outlasts the timeout", async () => {
@@ -135,5 +138,6 @@ describe.each(harnesses)("%s: connect to an unreachable peer", (_name, make) => 
     const err = await dial;
     expect(err.kind).toBe("unknownTarget");
     expect(err.message).toMatch(/timed out/);
+    expect((err as ConnectFailure).cause).toBe("timeout");
   });
 });

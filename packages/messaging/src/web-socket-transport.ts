@@ -240,7 +240,14 @@ export class WebSocketTransport implements Transport {
     socket.on("error", (err: Error) => {
       // An 'error' is always followed by 'close', where teardown happens. Before
       // the ack it is also the reason the dial failed (ECONNREFUSED, ...).
-      if (!ackReceived) failHandshake?.(connectFailure(to, err.message));
+      if (!ackReceived)
+        failHandshake?.(
+          connectFailure(
+            to,
+            err.message,
+            (err as NodeJS.ErrnoException).code === "ECONNREFUSED" ? "refused" : "handshake",
+          ),
+        );
     });
     let resolveAck: (() => void) | undefined;
     const ack = new Promise<void>((resolve) => {

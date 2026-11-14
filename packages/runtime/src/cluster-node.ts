@@ -93,11 +93,12 @@ import {
 } from "@thresh/messaging/message";
 import { MessagePackSerializer } from "@thresh/messaging/msgpack-serializer";
 import type { Serializer } from "@thresh/messaging/serializer";
-import type {
-  Connection,
-  ConnectionPreamble,
-  Listener,
-  Transport,
+import {
+  ConnectFailure,
+  type Connection,
+  type ConnectionPreamble,
+  type Listener,
+  type Transport,
 } from "@thresh/messaging/transport";
 import { ActivationCollector } from "@thresh/runtime/activation-collector";
 import { ICancellationSourcesExtension } from "@thresh/runtime/cancellation-extension";
@@ -462,15 +463,14 @@ interface RecoveryReArm {
 }
 
 /**
- * Whether a send failed because the peer could not be reached: every transport
- * reports that as the one typed `unknownTarget` rejection (`connectFailure` in
- * `@thresh/messaging/transport`), whether nothing is listening, the listener
- * closed during the handshake, or the dial timed out. Used only by join
- * recovery, where it means the peer hosts nothing (see `pullFrom`); a call's
- * handling of these errors is unchanged.
+ * Whether a dial was refused outright: no process is serving at the address
+ * (`ConnectFailure` cause `refused`). Only then does join recovery read the
+ * peer as hosting nothing (see `pullFrom`). A dial timeout or a handshake
+ * close is the same `unknownTarget` rejection to a caller but says nothing
+ * about a live silo behind the address, so those fail closed and are retried.
  */
 function isNothingListening(err: unknown): boolean {
-  return err instanceof RejectionError && err.kind === "unknownTarget";
+  return err instanceof ConnectFailure && err.cause === "refused";
 }
 
 function directoryOpGrainId(op: DirectoryOp): GrainId {

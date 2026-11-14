@@ -129,7 +129,7 @@ export class InProcessTransport implements Transport {
     onMessage?: MessageHandler,
   ): Promise<Connection> {
     const endpoint = this.network.lookup(to);
-    if (endpoint === undefined) throw connectFailure(to, "no listener");
+    if (endpoint === undefined) throw connectFailure(to, "no listener", "refused");
     if (endpoint.clusterId !== preamble.clusterId) {
       throw connectFailure(to, `cluster mismatch: ${preamble.clusterId} != ${endpoint.clusterId}`);
     }
