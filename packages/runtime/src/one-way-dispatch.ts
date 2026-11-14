@@ -1,4 +1,4 @@
-import type { Logger } from "@thresh/core/logger";
+import { safeLogger, type Logger } from "@thresh/core/logger";
 import type { InvocationRequest } from "@thresh/core/request";
 
 /**
@@ -85,5 +85,5 @@ export function logOneWayFailure(
   method: string,
   error: unknown,
 ): void {
-  logger.warn("one-way grain call failed", { grainId, method, error });
+  safeLogger(logger).warn("one-way grain call failed", { grainId, method, error });
 }

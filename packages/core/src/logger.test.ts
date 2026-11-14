@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { defaultLogger, noopLogger } from "@thresh/core/logger";
+import { defaultLogger, noopLogger, safeLogger } from "@thresh/core/logger";
 
 describe("defaultLogger", () => {
   afterEach(() => vi.restoreAllMocks());
@@ -31,5 +31,40 @@ describe("defaultLogger", () => {
     noopLogger.error("e");
     expect(warn).not.toHaveBeenCalled();
     expect(error).not.toHaveBeenCalled();
+  });
+});
+
+describe("safeLogger", () => {
+  const throwing = {
+    debug() {
+      throw new Error("down");
+    },
+    info() {
+      throw new Error("down");
+    },
+    warn() {
+      throw new Error("down");
+    },
+    error() {
+      throw new Error("down");
+    },
+  };
+
+  it("swallows an exception from the wrapped logger at every level", () => {
+    const safe = safeLogger(throwing);
+    expect(() => {
+      safe.debug("d");
+      safe.info("i");
+      safe.warn("w");
+      safe.error("e");
+    }).not.toThrow();
+  });
+
+  it("forwards calls to a healthy logger and does not wrap twice", () => {
+    const seen: string[] = [];
+    const safe = safeLogger({ ...noopLogger, warn: (m) => void seen.push(m) });
+    safe.warn("hello");
+    expect(seen).toEqual(["hello"]);
+    expect(safeLogger(safe)).toBe(safe);
   });
 });

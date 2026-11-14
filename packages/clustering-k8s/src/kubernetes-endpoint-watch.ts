@@ -1,4 +1,4 @@
-import { defaultLogger, type Logger } from "@thresh/core/logger";
+import { defaultLogger, safeLogger, type Logger } from "@thresh/core/logger";
 import { systemTimeProvider, type TimeProvider } from "@thresh/core/time-provider";
 import type { EndpointSlice, EndpointSliceEndpoint } from "@thresh/clustering-k8s/endpoint-slice";
 import type { EndpointWatch } from "@thresh/clustering-k8s/kubernetes-membership";
@@ -152,7 +152,7 @@ export class KubernetesEndpointWatch implements EndpointWatch {
     this.reconnectMs = options.reconnectMs ?? 1000;
     this.maxReconnectMs = options.maxReconnectMs ?? 30_000;
     this.random = options.random ?? Math.random;
-    this.logger = options.logger ?? defaultLogger;
+    this.logger = safeLogger(options.logger ?? defaultLogger);
     this.loggerChosen = options.logger !== undefined;
     this.time = options.time ?? systemTimeProvider;
   }
@@ -162,7 +162,7 @@ export class KubernetesEndpointWatch implements EndpointWatch {
    * calls this so the watch reports through the silo's logger without the caller wiring it twice.
    */
   adoptLogger(logger: Logger): void {
-    if (!this.loggerChosen) this.logger = logger;
+    if (!this.loggerChosen) this.logger = safeLogger(logger);
   }
 
   /** The watch's connection state; see {@link EndpointWatchStatus}. */

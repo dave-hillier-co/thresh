@@ -304,3 +304,44 @@ describe("SelfProbeWorker", () => {
     });
   });
 });
+
+describe("SelfProbeWorker with a logger that throws", () => {
+  it("still flips dispatcherResponsive false, without an unhandled rejection", async () => {
+    const time = new FakeTimeProvider();
+    const health = new HealthCheck();
+    health.update({
+      started: true,
+      transportReady: true,
+      membershipHealthy: true,
+      draining: false,
+      overloaded: false,
+    });
+    const broken: Logger = {
+      debug() {},
+      info() {
+        throw new Error("logger down");
+      },
+      warn() {
+        throw new Error("logger down");
+      },
+      error() {},
+    };
+    const worker = new SelfProbeWorker({
+      probe: () => Promise.reject(new Error("boom")),
+      health,
+      time,
+      intervalMs: 1000,
+      timeoutMs: 100,
+      missedThreshold: 1,
+      logger: broken,
+    });
+    try {
+      worker.start();
+      time.advance(1000);
+      await flush();
+      expect(health.ready().checks.dispatcherResponsive).toBe(false);
+    } finally {
+      worker.stop();
+    }
+  });
+});

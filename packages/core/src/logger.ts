@@ -38,3 +38,32 @@ export const defaultLogger: Logger = {
     else console.error(`[thresh] ${message}`, fields);
   },
 };
+
+const wrapped = new WeakSet<Logger>();
+
+/**
+ * Wrap `logger` so an exception thrown by it (a broken sink, a closed transport) is swallowed.
+ * Diagnostics are best effort: a failing logger must never abort the work it was reporting on,
+ * such as the Kubernetes watch's reconnect or the self-probe's readiness flip, or replace the
+ * original error a hook threw. Wrapping an already-safe logger returns it unchanged.
+ */
+export function safeLogger(logger: Logger): Logger {
+  if (wrapped.has(logger)) return logger;
+  const guard =
+    (level: keyof Logger) =>
+    (message: string, fields?: LogFields): void => {
+      try {
+        logger[level](message, fields);
+      } catch {
+        // best effort
+      }
+    };
+  const safe: Logger = {
+    debug: guard("debug"),
+    info: guard("info"),
+    warn: guard("warn"),
+    error: guard("error"),
+  };
+  wrapped.add(safe);
+  return safe;
+}

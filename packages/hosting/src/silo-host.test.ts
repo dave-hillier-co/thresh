@@ -77,7 +77,10 @@ describe("SiloHost.stop ordering (issue #108)", () => {
 });
 
 describe("SiloHost hook failures are logged, not only thrown", () => {
-  function hostWith(hooks: Partial<Pick<SiloHostParts, "onStart" | "onStop" | "startupTasks">>): {
+  function hostWith(
+    hooks: Partial<Pick<SiloHostParts, "onStart" | "onStop" | "startupTasks">>,
+    throwingLogger = false,
+  ): {
     host: SiloHost;
     errors: Array<{ message: string; fields?: LogFields }>;
   } {
@@ -87,6 +90,7 @@ describe("SiloHost hook failures are logged, not only thrown", () => {
       info: () => undefined,
       warn: () => undefined,
       error: (message, fields) => {
+        if (throwingLogger) throw new Error("logger down");
         errors.push({ message, ...(fields !== undefined ? { fields } : {}) });
       },
     };
@@ -130,6 +134,20 @@ describe("SiloHost hook failures are logged, not only thrown", () => {
     await expect(host.start()).rejects.toThrow("connect failed");
     expect(errors.map((e) => e.message)).toEqual(["silo start hook failed"]);
     expect(errors[0]!.fields).toMatchObject({ phase: "onStart" });
+  });
+
+  it("surfaces the original start error when the logger throws", async () => {
+    const { host } = hostWith(
+      {
+        onStart: [
+          async () => {
+            throw new Error("connect failed");
+          },
+        ],
+      },
+      true,
+    );
+    await expect(host.start()).rejects.toThrow("connect failed");
   });
 
   it("logs a startup task that throws", async () => {

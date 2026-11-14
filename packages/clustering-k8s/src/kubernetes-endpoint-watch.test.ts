@@ -493,6 +493,42 @@ describe("KubernetesEndpointWatch failure reporting", () => {
     }
   });
 
+  it("keeps reconnecting when the logger itself throws", async () => {
+    vi.useFakeTimers();
+    try {
+      const source = new FakeSource();
+      const broken: Logger = {
+        debug() {},
+        info() {},
+        warn() {
+          throw new Error("logger down");
+        },
+        error() {},
+      };
+      const watch = new KubernetesEndpointWatch(source, {
+        reconnectMs: 10,
+        random: () => 0,
+        logger: broken,
+      });
+      await watch.start();
+      source.endWatch(new Error("boom"));
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(source.listCount).toBeGreaterThan(1);
+      expect(watch.status().connected).toBe(true);
+
+      // A relist failure logged through the broken logger still reschedules.
+      source.listError = new Error("refused");
+      source.endWatch(new Error("boom again"));
+      await vi.advanceTimersByTimeAsync(20);
+      source.listError = undefined;
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(watch.status().connected).toBe(true);
+      watch.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("reports when it last synced, on the injected clock", async () => {
     const time = new FakeTimeProvider();
     const source = new FakeSource();

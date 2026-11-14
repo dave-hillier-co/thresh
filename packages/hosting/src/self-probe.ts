@@ -22,7 +22,7 @@
  * `TimeProvider.setTimer`, so the whole loop is deterministic under a fake
  * clock in tests, and a failed tick never kills the loop.
  */
-import { defaultLogger, type Logger } from "@thresh/core/logger";
+import { defaultLogger, safeLogger, type Logger } from "@thresh/core/logger";
 import type { HealthCheck } from "@thresh/hosting/health-check";
 import type { TimeProvider, TimerHandle } from "@thresh/core/time-provider";
 import { withCallOptions } from "@thresh/runtime/invocation-context";
@@ -67,7 +67,7 @@ export class SelfProbeWorker {
     this.intervalMs = options.intervalMs ?? DEFAULT_INTERVAL_MS;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.missedThreshold = options.missedThreshold ?? DEFAULT_MISSED_THRESHOLD;
-    this.logger = options.logger ?? defaultLogger;
+    this.logger = safeLogger(options.logger ?? defaultLogger);
   }
 
   /** Begin probing, one interval from now. */

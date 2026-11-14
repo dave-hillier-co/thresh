@@ -51,7 +51,7 @@ import {
   bindTransactionalStates,
   unbindTransactionalStates,
 } from "@thresh/transactions/transactional-state-activator";
-import { defaultLogger, type Logger } from "@thresh/core/logger";
+import { defaultLogger, safeLogger, type Logger } from "@thresh/core/logger";
 import { setupTracePropagation, tracingFilters } from "@thresh/observability/tracing";
 import { metricsFilters } from "@thresh/observability/metrics";
 import type { MembershipWatchSource } from "@thresh/observability/membership-metrics";
@@ -1673,7 +1673,7 @@ export class SiloBuilder {
     this.refuseSingleSiloSettingsOnACluster();
     const classSpecificCollectionAgeSeconds = this.resolvedClassSpecificCollectionAges;
     validateClassSpecificCollectionAges(classSpecificCollectionAgeSeconds);
-    const logger = this.logger ?? defaultLogger;
+    const logger = safeLogger(this.logger ?? defaultLogger);
     const health = new HealthCheck({
       ...(this.config.time !== undefined ? { time: this.config.time } : {}),
       ...(this.config.selfProbe?.livenessFailureMs !== undefined
