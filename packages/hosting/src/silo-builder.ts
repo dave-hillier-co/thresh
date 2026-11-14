@@ -1414,6 +1414,15 @@ export class SiloBuilder {
     return this;
   }
 
+  /**
+   * Use a transport built elsewhere — typically one of the above wrapped in a decorator, such
+   * as `FaultInjectingTransport` for fault-injection tests.
+   */
+  useTransport(transport: Transport): this {
+    this.transport = transport;
+    return this;
+  }
+
   /** MessagePack is the default serializer; this is here for symmetry with docs/11. */
   useMessagePackSerialization(): this {
     return this;

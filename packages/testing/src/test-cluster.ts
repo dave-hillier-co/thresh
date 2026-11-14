@@ -10,6 +10,10 @@ import type { MembershipService, MembershipSnapshot } from "@thresh/core/members
 import { SiloAddress } from "@thresh/core/silo-address";
 import type { StreamProvider } from "@thresh/core/stream";
 import type { TimeProvider } from "@thresh/core/time-provider";
+import {
+  FaultInjectingTransport,
+  NetworkFaults,
+} from "@thresh/messaging/fault-injecting-transport";
 import { InProcessNetwork, InProcessTransport } from "@thresh/messaging/in-process-transport";
 import { ICancellationSourcesExtension } from "@thresh/runtime/cancellation-extension";
 import { MemoryJobShardStore } from "@thresh/durable-jobs/memory-job-shard-store";
@@ -164,6 +168,12 @@ export interface TestClusterOptions {
    * tests that need to observe traffic on the wire.
    */
   network?: InProcessNetwork;
+  /**
+   * The faults every silo's transport injects (see `TestCluster.faults`). Defaults to a fresh
+   * `NetworkFaults` on the cluster's clock with nothing set; pass one to arm a fault before the
+   * cluster starts, e.g. a refused connect that must hold from the first dial.
+   */
+  faults?: NetworkFaults;
 }
 
 export interface TestSiloHandle {
@@ -207,10 +217,19 @@ export class TestCluster {
   // The cluster client, connected on first access — see `client`.
   private connectedClient: Promise<ClientNode> | undefined;
 
+  /**
+   * Network faults between this cluster's silos: drop, delay, refuse connects, partition and
+   * heal, by direct call or explicit schedule. Every silo's transport is a
+   * `FaultInjectingTransport` over this one object, applying faults to what that silo sends.
+   */
+  readonly faults: NetworkFaults;
+
   private constructor(
     private readonly options: TestClusterOptions,
     readonly network: InProcessNetwork,
-  ) {}
+  ) {
+    this.faults = options.faults ?? new NetworkFaults(options.time);
+  }
 
   static async start(options: TestClusterOptions = {}): Promise<TestCluster> {
     const cluster = new TestCluster(options, options.network ?? new InProcessNetwork());
@@ -482,7 +501,12 @@ export class TestCluster {
         : {}),
     })
       .useMembership(membership)
-      .useInProcessTransport(this.network)
+      .useTransport(
+        new FaultInjectingTransport(
+          new InProcessTransport(this.network, this.clusterId),
+          this.faults,
+        ),
+      )
       .useMemoryStreams("default", undefined, this.streamProvider("default"))
       .useBroadcastChannels()
       .useMemoryDurableJobs(this.jobShardStore)
