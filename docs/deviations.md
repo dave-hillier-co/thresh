@@ -21,6 +21,11 @@ summary of the deliberate deviations. [`EPICS.md`](../EPICS.md) tracks what is s
   `defineGrainInterface<ICounter, "integer">("ICounter")` — and it determines the type of the `key`
   argument at every `getGrain`. The legacy `GrainWith*Key` phantom markers still work and still imply
   the same kind, but they are deprecated; new code states the kind.
+  As in Orleans, a grain id is its type plus the key text: the kind is not part of identity, and
+  the grain type decides how the text is read. A kind declared as a value (`{ key: "integer" }`) is
+  enforced by `getGrain` and used to read the key of an implicitly subscribed grain; a kind carried
+  only by a phantom marker or type argument is erased at runtime, so such a grain sees its key as
+  whichever kind the first arriving id was built with.
 - **Serialization is registered at runtime** (`@serializable`) rather than source-generated;
   MessagePack is the default wire format.
 - **Transport is WebSocket over HTTP**, behind an abstraction.
