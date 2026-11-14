@@ -472,7 +472,8 @@ function grainIdFields(id: GrainId): Record<string, unknown> {
 function grainIdFrom(obj: Record<string, unknown>): GrainId {
   return GrainId.parse(
     `${obj.grainType as string}/${obj.key as string}`,
-    obj.keyKind as GrainKeyKind,
+    // A wire id from before the kind left identity may carry none; the text alone identifies.
+    obj.keyKind as GrainKeyKind | undefined,
   );
 }
 
