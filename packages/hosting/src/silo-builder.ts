@@ -213,8 +213,9 @@ export interface SiloConfig {
   snapshotThreshold?: number;
   /**
    * Whether a `JournaledGrain` keeps its confirmed events across a journal snapshot (default
-   * `true`: snapshots speed activation but never discard event history). `false` is the explicit
-   * retention choice to let a snapshot replace the events below it.
+   * `false`: a snapshot replaces the events below it, as Orleans' state-storage provider). `true`
+   * opts in to whole-log retention, as Orleans' log-storage provider; every compaction then
+   * rewrites the whole retained history.
    */
   retainJournaledEvents?: boolean;
   /**

@@ -21,11 +21,12 @@ const MAX_APPEND_ATTEMPTS = 5;
 
 export interface LogViewAdaptorOptions {
   /**
-   * Keep the confirmed event history across compaction (default `true`), as Orleans' log-storage
-   * consistency provider keeps the whole log: a snapshot makes activation fast but the grain's
-   * events stay retrievable. `false` is the explicit retention choice to let a snapshot replace the
-   * events below it, after which `retrieveLogSegment` throws for a range that starts below the
-   * snapshot's version.
+   * Keep the confirmed event history across compaction (default `false`). The default is
+   * snapshot-plus-tail, as Orleans' state-storage provider: a compaction truncates the log and the
+   * activation holds only the events since the snapshot, so `retrieveLogSegment` throws for a range
+   * that starts below the snapshot's version. `true` is the opt-in to whole-log retention, as
+   * Orleans' log-storage provider; until the storage seam can snapshot without truncating, every
+   * compaction then rewrites the whole retained history and the activation holds it in memory.
    */
   retainEvents?: boolean;
 }
@@ -75,7 +76,7 @@ export class LogViewAdaptorImpl<TState, TEvent>
     private readonly manager: StateMachineManager,
     options: LogViewAdaptorOptions = {},
   ) {
-    this.retainEvents = options.retainEvents ?? true;
+    this.retainEvents = options.retainEvents ?? false;
     this.confirmed = initial();
     this.tentative = this.confirmed;
   }
@@ -261,6 +262,12 @@ export class LogViewAdaptorImpl<TState, TEvent>
     // a requested range is translated into an offset into it.
     const baseVersion = this.version - this.confirmedEvents.length;
     if (fromVersion < baseVersion || toVersion < fromVersion || toVersion > this.version) {
+      if (fromVersion < baseVersion && toVersion >= fromVersion && toVersion <= this.version) {
+        throw new Error(
+          `events below version ${baseVersion} were truncated by compaction; ` +
+            `enable the retainEvents option (silo config retainJournaledEvents) to keep the whole history`,
+        );
+      }
       throw new Error(`invalid range [${fromVersion}, ${toVersion}]`);
     }
     return this.confirmedEvents.slice(fromVersion - baseVersion, toVersion - baseVersion);
