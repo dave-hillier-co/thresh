@@ -194,4 +194,4 @@ export abstract class JournaledGrain<TState, TEvent> extends Grain {
   }
 }
 
-markFrameworkGrainBase(JournaledGrain);
+markFrameworkGrainBase(JournaledGrain, ["initialState", "transitionState"]);

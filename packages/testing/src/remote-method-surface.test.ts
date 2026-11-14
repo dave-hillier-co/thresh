@@ -161,6 +161,8 @@ describe("remote method surface", () => {
           "confirmEvents",
           "installLogViewAdaptor",
           "retrieveConfirmedEvents",
+          "initialState",
+          "transitionState",
         ]) {
           await expectNoMethod(loose[name]!(1));
         }
