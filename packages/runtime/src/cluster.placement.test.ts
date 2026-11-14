@@ -116,6 +116,10 @@ describe("metadata-aware placement across a cluster", () => {
       await cluster.silos[0]!.host.getGrain(ISeed, "b").ping();
       await cluster.silos[0]!.host.getGrain(ISeed, "c").ping();
 
+      // Peers that have pushed no statistics are not scored, so let every silo push once
+      // (an unlatch forces an immediate push, as Orleans' test hooks do).
+      for (const silo of cluster.silos) await silo.host.loadShedding.unlatchCpuUsage();
+
       // A resource-optimized grain placed from the loaded node avoids silo-0.
       await cluster.silos[0]!.host.getGrain(IBalanced, "x").ping();
       const hosts = hostsOf(cluster, new GrainId("Balanced", "x"));

@@ -101,10 +101,7 @@ import type {
 import { ActivationCollector } from "@thresh/runtime/activation-collector";
 import { ICancellationSourcesExtension } from "@thresh/runtime/cancellation-extension";
 import { Catalog, type GrainActivator, type RegisteredGrain } from "@thresh/runtime/catalog";
-import {
-  withFilterPlacementCandidatesSpan,
-  withPlaceGrainSpan,
-} from "@thresh/observability/activation-tracing";
+import { withPlaceGrainSpan } from "@thresh/observability/activation-tracing";
 import { ClientDirectory } from "@thresh/runtime/client-directory";
 import type { ActivationData, ActivationOptions } from "@thresh/runtime/activation";
 import { DistributedDispatcher } from "@thresh/runtime/distributed-dispatcher";
@@ -113,7 +110,8 @@ import { GrainFactory } from "@thresh/runtime/grain-factory";
 import type { GrainServiceRegistry } from "@thresh/runtime/grain-service";
 import { createManagementGrainType } from "@thresh/runtime/management-grain";
 import { createSiloProbeGrainType } from "@thresh/runtime/silo-probe-grain";
-import { chooseMigrationTarget } from "@thresh/runtime/placement/choose-migration-target";
+import { isMigratable } from "@thresh/runtime/placement/grain-migratability";
+import { selectPlacementTarget } from "@thresh/runtime/placement/select-placement-target";
 import {
   placementFiltersFor,
   placementStrategyFor,
@@ -126,6 +124,7 @@ import { RandomPlacement } from "@thresh/runtime/placement/random-placement";
 import type {
   PlacementContext,
   PlacementStrategy,
+  SiloResourceStats,
 } from "@thresh/runtime/placement/placement-strategy";
 import { filterByVersion } from "@thresh/runtime/placement/version-placement-filter";
 import {
@@ -152,8 +151,10 @@ import {
 import { TransactionAgent } from "@thresh/runtime/transaction-agent";
 import {
   DEFAULT_LOAD_SHEDDING_OPTIONS,
+  NodeEnvironmentStatisticsProvider,
   OverloadDetector,
   TestHooksEnvironmentStatisticsProvider,
+  type EnvironmentStatisticsProvider,
   type LoadSheddingOptions,
   type SiloLoadSheddingTestHooks,
 } from "@thresh/runtime/load-shedding";
@@ -361,6 +362,19 @@ export interface ClusterNodeOptions {
    */
   loadShedding?: Partial<LoadSheddingOptions>;
   /**
+   * This silo's environment-statistics source (Orleans `IEnvironmentStatisticsProvider`): the
+   * CPU and memory readings load shedding, overloaded-silo exclusion and resource-optimized
+   * placement act on, and that the load snapshot sent to peers carries. Defaults to
+   * `NodeEnvironmentStatisticsProvider`.
+   */
+  environmentStatistics?: EnvironmentStatisticsProvider;
+  /**
+   * Enables the load-shedding test hooks (`siloTestHooks()`, and through them
+   * `GrainRuntime.latchCpuUsage` and friends). Off by default: on a silo built without it every
+   * latch method throws, so an application grain cannot force its silo into load shedding.
+   */
+  testHooks?: boolean;
+  /**
    * Enables the activation repartitioner (Orleans `AddActivationRepartitioner`):
    * a communication-graph-driven protocol that moves grain activations near
    * their most frequent communication partners. Only when set does the
@@ -427,6 +441,19 @@ type DirectoryOp =
   | { kind: "recoverAck"; addrs: GrainAddress[]; version: number };
 
 /** Stand-in target grain for batch ops with no single grain (fills the envelope only). */
+/**
+ * The load snapshot a silo pushes to its peers (Orleans `SiloRuntimeStatistics`). The readings
+ * are optional on the wire so a snapshot from a silo that predates them still decodes.
+ */
+interface LoadSnapshot {
+  activationCount: number;
+  isOverloaded: boolean;
+  cpuUsagePercentage?: number;
+  memoryUsageBytes?: number;
+  availableMemoryBytes?: number;
+  maximumAvailableMemoryBytes?: number;
+}
+
 const DIRECTORY_OP_TARGET = new GrainId("$directory", "op");
 
 /** Where a grain's directory entry lived before a recovery pass: the source that can serve it. */
@@ -466,6 +493,25 @@ interface RecoveryReArm {
  * TCP connect. Used only by join recovery, where it means the peer hosts nothing
  * (see `pullFrom`); a call's handling of these errors is unchanged.
  */
+function resourceStatsOf(snapshot: LoadSnapshot): SiloResourceStats {
+  return {
+    activationCount: snapshot.activationCount,
+    isOverloaded: snapshot.isOverloaded,
+    ...(snapshot.cpuUsagePercentage !== undefined
+      ? { cpuUsagePercentage: snapshot.cpuUsagePercentage }
+      : {}),
+    ...(snapshot.memoryUsageBytes !== undefined
+      ? { memoryUsageBytes: snapshot.memoryUsageBytes }
+      : {}),
+    ...(snapshot.availableMemoryBytes !== undefined
+      ? { availableMemoryBytes: snapshot.availableMemoryBytes }
+      : {}),
+    ...(snapshot.maximumAvailableMemoryBytes !== undefined
+      ? { maximumAvailableMemoryBytes: snapshot.maximumAvailableMemoryBytes }
+      : {}),
+  };
+}
+
 function isNothingListening(err: unknown): boolean {
   if (err instanceof RejectionError) return err.kind === "unknownTarget";
   return (err as { code?: unknown } | undefined)?.code === "ECONNREFUSED";
@@ -586,8 +632,12 @@ export class ClusterNode {
   private readonly clientConnectionTags = new WeakMap<Connection, string>();
   private nextClientConnectionTag = 0;
   private readonly clientDisconnectedSince = new Map<string, number>();
-  /** This silo's (test-hooks-latched) CPU-usage source (Orleans `TestHooksEnvironmentStatisticsProvider`). */
-  private readonly environmentStatistics = new TestHooksEnvironmentStatisticsProvider();
+  /**
+   * This silo's environment-statistics source (Orleans `IEnvironmentStatisticsProvider`),
+   * wrapped so a silo built with test hooks can latch the CPU reading
+   * (`TestHooksEnvironmentStatisticsProvider`).
+   */
+  private readonly environmentStatistics: TestHooksEnvironmentStatisticsProvider;
   /** Decides whether this silo is currently shedding load (Orleans `OverloadDetector`). */
   private readonly overloadDetector: OverloadDetector;
   /**
@@ -599,10 +649,7 @@ export class ClusterNode {
    * test-only `PropagateStatisticsToCluster`/`ForceRuntimeStatisticsCollection`)
    * so tests see a change without waiting for the next interval.
    */
-  private readonly remoteLoadStats = new Map<
-    string,
-    { activationCount: number; isOverloaded: boolean }
-  >();
+  private readonly remoteLoadStats = new Map<string, LoadSnapshot>();
   /**
    * In-flight durable-job deliveries keyed by RunId (Orleans
    * `DurableJobReceiverExtension._runningJobs`): coalesces concurrent
@@ -700,6 +747,9 @@ export class ClusterNode {
     this.clientDropTimeoutMs = options.clientDropTimeoutMs ?? DEFAULT_CLIENT_DROP_TIMEOUT_MS;
     this.clientDirectoryRefreshMs =
       options.clientDirectoryRefreshMs ?? DEFAULT_CLIENT_DIRECTORY_REFRESH_MS;
+    this.environmentStatistics = new TestHooksEnvironmentStatisticsProvider(
+      options.environmentStatistics ?? new NodeEnvironmentStatisticsProvider(),
+    );
     this.overloadDetector = new OverloadDetector(this.environmentStatistics, {
       ...DEFAULT_LOAD_SHEDDING_OPTIONS,
       ...options.loadShedding,
@@ -969,15 +1019,28 @@ export class ClusterNode {
    * (via `GrainRuntime`, see `grain-runtime-impl.ts`).
    */
   siloTestHooks(): SiloLoadSheddingTestHooks {
+    // Test-only: a silo not built with `testHooks` refuses every latch, so an application
+    // grain reaching these through `GrainRuntime` cannot take its silo out of client traffic.
+    const requireTestHooks = (): void => {
+      if (this.options.testHooks !== true) {
+        throw new Error(
+          "load-shedding test hooks are not enabled on this silo: build it with test hooks " +
+            "enabled (`testHooks` on the silo config, as a TestCluster does) to latch statistics",
+        );
+      }
+    };
     return {
       enableOverloadDetection: (enabled) => {
+        requireTestHooks();
         this.overloadDetector.enabled = enabled;
       },
       latchCpuUsage: (value) => {
+        requireTestHooks();
         this.environmentStatistics.latchCpuUsage(value);
         return this.publishLoadStats();
       },
       unlatchCpuUsage: () => {
+        requireTestHooks();
         this.environmentStatistics.unlatchHardwareStatistics();
         return this.publishLoadStats();
       },
@@ -985,14 +1048,27 @@ export class ClusterNode {
       // there is no separate boolean the detector consults (Orleans mirrors
       // this: `LatchOverloaded` also just latches CPU to `cpuThreshold + 1`).
       latchOverloaded: () => {
+        requireTestHooks();
         this.environmentStatistics.latchCpuUsage(this.loadSheddingCpuThreshold() + 1);
         return this.publishLoadStats();
       },
       unlatchOverloaded: () => {
+        requireTestHooks();
         this.environmentStatistics.unlatchHardwareStatistics();
         return this.publishLoadStats();
       },
     };
+  }
+
+  /** Whether this silo is currently shedding load (Orleans `IOverloadDetector.IsOverloaded`). */
+  isOverloaded(): boolean {
+    return this.overloadDetector.isOverloaded;
+  }
+
+  /** A peer's last-pushed resource readings, or `undefined` if it has pushed none. */
+  peerResourceStats(silo: SiloAddress): SiloResourceStats | undefined {
+    const snapshot = this.remoteLoadStats.get(silo.ringKey);
+    return snapshot === undefined ? undefined : resourceStatsOf(snapshot);
   }
 
   private loadSheddingCpuThreshold(): number {
@@ -1417,6 +1493,9 @@ export class ClusterNode {
     const newRing = this.buildRing();
     const live = new Set(activeSilos(snapshot).map((s) => s.ringKey));
     const present = new Set(memberSilos(snapshot).map((s) => s.ringKey));
+    for (const key of this.remoteLoadStats.keys()) {
+      if (!present.has(key)) this.remoteLoadStats.delete(key);
+    }
     // Silos newly active in this view: they never received this silo's
     // `broadcastClientGossip` from before they joined, so republish this
     // silo's clients to them now instead of leaving them to learn of it only
@@ -1973,9 +2052,9 @@ export class ClusterNode {
    * peer which has never pushed one still reports zero activations — the
    * pre-existing "unknown load" default, not a claim that it is idle. Peers
    * push it every `loadPublishIntervalMs` (`scheduleLoadPublish`), and the
-   * load-shedding test hooks force an immediate push. `resourceStats` stays
-   * local-only: it carries nothing the activation count does not already
-   * (there is no CPU or memory signal in the snapshot yet).
+   * load-shedding test hooks force an immediate push. `resourceStats` adds the
+   * snapshot's CPU and memory readings (live for the local silo) for
+   * `ResourceOptimizedPlacement`; a peer that has pushed nothing has none.
    */
   private placementContext(): Omit<PlacementContext, "localSilo"> {
     const snapshot = this.options.membership.current();
@@ -1988,8 +2067,13 @@ export class ClusterNode {
           ? this.catalog.count()
           : (this.remoteLoadStats.get(silo.ringKey)?.activationCount ?? 0),
       siloMetadata: (silo) => (isLocal(silo) ? localMeta : byKey.get(silo.ringKey)?.metadata),
-      resourceStats: (silo) =>
-        isLocal(silo) ? { activationCount: this.catalog.count() } : undefined,
+      resourceStats: (silo) => {
+        if (!isLocal(silo)) {
+          const pushed = this.remoteLoadStats.get(silo.ringKey);
+          return pushed === undefined ? undefined : resourceStatsOf(pushed);
+        }
+        return resourceStatsOf(this.loadSnapshot());
+      },
       isOverloaded: (silo) =>
         isLocal(silo)
           ? this.overloadDetector.isOverloaded
@@ -2036,43 +2120,68 @@ export class ClusterNode {
    */
   private async migrateActivation(activation: ActivationData): Promise<boolean> {
     try {
-      // Mirrors `DistributedDispatcher.placeAndInvoke`: the whole target
-      // decision (filtering + strategy/directed choice) runs inside a "place
-      // grain" span (Orleans `PlaceGrainAsync`, invoked from the migration
-      // path as well as fresh activation), with one `FilterPlacementCandidates`
-      // child span per stacked filter.
-      return await withPlaceGrainSpan(async () => {
-        const context: PlacementContext = {
-          localSilo: this.options.local,
-          activationCount: (silo) => (silo.equals(this.options.local) ? this.catalog.count() : 0),
-          random: this.options.random ?? Math.random,
-        };
-        let candidates: readonly SiloAddress[] = activeSilos(this.options.membership.current());
-        for (const filter of this.filtersFor(activation.id.type)) {
-          candidates = withFilterPlacementCandidatesSpan(
-            { filterType: filter.constructor.name },
-            () => filter.filter(activation.id.type, candidates, context),
-          );
-        }
-        // An explicit `migrationTarget` (set via `migrateOnIdle(target)`) wins;
-        // otherwise fall back to the caller's ambient placement hint captured
-        // at `requestMigration` time, resolved against the live candidates now.
-        const directed =
-          activation.migrationTarget ??
-          resolvePlacementHintValue(activation.migrationHint, candidates);
-        const target = chooseMigrationTarget(
-          activation.id.type,
-          directed,
-          candidates,
-          this.placementFor(activation.id.type),
-          context,
-        );
-        if (target === undefined) return false;
-        return this.migrateActivationTo(activation, target);
-      });
+      // An explicit `migrationTarget` (set via `migrateOnIdle(target)`) wins;
+      // otherwise fall back to the caller's ambient placement hint captured
+      // at `requestMigration` time, resolved against the live candidates now.
+      const target = await this.selectMigrationTarget(activation.id, (candidates) =>
+        activation.migrationTarget !== undefined
+          ? candidates.find((c) => c.equals(activation.migrationTarget!))
+          : resolvePlacementHintValue(activation.migrationHint, candidates),
+      );
+      if (target === undefined) return false;
+      return await this.migrateActivationTo(activation, target);
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Choose where a migrating activation goes through the same pipeline a new activation is
+   * placed by (`selectPlacementTarget`, Orleans `PlacementService`): the same context, filters,
+   * version filter and hint handling, with this silo excluded. A `hint` (the mover's chosen
+   * target) is honoured only if it survives the filters; otherwise the grain's strategy chooses.
+   * `undefined` means nowhere to go.
+   */
+  private selectMigrationTarget(
+    grainId: GrainId,
+    hint: (candidates: readonly SiloAddress[]) => SiloAddress | undefined,
+  ): Promise<SiloAddress | undefined> {
+    const grainType = grainId.type;
+    return withPlaceGrainSpan(() =>
+      selectPlacementTarget({
+        grainType,
+        candidates: activeSilos(this.options.membership.current()),
+        exclude: [this.options.local],
+        filters: this.filtersFor(grainType),
+        strategy: this.placementFor(grainType),
+        context: { localSilo: this.options.local, ...this.placementContext(), grainId },
+        versionFilter: (candidates) => this.migrationVersionFilter(grainType, candidates),
+        hint,
+      }),
+    );
+  }
+
+  /**
+   * The version-aware pre-filter for a migration, which has no request to read an interface
+   * from: narrow by each interface of the grain's type in turn, keeping the previous set when an
+   * interface leaves none (best-effort, as for a call).
+   */
+  private async migrationVersionFilter(
+    grainType: GrainType,
+    candidates: readonly SiloAddress[],
+  ): Promise<readonly SiloAddress[]> {
+    if (!this.versioningActive()) return candidates;
+    let narrowed = candidates;
+    for (const [interfaceId, v] of this.localVersions) {
+      if (v.grainType !== grainType) continue;
+      const compatible = await filterByVersion(interfaceId, v.version, narrowed, {
+        director: this.director,
+        selector: this.selector,
+        getManifest: (silo) => this.getManifest(silo),
+      });
+      if (compatible.length > 0) narrowed = compatible;
+    }
+    return narrowed;
   }
 
   /**
@@ -2839,7 +2948,7 @@ export class ClusterNode {
   }
 
   /**
-   * Push this silo's current load snapshot (activation count + overloaded flag)
+   * Push this silo's current load snapshot (activation count, overloaded flag, CPU and memory readings)
    * to every other active silo, as `system: "loadstats"` requests, and wait for
    * all of them to land — Orleans' `DeploymentLoadPublisher.PublishStatistics`.
    * Called periodically by `scheduleLoadPublish` and, in tests, forced
@@ -2854,19 +2963,26 @@ export class ClusterNode {
     const peers = activeSilos(this.options.membership.current()).filter(
       (s) => !s.equals(this.options.local),
     );
-    const stats = {
-      activationCount: this.catalog.count(),
-      isOverloaded: this.overloadDetector.isOverloaded,
-    };
+    const stats = this.loadSnapshot();
     await Promise.all(
       peers.map((peer) => this.sendLoadStatsPush(peer, stats).catch(() => undefined)),
     );
   }
 
-  private async sendLoadStatsPush(
-    silo: SiloAddress,
-    stats: { activationCount: number; isOverloaded: boolean },
-  ): Promise<void> {
+  /** This silo's current load snapshot: activation count, overload flag and environment readings. */
+  private loadSnapshot(): LoadSnapshot {
+    const environment = this.environmentStatistics.getEnvironmentStatistics();
+    return {
+      activationCount: this.catalog.count(),
+      isOverloaded: this.overloadDetector.isOverloaded,
+      cpuUsagePercentage: environment.cpuUsagePercentage,
+      memoryUsageBytes: environment.memoryUsageBytes,
+      availableMemoryBytes: environment.availableMemoryBytes,
+      maximumAvailableMemoryBytes: environment.maximumAvailableMemoryBytes,
+    };
+  }
+
+  private async sendLoadStatsPush(silo: SiloAddress, stats: LoadSnapshot): Promise<void> {
     await this.sendSystemMessage(
       silo,
       "loadstats",
@@ -2878,9 +2994,7 @@ export class ClusterNode {
   private async handleLoadStatsRequest(message: Message): Promise<void> {
     const replyTo = message.sendingSilo;
     if (replyTo === undefined) return;
-    const stats = this.serializer.deserialize<{ activationCount: number; isOverloaded: boolean }>(
-      message.body,
-    );
+    const stats = this.serializer.deserialize<LoadSnapshot>(message.body);
     this.remoteLoadStats.set(replyTo.ringKey, stats);
     await this.reply(
       replyTo,
@@ -3317,8 +3431,7 @@ export class ClusterNode {
 
   /** Whether `grainId`'s type may be moved by `kind` (Orleans `GrainMigratabilityChecker`). */
   private isMigratableBy(grainId: GrainId, kind: "rebalancer" | "repartitioner"): boolean {
-    const immovable = this.grainTypes.get(grainId.type)?.metadata.options.immovable;
-    return immovable !== "any" && immovable !== kind;
+    return isMigratable(grainId.type, kind, this.grainTypes.get(grainId.type)?.metadata);
   }
 
   /**
@@ -3353,9 +3466,21 @@ export class ClusterNode {
     target: SiloAddress,
     description: string,
   ): Promise<boolean> {
+    // `target` is the mover's choice, passed to the shared pipeline as a hint (Orleans
+    // `Migrate(..., hint)`): the filters can still refuse it, and then placement chooses. With
+    // nowhere to go the activation is left running, untouched.
+    let chosen: SiloAddress | undefined;
+    try {
+      chosen = await this.selectMigrationTarget(activation.id, (candidates) =>
+        candidates.find((c) => c.equals(target)),
+      );
+    } catch {
+      return false;
+    }
+    if (chosen === undefined) return false;
     const { migrated } = await activation.deactivate(
       { code: "migrating", description },
-      { migrateTo: target },
+      { migrateTo: chosen },
     );
     return migrated;
   }

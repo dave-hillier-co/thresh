@@ -119,7 +119,10 @@ import { ClusterNode } from "@thresh/runtime/cluster-node";
 import type { ActivationOptions } from "@thresh/runtime/activation";
 import type { GrainActivator } from "@thresh/runtime/catalog";
 import { GrainServiceRegistry, type GrainService } from "@thresh/runtime/grain-service";
-import type { LoadSheddingOptions } from "@thresh/runtime/load-shedding";
+import type {
+  EnvironmentStatisticsProvider,
+  LoadSheddingOptions,
+} from "@thresh/runtime/load-shedding";
 import { StaticMembershipService } from "@thresh/runtime/static-membership";
 import { ActivationRebalancerWorker } from "@thresh/runtime/placement/rebalancing/rebalancer-worker";
 import { ISiloProbe } from "@thresh/core/silo-probe-grain";
@@ -237,6 +240,19 @@ export interface SiloConfig {
    * to shedding disabled; see `ClusterNodeOptions.loadShedding`.
    */
   loadShedding?: Partial<LoadSheddingOptions>;
+  /**
+   * The silo's CPU and memory source (Orleans `IEnvironmentStatisticsProvider`), read by load
+   * shedding, overloaded-silo exclusion and resource-optimized placement, and carried in the load
+   * snapshot sent to peers. Defaults to a Node provider (event-loop utilisation and process/OS
+   * memory); see `ClusterNodeOptions.environmentStatistics`.
+   */
+  environmentStatistics?: EnvironmentStatisticsProvider;
+  /**
+   * Enables the load-shedding test hooks (`GrainRuntime.latchCpuUsage` and friends, and
+   * `SiloHost.loadShedding`). Off by default, and a `TestCluster` turns it on: without it every
+   * latch method throws; see `ClusterNodeOptions.testHooks`.
+   */
+  testHooks?: boolean;
   /**
    * Per-activation turn-scheduler back-pressure/watchdog config (Orleans
    * `SchedulingOptions`). Any field left unset falls back to this builder's
@@ -1750,6 +1766,10 @@ export class SiloBuilder {
         : {}),
       ...(this.config.metadata !== undefined ? { metadata: this.config.metadata } : {}),
       ...(this.config.loadShedding !== undefined ? { loadShedding: this.config.loadShedding } : {}),
+      ...(this.config.environmentStatistics !== undefined
+        ? { environmentStatistics: this.config.environmentStatistics }
+        : {}),
+      ...(this.config.testHooks === true ? { testHooks: true } : {}),
       ...(this.config.readOnlyStateGuard !== undefined
         ? { readOnlyStateGuard: this.config.readOnlyStateGuard }
         : {}),

@@ -399,6 +399,18 @@ longer holds, so that decision is final. An ordinary prepared participant asks i
 `RemoteTransactionPingFrequency`. A resource deactivated after the five-second bound loses its lock,
 or leaves its record for the next activation to load and resolve.
 
+## Resource-optimized placement scores raw readings over every candidate
+
+`ResourceOptimizedPlacement` ports the scoring of Orleans' `ResourceOptimizedPlacementDirector`
+(normalised weights over CPU, memory usage, available memory, maximum memory and activation count,
+the local-silo preference margin, overloaded silos left out). Two things differ. The readings are
+the raw ones each silo pushes in its load snapshot, where Orleans scores Kalman-filtered CPU and
+memory, so a single noisy sample moves the score more here. Every eligible candidate is scored,
+where Orleans scores a random square-root-of-n subset. A silo that has pushed no snapshot is skipped, as in Orleans; only a context with no statistics source at all falls back
+to activation counts. The default statistics source is Node's
+event-loop utilisation for CPU and process and OS memory for the rest, and a silo accepts any
+`EnvironmentStatisticsProvider` in its place (Orleans' `IEnvironmentStatisticsProvider`).
+
 ## Additions beyond Orleans
 
 A few capabilities layer on top of the faithful model without changing it: **durable journaling**
