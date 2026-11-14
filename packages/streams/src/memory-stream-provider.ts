@@ -1,5 +1,6 @@
 import type { GrainId } from "@thresh/core/grain-id";
 import { keyToString, type GrainKey } from "@thresh/core/grain-key";
+import type { GrainKeyKind } from "@thresh/core/grain-key";
 import type { GrainType } from "@thresh/core/grain-type";
 import {
   SequenceToken,
@@ -212,6 +213,8 @@ export interface MemorySiloBinding {
   deliver: StreamDeliver;
   /** This silo's implicit-subscription table (`namespace -> grain types`). */
   implicitTypesFor: (namespace: string) => Iterable<GrainType>;
+  /** The key kind a grain type declares, so an implicit subscriber is addressed under it. */
+  implicitKeyKindFor?: ((type: GrainType) => GrainKeyKind | undefined) | undefined;
   /** Confirm an administratively-added subscription with its target grain through this silo. */
   confirm: (grainId: GrainId, streamKey: string) => Promise<boolean>;
   /**
@@ -313,8 +316,12 @@ export class MemoryStreamProvider implements StreamProvider {
   }
 
   /** Wire the implicit-subscription table (`namespace → grain types`); see `setDeliver`. */
-  setImplicitSubscribers(typesFor: (namespace: string) => Iterable<GrainType>): void {
+  setImplicitSubscribers(
+    typesFor: (namespace: string) => Iterable<GrainType>,
+    keyKindFor?: (type: GrainType) => GrainKeyKind | undefined,
+  ): void {
     this.standalone.implicitTypesFor = typesFor;
+    this.standalone.implicitKeyKindFor = keyKindFor;
   }
 
   /**
@@ -404,7 +411,11 @@ export class MemoryStreamProvider implements StreamProvider {
     const route = this.routeThrough();
     if (route === undefined) return;
     const streamKey = `${streamId.namespace}/${streamId.key}`;
-    const implicit = implicitSubscriberIds(streamKey, route.implicitTypesFor);
+    const implicit = implicitSubscriberIds(
+      streamKey,
+      route.implicitTypesFor,
+      route.implicitKeyKindFor,
+    );
     const admin = this.subscriptionManager.subscribersFor(streamKey);
     const seen = new Set<string>();
     const subscribers = [];

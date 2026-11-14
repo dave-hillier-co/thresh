@@ -13,6 +13,7 @@ import type { InterfaceVersionEntry, SiloManifest } from "@thresh/core/grain-man
 import { getGrainMetadata } from "@thresh/core/grain-metadata";
 import {
   type GrainRegistration,
+  declaredKeyKind,
   normalizeRegistration,
   type Registrable,
 } from "@thresh/core/grain-registration";
@@ -1006,7 +1007,12 @@ export class ClusterNode {
     const { ctor, interfaces } = normalizeRegistration(definition, registration);
     const metadata = getGrainMetadata(ctor);
     if (metadata === undefined) throw new Error(`${ctor.name} is not decorated with @grain()`);
-    this.grainTypes.set(metadata.grainType, { ctor, metadata });
+    const keyKind = declaredKeyKind(ctor.name, interfaces);
+    this.grainTypes.set(metadata.grainType, {
+      ctor,
+      metadata,
+      ...(keyKind !== undefined ? { keyKind } : {}),
+    });
     // The version manifest is driven off the RESOLVED list, so per-silo version
     // registration (`registerGrain(ctor, { interfaces: [ICounterAt(v)] })`) keeps
     // declaring exactly the versions the caller named.
@@ -1106,6 +1112,18 @@ export class ClusterNode {
     return this.options.loadShedding?.cpuThreshold ?? DEFAULT_LOAD_SHEDDING_OPTIONS.cpuThreshold;
   }
 
+  /** The key kind a registered grain type declares, if it declares one as a value. */
+  grainKeyKind(type: GrainType): GrainKeyKind | undefined {
+    return this.grainTypes.get(type)?.keyKind;
+  }
+
+  /** An implicit subscriber's id: the key text read as the kind its grain type declares. */
+  private implicitTargetId(type: GrainType, keyText: string): GrainId {
+    const id = new GrainId(type, keyText);
+    const kind = this.grainKeyKind(type);
+    return kind === undefined ? id : id.asKind(kind);
+  }
+
   /** Grain types implicitly subscribed to a stream namespace (drives stream fan-out). */
   implicitGrainTypes(namespace: string): readonly GrainType[] {
     return this.implicitSubscriptions.get(namespace) ?? [];
@@ -1181,7 +1199,7 @@ export class ClusterNode {
     const deliver = (type: GrainType): Promise<void> =>
       this.dispatcher
         .invoke({
-          target: new GrainId(type, channel.key),
+          target: this.implicitTargetId(type, channel.key),
           interfaceId: BroadcastConsumerInterface.id,
           method: "onPublished",
           args: [key, item],

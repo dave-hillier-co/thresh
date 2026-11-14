@@ -1,5 +1,6 @@
 import { keyToString, type GrainKey } from "@thresh/core/grain-key";
 import type { GrainId } from "@thresh/core/grain-id";
+import type { GrainKeyKind } from "@thresh/core/grain-key";
 import type { GrainType } from "@thresh/core/grain-type";
 import { raceSignal } from "@thresh/core/abort";
 import { stableHash32 } from "@thresh/core/hash";
@@ -131,6 +132,7 @@ export class PullingStreamProviderCore implements ActivationBoundStreamProvider 
   private readonly fanOutDelivery: FanOutDelivery;
   private deliver: StreamDeliver = async () => undefined;
   private implicitTypesFor: (namespace: string) => Iterable<GrainType> = () => [];
+  private implicitKeyKindFor: ((type: GrainType) => GrainKeyKind | undefined) | undefined;
 
   constructor(
     private readonly name: string,
@@ -176,8 +178,12 @@ export class PullingStreamProviderCore implements ActivationBoundStreamProvider 
    * fans each event out to these grain types' matching-key activations as well as
    * to the registry's explicit subscribers (Orleans' `[ImplicitStreamSubscription]`).
    */
-  setImplicitSubscribers(typesFor: (namespace: string) => Iterable<GrainType>): void {
+  setImplicitSubscribers(
+    typesFor: (namespace: string) => Iterable<GrainType>,
+    keyKindFor?: (type: GrainType) => GrainKeyKind | undefined,
+  ): void {
     this.implicitTypesFor = typesFor;
+    this.implicitKeyKindFor = keyKindFor;
   }
 
   /**
@@ -255,7 +261,11 @@ export class PullingStreamProviderCore implements ActivationBoundStreamProvider 
     // types bound to the stream's namespace), deduplicated so a grain that is both
     // gets the event once.
     const explicit = await raceSignal(this.registry.subscribers(streamKey), signal);
-    const implicit = implicitSubscriberIds(streamKey, this.implicitTypesFor);
+    const implicit = implicitSubscriberIds(
+      streamKey,
+      this.implicitTypesFor,
+      this.implicitKeyKindFor,
+    );
     const seen = new Set<string>();
     const subscribers: GrainId[] = [];
     for (const subscriber of [...explicit, ...implicit]) {

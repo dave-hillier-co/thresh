@@ -7,6 +7,7 @@ import type { IncomingGrainCallFilter } from "@thresh/core/grain-call-filter";
 import type { BroadcastChannelProvider } from "@thresh/core/broadcast-channel";
 import type { GrainAddress } from "@thresh/core/grain-address";
 import type { GrainId } from "@thresh/core/grain-id";
+import type { GrainKeyKind } from "@thresh/core/grain-key";
 import type { GrainMetadata } from "@thresh/core/grain-metadata";
 import type { GrainType } from "@thresh/core/grain-type";
 import type { DeactivationReason } from "@thresh/core/reasons";
@@ -33,6 +34,8 @@ import type { TimeProvider } from "@thresh/runtime/time-provider";
 export interface RegisteredGrain {
   ctor: GrainClass;
   metadata: GrainMetadata;
+  /** The key kind the grain type declares, when it declares one as a value. */
+  keyKind?: GrainKeyKind;
 }
 
 /**
@@ -531,6 +534,9 @@ export class Catalog {
     }
     const reg = this.options.grainTypes.get(id.type);
     if (reg === undefined) throw new GrainCallError(`no grain type registered: ${id.type}`);
+    // Identity is type and key text; the activation reads that text as the kind the grain type
+    // declares, whichever typed or string-built id arrived first.
+    if (reg.keyKind !== undefined) id = id.asKind(reg.keyKind);
     // Orleans' order, from `GrainTypeSharedContext.GetCollectionAgeLimit`: the grain class's own
     // declaration first (the `IdleDeactivationPeriod` property written by `[CollectionAgeLimit]`,
     // which `@grain({ collectionAgeSeconds })` stands in for), THEN the per-silo class-specific
