@@ -85,6 +85,7 @@ import { LocalDirectoryPartition } from "@thresh/directory/local-directory-parti
 import { LocationCache } from "@thresh/directory/location-cache";
 import { ConnectionManager } from "@thresh/messaging/connection-manager";
 import { CorrelationTable } from "@thresh/messaging/correlation-table";
+import { requestEnvelope } from "@thresh/messaging/request-envelope";
 import {
   nextCorrelationId,
   responseTo,
@@ -2592,24 +2593,7 @@ export class ClusterNode {
         "unknownTarget",
       );
     }
-    const correlationId = nextCorrelationId();
-    const message: Message = {
-      correlationId,
-      direction: req.options.oneWay ? "oneWay" : "request",
-      targetGrain: req.target,
-      sendingSilo: this.options.local,
-      sendingGrain: req.sender,
-      ...(req.callingGrain !== undefined ? { callingGrain: req.callingGrain } : {}),
-      interfaceId: req.interfaceId,
-      ...(req.interfaceVersion !== undefined ? { interfaceVersion: req.interfaceVersion } : {}),
-      method: req.method,
-      ...this.wireExpiry(req),
-      requestContext: {
-        reentrancyId: req.reentrancyId,
-        ...(req.headers !== undefined ? { headers: req.headers } : {}),
-      },
-      body: this.serializer.serialize(req.args),
-    };
+    const message = this.requestEnvelope(req);
     if (req.options.oneWay) {
       conn.send(message);
       return undefined;
@@ -2672,54 +2656,28 @@ export class ClusterNode {
   // --- transport ---
 
   /**
-   * The request's ambient deadline and time-to-live as wire fields, both
-   * RELATIVE to this silo's clock (Orleans writes `TimeToLive` as remaining
-   * ms), so the receiver re-bases them on its own clock in `toRequest` and
-   * never compares two silos' wall clocks. The time-to-live is this node's
-   * own call timeout -- the point at which `sendAndAwait` stops waiting --
-   * or whatever is left of one the request already carried from an earlier
-   * hop (a forward), if shorter; a one-way request, which nobody waits for,
-   * gets none (Orleans `Message.IsExpirableMessage`). Issue #90.
+   * The request as a wire envelope (`requestEnvelope`, the one builder every sender uses). Its
+   * deadline and time-to-live are RELATIVE to this silo's clock (Orleans writes `TimeToLive` as
+   * remaining ms), so the receiver re-bases them on its own clock in `toRequest` and never
+   * compares two silos' wall clocks. The time-to-live is this node's own call timeout -- the
+   * point at which `sendAndAwait` stops waiting -- or whatever is left of one the request
+   * already carried from an earlier hop (a forward), if shorter. Issue #90.
    */
-  private wireExpiry(req: InvocationRequest): Pick<Message, "deadlineInMs" | "timeToLiveMs"> {
+  private requestEnvelope(req: InvocationRequest): Message {
     const now = this.time.now();
     const inherited = req.expiresAt === undefined ? Infinity : req.expiresAt - now;
-    return {
-      ...(req.deadline !== undefined ? { deadlineInMs: req.deadline - now } : {}),
-      ...(req.options.oneWay ? {} : { timeToLiveMs: Math.min(this.callTimeoutMs, inherited) }),
-    };
+    return requestEnvelope(req, {
+      correlationId: nextCorrelationId(),
+      sendingSilo: this.options.local,
+      body: this.serializer.serialize(req.args),
+      now,
+      timeToLiveMs: Math.min(this.callTimeoutMs, inherited),
+    });
   }
 
   private async sendRemote(silo: SiloAddress, req: InvocationRequest): Promise<unknown> {
     const conn = await this.connections.get(silo);
-    const correlationId = nextCorrelationId();
-    const message: Message = {
-      correlationId,
-      direction: req.options.oneWay ? "oneWay" : "request",
-      targetGrain: req.target,
-      sendingSilo: this.options.local,
-      sendingGrain: req.sender,
-      ...(req.callingGrain !== undefined ? { callingGrain: req.callingGrain } : {}),
-      interfaceId: req.interfaceId,
-      ...(req.interfaceVersion !== undefined ? { interfaceVersion: req.interfaceVersion } : {}),
-      method: req.method,
-      ...this.wireExpiry(req),
-      ...(req.forwardCount !== undefined ? { forwardCount: req.forwardCount } : {}),
-      requestContext: {
-        reentrancyId: req.reentrancyId,
-        ...(req.transaction !== undefined
-          ? {
-              transaction: {
-                id: req.transaction.id,
-                timeStamp: req.transaction.timeStamp,
-                readOnly: req.transaction.readOnly,
-              },
-            }
-          : {}),
-        ...(req.headers !== undefined ? { headers: req.headers } : {}),
-      },
-      body: this.serializer.serialize(req.args),
-    };
+    const message = this.requestEnvelope(req);
     if (req.options.oneWay) {
       conn.send(message);
       return undefined;

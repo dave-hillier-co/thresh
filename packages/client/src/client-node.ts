@@ -52,6 +52,7 @@ import {
 import { SiloAddress } from "@thresh/core/silo-address";
 import { ConnectionManager } from "@thresh/messaging/connection-manager";
 import { CorrelationTable } from "@thresh/messaging/correlation-table";
+import { requestEnvelope } from "@thresh/messaging/request-envelope";
 import {
   nextCorrelationId,
   responseTo,
@@ -398,29 +399,19 @@ export class ClientNode implements Dispatcher {
       attempts++;
       try {
         const conn = await this.connections.get(gateway);
-        const correlationId = nextCorrelationId();
-        const message: Message = {
-          correlationId,
-          direction: req.options.oneWay ? "oneWay" : "request",
-          targetGrain: req.target,
+        // Both RELATIVE to this client's clock, like Orleans' wire `TimeToLive`: the gateway
+        // re-bases them on its own clock. The time-to-live is what is left of this call's
+        // budget -- the point this client stops waiting -- so the gateway does not run a
+        // request nobody is waiting for any more (Orleans `OutsideRuntimeClient.SendRequest`;
+        // issue #90).
+        const now = this.now();
+        const message = requestEnvelope(req, {
+          correlationId: nextCorrelationId(),
           sendingSilo: this.localAddress,
-          sendingGrain: req.sender,
-          interfaceId: req.interfaceId,
-          method: req.method,
-          // Both RELATIVE to this client's clock, like Orleans' wire
-          // `TimeToLive`: the gateway re-bases them on its own clock. The
-          // time-to-live is what is left of this call's budget -- the point
-          // this client stops waiting -- so the gateway does not run a request
-          // nobody is waiting for any more (Orleans
-          // `OutsideRuntimeClient.SendRequest`; issue #90).
-          ...(req.deadline !== undefined ? { deadlineInMs: req.deadline - this.now() } : {}),
-          ...(req.options.oneWay ? {} : { timeToLiveMs: deadline - this.now() }),
-          requestContext: {
-            ...(req.reentrancyId !== undefined ? { reentrancyId: req.reentrancyId } : {}),
-            ...(req.headers !== undefined ? { headers: req.headers } : {}),
-          },
           body: this.serializer.serialize(req.args),
-        };
+          now,
+          timeToLiveMs: deadline - now,
+        });
         if (req.options.oneWay) {
           conn.send(message);
           return undefined;
