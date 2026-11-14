@@ -148,7 +148,14 @@ export class DistributedDispatcher implements Dispatcher {
     );
   }
 
+  /** The request addressed to its target's canonical id (see `Catalog.canonicalId`). */
+  private canonical(req: InvocationRequest): InvocationRequest {
+    const target = this.deps.catalog.canonicalId(req.target);
+    return target === req.target ? req : { ...req, target };
+  }
+
   private async deliver(req: InvocationRequest, opts?: InvokeCallOptions): Promise<unknown> {
+    req = this.canonical(req);
     // Resolved once, up front, so a fresh `opts.deadlineMs` is embedded into
     // `req.deadline` before any placement/forwarding decision below — it must
     // ride a distributed forward too, but `opts.signal` itself never can (see
@@ -220,6 +227,7 @@ export class DistributedDispatcher implements Dispatcher {
 
   /** A request that arrived here: ensure a local activation, or forward to the CAS winner. */
   async deliverLocal(req: InvocationRequest, opts?: InvokeCallOptions): Promise<unknown> {
+    req = this.canonical(req);
     // [StatelessWorker] grains bypass the directory funnel here too (see
     // `deliver`): a call that arrived over a connection is already confined to
     // this silo, and its activations are interchangeable, so it joins this

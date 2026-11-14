@@ -52,6 +52,7 @@ function forwardingDeps(): {
       } as unknown as LocationCache,
       catalog: {
         isStatelessWorkerType: () => false,
+        canonicalId: (id: unknown) => id,
         resolveLive: async () => undefined,
       } as unknown as Catalog,
       remote: { send },

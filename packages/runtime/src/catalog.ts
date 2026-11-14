@@ -270,6 +270,7 @@ export class Catalog {
     rehydrationBag?: Record<string, unknown>,
     sourceAddr?: GrainAddress,
   ): Promise<ActivationData> {
+    id = this.canonicalId(id);
     const key = id.toString();
     const existing = this.activations.get(key);
     if (existing !== undefined && existing.state !== "invalid") {
@@ -373,7 +374,7 @@ export class Catalog {
    * invoking the stale activation forever.
    */
   resolveLive(id: GrainId): Promise<ActivationData | undefined> {
-    const key = id.toString();
+    const key = this.canonicalId(id).toString();
     const existing = this.activations.get(key);
     if (existing === undefined || existing.state === "invalid") return Promise.resolve(undefined);
     if (!existing.deactivationRequestedAndIdle) return Promise.resolve(existing);
@@ -382,14 +383,14 @@ export class Catalog {
 
   /** A live activation for `id` — for a stateless-worker id, an arbitrary one of possibly several. */
   get(id: GrainId): ActivationData | undefined {
-    const key = id.toString();
+    const key = this.canonicalId(id).toString();
     const single = this.activations.get(key);
     if (single !== undefined) return single;
     return this.workerActivations.get(key)?.find((a) => a.state !== "invalid");
   }
 
   isActive(id: GrainId): boolean {
-    const key = id.toString();
+    const key = this.canonicalId(id).toString();
     if (this.activations.get(key)?.state === "valid") return true;
     return this.workerActivations.get(key)?.some((a) => a.state === "valid") ?? false;
   }
@@ -401,7 +402,7 @@ export class Catalog {
    * management grain amalgamates this across silos itself).
    */
   countFor(id: GrainId): number {
-    const key = id.toString();
+    const key = this.canonicalId(id).toString();
     const single = this.activations.get(key);
     if (single !== undefined) return single.state === "invalid" ? 0 : 1;
     const list = this.workerActivations.get(key);
@@ -409,6 +410,23 @@ export class Catalog {
     let n = 0;
     for (const a of list) if (a.state !== "invalid") n++;
     return n;
+  }
+
+  /**
+   * The id in the one canonical text its grain type reads: a key arriving as text is re-read as
+   * the kind the type declares, so `'005'`, `'+5'` and `5n` are one identity for an integer grain
+   * and an upper-case guid string is the Guid it spells. Every lookup, the directory and the ring
+   * go through this, so equality, hash and catalog key agree. Text the declared kind cannot read
+   * is left as it is: it names no activation, and creating one reports the error.
+   */
+  canonicalId(id: GrainId): GrainId {
+    const kind = this.options.grainTypes.get(id.type)?.keyKind;
+    if (kind === undefined) return id;
+    try {
+      return id.asKind(kind);
+    } catch {
+      return id;
+    }
   }
 
   /** Whether `type` was registered with `stateless: true` ([StatelessWorker]-equivalent). */
@@ -479,6 +497,7 @@ export class Catalog {
     if (maxLocalWorkers === undefined) {
       throw new GrainCallError(`${id.type} is not a [StatelessWorker] grain type`);
     }
+    id = this.canonicalId(id);
     const key = id.toString();
     let list = this.workerActivations.get(key);
     if (list === undefined) {
