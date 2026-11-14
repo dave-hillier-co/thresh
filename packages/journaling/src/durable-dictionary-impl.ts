@@ -10,8 +10,8 @@ type DictOp<K, V> =
 /**
  * A journalled scalar-keyed map, implemented as a `DurableStateMachine`. Keys
  * must be JSON-stable scalars (string/number) so they round-trip through the
- * value-codec on replay. Each mutation is appended to the grain's log and then
- * applied to memory.
+ * value-codec on replay. Each mutation is applied to memory at once and
+ * buffered; `writeState` appends the buffer.
  */
 export class DurableDictionaryImpl<K, V> implements DurableDictionary<K, V>, DurableStateMachine {
   private readonly map = new Map<K, V>();
@@ -45,19 +45,25 @@ export class DurableDictionaryImpl<K, V> implements DurableDictionary<K, V>, Dur
     return this.map.values();
   }
 
-  async set(key: K, value: V): Promise<void> {
-    // The manager applies the op to memory after a successful append.
-    await this.manager.append(this.name, { t: "set", k: key, v: value } satisfies DictOp<K, V>);
+  set(key: K, value: V): void {
+    this.mutate({ t: "set", k: key, v: value });
   }
 
-  async delete(key: K): Promise<boolean> {
+  delete(key: K): boolean {
     if (!this.map.has(key)) return false;
-    await this.manager.append(this.name, { t: "del", k: key } satisfies DictOp<K, V>);
+    this.mutate({ t: "del", k: key });
     return true;
   }
 
-  async clear(): Promise<void> {
-    await this.manager.append(this.name, { t: "clear" } satisfies DictOp<K, V>);
+  clear(): void {
+    this.mutate({ t: "clear" });
+  }
+
+  /** Buffers the op's log entry for the next `writeState` and applies it to memory now. */
+  private mutate(op: DictOp<K, V>): void {
+    // Serialised first: a payload the codec rejects leaves memory untouched, as in Orleans.
+    this.manager.buffer(this.name, op);
+    this.apply(op);
   }
 
   reset(): void {

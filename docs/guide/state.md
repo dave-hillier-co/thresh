@@ -30,6 +30,43 @@ Journaling stores events, periodically snapshots state, and truncates the log. `
 collections. Configure memory, Redis or Postgres journaling (`addPostgresJournaling`) under the same
 provider name used by the grain.
 
+Durable collections buffer their mutations, as `Orleans.Journaling` does. A mutator (`set`, `add`,
+`enqueue`, `dequeue`, `delete`, ...) is a synchronous in-memory operation that returns what the
+Orleans one returns (nothing, a boolean or the element), and a read right after it sees the change.
+Nothing reaches storage until the grain writes its durable state: `writeDurableState()` on a class
+grain (a protected method of `Grain`), or the function `useWriteDurableState()` returns in a hook
+grain. That one call is Orleans' `WriteStateAsync`: it appends everything buffered across all of the
+grain's durable structures in one storage write, and that write is the unit of durability. Ten
+mutations and one write cost one append, and a method that dequeues from one structure and adds to
+another is atomic when it writes once at the end: a crash before the write leaves neither change
+durable.
+
+```ts
+const jobs = useDurableQueue<string>("jobs");
+const done = useDurableSet<string>("done");
+const writeState = useWriteDurableState();
+
+// ... in a method:
+const job = jobs.dequeue();
+if (job !== undefined) done.add(job);
+await writeState(); // one append carries both changes
+```
+
+What happens to buffered entries follows Orleans' `JournaledStateManager`:
+
+- A failed write rejects to its caller and rolls nothing back. Memory keeps the mutations, the
+  entries stay buffered, the activation continues, and the next write retries them together with
+  anything buffered since.
+- A write that loses to another incarnation (`InconsistentStateError`) rejects the same way, and the
+  next write first re-reads the log, discarding the in-memory state and every buffered entry.
+- Deactivation and crashes flush nothing. Mutations not yet written are dropped, and the next
+  activation replays only what a write made durable. Write before the method returns, or in
+  `onDeactivate`, whatever must survive.
+- Overlapping writes run one after another. Compaction runs after a write and only while nothing is
+  buffered, so a snapshot never makes an unwritten mutation durable; a `JournaledGrain` sharing the
+  log keeps writing its own events at `confirmEvents`, which does not flush the durable collections.
+- An entry the value codec cannot encode makes the mutator throw and leaves memory unchanged.
+
 Compaction truncates the log to a snapshot at the threshold (`snapshotThreshold`, default 100
 entries), for durable collections and for a `JournaledGrain` alike. A `JournaledGrain` therefore
 defaults to snapshot-plus-tail, which is what Orleans' StateStorage-based provider gives:

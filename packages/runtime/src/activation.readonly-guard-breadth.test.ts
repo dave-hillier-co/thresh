@@ -49,10 +49,10 @@ function fakeDurableValue(initial: Balance): DurableValue<Balance> {
     get() {
       return current;
     },
-    async set(v) {
+    set(v) {
       current = v;
     },
-    async clear() {
+    clear() {
       current = undefined;
     },
   };
@@ -97,7 +97,7 @@ class MultiFacetGrain extends Grain {
   }
 
   async setCache(): Promise<void> {
-    await this.cache.set({ cents: 1 });
+    this.cache.set({ cents: 1 });
   }
 
   async updateWallet(): Promise<number> {

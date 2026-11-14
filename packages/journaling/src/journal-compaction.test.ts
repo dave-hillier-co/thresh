@@ -1,3 +1,4 @@
+import { writeDurableState } from "@thresh/core/durable-state-metadata";
 import { durableState } from "@thresh/core/decorators";
 import type { DurableValue } from "@thresh/core/durable-state";
 import { GrainId } from "@thresh/core/grain-id";
@@ -114,12 +115,30 @@ describe("JournaledGrain history across compaction", () => {
     await bindJournalFacets(grain, id, registryOver(storage), { snapshotThreshold: 10, ...retain });
     for (let i = 1; i <= 40; i++) {
       await grain.add(i);
-      await grain.label.set(`label-${i}`);
+      grain.label.set(`label-${i}`);
+      await writeDurableState(grain);
     }
     const again = new LedgerWithLabel();
     await bindJournalFacets(again, id, registryOver(storage), { snapshotThreshold: 10, ...retain });
     expect(again.history(0, 40)).toHaveLength(40);
     expect(again.label.value).toBe("label-40");
+  });
+
+  it("does not make unwritten durable mutations durable when the JournaledGrain compacts the shared log", async () => {
+    const storage = new MemoryJournalStorage();
+    const grain = new LedgerWithLabel();
+    await bindJournalFacets(grain, id, registryOver(storage), { snapshotThreshold: 4 });
+    grain.label.set("written");
+    await writeDurableState(grain);
+    grain.label.set("never written");
+    // Enough confirmed events to cross the threshold and compact the shared log.
+    await raiseMany(grain, 12);
+    expect(grain.label.value).toBe("never written");
+
+    const again = new LedgerWithLabel();
+    await bindJournalFacets(again, id, registryOver(storage), { snapshotThreshold: 4 });
+    expect(again.head).toBe(12);
+    expect(again.label.value).toBe("written");
   });
 
   it("truncates by default: the log shrinks and nothing below the snapshot is held", async () => {
@@ -153,7 +172,10 @@ describe("durable collections without a JournaledGrain", () => {
     const storage = new MemoryJournalStorage();
     const grain = new OnlyCollections();
     await bindDurableStates(grain, id, registryOver(storage), { snapshotThreshold: 10 });
-    for (let i = 0; i < 95; i++) await grain.counter.set(i);
+    for (let i = 0; i < 95; i++) {
+      grain.counter.set(i);
+      await writeDurableState(grain);
+    }
 
     const { entries } = await storage.read("journal", id);
     expect(entries.length).toBeLessThan(10);

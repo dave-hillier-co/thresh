@@ -58,7 +58,8 @@ class CartGrain extends Grain implements ICart {
   private items!: DurableList<string>;
 
   async add(item: string): Promise<number> {
-    await this.items.add(item);
+    this.items.add(item);
+    await this.writeDurableState();
     return this.items.length;
   }
 

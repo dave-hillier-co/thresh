@@ -23,7 +23,11 @@ import type {
   DurableSet,
   DurableValue,
 } from "./durable-state";
-import { registerDurableField, type DurableKind } from "./durable-state-metadata";
+import {
+  registerDurableField,
+  writeDurableState,
+  type DurableKind,
+} from "./durable-state-metadata";
 import { createFieldRegistry } from "./field-registry";
 import type { Reducer, ReducerState } from "./reducer-state";
 import { registerReducerField } from "./reducer-state-metadata";
@@ -597,6 +601,16 @@ function createDurableFacetHook<F>(
     if (facet === undefined) throw new Error(`${label} "${stateName}" not yet bound`);
     return facet;
   };
+}
+
+/**
+ * The hooks counterpart of `Grain.writeDurableState()` (Orleans' `WriteStateAsync`): returns a
+ * function that appends everything buffered across ALL of the grain's `useDurable*` structures in
+ * one storage write. Mutations are in memory only until it resolves.
+ */
+export function useWriteDurableState(): () => Promise<void> {
+  const { instance } = activeSetup("useWriteDurableState");
+  return () => writeDurableState(instance);
 }
 
 export function useDurableState<T>(

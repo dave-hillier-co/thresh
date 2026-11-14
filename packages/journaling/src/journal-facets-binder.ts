@@ -1,5 +1,5 @@
 import type { GrainId } from "@thresh/core/grain-id";
-import { getDurableFields } from "@thresh/core/durable-state-metadata";
+import { bindDurableStateWriter, getDurableFields } from "@thresh/core/durable-state-metadata";
 import { isCustomStorageHost, JournaledGrain } from "@thresh/core/journaled-grain";
 import {
   bindDurableStates,
@@ -76,6 +76,7 @@ export async function bindJournalFacets(
   });
 
   registerDurableMachines(instance, fields, manager);
+  bindDurableStateWriter(instance, manager);
   installJournalViewAdaptor(
     instance,
     manager,

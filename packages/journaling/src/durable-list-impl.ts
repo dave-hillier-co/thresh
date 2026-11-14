@@ -12,8 +12,8 @@ type ListOp<T> =
 /**
  * A journalled ordered list, implemented as a `DurableStateMachine`. Index-based
  * ops journal the index at append time; replay reproduces the same indices
- * because entries are applied in append order. Each mutation is appended to the
- * grain's log and then applied to memory.
+ * because entries are applied in append order. Each mutation is applied to
+ * memory at once and buffered; `writeState` appends the buffer.
  */
 export class DurableListImpl<T> implements DurableList<T>, DurableStateMachine {
   private items: T[] = [];
@@ -44,37 +44,40 @@ export class DurableListImpl<T> implements DurableList<T>, DurableStateMachine {
     return this.items[Symbol.iterator]();
   }
 
-  async add(value: T): Promise<void> {
-    // The manager applies the op to memory after a successful append.
-    await this.manager.append(this.name, { t: "add", v: value } satisfies ListOp<T>);
+  add(value: T): void {
+    this.mutate({ t: "add", v: value });
   }
 
-  async set(index: number, value: T): Promise<void> {
-    await this.manager.append(this.name, { t: "set", i: index, v: value } satisfies ListOp<T>);
+  set(index: number, value: T): void {
+    this.mutate({ t: "set", i: index, v: value });
   }
 
-  async removeAt(index: number): Promise<void> {
-    await this.manager.append(this.name, { t: "removeAt", i: index } satisfies ListOp<T>);
+  removeAt(index: number): void {
+    this.mutate({ t: "removeAt", i: index });
   }
 
-  /** Journal an insert-at-index, shifting later items back, and update memory. */
-  async insert(index: number, value: T): Promise<void> {
-    await this.manager.append(this.name, { t: "insert", i: index, v: value } satisfies ListOp<T>);
+  /** Insert at an index, shifting later items back. */
+  insert(index: number, value: T): void {
+    this.mutate({ t: "insert", i: index, v: value });
   }
 
-  /**
-   * Journal a remove of the first occurrence of `value` and update memory.
-   * Resolves to whether a matching item was found and removed.
-   */
-  async remove(value: T): Promise<boolean> {
+  /** Remove the first occurrence of `value`; returns whether a matching item was found. */
+  remove(value: T): boolean {
     const index = this.items.indexOf(value);
     if (index === -1) return false;
-    await this.removeAt(index);
+    this.removeAt(index);
     return true;
   }
 
-  async clear(): Promise<void> {
-    await this.manager.append(this.name, { t: "clear" } satisfies ListOp<T>);
+  clear(): void {
+    this.mutate({ t: "clear" });
+  }
+
+  /** Buffers the op's log entry for the next `writeState` and applies it to memory now. */
+  private mutate(op: ListOp<T>): void {
+    // Serialised first: a payload the codec rejects leaves memory untouched, as in Orleans.
+    this.manager.buffer(this.name, op);
+    this.apply(op);
   }
 
   reset(): void {

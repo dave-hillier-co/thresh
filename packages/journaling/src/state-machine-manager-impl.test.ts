@@ -72,10 +72,14 @@ describe("StateMachineManagerImpl", () => {
     await manager.replay();
 
     // 4 appends crosses the threshold and triggers a compaction.
-    await value.set(1);
-    await value.set(2);
-    await value.set(3);
-    await value.set(4);
+    value.set(1);
+    await manager.writeState();
+    value.set(2);
+    await manager.writeState();
+    value.set(3);
+    await manager.writeState();
+    value.set(4);
+    await manager.writeState();
 
     const kinds = await frameKinds(storage);
     expect(kinds).toEqual(["snap"]); // log truncated to one snapshot frame
@@ -83,7 +87,8 @@ describe("StateMachineManagerImpl", () => {
     expect(version).toBe(5); // 4 appends + 1 replace
 
     // Further mutations after the snapshot, then a fresh activation replays it all.
-    await value.set(5);
+    value.set(5);
+    await manager.writeState();
     const fresh = new StateMachineManagerImpl("journal", id, storage, { snapshotThreshold: 4 });
     const replayed = new DurableValueImpl<number>("v", fresh);
     fresh.register(replayed);
@@ -104,11 +109,16 @@ describe("StateMachineManagerImpl", () => {
     manager.register(list);
     await manager.replay();
 
-    await value.set("hello");
-    await dict.set("a", 1);
-    await list.add(10);
-    await dict.set("b", 2);
-    await list.add(20);
+    value.set("hello");
+    await manager.writeState();
+    dict.set("a", 1);
+    await manager.writeState();
+    list.add(10);
+    await manager.writeState();
+    dict.set("b", 2);
+    await manager.writeState();
+    list.add(20);
+    await manager.writeState();
 
     // All five mutations live in the single shared log.
     expect((await storage.read("journal", id)).entries).toHaveLength(5);
@@ -130,7 +140,7 @@ describe("StateMachineManagerImpl", () => {
     expect(l2.toArray()).toEqual([10, 20]);
   });
 
-  it("fences out a stale incarnation via the version CAS, leaving its memory untouched", async () => {
+  it("fences out a stale incarnation via the version CAS, writing nothing", async () => {
     const storage = new MemoryJournalStorage();
     const a = new StateMachineManagerImpl("journal", id, storage);
     const av = new DurableValueImpl<number>("v", a);
@@ -142,10 +152,14 @@ describe("StateMachineManagerImpl", () => {
     b.register(bv);
     await b.replay(); // both at the empty version
 
-    await av.set(1); // A wins the append
+    av.set(1); // A wins the append
+    await a.writeState();
 
-    await expect(bv.set(99)).rejects.toBeInstanceOf(InconsistentStateError);
-    expect(bv.value).toBeUndefined(); // append-before-apply: B's memory unchanged
+    bv.set(99);
+    await expect(b.writeState()).rejects.toBeInstanceOf(InconsistentStateError);
+    // Nothing was written; as in Orleans, memory is not rolled back by the failure.
+    expect((await storage.read("journal", id)).entries).toHaveLength(1);
+    expect(bv.value).toBe(99);
   });
 
   describe("retirement of unregistered structures", () => {
@@ -160,8 +174,10 @@ describe("StateMachineManagerImpl", () => {
       gen1.register(keep1);
       gen1.register(retire1);
       await gen1.replay();
-      await keep1.set("a", 1);
-      await retire1.set("b", 1);
+      keep1.set("a", 1);
+      await gen1.writeState();
+      retire1.set("b", 1);
+      await gen1.writeState();
 
       // Next activation: only "keep" is registered. "retire" becomes an orphan.
       const gen2 = new StateMachineManagerImpl("journal", id, storage);
@@ -170,7 +186,8 @@ describe("StateMachineManagerImpl", () => {
       await gen2.replay();
       expect(keep2.get("a")).toBe(1);
 
-      await keep2.set("a", 10);
+      keep2.set("a", 10);
+      await gen2.writeState();
       await gen2.compact(); // 1st compaction while orphaned: within the default grace of 2, kept
 
       const gen3 = new StateMachineManagerImpl("journal", id, storage);
@@ -194,7 +211,8 @@ describe("StateMachineManagerImpl", () => {
       gen1.register(keep1);
       gen1.register(retire1);
       await gen1.replay();
-      await retire1.set("b", 1);
+      retire1.set("b", 1);
+      await gen1.writeState();
 
       // Two activations in a row without "retire" registered, each compacting
       // once: 1st compaction keeps it (grace = 2), 2nd purges it for good.
@@ -203,7 +221,8 @@ describe("StateMachineManagerImpl", () => {
         const keep = new DurableDictionaryImpl<string, number>("keep", gen);
         gen.register(keep);
         await gen.replay();
-        await keep.set("a", i);
+        keep.set("a", i);
+        await gen.writeState();
         await gen.compact();
       }
 
@@ -228,14 +247,16 @@ describe("StateMachineManagerImpl", () => {
       gen1.register(keep1);
       gen1.register(retire1);
       await gen1.replay();
-      await retire1.set("b", 1);
+      retire1.set("b", 1);
+      await gen1.writeState();
 
       // "retire" goes unregistered for one activation and one compaction...
       const gen2 = new StateMachineManagerImpl("journal", id, storage);
       const keep2 = new DurableDictionaryImpl<string, number>("keep", gen2);
       gen2.register(keep2);
       await gen2.replay();
-      await keep2.set("a", 1);
+      keep2.set("a", 1);
+      await gen2.writeState();
       await gen2.compact();
 
       // ...then comes back before the grace period (2 compactions) elapses.
@@ -268,14 +289,16 @@ describe("StateMachineManagerImpl", () => {
       gen1.register(keep1);
       gen1.register(retire1);
       await gen1.replay();
-      await retire1.set("b", 1);
+      retire1.set("b", 1);
+      await gen1.writeState();
 
       // Orphaned for one compaction (grace = 2, so 1 of 2 spent)...
       const gen2 = new StateMachineManagerImpl("journal", id, storage);
       const keep2 = new DurableDictionaryImpl<string, number>("keep", gen2);
       gen2.register(keep2);
       await gen2.replay();
-      await keep2.set("a", 1);
+      keep2.set("a", 1);
+      await gen2.writeState();
       await gen2.compact();
 
       // ...resurrected (writes a normal snapshot for it, clearing the tracker)...
@@ -285,7 +308,8 @@ describe("StateMachineManagerImpl", () => {
       gen3.register(keep3);
       gen3.register(retire3);
       await gen3.replay();
-      await keep3.set("a", 2);
+      keep3.set("a", 2);
+      await gen3.writeState();
       await gen3.compact();
 
       // ...then orphaned again. If the grace period had carried over from
@@ -295,7 +319,8 @@ describe("StateMachineManagerImpl", () => {
       const keep4 = new DurableDictionaryImpl<string, number>("keep", gen4);
       gen4.register(keep4);
       await gen4.replay();
-      await keep4.set("a", 3);
+      keep4.set("a", 3);
+      await gen4.writeState();
       await gen4.compact(); // 1st compaction of the fresh grace period: kept
 
       const gen5 = new StateMachineManagerImpl("journal", id, storage);
@@ -318,7 +343,8 @@ describe("StateMachineManagerImpl", () => {
       gen1.register(keep1);
       gen1.register(retire1);
       await gen1.replay();
-      await retire1.set("b", 1);
+      retire1.set("b", 1);
+      await gen1.writeState();
 
       // A grace period of 1 means the very first compaction while unregistered purges it.
       const gen2 = new StateMachineManagerImpl("journal", id, storage, {
@@ -327,7 +353,8 @@ describe("StateMachineManagerImpl", () => {
       const keep2 = new DurableDictionaryImpl<string, number>("keep", gen2);
       gen2.register(keep2);
       await gen2.replay();
-      await keep2.set("a", 1);
+      keep2.set("a", 1);
+      await gen2.writeState();
       await gen2.compact();
 
       const gen3 = new StateMachineManagerImpl("journal", id, storage, {
@@ -352,13 +379,15 @@ describe("StateMachineManagerImpl", () => {
     manager.register(value);
     await manager.replay();
 
-    await value.set(1); // below the effective threshold (machines.size + 1): no compaction yet
+    value.set(1); // below the effective threshold (machines.size + 1): no compaction yet
+    await manager.writeState();
 
     // This append both persists the entry durably AND triggers an in-turn
     // compaction that fails. The entry is already safely written -- the call
     // must not throw, or a retrying caller (e.g. DurableList.add) would
     // re-append and apply it twice.
-    await expect(value.set(2)).resolves.toBeUndefined();
+    value.set(2);
+    await expect(manager.writeState()).resolves.toBeUndefined();
     expect(value.value).toBe(2);
 
     // The entry is durable even though its compaction failed.
@@ -378,7 +407,8 @@ describe("StateMachineManagerImpl", () => {
     gen1.register(keep1);
     gen1.register(retire1);
     await gen1.replay();
-    await retire1.set("b", 1);
+    retire1.set("b", 1);
+    await gen1.writeState();
 
     // Orphaned (grace = 2). The first compaction fails and is swallowed by the
     // in-turn path; it wrote nothing, so it must not count against the grace
@@ -388,8 +418,10 @@ describe("StateMachineManagerImpl", () => {
     const keep2 = new DurableDictionaryImpl<string, number>("keep", gen2);
     gen2.register(keep2);
     await gen2.replay();
-    await keep2.set("a", 1); // live entries 3 >= threshold: in-turn compaction fails
-    await keep2.set("a", 2); // retried: succeeds -- the 1st compaction actually written
+    keep2.set("a", 1); // live entries 3 >= threshold: in-turn compaction fails
+    await gen2.writeState();
+    keep2.set("a", 2); // retried: succeeds -- the 1st compaction actually written
+    await gen2.writeState();
 
     const gen3 = new StateMachineManagerImpl("journal", id, memory);
     const keep3 = new DurableDictionaryImpl<string, number>("keep", gen3);

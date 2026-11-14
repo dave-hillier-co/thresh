@@ -55,6 +55,9 @@ export interface IDurableCollectionsGrain extends GrainKey<string> {
   setSize(): Promise<number>;
   setToArray(): Promise<unknown[]>;
 
+  /** Orleans' `IJournaledStateManager.WriteStateAsync`: persists everything buffered across all five structures in one write. */
+  writeState(): Promise<void>;
+
   /** A per-activation random tag: proves a new activation ran after a silo restart. */
   activationTag(): Promise<string>;
 }
