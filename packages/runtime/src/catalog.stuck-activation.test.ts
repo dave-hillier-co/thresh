@@ -263,4 +263,36 @@ describe("Catalog stuck-activation deactivation (Orleans DeactivateStuckActivati
     await stopping;
     expect(deactivated).toEqual([first]);
   });
+
+  it("finishes silo stop instead of waiting forever on an activation whose turn never settles", async () => {
+    const time = new FakeTimeProvider();
+    const deactivated: ActivationData[] = [];
+    const catalog = buildCatalog(time, (a) => deactivated.push(a));
+    const id = new GrainId(metadata.grainType, "wedged-stop");
+    const activation = await catalog.getOrCreate(id);
+    await flush();
+    void activation
+      .invoke({
+        target: id,
+        interfaceId: 0,
+        method: "block",
+        args: [],
+        options: {},
+        reentrancyId: "r-w",
+      })
+      .catch(() => undefined);
+    await flush();
+
+    let stopped = false;
+    void catalog
+      .deactivateAll({ code: "shutting-down", description: "test" })
+      .then(() => (stopped = true));
+    await flush();
+    time.advance(2000);
+    await flush();
+
+    expect(stopped).toBe(true);
+    expect(deactivated).toEqual([activation]);
+    (activation.instance as StuckGrain).gate.resolve("done");
+  });
 });

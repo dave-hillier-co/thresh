@@ -266,6 +266,8 @@ interface PendingOperation {
   readonly name: OperationName;
   /** Runs the operation; settles once it has finished, never rejects. */
   readonly run: () => Promise<void>;
+  /** Drops it unrun, rejecting whoever scheduled it with `error` (the activation was abandoned). */
+  readonly discard: (error: unknown) => void;
 }
 
 /** How calls held on a deactivation that refuses them are answered (Orleans `DeactivationException`). */
@@ -298,6 +300,8 @@ interface Deactivation {
   /** `DeactivationTimeout`, armed when the deactivation was requested (Orleans `CancelAfter`). */
   readonly timeout: { readonly elapsed: Promise<void>; readonly handle: TimerHandle } | undefined;
   readonly completion: Promise<DeactivationOutcome>;
+  /** Settles `completion` (Orleans' deactivation completion source); later calls do nothing. */
+  readonly complete: (outcome: DeactivationOutcome) => void;
 }
 
 /**
@@ -538,6 +542,12 @@ export class ActivationData implements GrainContext {
    * skipped — it assumes the grain's code ran to an end, which it did not —
    * and a deactivation still awaiting the wedged hook finds this activation
    * already finalized when it returns, so nothing runs twice.
+   *
+   * Lifecycle operations still pending are discarded unrun — they wait for
+   * the wedged code to finish, which may never happen — and a deactivation
+   * under way is settled now (Orleans `AbandonStuckDeactivatingActivation`:
+   * `GetDeactivationCompletionSource().TrySetResult`), so whoever awaits
+   * `deactivate()` — silo stop, an idle sweep, a migration — is released.
    */
   private abandon(): void {
     this.clearStuckDeactivationTimer();
@@ -545,6 +555,19 @@ export class ActivationData implements GrainContext {
     void this.runStep("unregister", this.steps?.unregister);
     void this.runStep("remove", this.steps?.remove);
     this.onStuckHook?.(this);
+    const discarded = this.operations.splice(0, this.operations.length);
+    if (discarded.length > 0) {
+      const error = new RejectionError(
+        `activation ${this.id.toString()} is stuck and has been abandoned`,
+        "noActivation",
+      );
+      for (const operation of discarded) operation.discard(error);
+    }
+    const deactivation = this.deactivation;
+    if (deactivation !== undefined) {
+      if (deactivation.timeout !== undefined) this.time.clearTimer(deactivation.timeout.handle);
+      deactivation.complete({ migrated: false });
+    }
     this.releaseFinalizationWaiters();
   }
 
@@ -555,6 +578,11 @@ export class ActivationData implements GrainContext {
    * declared stuck (`IsStuckDeactivating`) and abandoned. Held calls sit
    * outside the turn scheduler (#91), so its own stuck-turn detection never
    * sees them waiting on a wedged `onDeactivate`; this is that check for them.
+   * The pending deactivate operation is a waiter in the same sense: it waits
+   * for the running turns to drain, as the hook turn queued behind a wedged
+   * turn did before lifecycle operations had their own queue, so a turn
+   * that never drains is declared stuck with no call held at all. A running
+   * hook with nothing waiting on it is left alone, as before.
    * No-op without `maxRequestProcessingTimeMs`, or with neither
    * `deactivationSteps` nor an `onStuck` hook to act on it.
    */
@@ -571,7 +599,7 @@ export class ActivationData implements GrainContext {
     }
     this.stuckDeactivationTimer = this.time.setTimer(() => {
       this.stuckDeactivationTimer = undefined;
-      if (this._state === "deactivating" && this.finalizationWaiters.length > 0) {
+      if (this._state === "deactivating" && this.isWaitingOnDeactivation) {
         this.abandonStuckDeactivation();
       }
     }, remainingMs);
@@ -591,6 +619,14 @@ export class ActivationData implements GrainContext {
       maxRequestProcessingTimeMs: this.maxRequestProcessingTimeMs,
     });
     this.abandon();
+  }
+
+  /** Something waits on the deactivation: a held call, or the deactivate operation not yet started. */
+  private get isWaitingOnDeactivation(): boolean {
+    return (
+      this.finalizationWaiters.length > 0 ||
+      this.operations.some((operation) => operation.name === "deactivate")
+    );
   }
 
   private clearStuckDeactivationTimer(): void {
@@ -665,6 +701,7 @@ export class ActivationData implements GrainContext {
       this.operations.push({
         name,
         run: () => Promise.resolve().then(body).then(resolve, reject),
+        discard: reject,
       });
       this.processOperations();
     });
@@ -1027,6 +1064,7 @@ export class ActivationData implements GrainContext {
     // invalid activation returns).
     if (this._state === "invalid") return Promise.resolve({ migrated: false });
     let complete!: (outcome: DeactivationOutcome) => void;
+    const completion = new Promise<DeactivationOutcome>((resolve) => (complete = resolve));
     const deactivation: Deactivation = {
       reason,
       previousState: this._state,
@@ -1035,13 +1073,19 @@ export class ActivationData implements GrainContext {
       migration,
       refusal,
       timeout: this.armDeactivationTimeout(),
-      completion: new Promise<DeactivationOutcome>((resolve) => (complete = resolve)),
+      completion,
+      complete,
     };
     this.deactivation = deactivation;
     this.transition(to);
+    // An abandonment discards the operation unrun and settles the completion itself.
     void this.scheduleOperation("deactivate", () => this.runDeactivation(deactivation)).then(
       complete,
+      () => complete({ migrated: false }),
     );
+    // The pipeline waits for running turns to drain; one that never does is
+    // declared stuck from here (see `watchForStuckDeactivation`).
+    this.watchForStuckDeactivation();
     return deactivation.completion;
   }
 
