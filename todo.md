@@ -270,7 +270,8 @@ Follow-ups surfaced while fixing them:
 
 Every finding's evidence and direction is in
 [`docs/project-review-2026-11-14.md`](docs/project-review-2026-11-14.md); the ids below are its
-headings. Not filed as issues. Fixes land on `integration/2026-11-14-design-review-fixes`, each
+headings. Not filed as issues. Fixes land on `integration/2026-11-14-design-review-fixes`, and
+the larger redesigns on `integration/2026-11-14-design-review-redesigns` stacked on it, each
 carrying a test that was observed failing first. Redis-, Postgres- and Kafka-backed paths were not
 executed locally in either wave: the Redis job-shard scripts and keys changed and must run in CI.
 
@@ -299,22 +300,27 @@ Membership and partition ownership:
       applied view, `overloaded` follows the load-shedding detector, `transportReady` follows the
       listener, and liveness can fail after sustained self-probe failure (opt-in). Residual: a
       listener `error` event still leaves `transportReady` true.
-- [ ] **M9** **partly fixed.** A dial is bounded at 5 s. Still open: replies use a
-      reverse-dialled connection, and responses match by id alone with no process epoch.
+- [x] **M9** silo replies use a reverse-dialled connection; responses match by id alone. A
+      reply travels down the request's connection, a pending call is bound to its connection and
+      to a process epoch, and a dial is bounded. Residual: the epoch is tested only at unit
+      level, and each silo still dials its own connection for the requests it sends.
 
 Transactions:
 
-- [ ] **T1** the caller-side agent drives 2PC; the TM is only a commit-record register
+- [x] **T1** the caller-side agent drives 2PC; the TM is only a commit-record register. The TM
+      drives the commit through a ported `TransactionQueue`; the agent only sends `prepare` and
+      awaits `prepareAndCommit`. Recorded departures: the memory-only committer stays outside the
+      protocol, and participant clocks are not merged into the transaction time stamp.
 - [x] **T2** `prepare` validates nothing (a re-activated participant loses its write). `prepare`
       carries the access counts and votes no unless the lock is still held with them.
 - [x] **T3** `status(): boolean` conflates "not yet decided" with "aborted". Status is
       committed / undetermined / presumed abort.
-- [ ] **T4** **partly fixed.** A holder past `lockTimeoutMs` (8 s) is broken, waiters use
-      `lockAcquireTimeoutMs` (10 s), protocol calls are always-interleave, no timer outlives its
-      resource, and the options are settable through the builder and `TestCluster`. Still open:
-      commit records are never collected (needs T1's Confirm phase), and the prepared-participant
-      ping is a stand-in.
-- [ ] **T5** pending records are siblings but the storage contract encodes a chain (root of #78)
+- [x] **T4** nothing times out or is collected. Holders expire, waiters are bounded, protocol
+      calls interleave, no timer outlives its resource, commit records are collected once every
+      writer confirms, and a prepared participant pings its TM.
+- [x] **T5** pending records are siblings but the storage contract encodes a chain (root of
+      #78). A new transaction builds on the newest pending state, loaded records queue ahead of
+      new work, and an abort cascades; both residual scenarios of #78 are tests.
 - [x] **T6** nothing blocks deactivation while a lock or prepared record is live. Deactivation
       waits for the block on every path, bounded at Orleans' 5 s.
 
@@ -322,8 +328,12 @@ Activation lifecycle:
 
 - [x] **L1** deactivation has no single owner. One joinable pipeline on the activation, in
       Orleans' order, used by every path; no invalid entry waits in the catalog for a sweep.
-- [ ] **L2** lifecycle operations are ordinary turns; a deactivation request is a polled flag
-- [ ] **L3** a 5-value state plus about 13 flags; admission is decided in about ten places
+- [x] **L2** lifecycle operations are ordinary turns; a deactivation request is a polled flag.
+      Lifecycle operations run on their own queue, never beside a request turn, and a
+      deactivation request stops admission at once.
+- [x] **L3** a 5-value state plus about 13 flags; admission is decided in about ten places. One
+      state with a tested transition table, and one admission gate for calls, stream deliveries,
+      timer ticks and system calls.
 - [ ] **L4** directory registration lives outside the activation; cold-grain order rests on timing
 - [x] **L5** the placement pipeline exists twice. Migration targets come from the same pipeline
       as new activations; directed movers pass a hint; stateless workers and system grains never
@@ -334,7 +344,8 @@ Activation lifecycle:
       has no Kalman filtering or candidate subset yet (the open part of #74).
 - [x] **L7** idle collection is a sequential full-map sweep. Stale activations are selected in
       one pass and deactivated with bounded concurrency; sweeps never overlap.
-- [ ] **L8** a same-silo call has no default deadline
+- [x] **L8** a same-silo call has no default deadline. It has the call timeout, like a
+      cross-silo call; a method's or the silo's response timeout still overrides it.
 
 Wire surface and location transparency:
 
@@ -343,17 +354,22 @@ Wire surface and location transparency:
       framework hooks are excluded.
 - [x] **W2** the value codec reserves keys inside user data. Objects owning `$thresh` or a
       dangerous key travel in a `plainObject` envelope and round-trip as themselves.
-- [ ] **W3** **partly fixed.** `wireSemanticsForLocalCalls` (silo config and `TestCluster`)
-      round-trips same-silo calls through the codec; it is off by default. Forced on, 11 tests
-      fail: 7 pass values the wire refuses, 3 rely on aliasing, 1 pins local-only semantics.
+- [ ] **W3** **partly fixed.** `TestCluster` round-trips same-silo calls through the codec by
+      default, so tests see wire semantics. A production silo still passes by reference unless
+      `wireSemanticsForLocalCalls` is set; Orleans copies. That default is an open choice.
 - [ ] **W4** no compatibility contract for the wire or stored state
 - [x] **W5** a decode failure is a process fault. An undecodable frame closes that connection
       and is counted; one failure policy wraps every system handler. Residual: a frame that
       decodes to a non-message object is delivered to the handler, whose failure is contained.
-- [ ] **W6** "safe to resend" has three definitions
+- [x] **W6** "safe to resend" has three definitions. Refused-before-execution is carried on
+      the response, and both dispatchers and the client resend only on that or a connect
+      failure; one function builds the request envelope.
 - [x] **W7** the error taxonomy lives in parallel tables that have drifted. One table, a test
       that enumerates every exported error, and `isThreshRuntimeError` classifies as Orleans does.
-- [ ] **W8** `GrainId` has two equalities
+- [ ] **W8** `GrainId` has two equalities. **Implemented on `redesign/dr3-identity-r2`, not
+      merged: it needs a decision.** Making ids canonical needs the declared key kind at run
+      time, so `defineGrainInterface` must state a non-string kind as a value (`{ key:
+      "integer" }`), not only as a type argument or marker: 159 sites here and 2 in BeneDB.
 
 Verification model:
 
@@ -372,7 +388,8 @@ State and journaling:
 - [x] **S1** the journal adaptor swallows the lost-writer signal and stays stale. A lost
       append resyncs; only the conditional entries are dropped; a lost unconditional confirm is
       retried on top of the refreshed view.
-- [ ] **S2** one storage write per durable-collection mutation, no atomic unit
+- [x] **S2** one storage write per durable-collection mutation, no atomic unit. Mutators are
+      synchronous and buffer; `writeDurableState()` appends everything buffered in one write.
 - [x] **S3** `JournaledGrain` event history is truncated by the shared compaction threshold.
       Truncation is the documented default and whole-history retention is opt-in. Opting in
       rewrites the history at every compaction until the storage seam can snapshot without
@@ -406,7 +423,9 @@ Composition, configuration and operability:
       ignored are refused. The builder still creates resources at call time and validates by
       special case.
 - [ ] **C2** options live in four hand-synchronised layers
-- [ ] **C3** lifecycle is hook arrays, not a staged lifecycle
+- [x] **C3** lifecycle is hook arrays, not a staged lifecycle. Every subsystem starts and stops
+      at a stage of one lifecycle; stop runs in reverse and is contained; a failed start rolls
+      back; grain activators compose. Residual: the stop bound is per participant.
 - [x] **C4** the logger is not a seam and the runtime is silent by default. One `logger` on the
       silo configuration reaches the node, dispatchers, reminders, jobs, the endpoint watch, the
       self-probe and the WebSocket transport; the default writes warn and error to the console.
@@ -419,7 +438,9 @@ API boundary and consumer coupling:
 
 - [ ] **A1** nothing separates public API from internals
 - [ ] **A2** nothing runs BeneDB when Thresh changes
-- [ ] **A3** two authoring models are not in lockstep
+- [x] **A3** two authoring models are not in lockstep. A feature-matrix test derived from the
+      two modules' exports, and hooks for the functional path's gaps (may-interleave, facets,
+      regex channel subscriptions, migration hooks off the call surface, per-silo dependencies).
 
 ## Beyond parity
 
