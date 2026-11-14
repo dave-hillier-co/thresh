@@ -121,4 +121,25 @@ describe("bindJournalFacets", () => {
     expect(again.total).toBe(2);
     expect(again.labelCell.value).toBe("beta");
   });
+
+  it("runs one manager over a log reached through two differently named providers on one backing", async () => {
+    const defaultStorage = new MemoryJournalStorage();
+    // A second provider name over the SAME backing store: a distinct provider object that
+    // reads and writes the same logs (as two Postgres providers over one pool and tables do).
+    const otherStorage = new MemoryJournalStorage({ sharing: defaultStorage });
+    const registry = new JournalStorageRegistry()
+      .add("default", defaultStorage)
+      .add("other", otherStorage);
+
+    const grain = new OtherProviderLabel();
+    await bindJournalFacets(grain, id, registry);
+    await grain.add(2);
+    await grain.labelCell.set("beta");
+    await grain.add(5);
+
+    const again = new OtherProviderLabel();
+    await bindJournalFacets(again, id, registry);
+    expect(again.total).toBe(7);
+    expect(again.labelCell.value).toBe("beta");
+  });
 });

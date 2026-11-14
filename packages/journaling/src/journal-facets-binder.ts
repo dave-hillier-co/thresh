@@ -10,6 +10,7 @@ import {
   bindJournaledGrain,
   installJournalViewAdaptor,
 } from "@thresh/journaling/journaled-grain-binder";
+import { sharesJournalBacking } from "@thresh/core/journal-storage";
 import type { JournalStorageRegistry } from "@thresh/journaling/journal-storage-registry";
 import { StateMachineManagerImpl } from "@thresh/journaling/state-machine-manager-impl";
 
@@ -61,7 +62,7 @@ export async function bindJournalFacets(
     isJournaledGrain &&
     !isCustomStorageHost(instance) &&
     fields.length > 0 &&
-    registry.get(durableProvider) === registry.get(opts.provider);
+    sharesJournalBacking(registry.get(durableProvider), registry.get(opts.provider));
   if (!sharesLog) {
     await bindDurableStates(instance, grainId, registry, opts);
     await bindJournaledGrain(instance, grainId, registry, opts);
