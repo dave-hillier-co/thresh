@@ -1944,7 +1944,10 @@ export class SiloBuilder {
             instance,
             grainId,
             transactionalStorage,
-            (manager, txId) => node.resolveTransactionStatus(manager, txId),
+            {
+              invoke: (target, method, args) =>
+                node.invokeTransactionResource(target, method, args),
+            },
             time,
             transactionsOptions,
           );

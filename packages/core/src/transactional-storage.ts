@@ -27,10 +27,16 @@ export interface PendingTransactionState<T> {
   state: T;
 }
 
-/** A durable record of a committed transaction's manager view, used in recovery. */
+/**
+ * The TM's durable record that a transaction committed (Orleans `CommitRecord`).
+ * Written in the same store as the TM's own write; removed once every other
+ * write participant has confirmed. A TM that re-activates with records still
+ * present resumes confirming them.
+ */
 export interface CommitRecord {
   timeStamp: number;
-  writeParticipants: string[];
+  /** Every write participant, the TM included; the ones still to confirm. */
+  writeParticipants: ParticipantId[];
 }
 
 /** Algorithm metadata stored alongside the state (the TM's commit log). */
@@ -68,6 +74,12 @@ export interface TransactionalStateStorage<T = unknown> {
    * all pending up to and including that sequence id; if `abortAfter` is set,
    * drop all pending with a strictly larger sequence id. Returns the new etag;
    * throws on an etag mismatch.
+   *
+   * Both thresholds are sound because the pending states form a chain: each
+   * transaction's tentative state is built on the newest pending one, so a
+   * record commits only after every record below it has (a confirmed record
+   * subsumes the ones below it), and aborting one aborts every record above
+   * it, which was built on it (Orleans `TransactionQueue`).
    */
   store(
     stateName: string,
