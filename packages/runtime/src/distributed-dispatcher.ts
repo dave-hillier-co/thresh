@@ -3,7 +3,7 @@ import { isStaleActivationRejection, RejectionError } from "@thresh/core/errors"
 import type { GrainAddress } from "@thresh/core/grain-address";
 import type { GrainId } from "@thresh/core/grain-id";
 import type { GrainType } from "@thresh/core/grain-type";
-import { type Logger, noopLogger } from "@thresh/core/logger";
+import { type Logger, defaultLogger } from "@thresh/core/logger";
 import type { InvocationRequest } from "@thresh/core/request";
 import type { SiloAddress } from "@thresh/core/silo-address";
 import type { GrainDirectory } from "@thresh/directory/grain-directory";
@@ -79,7 +79,7 @@ export interface DistributedDispatcherDeps {
   /**
    * Where a detached `oneWay` delivery's failure is reported (see
    * `dispatchDetachingOneWay`). Optional so a test can wire a dispatcher
-   * without one; defaults to `noopLogger`.
+   * without one; defaults to `defaultLogger`.
    */
   logger?: Logger;
 }
@@ -143,7 +143,7 @@ export class DistributedDispatcher implements Dispatcher {
     // what makes `fireAndForget()` placement-independent. `deliver` still runs
     // the whole funnel (cache, directory, placement, forward, local turn) to
     // completion; the caller just isn't holding its promise.
-    return dispatchDetachingOneWay(req, this.deps.logger ?? noopLogger, () =>
+    return dispatchDetachingOneWay(req, this.deps.logger ?? defaultLogger, () =>
       this.deliver(req, opts),
     );
   }

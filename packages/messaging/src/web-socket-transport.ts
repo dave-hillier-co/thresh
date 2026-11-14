@@ -1,6 +1,6 @@
 import { once } from "node:events";
 import { WebSocket, WebSocketServer } from "ws";
-import { noopLogger, type Logger } from "@thresh/core/logger";
+import { defaultLogger, type Logger } from "@thresh/core/logger";
 import { SiloAddress } from "@thresh/core/silo-address";
 import { systemTimeProvider, type TimeProvider } from "@thresh/core/time-provider";
 import {
@@ -63,7 +63,7 @@ export class WebSocketTransport implements Transport {
   ) {}
 
   private get logger(): Logger {
-    return this.options.logger ?? noopLogger;
+    return this.options.logger ?? defaultLogger;
   }
 
   /**
@@ -184,6 +184,9 @@ export class WebSocketTransport implements Transport {
 
     return {
       address: boundAddress,
+      onClose: (callback) => {
+        server.once("close", callback);
+      },
       close: async () => {
         await new Promise<void>((resolve) => {
           for (const client of server.clients) client.terminate(); // else close() waits forever

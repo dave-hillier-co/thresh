@@ -6,6 +6,7 @@ import type { GrainInterface } from "@thresh/core/grain-interface";
 import type { GrainKeyKind } from "@thresh/core/grain-key";
 import type { Registrable } from "@thresh/core/grain-registration";
 import type { KeyTypeOf } from "@thresh/core/key-kinds";
+import { noopLogger, type Logger } from "@thresh/core/logger";
 import type { MembershipService, MembershipSnapshot } from "@thresh/core/membership";
 import { SiloAddress } from "@thresh/core/silo-address";
 import type { StreamProvider } from "@thresh/core/stream";
@@ -47,6 +48,11 @@ export interface TestClusterOptions {
    * config, not per-silo state.
    */
   serviceId?: string;
+  /**
+   * The logger every silo in the cluster is built with. Defaults to `noopLogger`, so a suite's
+   * output is not filled with the runtime's own warnings; pass a recording logger to assert on them.
+   */
+  logger?: Logger;
   /** Grains registered on every silo. */
   grains?: ReadonlyArray<TestGrainSpec>;
   /** Clock injected into every silo; pass a `FakeTimeProvider` for determinism. */
@@ -449,6 +455,7 @@ export class TestCluster {
       clusterId: this.options.clusterId ?? "test-cluster",
       serviceId: this.options.serviceId ?? this.options.clusterId ?? "test-cluster",
       local: address,
+      logger: this.options.logger ?? noopLogger,
       ...(this.options.time !== undefined ? { time: this.options.time } : {}),
       ...(metadata !== undefined ? { metadata } : {}),
       ...(this.options.defaultResponseTimeout !== undefined

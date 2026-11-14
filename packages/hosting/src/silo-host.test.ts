@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { LogFields, Logger } from "@thresh/core/logger";
 import { GracefulShutdown } from "@thresh/hosting/graceful-shutdown";
 import { HealthCheck } from "@thresh/hosting/health-check";
 import { SiloHost, type SiloHostParts } from "@thresh/hosting/silo-host";
@@ -72,5 +73,104 @@ describe("SiloHost.stop ordering (issue #108)", () => {
     await host.stop();
 
     expect(order).toEqual(["durable job manager stop", "node.stop (deactivateAll)", "onStop"]);
+  });
+});
+
+describe("SiloHost hook failures are logged, not only thrown", () => {
+  function hostWith(
+    hooks: Partial<Pick<SiloHostParts, "onStart" | "onStop" | "startupTasks">>,
+    throwingLogger = false,
+  ): {
+    host: SiloHost;
+    errors: Array<{ message: string; fields?: LogFields }>;
+  } {
+    const errors: Array<{ message: string; fields?: LogFields }> = [];
+    const logger: Logger = {
+      debug: () => undefined,
+      info: () => undefined,
+      warn: () => undefined,
+      error: (message, fields) => {
+        if (throwingLogger) throw new Error("logger down");
+        errors.push({ message, ...(fields !== undefined ? { fields } : {}) });
+      },
+    };
+    const health = new HealthCheck();
+    const node = {
+      start: async () => undefined,
+      stop: async () => undefined,
+      recoverySettled: async () => undefined,
+      onListenerClosed: () => undefined,
+      onViewApplied: () => () => undefined,
+      hasAppliedView: () => true,
+      appliedViewVersion: 0,
+      updateView: () => undefined,
+      ownedHashRanges: () => [],
+    } as unknown as ClusterNode;
+    const host = new SiloHost({
+      node,
+      serviceId: "svc",
+      health,
+      healthServer: undefined,
+      healthPort: undefined,
+      shutdown: new GracefulShutdown(health, node, { delay: () => Promise.resolve() }),
+      membership: {
+        current: () => ({ silos: [], version: 0 }),
+        updates: async function* () {},
+      } as never,
+      logger,
+      ...hooks,
+    });
+    return { host, errors };
+  }
+
+  it("logs a start hook that throws, and still fails the start", async () => {
+    const { host, errors } = hostWith({
+      onStart: [
+        async () => {
+          throw new Error("connect failed");
+        },
+      ],
+    });
+    await expect(host.start()).rejects.toThrow("connect failed");
+    expect(errors.map((e) => e.message)).toEqual(["silo start hook failed"]);
+    expect(errors[0]!.fields).toMatchObject({ phase: "onStart" });
+  });
+
+  it("surfaces the original start error when the logger throws", async () => {
+    const { host } = hostWith(
+      {
+        onStart: [
+          async () => {
+            throw new Error("connect failed");
+          },
+        ],
+      },
+      true,
+    );
+    await expect(host.start()).rejects.toThrow("connect failed");
+  });
+
+  it("logs a startup task that throws", async () => {
+    const { host, errors } = hostWith({
+      startupTasks: [
+        async () => {
+          throw new Error("warmup failed");
+        },
+      ],
+    });
+    await expect(host.start()).rejects.toThrow("warmup failed");
+    expect(errors[0]!.fields).toMatchObject({ phase: "startupTasks" });
+  });
+
+  it("logs a stop hook that throws, and still fails the stop", async () => {
+    const { host, errors } = hostWith({
+      onStop: [
+        async () => {
+          throw new Error("disconnect failed");
+        },
+      ],
+    });
+    await expect(host.stop()).rejects.toThrow("disconnect failed");
+    expect(errors.map((e) => e.message)).toEqual(["silo stop hook failed"]);
   });
 });

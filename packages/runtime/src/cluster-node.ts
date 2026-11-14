@@ -33,7 +33,7 @@ import type {
   IncomingGrainCallFilter,
   OutgoingGrainCallFilter,
 } from "@thresh/core/grain-call-filter";
-import { type Logger, noopLogger } from "@thresh/core/logger";
+import { type Logger, defaultLogger } from "@thresh/core/logger";
 import { recordHandlerFailure } from "@thresh/observability/messaging-metrics";
 import type { GrainReferenceIdentity } from "@thresh/core/grain-reference";
 import { RemindableInterface, type ReminderRegistry, type TickStatus } from "@thresh/core/reminder";
@@ -107,6 +107,7 @@ import { withPlaceGrainSpan } from "@thresh/observability/activation-tracing";
 import { ClientDirectory } from "@thresh/runtime/client-directory";
 import type { ActivationData, ActivationOptions } from "@thresh/runtime/activation";
 import { DistributedDispatcher } from "@thresh/runtime/distributed-dispatcher";
+import { logOneWayFailure } from "@thresh/runtime/one-way-dispatch";
 import { BroadcastChannelProviderImpl } from "@thresh/runtime/broadcast-channel-provider";
 import { GrainFactory } from "@thresh/runtime/grain-factory";
 import type { GrainServiceRegistry } from "@thresh/runtime/grain-service";
@@ -397,6 +398,12 @@ export interface ClusterNodeOptions {
    * `SiloBuilder`, which turns these on with Orleans-like defaults.
    */
   activationOptions?: ActivationOptions;
+  /**
+   * THE node's logger: the node itself, its dispatcher and (unless `activationOptions.logger`
+   * names another) every activation report through it. Unset, `activationOptions.logger` is
+   * used, then `defaultLogger` (warnings and errors reach the console).
+   */
+  logger?: Logger;
 }
 
 interface RejectionPayload {
@@ -740,7 +747,7 @@ export class ClusterNode {
   constructor(private readonly options: ClusterNodeOptions) {
     const time = options.time ?? systemTimeProvider;
     this.time = time;
-    this.logger = options.activationOptions?.logger ?? noopLogger;
+    this.logger = options.logger ?? options.activationOptions?.logger ?? defaultLogger;
     this.recoveryMaxAttempts = options.recovery?.maxAttempts ?? DEFAULT_RECOVERY_MAX_ATTEMPTS;
     this.recoveryBackoffMs = options.recovery?.backoffMs ?? DEFAULT_RECOVERY_BACKOFF_MS;
     this.recoveryRetentionMs = options.recovery?.retentionMs ?? DEFAULT_RECOVERY_RETENTION_MS;
@@ -868,8 +875,13 @@ export class ClusterNode {
       ...(options.grainExtensionFactories !== undefined
         ? { grainExtensionFactories: options.grainExtensionFactories }
         : {}),
-      ...(options.activationOptions !== undefined
-        ? { activationOptions: options.activationOptions }
+      ...(options.activationOptions !== undefined || options.logger !== undefined
+        ? {
+            activationOptions: {
+              ...options.activationOptions,
+              logger: options.activationOptions?.logger ?? this.logger,
+            },
+          }
         : {}),
       loadShedding: () => this.siloTestHooks(),
       siloPing: (target, message) => this.pingSilo(target, message),
@@ -889,9 +901,7 @@ export class ClusterNode {
       // it is logged instead (see `dispatchDetachingOneWay`); reuse whatever
       // logger the host configured for activations rather than inventing a
       // second knob for it.
-      ...(options.activationOptions?.logger !== undefined
-        ? { logger: options.activationOptions.logger }
-        : {}),
+      logger: this.logger,
       clientRouter: {
         isClientTarget: (t) => isClient(t),
         route: (req) => this.routeToClient(req),
@@ -931,6 +941,7 @@ export class ClusterNode {
       this.catalog,
       time,
       (options.collectionIntervalSeconds ?? 60) * 1000,
+      this.logger,
     );
     // Built-in system grain (Orleans `IManagementGrain`), registered on every
     // silo so `getGrain(IManagementGrain, 0n)` resolves wherever placement
@@ -1403,6 +1414,15 @@ export class ClusterNode {
   /** Location-cache entries pointing at `silo` (introspection: a departed silo should have none). */
   locationCacheEntriesFor(silo: SiloAddress): number {
     return this.cache.entriesFor(silo);
+  }
+
+  /**
+   * Run `callback` once if the transport's listener stops accepting connections, whether this
+   * node closed it (`stop`) or the transport lost it. A transport whose listener cannot report
+   * this is assumed to stay up. Call after `start()`.
+   */
+  onListenerClosed(callback: () => void): void {
+    this.listener?.onClose?.(callback);
   }
 
   async start(): Promise<void> {
@@ -3708,7 +3728,13 @@ export class ClusterNode {
       this.attachParticipants(response, transaction);
       await this.reply(replyTo, response);
     } catch (err) {
-      if (message.direction === "oneWay" || replyTo === undefined) return;
+      if (message.direction === "oneWay" || replyTo === undefined) {
+        // No reply channel to carry it back on: report it the way a detached one-way dispatch does.
+        if (message.direction === "oneWay") {
+          logOneWayFailure(this.logger, message.targetGrain.toString(), message.method, err);
+        }
+        return;
+      }
       const { kind, body } = this.serializeError(err);
       const response = responseTo(message, kind, body, this.options.local);
       if (forwardedTo !== undefined) response.staleCacheEntry = true;

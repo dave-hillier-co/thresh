@@ -19,6 +19,12 @@ export type MessageHandler = (message: Message, from: SiloAddress) => void | Pro
 export interface Listener {
   readonly address: SiloAddress;
   close(): Promise<void>;
+  /**
+   * Registers a callback fired once when the listener stops accepting connections, whether
+   * through `close()` or on its own (the server went away). Optional: a transport that cannot
+   * observe this need not implement it, and its listener is then assumed to stay up.
+   */
+  onClose?(callback: () => void): void;
 }
 
 export interface Connection {

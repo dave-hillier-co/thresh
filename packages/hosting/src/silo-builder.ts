@@ -51,9 +51,11 @@ import {
   bindTransactionalStates,
   unbindTransactionalStates,
 } from "@thresh/transactions/transactional-state-activator";
-import type { Logger } from "@thresh/core/logger";
+import { defaultLogger, safeLogger, type Logger } from "@thresh/core/logger";
 import { setupTracePropagation, tracingFilters } from "@thresh/observability/tracing";
 import { metricsFilters } from "@thresh/observability/metrics";
+import type { MembershipWatchSource } from "@thresh/observability/membership-metrics";
+import { registerMembershipMetrics } from "@thresh/observability/membership-metrics";
 import { registerRuntimeMetrics } from "@thresh/observability/runtime-metrics";
 import { loggingFilter } from "@thresh/observability/logging";
 import { MemoryTransactionalStorage } from "@thresh/transactions/memory-transactional-storage";
@@ -157,6 +159,13 @@ export interface SiloConfig {
    */
   serviceId?: string;
   local: SiloAddress;
+  /**
+   * THE silo's logger: handed to the node, both dispatchers, the reminder service, the
+   * Kubernetes endpoint watch, the self-probe worker and the host. Unset, the runtime writes
+   * `warn` and `error` to the console and discards `debug` and `info` (`defaultLogger`); pass
+   * `noopLogger` to silence it. `useLogging(logger)` additionally logs every incoming call.
+   */
+  logger?: Logger;
   /** Shared clock (defaults to the system clock); inject a fake for tests. */
   time?: TimeProvider;
   /** Idle-deactivation threshold for grains without their own `collectionAgeSeconds`. */
@@ -334,6 +343,15 @@ export interface SiloConfig {
     missedThreshold?: number;
     /** Set `false` to disable the worker entirely. Defaults to `true`. */
     enabled?: boolean;
+    /**
+     * Make LIVENESS fail once the probe has failed continuously for this many milliseconds, so
+     * the kubelet restarts a silo whose dispatcher is permanently wedged (readiness alone only
+     * pulls it from service). Off unless set, because a restart drops every activation and the
+     * right period depends on the deployment; choose one well above `intervalMs * missedThreshold`
+     * (a minute or more) so a silo that is merely slow to recover is not killed. Never depends
+     * on the Kubernetes API.
+     */
+    livenessFailureMs?: number;
   };
 }
 
@@ -464,6 +482,7 @@ export class SiloBuilder {
   private readonly broadcastProviders = new Map<string, BroadcastChannelOptions>();
   private transactionsDisabled = false;
   private logger: Logger | undefined;
+  private endpointWatch: EndpointWatch | undefined;
   /**
    * Builder-time additions to `SiloConfig.classSpecificCollectionAgeSeconds` (#66). Held apart
    * from `config` — which is `readonly`, as is the map inside it — and composed at `build()`, so
@@ -471,7 +490,9 @@ export class SiloBuilder {
    */
   private readonly classSpecificCollectionAges = new Map<string, number>();
 
-  constructor(private readonly config: SiloConfig) {}
+  constructor(private readonly config: SiloConfig) {
+    this.logger = config.logger;
+  }
 
   /**
    * This silo's logical service identity (Orleans `ClusterOptions.ServiceId`),
@@ -1194,11 +1215,13 @@ export class SiloBuilder {
 
   /**
    * Log each incoming grain call (and its failures) with structured fields via
-   * the given {@link Logger}, on the call-filter seam.
+   * the given {@link Logger}, on the call-filter seam. The logger also becomes the silo's
+   * logger when `SiloConfig.logger` was not set; to log runtime diagnostics WITHOUT a line per
+   * call, set `SiloConfig.logger` instead.
    */
   useLogging(logger: Logger): this {
     this.incomingCallFilters.push(loggingFilter(logger));
-    this.logger = logger;
+    this.logger ??= logger;
     return this;
   }
 
@@ -1414,6 +1437,7 @@ export class SiloBuilder {
     if (typeof lifecycle.start === "function") {
       this.starters.push(() => lifecycle.start!());
     }
+    this.endpointWatch = watch;
     if (typeof lifecycle.stop === "function") {
       this.closers.push(async () => lifecycle.stop!());
     }
@@ -1672,7 +1696,18 @@ export class SiloBuilder {
     this.refuseSingleSiloSettingsOnACluster();
     const classSpecificCollectionAgeSeconds = this.resolvedClassSpecificCollectionAges;
     validateClassSpecificCollectionAges(classSpecificCollectionAgeSeconds);
-    const health = new HealthCheck();
+    const logger = safeLogger(this.logger ?? defaultLogger);
+    const health = new HealthCheck({
+      ...(this.config.time !== undefined ? { time: this.config.time } : {}),
+      ...(this.config.selfProbe?.livenessFailureMs !== undefined
+        ? { livenessFailureMs: this.config.selfProbe.livenessFailureMs }
+        : {}),
+    });
+    // The Kubernetes watch is built by the caller before the silo exists; give it the silo's
+    // logger unless it was handed its own.
+    (this.endpointWatch as { adoptLogger?: (logger: Logger) => void } | undefined)?.adoptLogger?.(
+      logger,
+    );
     const storage = this.storage;
     // Transactional facets default to a per-silo in-memory provider
     // (non-durable across restarts) unless transactions were explicitly
@@ -1726,10 +1761,11 @@ export class SiloBuilder {
                 : DEFAULT_DEACTIVATION_TIMEOUT_MS,
           }
         : {}),
-      ...(this.logger !== undefined ? { logger: this.logger } : {}),
+      logger,
     };
 
     const node = new ClusterNode({
+      logger,
       local: this.config.local,
       clusterId: this.config.clusterId,
       membership: this.membership,
@@ -1872,6 +1908,18 @@ export class SiloBuilder {
         directoryRecovery: () => node.directoryRecoveryStats(),
       });
       this.closers.push(async () => unregister());
+      const endpointWatch = this.endpointWatch as
+        | { status?: () => MembershipWatchSource }
+        | undefined;
+      const unregisterMembership = registerMembershipMetrics({
+        appliedViewVersion: () => node.appliedViewVersion,
+        memberCount: () => membership.current().silos.length,
+        activeMemberCount: () => activeSilos(membership.current()).length,
+        ...(typeof endpointWatch?.status === "function"
+          ? { watch: () => endpointWatch.status!() }
+          : {}),
+      });
+      this.closers.push(async () => unregisterMembership());
     }
 
     if (this.reminderTable !== undefined) {
@@ -1881,9 +1929,11 @@ export class SiloBuilder {
         (grainId, name, status) => node.deliverReminder(grainId, name, status),
         node.ownedHashRanges(),
         (this.config.reminderRefreshSeconds ?? 60) * 1000,
-        this.reminderServiceOptions ?? {},
+        { ...this.reminderServiceOptions, logger: this.reminderServiceOptions?.logger ?? logger },
       );
     }
+
+    health.followOverload(() => node.isOverloaded());
 
     // The rebalancer worker elects a single leader from membership and
     // drives the node's `runRebalanceCycle` on a timer; the host starts/stops it.
@@ -1912,6 +1962,7 @@ export class SiloBuilder {
       selfProbeWorker = new SelfProbeWorker({
         probe: () => node.getGrain(ISiloProbe, this.config.local.ringKey).ping(),
         health,
+        logger,
         time: time ?? systemTimeProvider,
         ...(this.config.selfProbe?.intervalMs !== undefined
           ? { intervalMs: this.config.selfProbe.intervalMs }
@@ -2074,7 +2125,7 @@ export class SiloBuilder {
       onOwnershipChange,
       onBeforeDeactivate: this.preDeactivateClosers,
       onStop: this.closers,
-      ...(this.logger !== undefined ? { logger: this.logger } : {}),
+      logger,
       startupTasks: this.startupTasks.map((fn) => async () => {
         await ensureEmbeddedClient(); // no-op without an in-process network
         await fn(grainFactoryAccess);

@@ -1,4 +1,4 @@
-import { type Logger, noopLogger } from "@thresh/core/logger";
+import { type Logger, defaultLogger } from "@thresh/core/logger";
 import type { InvocationRequest } from "@thresh/core/request";
 import type { Catalog } from "@thresh/runtime/catalog";
 import {
@@ -17,7 +17,7 @@ export class LocalDispatcher implements Dispatcher {
   constructor(
     private readonly catalog: Catalog,
     /** Where a detached `oneWay` failure is reported; see `dispatchDetachingOneWay`. */
-    private readonly logger: Logger = noopLogger,
+    private readonly logger: Logger = defaultLogger,
   ) {}
 
   invoke(req: InvocationRequest, opts?: InvokeCallOptions): Promise<unknown> {

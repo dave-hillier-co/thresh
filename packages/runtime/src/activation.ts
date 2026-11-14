@@ -35,7 +35,7 @@ import { MigrationBag } from "@thresh/core/grain-migration-participant";
 import type { GrainRuntime } from "@thresh/core/grain-runtime";
 import type { GrainTimer, TimerOptions } from "@thresh/core/grain-timer";
 import type { InvokeMethodOptions } from "@thresh/core/invoke-options";
-import { type Logger, noopLogger } from "@thresh/core/logger";
+import { type Logger, defaultLogger } from "@thresh/core/logger";
 import {
   formatDeactivationReason,
   type ActivationReason,
@@ -394,7 +394,7 @@ export class ActivationData implements GrainContext {
     this.id = id;
     this.activationId = activationId;
     this.deactivationTimeoutMs = options.deactivationTimeoutMs;
-    this.logger = options.logger ?? noopLogger;
+    this.logger = options.logger ?? defaultLogger;
     this.onStuckHook = options.onStuck;
     this.steps = options.deactivationSteps;
     this.maxRequestProcessingTimeMs = options.maxRequestProcessingTimeMs;
