@@ -148,6 +148,55 @@ Each normal method call is one serialized turn. `readOnly` interface options dec
 not mutate state and enable runtime optimizations; violating read-only state guards throws. Other
 method options include response timeout, transaction behavior, interleaving, and one-way delivery.
 
+## Class form and functional form
+
+A grain is written either as a class (decorators) or as a `defineGrain` factory (options and
+hooks); both register through the same catalog, scheduler and facet binding, and the functional form
+is the recommended one for new code. The two are kept in lockstep: every authoring feature is in the
+matrix in `packages/core/src/authoring-matrix.test.ts`, which is checked against what
+`@thresh/core/decorators` and `@thresh/core/define-grain` export, and fails when a decorator or hook
+is added to one without an answer for the other.
+
+| Feature | Class form | Functional form |
+|---|---|---|
+| Registration | `@grain()` | `defineGrain(name, factory, options)` |
+| Full reentrancy | `@reentrant()` | `reentrant: true` |
+| May-interleave predicate | `@mayInterleave(predicate)` | `useMayInterleave(predicate)` |
+| Implicit stream subscription | `@implicitStreamSubscription(ns)` | `implicitSubscriptions: [ns]` |
+| Implicit channel subscription | `@implicitChannelSubscription(ns)` | `implicitChannelSubscriptions: [ns]` |
+| Regex channel subscription | `@regexImplicitChannelSubscription(re)` | `regexImplicitChannelSubscriptions: [re]` |
+| Persistent, reducer, transactional, durable state | `@persistentState` and the other field decorators | `usePersistentState` and the other `use*` hooks |
+| Third-party facet | `@grainFacet(kind, name, config)` | `useGrainFacet(kind, { name, config })` |
+| Activation and deactivation | override `onActivate` / `onDeactivate` | `useOnActivate` / `useOnDeactivate` |
+| Migration state | implement `onDehydrate` / `onRehydrate` | `useOnDehydrate` / `useOnRehydrate` |
+| Per-silo dependencies | a `GrainActivator` passes constructor arguments | `useDependency(token)` |
+| Durable job handler | `DURABLE_JOB_HANDLER` member | `useDurableJobHandler` |
+
+A few notes on the functional column:
+
+- `useMayInterleave` is per activation, so the predicate may close over the factory's state.
+- `useGrainFacet` returns a handle; `handle.get()` is the facet the factory registered with
+  `addGrainFacetFactory(kind, name, factory)`, bound before `onActivate`.
+- `useOnDehydrate` and `useOnRehydrate` make the activation a migration participant without
+  putting `onDehydrate` / `onRehydrate` on the grain's call surface: a remote call to either is
+  refused like any runtime hook, and a factory that returns one of them is rejected at activation.
+  A hook runs synchronously, as the class methods do.
+- `useDependency` reads a value the silo's builder registered with
+  `builder.addGrainDependency(token, value)`, where `token` comes from `createDependencyToken<T>(name)`
+  in `@thresh/core/grain-dependency`. It is per silo: two silos in one process can supply different
+  values. It throws, naming the token, if the silo registered none.
+- All of them follow the rules of hooks: call them at the top of the factory, synchronously.
+
+Three features are deliberately single-path:
+
+- **`JournaledGrain`** is a base class whose transition and log-view hooks the application
+  overrides; a factory has no base class. A functional grain journals with `useDurable*` or folds
+  events with `useReducerState`.
+- **Custom log-view storage** (`readStateFromStorage`, `applyUpdatesToStorage`, `clearStoredState`)
+  is an extension point of `JournaledGrain` and follows it.
+- **`defineReducerGrain`** is a whole-grain shortcut over `useReducerState`; a class grain gets the
+  same behaviour from a `@reducerState` field.
+
 ## Interleaving
 
 A turn is the whole `async` method, including every continuation after an `await`. By default a
@@ -182,7 +231,7 @@ What an interleaved call may observe is a contract, pinned by
 
 Call-chain reentrancy is off by default, as in Orleans. A non-reentrant grain that calls back into
 itself — directly, or through other grains (`A -> B -> A`) — waits on its own running turn and fails
-with `GrainCallTimeoutError` when the call's response timeout elapses. To allow it, wrap the calls in
+with `GrainCallTimeoutError` when the call's response timeout elapses (30 seconds unless the method, `defaultResponseTimeout` or `callTimeout` says otherwise, for a call to a grain on the same silo as for one on another). To allow it, wrap the calls in
 `RequestContext.allowCallChainReentrancy` (Orleans' `AllowCallChainReentrancy`):
 
 ```ts
@@ -462,9 +511,10 @@ closer:
   change reaches every silo in the same instant with the same version, and a stopped or killed
   silo leaves every view at once. Production silos each follow their own Kubernetes watch, so their
   views change one at a time and can differ. Pass `membership: "kubernetes"` to run that path.
-- **Serialization.** A call between silos round-trips the value codec; a call to a grain on the
-  same silo does not, so its arguments and result are shared objects and a thrown error keeps its
-  class. Pass `wireSemanticsForLocalCalls: true` to make same-silo calls behave like remote ones.
+- **Serialization.** A call between silos round-trips the value codec. In `TestCluster` so does a
+  call to a grain on the same silo, so a test never sees shared objects or a preserved error class
+  that a cross-silo call would lose. Pass `wireSemanticsForLocalCalls: false` to opt out. A silo
+  outside the harness does not copy local calls unless the option is set.
 - **Failure.** Nothing fails unless the test makes it fail: use `killSilo`, `cluster.faults` and the
   fault-injecting storage decorators below.
 
@@ -525,9 +575,13 @@ cluster.faults.failConnects({ from: a.address, to: b.address }); // RejectionErr
 const cut = cluster.faults.partition([a.address], [b.address, c.address]);
 cut.heal();
 cluster.faults.schedule({ from: a.address, to: b.address }, ["deliver", "drop", { delayMs: 50 }]);
+await cluster.faults.sever({ from: a.address, to: b.address }); // calls pending on it: "siloUnavailable"
 ```
 
-Faults are applied where a message is sent, to requests and replies alike. Each fault holds until
+Faults are applied where a message is sent, to requests and replies alike; a reply travels back down
+the connection its request came in on, so a fault from `b` to `a` reaches `b`'s replies to `a`'s
+calls. `sever` closes the connections already open on a link at the accepting end, as a reset socket
+would: the dialler sees each one lost and fails exactly the calls pending on it. Each fault holds until
 healed, or for the given `count` of messages. A schedule decides the next messages on a link one at
 a time, then the link goes back to the standing rules. Nothing is random. Connections are pooled, so
 a refused connect only bites a link that has not connected yet; arm one before the cluster starts by
@@ -552,12 +606,13 @@ store's `backingKey`. Install them from `configureSilo`, for example
 
 ## Remote semantics for local calls
 
-`wireSemanticsForLocalCalls: true` (also a `SiloConfig` field) passes the arguments, the result and
+`wireSemanticsForLocalCalls` (also a `SiloConfig` field) passes the arguments, the result and
 a thrown error of every grain call through the codec round trip a message makes. A same-silo
 callee then gets copies, not the caller's objects. A class instance with no registered surrogate
 is flattened or refused, as on the wire. An error class the codec cannot rebuild arrives as
-`UnavailableExceptionFallbackException`, as a remote caller would see it. The option is off by
-default.
+`UnavailableExceptionFallbackException`, as a remote caller would see it. The option is on by
+default in `TestCluster` and off by default in a silo; a test that pins local-only behaviour, such as
+a cyclic argument, passes `false`.
 
 
 ---
@@ -725,7 +780,8 @@ runtime, guarantees, and lifecycle are unchanged.
 
 `usePersistentState`, `useReducerState`, `useTransactionalState`, `useDurableState` /
 `useDurableDictionary` / `useDurableList` / `useDurableQueue` / `useDurableSet`,
-`useDurableJobHandler` and `useContext` take **no context argument**. They resolve the activation
+`useDurableJobHandler`, `useContext`, `useMayInterleave`, `useGrainFacet`, `useOnDehydrate` /
+`useOnRehydrate` and `useDependency` take **no context argument**. They resolve the activation
 being set up from an ambient slot that the runtime pushes around the factory call and pops in a
 `finally`. That slot is live only for the *synchronous* body of the factory, so:
 
@@ -742,6 +798,27 @@ The factory's **`ctx` parameter stays**, and it is how a grain reaches the runti
 capture it in the closure and use `ctx.runtime`, `ctx.id` and `ctx.getGrain` inside method bodies and
 lifecycle hooks. `useContext()` returns the same value, for helpers that would otherwise thread `ctx`
 through — but only during setup, like any other hook.
+
+### The two forms stay in lockstep
+
+Orleans has one authoring form (a class, with attributes and constructor injection), so the
+class-only features (`[MayInterleave]`, facet attributes, regex channel subscriptions, migration
+participation, constructor-injected services) each need a functional spelling here. They are: 
+`useMayInterleave`, `useGrainFacet`, the `regexImplicitChannelSubscriptions` option,
+`useOnDehydrate` / `useOnRehydrate` and `useDependency`. Departures from the class spelling:
+
+- **Per-silo dependencies are tokens, not constructor parameters.** Orleans resolves a grain's
+  constructor from DI; a class grain here gets the same through a `GrainActivator`, and a functional
+  grain asks `useDependency(token)` for a value registered with `SiloBuilder.addGrainDependency`.
+  A token is compared by identity and carries the type.
+- **The may-interleave predicate is per activation** for a functional grain (it is built inside the
+  factory), and per class for `@mayInterleave`. The admission rules are identical.
+- **Migration hooks are not methods of the grain.** They are installed as non-enumerable members
+  that the call surface refuses by name, so a functional grain does not expose them to callers.
+
+A feature matrix test (`packages/core/src/authoring-matrix.test.ts`) lists every decorator and hook
+and fails when one is added to one form without an entry for the other. Deliberately single-path:
+`JournaledGrain` and its custom-storage hooks (class), `defineReducerGrain` (functional).
 
 ### Definitions are interfaces
 
@@ -1007,6 +1084,30 @@ in-memory instances every silo shares in one process (`TestCluster`), `allowWith
 A store the builder constructs itself is one per silo by construction, so only `allowInCluster`
 admits it.
 
+## Storage clients start below the node, and a failed start rolls itself back
+
+The silo runs Orleans' staged lifecycle (`ServiceLifecycleStage`, `LifecycleSubject`): every
+subsystem starts at a named stage ascending and stops descending, and a participant whose stop
+throws is logged while the rest still stop. Three placements differ from Orleans. Storage clients
+(Redis, Postgres, Kafka metadata) and the membership watch sit at `RuntimeInitialize`, below the
+node at `RuntimeServices`, where Orleans initialises storage providers at `RuntimeStorageServices`
+above its messaging: here the node listens as soon as it starts and a peer's call can activate a
+grain at once, so the client a grain reads must already be connected, and it must close only after
+the node has deactivated every activation. The readiness flip is a participant at `Last`, so it
+publishes first on stop. The membership reconcile, which tells reminders, durable jobs and pulling
+stream agents which ranges they own (Orleans' ring-change listeners, which have no stage of their
+own), sits one stage above `Active`, so it stops before every service it feeds; from the moment
+stop begins it runs no ownership hook, and its stop waits, within the stop budget, for a reconcile
+already in flight. Orleans' `LifecycleSubject.OnStart` does not itself unwind on failure; the
+host does, calling `onStop` and rejecting with the original error, so a half-started silo leaves
+nothing listening, connected or armed. Three further departures keep that guarantee. Within one
+stage a stop runs the participants one at a time in the reverse of registration order, where
+Orleans stops a stage's observers concurrently, so the whole stop order is the reverse of the start
+order. A stop issued while a start is in flight halts the start (no later stage begins) and stops
+what began, where Orleans leaves the start running. And a participant whose stop has not settled
+within the stop budget is logged as failed and abandoned, so one hung stop cannot hold the rest of
+the stop (or a rollback) forever; Orleans bounds this through the host's shutdown timeout.
+
 ## A transaction resource delays deactivation for a bounded time
 
 As in Orleans (`ActivationLifetime.BlockDeactivation` and `OnStopAsync`), a transactional-state
@@ -1075,6 +1176,35 @@ to activation counts. The default statistics source is Node's
 event-loop utilisation for CPU and process and OS memory for the rest, and a silo accepts any
 `EnvironmentStatisticsProvider` in its place (Orleans' `IEnvironmentStatisticsProvider`).
 
+## The activation lifecycle follows Orleans, with four differences
+
+As in Orleans' `ActivationData`, an activation has one lifecycle state, and activating,
+deactivating and dehydrating run on a queue of lifecycle operations that starts only when no
+request is running and admits no request while one is pending, on a reentrant grain too. A
+deactivation request (`deactivateOnIdle`, an escaped `InconsistentStateError`, `migrateOnIdle`,
+idle collection, a silo stop) moves the activation to deactivating at once: calls and stream
+deliveries that reach it are held and rerouted once it has gone, and timer ticks are dropped. Four
+things differ:
+
+- An activation that calls `deactivateOnIdle` from its own `onActivate` refuses the calls waiting on
+  it with "activation unavailable" instead of rerouting them, which is what Orleans' own
+  `DeactivateOnIdleWhileActivate` test observes as "Forwarding failed".
+- An explicit memory-stream subscription delivers through a handler closure rather than a message
+  to the grain, so a delivery held on a deactivating activation is released with a reroute
+  rejection and the provider redelivers it to the handler the next activation resumes. The
+  subscriber is not told of an error.
+- `ActivationTimeout` (`SiloConfig.activationTimeout`, 30 s by default as in Orleans) fails an
+  activation whose state load and `onActivate` have not finished in time, rejecting its waiting
+  calls and removing it so a later call activates afresh. Orleans cancels `OnActivateAsync` through
+  its cancellation token; `onActivate` has no token to observe, so a hung one keeps running in the
+  background after the activation has given up on it.
+- A deactivation that cannot start because a request never finishes is abandoned once it has waited
+  `maxRequestProcessingTimeMs`, even when no call is waiting on it, and whoever awaits it is
+  released. Orleans checks for a stuck deactivation only when a message arrives, so with no message
+  arriving it never declares one stuck; here the waiting deactivate operation counts as the
+  message, as the `onDeactivate` turn queued behind the wedged one did before lifecycle operations
+  had their own queue.
+
 ## A same-silo call shares its arguments unless asked not to
 
 Orleans deep-copies a call's arguments and its response even when caller and callee share a silo
@@ -1084,7 +1214,40 @@ same call to another silo round-trips the value codec. `SiloConfig.wireSemantics
 (and `TestClusterOptions.wireSemanticsForLocalCalls`) restores placement-independence by passing
 the arguments, the result and a thrown error of every call through that codec round trip. The codec
 is the copier here, so the option also flattens or refuses class instances and rebuilds error
-classes exactly as the wire does. It is off by default.
+classes exactly as the wire does. It is off by default in a silo and on by default in
+`TestCluster`, so a test sees what a cross-silo call would.
+
+This is an open choice, not a settled one. Copying in production would match Orleans and make
+placement invisible to grain code, at the price of an encode and a decode on every local call,
+a loss of class identity on arguments and results (a class instance with no surrogate arrives
+flattened, an unregistered error class arrives as `UnavailableExceptionFallbackException`), and
+a refusal for values the wire cannot carry, such as a cyclic argument or a function. Not copying
+keeps local calls cheap and lets a grain pass its own objects to a neighbour, at the price of
+aliasing no cross-silo call has: a callee can mutate its caller's argument, a caller can mutate
+a grain's returned state, and a suite that lands caller and callee together passes where a
+multi-silo deployment fails. The production default stays off.
+
+## A process epoch rides the preamble and the correlation, not the silo address
+
+Orleans carries a generation in `SiloAddress`, so a restarted silo at the same endpoint is a
+different address, and a message meant for its predecessor is recognised as stale. Thresh's
+`SiloAddress` keeps its identity (`podName` + `podUid` + endpoint, no generation), so the
+generation lives elsewhere: each process picks a random epoch at load (`PROCESS_EPOCH`), carries it
+in every connection preamble it dials, and stamps it on every request it awaits; the response
+carries it back. A pending call completes only on a response with its own id, this epoch, and
+arriving on the connection the request went out on. A late reply meant for a container's previous
+incarnation therefore completes nothing in its successor, even though correlation ids restart at 1
+in every process. Such a response is dropped and counted (`thresh.messaging.response.misrouted`).
+
+## Each silo dials its own connection for the requests it sends
+
+Replies travel down the connection their request arrived on, as in Orleans, so a silo never dials
+a peer to answer it. Orleans also registers an accepted silo connection in its connection manager,
+so a silo may send its own requests to that peer over the connection the peer opened. Thresh does
+not: a silo sends its requests over a connection it dialled, one per peer, so two silos that call
+each other hold one connection in each direction, each carrying one side's requests and the other
+side's replies. A caller detects the loss of the connection its call went out on; that is the only
+connection its reply can arrive on.
 
 ## Additions beyond Orleans
 
@@ -1179,6 +1342,15 @@ and `useDurableJobHandler` resolve the activation being set up from an ambient
 slot that is live only during the *synchronous* body of the factory. Call them at
 the top level of the factory, never after an `await`, from a method body, or from
 `onActivate` — those throw an error naming the hook and the rule.
+
+The hooks that close the gap with the class form follow the same rule: `useMayInterleave(predicate)`
+(per-activation admission predicate), `useGrainFacet<T>(kind, { name, config })` (returns a handle whose
+`get()` is the bound third-party facet), `useOnDehydrate(handler)` / `useOnRehydrate(handler)`
+(migration state; synchronous, and not on the grain's call surface) and `useDependency(token)`.
+Dependencies are typed by a token: make one with `createDependencyToken<T>(name)` from
+`@thresh/core/grain-dependency`, register the value per silo with
+`builder.addGrainDependency(token, value)`, and `useDependency(token)` returns a `T`. Regular-expression
+channel subscriptions are an option, `regexImplicitChannelSubscriptions: [pattern]`, not a hook.
 
 The factory keeps its `ctx` parameter for reaching the runtime *after* setup:
 capture it in the closure and use `ctx.runtime` / `ctx.id` / `ctx.getGrain` from
