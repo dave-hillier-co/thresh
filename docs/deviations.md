@@ -395,6 +395,18 @@ expires. `recordCommit` refuses a transaction the TM no longer holds, so that de
 An ordinary prepared participant asks its TM at Orleans' `RemoteTransactionPingFrequency`. An
 in-doubt record whose TM never answers keeps its activation alive until silo shutdown.
 
+## Resource-optimized placement scores raw readings over every candidate
+
+`ResourceOptimizedPlacement` ports the scoring of Orleans' `ResourceOptimizedPlacementDirector`
+(normalised weights over CPU, memory usage, available memory, maximum memory and activation count,
+the local-silo preference margin, overloaded silos left out). Three things differ. The readings are
+the raw ones each silo pushes in its load snapshot, where Orleans scores Kalman-filtered CPU and
+memory, so a single noisy sample moves the score more here. Every eligible candidate is scored,
+where Orleans scores a random square-root-of-n subset. And a silo that has pushed no snapshot is
+scored from its activation count alone rather than skipped. The default statistics source is Node's
+event-loop utilisation for CPU and process and OS memory for the rest, and a silo accepts any
+`EnvironmentStatisticsProvider` in its place (Orleans' `IEnvironmentStatisticsProvider`).
+
 ## Additions beyond Orleans
 
 A few capabilities layer on top of the faithful model without changing it: **durable journaling**

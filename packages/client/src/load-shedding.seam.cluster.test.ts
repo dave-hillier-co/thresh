@@ -94,7 +94,10 @@ describe("NodeEnvironmentStatisticsProvider", () => {
 
 describe("environment statistics seam", () => {
   it("sheds gateway traffic and is excluded from peer placement with no test latch", async () => {
-    const { network, nodes, addresses } = buildNodes([new FixedStatistics(99), new FixedStatistics(5)]);
+    const { network, nodes, addresses } = buildNodes([
+      new FixedStatistics(99),
+      new FixedStatistics(5),
+    ]);
     await Promise.all(nodes.map((n) => n.start()));
     const client = createClient({
       clusterId: CLUSTER,

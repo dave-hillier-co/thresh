@@ -30,6 +30,8 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
 }
 
 let onDeactivateGate: Promise<void>;
+/** Called when the source activation starts dehydrating: the migration is then mid-flight. */
+let dehydrationStarted: () => void = () => undefined;
 
 @grain()
 class SlowMigrateGrain extends Grain implements IWorker {
@@ -40,6 +42,12 @@ class SlowMigrateGrain extends Grain implements IWorker {
   override async onDeactivate(): Promise<void> {
     await onDeactivateGate;
   }
+
+  onDehydrate(): void {
+    dehydrationStarted();
+  }
+
+  onRehydrate(): void {}
 }
 
 const silo = (n: number) => new SiloAddress(`silo-${n}`, `uid-${n}`, `silo-${n}:1111${n}`);
@@ -65,6 +73,8 @@ describe("a remote caller reaching an activation mid-migration is held and rerou
   it("serves the remote call from the new host once the migration settles, instead of failing it", async () => {
     const gate = deferred();
     onDeactivateGate = gate.promise;
+    const started = deferred();
+    dehydrationStarted = started.resolve;
     const { nodes, addresses } = buildCluster();
     await Promise.all(nodes.map((n) => n.start()));
     try {
@@ -80,10 +90,12 @@ describe("a remote caller reaching an activation mid-migration is held and rerou
       // calls `deactivate()`, whose `onDeactivate` is gated open) without
       // awaiting it yet.
       const migrating = nodes[0]!.migrateRandomActivations(addresses[1]!, 1);
+      // Target selection now runs through the placement pipeline first, so wait until the
+      // source has begun dehydrating: the migration is mid-flight.
+      await started.promise;
 
       // A remote call from silo-1, issued while the migration is in flight,
-      // must be held rather than rejected — regardless of whether it lands
-      // before or after the hand-off completes.
+      // must be held rather than rejected.
       const remoteCall = nodes[1]!.getGrain(IWorker, "g").ping();
       let settled = false;
       void remoteCall.then(() => (settled = true));

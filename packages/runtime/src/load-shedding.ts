@@ -12,7 +12,7 @@ import { performance, type EventLoopUtilization } from "node:perf_hooks";
  * struggling process.
  */
 
-/** Mirrors Orleans `LoadSheddingOptions` (memory-threshold field omitted: nothing here reports memory usage). */
+/** Mirrors Orleans `LoadSheddingOptions` (memory-threshold field omitted: only the CPU threshold gates shedding here). */
 export interface LoadSheddingOptions {
   /** Whether load shedding is enforced at all. Defaults to `false` (Orleans parity: opt-in). */
   loadSheddingEnabled: boolean;
@@ -81,7 +81,9 @@ export class NodeEnvironmentStatisticsProvider implements EnvironmentStatisticsP
   private readCpuUsagePercentage(): number {
     const current = performance.eventLoopUtilization();
     const window =
-      this.previous === undefined ? current : performance.eventLoopUtilization(current, this.previous);
+      this.previous === undefined
+        ? current
+        : performance.eventLoopUtilization(current, this.previous);
     this.previous = current;
     return Math.min(100, Math.max(0, window.utilization * 100));
   }
