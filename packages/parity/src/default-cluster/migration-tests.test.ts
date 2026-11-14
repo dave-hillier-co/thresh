@@ -7,10 +7,10 @@
 // so a single attempt is guaranteed to move the activation; loop counts are
 // reduced accordingly without weakening any assertion inside the loop.
 //
-// Migration only runs on the collection sweep once an activation goes stale
-// (see `ActivationData.isStale`), so every case sets a short per-grain
-// `collectionAgeSeconds` and drives a `FakeTimeProvider` past it plus the
-// default collection interval to force a sweep.
+// As upstream, a migration request takes effect at once: the activation
+// starts deactivating as soon as the turn that asked finishes, and calls made
+// meanwhile are held and rerouted to wherever it lands. No collection sweep is
+// involved.
 import { afterAll, beforeAll, describe, expect } from "vitest";
 import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
 import { GrainId } from "@thresh/core/grain-id";
@@ -37,13 +37,6 @@ const persistentStateOfTGrainType = getGrainMetadata(
 
 function hostOf(cluster: TestCluster, grainId: GrainId): TestSiloHandle | undefined {
   return cluster.silos.find((s) => s.host.isActive(grainId));
-}
-
-// Fires the collection sweep (default interval 60s) well past the 1s
-// `collectionAgeSeconds` every migration-test grain is registered with.
-async function forceMigrationSweep(time: FakeTimeProvider): Promise<void> {
-  time.advance(65_000);
-  await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 describe("DefaultCluster.Tests.General.MigrationTests", () => {
@@ -83,7 +76,6 @@ describe("DefaultCluster.Tests.General.MigrationTests", () => {
 
       await grain.migrateOnIdle();
       await grain.setState(expectedState);
-      await forceMigrationSweep(time);
       await waitFor(() => {
         const host = hostOf(cluster, grainId);
         return host !== undefined && host !== originalHost;
@@ -109,7 +101,6 @@ describe("DefaultCluster.Tests.General.MigrationTests", () => {
         // Trigger deactivation and tell the grain that it should migrate to the
         // target host from its own onDeactivate hook.
         await grain.migrateDuringDeactivation(targetHost.address);
-        await forceMigrationSweep(time);
         await waitFor(() => hostOf(cluster, grainId) === targetHost);
 
         expect(hostOf(cluster, grainId)).toBe(targetHost);
@@ -132,7 +123,6 @@ describe("DefaultCluster.Tests.General.MigrationTests", () => {
         const targetHost = cluster.silos.find((s) => s !== originalHost)!;
 
         await grain.migrateOnIdle(targetHost.address);
-        await forceMigrationSweep(time);
         await waitFor(() => hostOf(cluster, grainId) === targetHost);
 
         expect(hostOf(cluster, grainId)).toBe(targetHost);
@@ -176,7 +166,6 @@ describe("DefaultCluster.Tests.General.MigrationTests", () => {
         const migrateB = b.migrateOnIdle();
         await migrateA;
         await migrateB;
-        await forceMigrationSweep(time);
 
         await waitFor(() => hostOf(cluster, grainIdA) === targetHost);
         await waitFor(() => hostOf(cluster, grainIdB) === targetHost);
@@ -201,7 +190,6 @@ describe("DefaultCluster.Tests.General.MigrationTests", () => {
         const targetHost = cluster.silos.find((s) => s !== originalHost)!;
 
         await grain.migrateOnIdle(targetHost.address);
-        await forceMigrationSweep(time);
         await waitFor(() => hostOf(cluster, grainId) === targetHost);
 
         expect(hostOf(cluster, grainId)).toBe(targetHost);
@@ -225,7 +213,6 @@ describe("DefaultCluster.Tests.General.MigrationTests", () => {
         const targetHost = cluster.silos.find((s) => s !== originalHost)!;
 
         await grain.migrateOnIdle(targetHost.address);
-        await forceMigrationSweep(time);
         await waitFor(() => hostOf(cluster, grainId) === targetHost);
 
         expect(hostOf(cluster, grainId)).toBe(targetHost);
@@ -259,7 +246,6 @@ describe("DefaultCluster.Tests.General.MigrationTests", () => {
 
     RequestContext.set("fail_dehydrate", "true");
     await grain.migrateOnIdle(targetHost.address);
-    await forceMigrationSweep(time);
     await waitFor(() => hostOf(cluster, grainId) === targetHost);
 
     expect(hostOf(cluster, grainId)).toBe(targetHost);
@@ -283,7 +269,6 @@ describe("DefaultCluster.Tests.General.MigrationTests", () => {
 
     await grain.failNextRehydrate();
     await grain.migrateOnIdle(targetHost.address);
-    await forceMigrationSweep(time);
 
     // Rehydration fails on the target, so the migrated activation is
     // discarded there; the directory still points at the target, so the next
