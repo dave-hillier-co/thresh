@@ -1492,6 +1492,9 @@ export class ClusterNode {
     const newRing = this.buildRing();
     const live = new Set(activeSilos(snapshot).map((s) => s.ringKey));
     const present = new Set(memberSilos(snapshot).map((s) => s.ringKey));
+    for (const key of this.remoteLoadStats.keys()) {
+      if (!present.has(key)) this.remoteLoadStats.delete(key);
+    }
     // Silos newly active in this view: they never received this silo's
     // `broadcastClientGossip` from before they joined, so republish this
     // silo's clients to them now instead of leaving them to learn of it only

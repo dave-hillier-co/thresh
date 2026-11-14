@@ -33,9 +33,9 @@ interface NormalizedWeights {
  *
  * Differences from Orleans: the readings are the raw ones a silo pushes, not Kalman-filtered
  * (Orleans scores `FilteredCpuUsagePercentage` and the filtered memory figures); every eligible
- * candidate is scored, where Orleans scores a random sqrt(n) subset (power of K); a candidate
- * with no statistics is scored from its activation count alone if the context has one, rather
- * than skipped; and with every reporting silo overloaded the first candidate is chosen, as in
+ * candidate is scored, where Orleans scores a random sqrt(n) subset (power of K); a context
+ * that supplies no `resourceStats` at all scores candidates from activation counts alone; and
+ * with every reporting silo overloaded the first candidate is chosen, as in
  * Orleans.
  */
 export class ResourceOptimizedPlacement implements PlacementStrategy {
@@ -114,9 +114,12 @@ export class ResourceOptimizedPlacement implements PlacementStrategy {
 }
 
 function statsOf(silo: SiloAddress, ctx: PlacementContext): SiloResourceStats | undefined {
-  const reported = ctx.resourceStats?.(silo);
-  const overloaded = reported?.isOverloaded ?? ctx.isOverloaded?.(silo);
-  if (reported !== undefined) {
+  const overloaded = ctx.resourceStats?.(silo)?.isOverloaded ?? ctx.isOverloaded?.(silo);
+  if (ctx.resourceStats !== undefined) {
+    // Orleans scores only silos it holds statistics for; a silo that has pushed none is
+    // skipped, whatever its (defaulted) activation count says.
+    const reported = ctx.resourceStats(silo);
+    if (reported === undefined) return undefined;
     const activationCount = reported.activationCount ?? ctx.activationCount?.(silo);
     return {
       ...reported,

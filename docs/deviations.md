@@ -399,11 +399,11 @@ in-doubt record whose TM never answers keeps its activation alive until silo shu
 
 `ResourceOptimizedPlacement` ports the scoring of Orleans' `ResourceOptimizedPlacementDirector`
 (normalised weights over CPU, memory usage, available memory, maximum memory and activation count,
-the local-silo preference margin, overloaded silos left out). Three things differ. The readings are
+the local-silo preference margin, overloaded silos left out). Two things differ. The readings are
 the raw ones each silo pushes in its load snapshot, where Orleans scores Kalman-filtered CPU and
 memory, so a single noisy sample moves the score more here. Every eligible candidate is scored,
-where Orleans scores a random square-root-of-n subset. And a silo that has pushed no snapshot is
-scored from its activation count alone rather than skipped. The default statistics source is Node's
+where Orleans scores a random square-root-of-n subset. A silo that has pushed no snapshot is skipped, as in Orleans; only a context with no statistics source at all falls back
+to activation counts. The default statistics source is Node's
 event-loop utilisation for CPU and process and OS memory for the rest, and a silo accepts any
 `EnvironmentStatisticsProvider` in its place (Orleans' `IEnvironmentStatisticsProvider`).
 

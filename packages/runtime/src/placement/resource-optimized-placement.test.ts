@@ -90,4 +90,17 @@ describe("ResourceOptimizedPlacement scoring (Orleans ResourceOptimizedPlacement
     const ctx: PlacementContext = { localSilo: silo(0), random: () => 0.99 };
     expect(new ResourceOptimizedPlacement().choose("G", pair, ctx).ringKey).toBe("silo-1");
   });
+
+  it("does not favour a peer that has never pushed statistics, even with a zero activation count", () => {
+    const ctx: PlacementContext = {
+      localSilo: silo(0),
+      random: () => 0,
+      resourceStats: (s) => (s.ringKey === "silo-0" ? stats(5, 1) : undefined),
+      activationCount: (s) => (s.ringKey === "silo-0" ? 10 : 0),
+      isOverloaded: () => false,
+    };
+    for (let i = 0; i < 20; i++) {
+      expect(new ResourceOptimizedPlacement().choose("G", pair, ctx).ringKey).toBe("silo-0");
+    }
+  });
 });
