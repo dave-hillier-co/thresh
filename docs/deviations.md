@@ -424,10 +424,31 @@ classes exactly as the wire does. It is off by default.
 
 ## Additions beyond Orleans
 
-A few capabilities layer on top of the faithful model without changing it: **durable journaling**
-(a grain that journals each mutation and replays it on activation) and **durable jobs** (sharded,
-at-least-once scheduled grain invocation). A further, **not-yet-built** direction is **browser state
-replication** — a live read-view of grain state in the browser under a server-enforced trust model.
+A few capabilities layer on top of the faithful model without changing it: **durable jobs**
+(sharded, at-least-once scheduled grain invocation). A further, **not-yet-built** direction is
+**browser state replication** — a live read-view of grain state in the browser under a server-enforced
+trust model. Durable journaling is not an addition: Orleans 10 ships it as `Orleans.Journaling`
+(`DurableGrain`, `DurableValue`, `DurableDictionary`, `DurableList`, `DurableQueue`, `DurableSet`),
+and `@thresh/journaling` ports it; its departures are listed in the next section.
+
+## Durable collections buffer until `writeDurableState()`
+
+As in `Orleans.Journaling`, a durable collection mutation is a synchronous in-memory operation that
+buffers its log entry, and `writeDurableState()` (`Grain`) or the function `useWriteDurableState()`
+returns (hooks) is `WriteStateAsync`: one append of everything buffered across the grain's
+structures. A failed write, a lost-writer conflict and deactivation with entries still buffered
+behave as in `JournaledStateManager` (see the state guide). The departures:
+
+- Orleans' `DurableValue` coalesces repeated sets into one entry per write through a dirty flag;
+  here every `set` buffers its own entry, so ten sets cost ten entries in one append.
+- Orleans takes a snapshot work item instead of an append when compaction is requested. Here the
+  threshold compaction runs after a write that leaves nothing buffered, and is skipped, not forced,
+  while entries are pending, so a `JournaledGrain` sharing the log can defer it until the grain
+  next writes.
+- A `JournaledGrain` on the shared log writes its events at `confirmEvents`, immediately; Orleans
+  has no equivalent, and that write does not flush the durable collections.
+- Orleans' recovery after a lost writer runs in the manager's work loop; here it runs at the start
+  of the next `writeState`, which is the same moment from the grain's point of view.
 
 ## JournaledGrain history is snapshot-plus-tail unless retention is opted in
 

@@ -124,6 +124,23 @@ describe("JournaledGrain history across compaction", () => {
     expect(again.label.value).toBe("label-40");
   });
 
+  it("does not make unwritten durable mutations durable when the JournaledGrain compacts the shared log", async () => {
+    const storage = new MemoryJournalStorage();
+    const grain = new LedgerWithLabel();
+    await bindJournalFacets(grain, id, registryOver(storage), { snapshotThreshold: 4 });
+    grain.label.set("written");
+    await writeDurableState(grain);
+    grain.label.set("never written");
+    // Enough confirmed events to cross the threshold and compact the shared log.
+    await raiseMany(grain, 12);
+    expect(grain.label.value).toBe("never written");
+
+    const again = new LedgerWithLabel();
+    await bindJournalFacets(again, id, registryOver(storage), { snapshotThreshold: 4 });
+    expect(again.head).toBe(12);
+    expect(again.label.value).toBe("written");
+  });
+
   it("truncates by default: the log shrinks and nothing below the snapshot is held", async () => {
     const storage = new MemoryJournalStorage();
     const grain = new Ledger();

@@ -158,7 +158,9 @@ describe("buffered durable mutations", () => {
     expect(b.value.value).toBe(9);
   });
 
-  // Mirrors Orleans.Journaling/JournaledStateManager.cs (WorkLoop, AppendJournalWorkItem): a flush
+  // Mirrors Orleans.Journaling.Tests/StateManagerTests.cs
+  // StateManager_WriteStateAsync_PreservesPendingStateAfterTransientStorageWriteFailure, and
+  // Orleans.Journaling/JournaledStateManager.cs (WorkLoop, AppendJournalWorkItem): a flush
   // that throws leaves the committed buffer unconsumed, so the entries stay pending and the next
   // WriteStateAsync writes them; nothing in memory is rolled back and the activation continues.
   it("keeps memory and the buffered entries after a failed write, and the next write retries them", async () => {
@@ -182,7 +184,9 @@ describe("buffered durable mutations", () => {
     expect(after.set.has("x")).toBe(true);
   });
 
-  // Mirrors the same file's IsRecoverySignal(InconsistentStateException) path: the failing write
+  // Mirrors Orleans.Journaling.Tests/StateManagerTests.cs
+  // StateManager_WriteStateAsync_RecoversAfterInconsistentStateException, and
+  // JournaledStateManager.cs's IsRecoverySignal(InconsistentStateException) path: the failing write
   // surfaces the exception; the NEXT write first recovers (resets every structure and re-reads the
   // log, discarding what was buffered) and only then proceeds.
   it("recovers from storage on the write after a lost-writer conflict, discarding buffered entries", async () => {
@@ -207,6 +211,37 @@ describe("buffered durable mutations", () => {
     await mine.manager.writeState();
     expect([...mine.queue]).toEqual(["mine", "theirs"]);
     expect(storage.appends).toHaveLength(0);
+  });
+
+  // Mirrors Orleans.Journaling.Tests/StateManagerTests.cs StateManager_DirectWriteFailure_AbortsEntryBeforeMutation:
+  // an entry that cannot be encoded fails the mutator and leaves memory and the buffer as they were.
+  it("leaves memory untouched when a mutation cannot be encoded", async () => {
+    const storage = new RecordingJournalStorage();
+    const { manager, dict, list } = activate(storage);
+    await manager.replay();
+    dict.set("ok", 1);
+    expect(() => list.add((() => 1) as unknown as string)).toThrow();
+    expect(list.length).toBe(0);
+    await manager.writeState();
+    expect(storage.appends).toHaveLength(1);
+    expect(storage.appends[0]).toHaveLength(1);
+  });
+
+  it("does not re-read the log after a transient write failure", async () => {
+    const storage = new RecordingJournalStorage();
+    let reads = 0;
+    const read = storage.read.bind(storage);
+    storage.read = (logName, grainId, signal) => {
+      reads += 1;
+      return read(logName, grainId, signal);
+    };
+    const { manager, queue } = activate(storage);
+    await manager.replay();
+    queue.enqueue("a");
+    storage.failNextAppend = new Error("blip");
+    await expect(manager.writeState()).rejects.toThrow("blip");
+    await manager.writeState();
+    expect(reads).toBe(1);
   });
 
   it("compacts only after a write, never snapshotting unwritten mutations", async () => {
