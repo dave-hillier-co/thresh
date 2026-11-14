@@ -53,6 +53,12 @@ import { SiloAddress } from "@thresh/core/silo-address";
 import { ConnectionManager } from "@thresh/messaging/connection-manager";
 import { CorrelationTable } from "@thresh/messaging/correlation-table";
 import { requestEnvelope } from "@thresh/messaging/request-envelope";
+import {
+  didNotExecute,
+  mayResend,
+  neverLeft,
+  refusedBeforeExecution,
+} from "@thresh/messaging/resend-policy";
 import { sendReply } from "@thresh/messaging/send-reply";
 import {
   nextCorrelationId,
@@ -128,6 +134,12 @@ export interface ClientConfig {
 /** Orleans `ClientMessageCenter.MINIMUM_INTERCONNECT_DELAY`. */
 const MINIMUM_INTERCONNECT_DELAY_MS = 100;
 const MAX_INTERCONNECT_DELAY_MS = 2_000;
+/**
+ * How many times one call is resent after a gateway refused it before it ran: once, against a
+ * fresh resolution of its target, as a silo resends a refused call once against a fresh directory
+ * lookup (`DistributedDispatcher.lookupAndInvoke`).
+ */
+const MAX_REFUSED_RESENDS = 1;
 
 const defaultDelay = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
@@ -356,12 +368,14 @@ export class ClientNode implements Dispatcher {
 
   /**
    * Forward a grain call to a gateway and await its response, failing over to
-   * another gateway when one is unreachable. A transport failure (a gateway we
-   * cannot connect to or send through, or a reply that never arrives) drops that
-   * gateway from rotation and retries the next; once all are exhausted we refresh
-   * the gateway list once and retry. An error *carried in a response* (a grain
-   * throw, or a rejection from the gateway's routing) is the call's real outcome
-   * and propagates — failover would not change it.
+   * another gateway when one is unreachable. A call is sent again only when it
+   * did not run (`mayResend`, the rule every dispatcher uses): a gateway we
+   * cannot connect to or send through is dropped from rotation and the next one
+   * tried, and once all are exhausted the gateway list is refreshed once; a
+   * gateway that refused the call before it ran because its target moved gets it
+   * resent once to the next gateway. A reply that never arrives, a connection
+   * lost mid-call, and an error *carried in a response* (a grain throw, a
+   * rejection the call's own turn raised) may follow a run, so they propagate.
    *
    * `callTimeoutMs` is a cumulative wall-clock budget for the whole call, not a
    * per-attempt allowance (Orleans deadline propagation): elapsed time is
@@ -378,6 +392,7 @@ export class ClientNode implements Dispatcher {
     let backoffMs = MINIMUM_INTERCONNECT_DELAY_MS;
     let hadFailure = false;
     let attempts = 0;
+    let refusedResends = 0;
     const timeoutError = (): GrainCallTimeoutError =>
       new GrainCallTimeoutError(
         `grain call timed out after ${this.callTimeoutMs}ms (${attempts} attempt${attempts === 1 ? "" : "s"} made)`,
@@ -423,7 +438,11 @@ export class ClientNode implements Dispatcher {
           timeToLiveMs: deadline - now,
         });
         if (req.options.oneWay) {
-          conn.send(message);
+          try {
+            conn.send(message);
+          } catch (err) {
+            throw neverLeft(err);
+          }
           return undefined;
         }
         const perAttemptTimeout = deadline - this.now();
@@ -432,16 +451,28 @@ export class ClientNode implements Dispatcher {
         response = await pending;
       } catch (err) {
         if (this.now() >= deadline) throw timeoutError();
-        // The gateway is unreachable (connect/send threw, or the reply timed out):
-        // drop it and try another.
+        // Resent only if the request never left (`mayResend`): a reply that timed out, or a
+        // connection lost mid-call, may have run, and sending it again could run it twice.
+        if (!mayResend(err)) throw err;
+        // The gateway is unreachable (the dial or the send failed): drop it and try another.
         this.gateways.markAsDead(gateway);
         await this.connections.drop(gateway);
         lastError = err;
         hadFailure = true;
         continue;
       }
-      // We have a response: its kind decides success or an application error.
-      return this.interpretResponse(response);
+      // We have a response: its kind decides success or an error.
+      try {
+        return this.interpretResponse(response);
+      } catch (err) {
+        // The gateway refused the call before it ran, its target having moved
+        // (`mayResend`): send it once more, to the next gateway in rotation, which
+        // re-resolves the target. The gateway itself is alive, so it stays in rotation.
+        if (!mayResend(err) || refusedResends >= MAX_REFUSED_RESENDS) throw err;
+        refusedResends++;
+        lastError = err;
+        hadFailure = true;
+      }
     }
   }
 
@@ -460,7 +491,8 @@ export class ClientNode implements Dispatcher {
     try {
       conn.send(message);
     } catch (err) {
-      this.correlation.fail(message.correlationId, err);
+      // The request never left, so it cannot have run.
+      this.correlation.fail(message.correlationId, neverLeft(err));
       throw err;
     }
     return pending;
@@ -667,7 +699,9 @@ export class ClientNode implements Dispatcher {
    * because there was nothing on the wire for it to rebuild from.
    */
   private serializeError(err: unknown): { kind: ResponseKind; body: Uint8Array } {
-    if (err instanceof RejectionError) {
+    // As on a silo: a rejection says "refused before it ran", so a `RejectionError` the hosted
+    // object itself threw travels as an error, keeping its class and kind through the codec.
+    if (err instanceof RejectionError && didNotExecute(err)) {
       return {
         kind: "rejection",
         body: this.serializer.serialize({ message: err.message, kind: err.kind }),
@@ -693,8 +727,11 @@ export class ClientNode implements Dispatcher {
       // (Orleans parity), not the generic `RejectionError` every other
       // rejection kind uses — it's the one kind ORIGINATED specifically to
       // signal "retry me, possibly against a different gateway".
-      if (payload.kind === "overloaded") throw new GatewayTooBusyException(payload.message);
-      throw new RejectionError(payload.message, payload.kind);
+      // Only a refusal before execution travels as a rejection; the rebuilt error carries that.
+      if (payload.kind === "overloaded") {
+        throw refusedBeforeExecution(new GatewayTooBusyException(payload.message));
+      }
+      throw refusedBeforeExecution(new RejectionError(payload.message, payload.kind));
     }
     const payload = this.serializer.deserialize<{
       message: string;

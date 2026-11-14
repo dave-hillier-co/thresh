@@ -66,7 +66,7 @@ function localDeps(invoke: ReturnType<typeof vi.fn>): {
 } {
   const { logger, warnings } = recordingLogger();
   const send = vi.fn().mockResolvedValue(undefined);
-  const activation = { activationId, invoke };
+  const activation = { activationId, invoke, isRerouteRejection: () => false };
   return {
     warnings,
     send,

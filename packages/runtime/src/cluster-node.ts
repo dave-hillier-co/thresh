@@ -86,6 +86,7 @@ import { LocationCache } from "@thresh/directory/location-cache";
 import { ConnectionManager } from "@thresh/messaging/connection-manager";
 import { CorrelationTable } from "@thresh/messaging/correlation-table";
 import { requestEnvelope } from "@thresh/messaging/request-envelope";
+import { didNotExecute, neverLeft, refusedBeforeExecution } from "@thresh/messaging/resend-policy";
 import { sendReply } from "@thresh/messaging/send-reply";
 import {
   nextCorrelationId,
@@ -2298,7 +2299,8 @@ export class ClusterNode {
     try {
       conn.send(message);
     } catch (err) {
-      this.correlation.fail(message.correlationId, err);
+      // The request never left, so it cannot have run.
+      this.correlation.fail(message.correlationId, neverLeft(err));
       throw err;
     }
     return pending;
@@ -2557,7 +2559,9 @@ export class ClusterNode {
     const client = clientIdOf(req.target);
     const gateway = this.clientDirectory.lookup(client, this.options.local);
     if (gateway === undefined) {
-      throw new RejectionError(`no gateway for client ${client.toString()}`, "unknownTarget");
+      throw refusedBeforeExecution(
+        new RejectionError(`no gateway for client ${client.toString()}`, "unknownTarget"),
+      );
     }
     if (gateway.equals(this.options.local)) return this.deliverToProxy(req);
     return this.sendRemote(gateway, req);
@@ -2567,9 +2571,11 @@ export class ClusterNode {
   private async deliverToProxy(req: InvocationRequest): Promise<unknown> {
     const conn = this.clientConnections.get(clientIdOf(req.target).toString());
     if (conn === undefined) {
-      throw new RejectionError(
-        `client not connected here: ${clientIdOf(req.target).toString()}`,
-        "unknownTarget",
+      throw refusedBeforeExecution(
+        new RejectionError(
+          `client not connected here: ${clientIdOf(req.target).toString()}`,
+          "unknownTarget",
+        ),
       );
     }
     const message = this.requestEnvelope(req);
@@ -2710,9 +2716,13 @@ export class ClusterNode {
   private interpretResponse(response: Message): unknown {
     if (response.responseKind === "success") return this.serializer.deserialize(response.body);
     if (response.responseKind === "rejection") {
+      // Only a refusal before execution travels as a rejection (see `serializeError`); the
+      // error rebuilt from one carries that fact, which is what decides a resend (`mayResend`).
       const payload = this.serializer.deserialize<RejectionPayload>(response.body);
-      if (payload.kind === "overloaded") throw new GatewayTooBusyException(payload.message);
-      throw new RejectionError(payload.message, payload.kind);
+      if (payload.kind === "overloaded") {
+        throw refusedBeforeExecution(new GatewayTooBusyException(payload.message));
+      }
+      throw refusedBeforeExecution(new RejectionError(payload.message, payload.kind));
     }
     const payload = this.serializer.deserialize<{
       message: string;
@@ -2865,7 +2875,11 @@ export class ClusterNode {
    * `ClusterNode` and `ClientNode`) prefers it and ignores `aggregateMessages` entirely.
    */
   private serializeError(err: unknown): { kind: ResponseKind; body: Uint8Array } {
-    if (err instanceof RejectionError) {
+    // A rejection says the request was refused before it ran, so only a refusal the runtime
+    // marked at one of its refusal points travels as one (Orleans: only
+    // `MessageCenter.RejectMessage` produces `ResponseTypes.Rejection`). A `RejectionError` a
+    // turn threw is an error like any other and keeps its class and kind through the codec.
+    if (err instanceof RejectionError && didNotExecute(err)) {
       return {
         kind: "rejection",
         body: this.serializer.serialize({ message: err.message, kind: err.kind }),
