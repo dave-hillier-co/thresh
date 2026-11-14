@@ -294,7 +294,7 @@ describe("TransactionalStateImpl (Slice 2)", () => {
       () => ({ cents: 100 }),
       storage,
       undefined,
-      { lockTimeoutMs: 5_000 },
+      { lockAcquireTimeoutMs: 5_000 },
       clock,
     );
     await contended.load();
@@ -307,7 +307,7 @@ describe("TransactionalStateImpl (Slice 2)", () => {
       () => ({ cents: 0 }),
       new MemoryTransactionalStorage(),
       undefined,
-      { lockTimeoutMs: 5_000 },
+      { lockAcquireTimeoutMs: 5_000 },
       clock,
     );
     await other.load();

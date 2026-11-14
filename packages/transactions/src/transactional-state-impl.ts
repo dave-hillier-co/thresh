@@ -107,7 +107,10 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
     this.key = `${grainId.toString()}/${stateName}`;
     this.options = { ...defaultTransactionsOptions, ...options };
     this.time = time;
-    this.lock = new ReaderWriterLock(time);
+    this.lock = new ReaderWriterLock(time, {
+      lockTimeoutMs: this.options.lockTimeoutMs,
+      onBreak: (transactionId) => this.onLockBroken(transactionId),
+    });
   }
 
   private get participantId(): ParticipantId {
@@ -190,7 +193,7 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
       tx.id,
       tx.timeStamp,
       mode,
-      { timeoutMs: this.options.lockTimeoutMs },
+      { timeoutMs: this.options.lockAcquireTimeoutMs },
       { isRead: true, counter: tx.participants.get(this.key)?.access },
     );
     this.enlist(tx, 1, 0);
@@ -207,7 +210,7 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
       tx.id,
       tx.timeStamp,
       "write",
-      { timeoutMs: this.options.lockTimeoutMs },
+      { timeoutMs: this.options.lockAcquireTimeoutMs },
       { isRead: false, counter: tx.participants.get(this.key)?.access },
     );
     this.enlist(tx, 0, 1);
@@ -250,6 +253,8 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
       if (validation === "lockValidationFailed") this.rollback(transactionId);
       return false;
     }
+    // Prepared: out of the lock group, so the hold bound no longer applies.
+    this.lock.exit(transactionId);
     if (this.tentative?.transactionId !== transactionId) return true; // read-only participant
     const pending: PendingTransactionState<T> = {
       sequenceId: this.tentative.sequenceId,
@@ -339,6 +344,16 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
       // Always release, even if the durable write threw: an unreleased lock
       // would deadlock this grain state's ReaderWriterLock permanently.
       this.lock.release(transactionId);
+    }
+  }
+
+  /**
+   * The hold bound broke `transactionId`'s lock (it had not prepared): roll back
+   * its tentative state, so a later prepare finds nothing to stage and votes no.
+   */
+  private onLockBroken(transactionId: string): void {
+    if (this.tentative?.transactionId === transactionId && !this.tentative.prepared) {
+      this.tentative = undefined;
     }
   }
 

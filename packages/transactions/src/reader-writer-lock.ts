@@ -20,6 +20,28 @@ interface Holder {
   reads: number;
   /** Writes granted to this transaction while it held the lock (Orleans `TransactionRecord.NumberWrites`). */
   writes: number;
+  /**
+   * Prepared: it has left the lock group for the commit queue (Orleans
+   * `LockExits`), so the hold bound no longer applies to it. It still blocks
+   * conflicting transactions until it commits or aborts.
+   */
+  exited: boolean;
+}
+
+/** Construction options for {@link ReaderWriterLock}. */
+export interface ReaderWriterLockOptions {
+  /**
+   * Orleans `TransactionalStateOptions.LockTimeout`: the longest the current
+   * holders may keep the lock, in milliseconds, measured from the last time a
+   * transaction joined them. Absent means holders never expire.
+   */
+  readonly lockTimeoutMs?: number | undefined;
+  /**
+   * Called for each holder whose lock the hold bound broke, after it has been
+   * removed, so the resource can roll back its tentative state (Orleans
+   * `BreakLock` notifying the queue).
+   */
+  readonly onBreak?: ((transactionId: string) => void) | undefined;
 }
 
 /**
@@ -91,7 +113,15 @@ export interface AcquireDeadline {
  * waiter blocks; when the deadline elapses the waiter is removed and the
  * promise rejects with {@link TransactionAbortedError} (`deadline exceeded`),
  * which the caller propagates as a cascading abort to its other participants.
- * This mirrors Orleans' `TransactionalStateOptions.LockTimeout`.
+ * This mirrors Orleans' `TransactionalStateOptions.LockAcquireTimeout`.
+ *
+ * Holders are bounded too ({@link ReaderWriterLockOptions.lockTimeoutMs},
+ * Orleans `LockTimeout`): the current holders form Orleans' lock group, whose
+ * deadline is set when a transaction joins it. When it passes, every holder
+ * that has not prepared ({@link exit}) is broken — removed, its queued requests
+ * rejected and the resource told through `onBreak` — and waiters are granted.
+ * The broken transaction finds out at its next access
+ * ({@link TransactionBrokenLockError}) or when its prepare fails validation.
  *
  * A holder re-entering with `"write"` while it only holds `"read"` upgrades
  * in place if no conflict, and otherwise follows the same wait-die rule —
@@ -103,8 +133,12 @@ export interface AcquireDeadline {
 export class ReaderWriterLock {
   private readonly holders = new Map<string, Holder>();
   private readonly waiters: Waiter[] = [];
+  private holdTimer: TimerHandle | undefined;
 
-  constructor(private readonly time: TimeProvider = systemTimeProvider) {}
+  constructor(
+    private readonly time: TimeProvider = systemTimeProvider,
+    private readonly options: ReaderWriterLockOptions = {},
+  ) {}
 
   /**
    * Acquire — or re-enter / upgrade — the lock for a transaction. Resolves once
@@ -184,6 +218,20 @@ export class ReaderWriterLock {
     return this.holders.size > 0;
   }
 
+  /**
+   * `transactionId` has prepared: it leaves the lock group for the commit
+   * queue (Orleans `LockExits` → `EnqueueCommit`), so the hold bound no longer
+   * applies to it — breaking a prepared participant's lock would lose a write
+   * the TM may already have committed. It keeps blocking conflicting
+   * transactions until it is released.
+   */
+  exit(transactionId: string): void {
+    const held = this.holders.get(transactionId);
+    if (held === undefined) return;
+    held.exited = true;
+    if (!this.hasUnexitedHolder()) this.clearHoldTimer();
+  }
+
   private grant(transactionId: string, priority: number, mode: LockMode, isRead: boolean): void {
     const existing = this.holders.get(transactionId);
     if (existing !== undefined) {
@@ -192,9 +240,56 @@ export class ReaderWriterLock {
       this.count(existing, isRead);
       return;
     }
-    const holder: Holder = { transactionId, priority, mode, reads: 0, writes: 0 };
+    const holder: Holder = {
+      transactionId,
+      priority,
+      mode,
+      reads: 0,
+      writes: 0,
+      exited: false,
+    };
     this.count(holder, isRead);
     this.holders.set(transactionId, holder);
+    this.armHoldTimer();
+  }
+
+  /**
+   * (Re)start the hold bound: Orleans sets the lock group's deadline to now +
+   * `LockTimeout` whenever a transaction joins the group holding the lock.
+   */
+  private armHoldTimer(): void {
+    const timeoutMs = this.options.lockTimeoutMs;
+    if (timeoutMs === undefined) return;
+    this.clearHoldTimer();
+    this.holdTimer = this.time.setTimer(() => {
+      this.holdTimer = undefined;
+      this.breakExpiredHolders();
+    }, timeoutMs);
+  }
+
+  private clearHoldTimer(): void {
+    if (this.holdTimer === undefined) return;
+    this.time.clearTimer(this.holdTimer);
+    this.holdTimer = undefined;
+  }
+
+  private hasUnexitedHolder(): boolean {
+    for (const holder of this.holders.values()) if (!holder.exited) return true;
+    return false;
+  }
+
+  /**
+   * The lock group timed out (Orleans `LockWork` → `AbortExecutingTransactions`):
+   * break every holder that has not prepared, then let waiters in.
+   */
+  private breakExpiredHolders(): void {
+    const broken = [...this.holders.values()].filter((h) => !h.exited);
+    for (const holder of broken) {
+      this.holders.delete(holder.transactionId);
+      this.rejectQueued(holder.transactionId, "lock broken: hold timeout exceeded");
+    }
+    for (const holder of broken) this.options.onBreak?.(holder.transactionId);
+    this.pump();
   }
 
   private count(holder: Holder, isRead: boolean): void {
@@ -205,6 +300,13 @@ export class ReaderWriterLock {
   /** Release a transaction's hold (and any queued request), then grant waiters. */
   release(transactionId: string): void {
     this.holders.delete(transactionId);
+    if (!this.hasUnexitedHolder()) this.clearHoldTimer();
+    this.rejectQueued(transactionId, "lock released while waiting");
+    this.pump();
+  }
+
+  /** Settle and drop every queued request of `transactionId`. */
+  private rejectQueued(transactionId: string, reason: string): void {
     for (let i = this.waiters.length - 1; i >= 0; i--) {
       const waiter = this.waiters[i]!;
       if (waiter.transactionId === transactionId) {
@@ -220,10 +322,9 @@ export class ReaderWriterLock {
         // upgrade on the same resource and is then aborted elsewhere (a dying
         // sibling participant, a caller deadline, a rejected `Promise.all`) —
         // the same abort path that leads here.
-        waiter.reject(new TransactionAbortedError(transactionId, "lock released while waiting"));
+        waiter.reject(new TransactionAbortedError(transactionId, reason));
       }
     }
-    this.pump();
   }
 
   private blockOrDie(
