@@ -3141,7 +3141,7 @@ export class ClusterNode {
     // stay on its own silo or the probe would silently exercise a peer.
     const candidates = this.catalog
       .liveActivations()
-      .filter((a) => this.isMigratableBy(a.id, "rebalancer"));
+      .filter((a) => this.isMigratableBy(a.id, "rebalancer") && !a.isDeactivationBlocked);
     // Fisher–Yates over a copy, deterministic under an injected RNG.
     for (let i = candidates.length - 1; i > 0; i--) {
       const j = Math.floor(random() * (i + 1));
@@ -3253,6 +3253,8 @@ export class ClusterNode {
     target: SiloAddress,
     description: string,
   ): Promise<boolean> {
+    // Holding a transaction lock or an undecided prepared record: stay put.
+    if (activation.isDeactivationBlocked) return false;
     const accepted = await this.migrateActivationTo(activation, target);
     await activation.deactivate({
       code: "migrating",

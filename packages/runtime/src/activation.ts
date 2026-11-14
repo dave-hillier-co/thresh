@@ -81,7 +81,7 @@ import {
   StreamConsumerInterface,
   type StreamHandler,
 } from "@thresh/core/stream";
-import type { TransactionParticipant } from "@thresh/core/transaction-info";
+import { blocksDeactivation, type TransactionParticipant } from "@thresh/core/transaction-info";
 import { TransactionResourceInterface } from "@thresh/core/transaction-resource";
 import { getTransactionalFields } from "@thresh/core/transactional-state-metadata";
 import { deadlineSignal } from "@thresh/runtime/ambient-signal";
@@ -1133,8 +1133,23 @@ export class ActivationData implements GrainContext {
     if (this.scheduler.busy) return false;
     const now = this.time.now();
     if (now < this.keepAliveUntilMs) return false;
+    if (this.isDeactivationBlocked) return false;
     if (this.deactivateRequested) return true;
     return now - this.lastActiveMs >= (ageLimitOverrideMs ?? this.collectionAgeMs);
+  }
+
+  /**
+   * Whether a transactional-state facet holds a transaction lock or a prepared
+   * record whose outcome is unknown (Orleans `ActivationLifetime.BlockDeactivation`):
+   * the idle sweep and migration leave such an activation in place.
+   */
+  get isDeactivationBlocked(): boolean {
+    const instance = this._instance as Grain | undefined;
+    if (instance === undefined) return false;
+    const record = instance as unknown as Record<string, unknown>;
+    return getTransactionalFields(instance).some((field) =>
+      blocksDeactivation(unguardedTransactionalState(record[field.fieldName])),
+    );
   }
 
   /**

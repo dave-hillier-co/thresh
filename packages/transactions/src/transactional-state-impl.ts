@@ -38,6 +38,8 @@ interface Tentative<T> {
   sequenceId: number;
   timeStamp: number;
   prepared: boolean;
+  /** Set while this resource, as TM, is durably recording the commit. */
+  recordingCommit?: boolean;
 }
 
 /** Asks the elected TM what it knows of an in-doubt transaction's fate (recovery). */
@@ -94,6 +96,8 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
   private readonly inDoubt = new Map<string, PendingTransactionState<T>>();
   private confirmationTimer: TimerHandle | undefined;
   private confirmationDelayMs = 0;
+  /** Bounds how long the prepared tentative waits for the coordinator; see {@link armPreparedTimer}. */
+  private preparedTimer: TimerHandle | undefined;
 
   constructor(
     private readonly stateName: string,
@@ -180,6 +184,21 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
       this.confirmationTimer = undefined;
     }
     this.confirmationDelayMs = 0;
+    this.clearPreparedTimer();
+  }
+
+  /**
+   * Orleans `ActivationLifetime.BlockDeactivation`: while this resource holds a
+   * transaction lock (a tentative or prepared transaction, or a reader) or an
+   * inherited prepared record whose outcome it does not know yet, its
+   * activation must not be idle-collected, migrated or rebalanced away —
+   * deactivating would break the lock, or strand the record until some later
+   * activation happens to load it. Both are bounded: an unprepared holder by
+   * the hold bound, a prepared one by {@link armPreparedTimer}, an in-doubt
+   * record by its TM's eventual answer.
+   */
+  get blocksDeactivation(): boolean {
+    return this.lock.isHeld || this.inDoubt.size > 0;
   }
 
   async performRead<R>(read: (state: T) => R, options?: PerformReadOptions): Promise<R> {
@@ -265,7 +284,75 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
     };
     await this.storeState([pending]);
     this.tentative.prepared = true;
+    this.armPreparedTimer(transactionId, manager);
     return true;
+  }
+
+  private isSelf(manager: ParticipantId): boolean {
+    return manager.grainId.equals(this.grainId) && manager.stateName === this.stateName;
+  }
+
+  /**
+   * Bound how long a prepared tentative waits for its coordinator, so a
+   * coordinator that dies after prepare cannot hold this lock (and, through
+   * {@link blocksDeactivation}, this activation) for ever:
+   *
+   * - As TM, after `prepareTimeoutMs` (Orleans `PrepareTimeout`) without a
+   *   recorded commit, decide abort: drop its own record and release the lock.
+   *   {@link recordCommit} then refuses, and {@link status} answers
+   *   `presumedAbort`, so every participant converges on the abort.
+   * - As an ordinary participant, every `remoteTransactionPingFrequencyMs`
+   *   (Orleans `RemoteTransactionPingFrequency`) ask the TM, and apply a
+   *   decided outcome; `undetermined` or an unreachable TM asks again later.
+   */
+  private armPreparedTimer(transactionId: string, manager: ParticipantId): void {
+    this.clearPreparedTimer();
+    const isSelf = this.isSelf(manager);
+    if (!isSelf && this.resolveStatus === undefined) return;
+    const delay = isSelf
+      ? this.options.prepareTimeoutMs
+      : this.options.remoteTransactionPingFrequencyMs;
+    this.preparedTimer = this.time.setTimer(() => {
+      this.preparedTimer = undefined;
+      void this.checkPrepared(transactionId, manager);
+    }, delay);
+  }
+
+  private clearPreparedTimer(): void {
+    if (this.preparedTimer === undefined) return;
+    this.time.clearTimer(this.preparedTimer);
+    this.preparedTimer = undefined;
+  }
+
+  private stillPrepared(transactionId: string): boolean {
+    return this.tentative?.transactionId === transactionId && this.tentative.prepared;
+  }
+
+  private async checkPrepared(transactionId: string, manager: ParticipantId): Promise<void> {
+    if (!this.stillPrepared(transactionId)) return;
+    let outcome: TransactionOutcome;
+    if (this.isSelf(manager)) {
+      outcome =
+        this.metadata.commitRecords[transactionId] !== undefined
+          ? "committed"
+          : this.tentative?.recordingCommit === true
+            ? "undetermined"
+            : "presumedAbort";
+    } else {
+      try {
+        outcome = await this.resolveStatus!(manager, transactionId);
+      } catch {
+        outcome = "undetermined";
+      }
+    }
+    if (!this.stillPrepared(transactionId)) return;
+    try {
+      if (outcome === "committed") await this.commit(transactionId);
+      else if (outcome === "presumedAbort") await this.abort(transactionId);
+    } catch {
+      // The durable write failed; try again on the next tick.
+    }
+    if (this.stillPrepared(transactionId)) this.armPreparedTimer(transactionId, manager);
   }
 
   /**
@@ -282,7 +369,8 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
     timeStamp: number,
     writeParticipants: ParticipantId[],
   ): Promise<void> {
-    if (this.tentative?.transactionId !== transactionId || !this.tentative.prepared) {
+    const tentative = this.tentative;
+    if (tentative?.transactionId !== transactionId || !tentative.prepared) {
       throw new TransactionAbortedError(
         transactionId,
         "the transaction manager no longer holds the transaction",
@@ -305,7 +393,12 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
     // record resolves to abort once the TM reactivates over that storage. The
     // agent converts this rejection to `TransactionInDoubtError` and leaves
     // participants prepared precisely so that recovery can resolve the truth.
-    await this.storeState([], undefined, undefined, metadata);
+    tentative.recordingCommit = true;
+    try {
+      await this.storeState([], undefined, undefined, metadata);
+    } finally {
+      tentative.recordingCommit = false;
+    }
     this.metadata = metadata;
   }
 
@@ -332,6 +425,7 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
         this.committed = tentative.value;
         this.committedSequenceId = tentative.sequenceId;
         this.tentative = undefined;
+        this.clearPreparedTimer();
       } else {
         // A record this activation inherited in doubt (it replaced the one
         // that prepared): the coordinator commits only after the TM recorded
@@ -379,6 +473,7 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
           await this.storeState([], undefined, tentative.sequenceId - 1);
         }
         this.tentative = undefined;
+        this.clearPreparedTimer();
       } else {
         // An inherited in-doubt record: the coordinator aborts only before any
         // commit was recorded, so the record can go.

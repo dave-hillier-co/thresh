@@ -150,6 +150,26 @@ export function isTransactionManager(
 }
 
 /**
+ * A transactional resource that can hold its activation in place (Orleans
+ * `IActivationLifetime.BlockDeactivation`): while `blocksDeactivation` is true
+ * — it holds a transaction lock, or a prepared record whose outcome it does not
+ * know yet — the activation is not idle-collected, migrated or rebalanced away,
+ * since doing so would break the lock or strand the record mid-protocol.
+ */
+export interface DeactivationBlocker {
+  readonly blocksDeactivation: boolean;
+}
+
+/** Whether `resource` is a {@link DeactivationBlocker} that is blocking right now. */
+export function blocksDeactivation(resource: unknown): boolean {
+  return (
+    typeof resource === "object" &&
+    resource !== null &&
+    (resource as Partial<DeactivationBlocker>).blocksDeactivation === true
+  );
+}
+
+/**
  * A participant enlisted in a transaction, with the access it has accrued. A
  * participant enlisted on the local silo carries its live `participant` object
  * (the agent drives it directly, and can tell from that object whether it may
