@@ -99,7 +99,9 @@ export class LogViewAdaptorImpl<TState, TEvent>
    * substrate's own storage CAS (a duplicate activation), which surfaces as an
    * `InconsistentStateError` from the append. That conflict reports `false` -- and `runConfirmLoop`
    * does not requeue the conflicting event, so it is dropped (from the tentative view too), never
-   * applied by a later confirm. Any other failure is a failed write: the log is re-read, which
+   * applied by a later confirm. Before reporting `false` the adaptor re-reads the log, so the
+   * confirmed view and version reflect storage and a retry computed from them can succeed (the
+   * same contract as the custom-storage adaptor). Any other failure is a failed write: the log is re-read, which
    * decides whether the write landed after all (then `true`), and the append is retried up to
    * {@link MAX_APPEND_ATTEMPTS} times before the event is dropped and `false` reported. A log that
    * cannot even be re-read rethrows. In every unsuccessful outcome the event leaves the pending
@@ -124,7 +126,14 @@ export class LogViewAdaptorImpl<TState, TEvent>
         await this.confirmSubmittedEntries();
         return true;
       } catch (error) {
-        if (error instanceof InconsistentStateError) return false;
+        if (error instanceof InconsistentStateError) {
+          // Lost the storage CAS: another writer moved the log. The runner has already dropped
+          // the batch. Refresh before reporting, as Orleans does before discarding stale
+          // conditional entries, so the confirmed view and version equal storage and a retry
+          // computed from them can succeed. A log that cannot be re-read rethrows.
+          await this.resync();
+          return false;
+        }
         // A failed write, as the custom-storage adaptor and Orleans treat it: re-read storage,
         // which decides whether the write landed after all, and retry on top of it. The events
         // must never stay pending past a `false` or a throw: their caller is told the append
