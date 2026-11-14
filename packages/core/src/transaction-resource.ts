@@ -39,6 +39,21 @@ export interface TransactionResource {
   status(stateName: string, transactionId: string): Promise<TransactionOutcome>;
 }
 
+/**
+ * Every protocol call is always-interleave, as Orleans marks
+ * `ITransactionalResourceExtension` and `ITransactionManagerExtension`: they
+ * must run while the grain's own turn is suspended — above all while that turn
+ * waits for the very lock an abort or commit here releases.
+ */
 export const TransactionResourceInterface = defineGrainInterface<TransactionResource>(
   "system.TransactionResource",
+  {
+    options: {
+      prepare: { alwaysInterleave: true },
+      commit: { alwaysInterleave: true },
+      abort: { alwaysInterleave: true },
+      recordCommit: { alwaysInterleave: true },
+      status: { alwaysInterleave: true },
+    },
+  },
 );

@@ -225,7 +225,9 @@ export class TransactionAgent {
       interfaceId: TransactionResourceInterface.id,
       method,
       args,
-      options: {},
+      // Always-interleave (see `TransactionResourceInterface`): a local
+      // dispatch takes the request's options as given.
+      options: TransactionResourceInterface.options[method] ?? {},
     });
   }
 

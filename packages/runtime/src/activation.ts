@@ -62,7 +62,10 @@ import { getReducerFields } from "@thresh/core/reducer-state-metadata";
 import { guardReducerStateForReadOnly } from "@thresh/core/reducer-state-readonly-guard";
 import { getDurableFields } from "@thresh/core/durable-state-metadata";
 import { guardDurableFieldForReadOnly } from "@thresh/core/durable-state-readonly-guard";
-import { guardTransactionalStateForReadOnly } from "@thresh/core/transactional-state-readonly-guard";
+import {
+  guardTransactionalStateForReadOnly,
+  unguardedTransactionalState,
+} from "@thresh/core/transactional-state-readonly-guard";
 import type { InvocationRequest } from "@thresh/core/request";
 import {
   type CallChainReentrantGrainContext,
@@ -1184,10 +1187,8 @@ export class ActivationData implements GrainContext {
    * `invoke()` — so a plain call, or any call on a silo that never opted in,
    * never allocates a proxy. Transaction-resource system calls (`prepare`/
    * `commit`/`abort`/`status`, routed through `invokeTransactionResource`)
-   * are unaffected: they run as exclusive (non-`readOnly`) turns, and the
-   * scheduler never runs an exclusive turn concurrently with a `readOnly`
-   * one (see `TurnScheduler`), so by the time one starts this closure has
-   * already restored the real transactional-state facet.
+   * are always-interleave, so one may run while this guard is in place;
+   * `invokeTransactionResource` unwraps the guard to reach the real facet.
    */
   private applyReadOnlyGuard(): () => void {
     const record = this.instance as unknown as Record<string, unknown>;
@@ -1547,12 +1548,13 @@ export class ActivationData implements GrainContext {
   private async invokeTransactionResource(req: InvocationRequest): Promise<unknown> {
     const [stateName, ...rest] = req.args as [string, ...unknown[]];
     const field = getTransactionalFields(this.instance).find((f) => f.stateName === stateName);
+    // Unguarded: an always-interleave protocol call may land mid-`@readOnly` turn.
     const resource =
       field === undefined
         ? undefined
-        : ((this.instance as unknown as Record<string, unknown>)[field.fieldName] as
-            | TransactionParticipant
-            | undefined);
+        : (unguardedTransactionalState(
+            (this.instance as unknown as Record<string, unknown>)[field.fieldName],
+          ) as TransactionParticipant | undefined);
     if (resource === undefined) {
       throw new GrainCallError(
         `grain ${this.id.toString()} has no transactional state "${stateName}"`,

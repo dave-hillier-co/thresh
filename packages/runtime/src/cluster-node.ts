@@ -1209,7 +1209,7 @@ export class ClusterNode {
       interfaceId: TransactionResourceInterface.id,
       method: "status",
       args: [manager.stateName, transactionId],
-      options: {},
+      options: TransactionResourceInterface.options["status"] ?? {},
     })) as TransactionOutcome;
   }
 
