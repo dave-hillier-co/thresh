@@ -379,6 +379,20 @@ in-memory instances every silo shares in one process (`TestCluster`), `allowWith
 A store the builder constructs itself is one per silo by construction, so only `allowInCluster`
 admits it.
 
+## Storage clients start below the node, and a failed start rolls itself back
+
+The silo runs Orleans' staged lifecycle (`ServiceLifecycleStage`, `LifecycleSubject`): every
+subsystem starts at a named stage ascending and stops descending, and a participant whose stop
+throws is logged while the rest still stop. Two placements differ from Orleans. Storage clients
+(Redis, Postgres, Kafka metadata) and the membership watch sit at `RuntimeInitialize`, below the
+node at `RuntimeServices`, where Orleans initialises storage providers at `RuntimeStorageServices`
+above its messaging: here the node listens as soon as it starts and a peer's call can activate a
+grain at once, so the client a grain reads must already be connected, and it must close only after
+the node has deactivated every activation. The readiness flip is a participant at `Last`, so it
+publishes first on stop. Orleans' `LifecycleSubject.OnStart` does not itself unwind on failure; the
+host does, calling `onStop` and rejecting with the original error, so a half-started silo leaves
+nothing listening, connected or armed.
+
 ## A transaction resource delays deactivation, but its own protocol timers differ
 
 As in Orleans (`ActivationLifetime.BlockDeactivation` and `OnStopAsync`), a transactional-state

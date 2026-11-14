@@ -87,3 +87,45 @@ describe("LifecycleSubject", () => {
     expect(() => subject.subscribe("late", 0, recordingObserver([], "late"))).toThrow();
   });
 });
+
+describe("LifecycleSubject failure reporting", () => {
+  it("reports a failed stop with the observer's name and stage, and keeps stopping", async () => {
+    const log: string[] = [];
+    const failures: Array<{ phase: string; observerName: string; stage: number }> = [];
+    const subject = new LifecycleSubject({
+      onError: (f) =>
+        failures.push({ phase: f.phase, observerName: f.observerName, stage: f.stage }),
+    });
+    subject.subscribe("a", 0, recordingObserver(log, "a"));
+    subject.subscribe("b", 1, recordingObserver(log, "b", { failOnStop: true }));
+    await subject.onStart();
+    await subject.onStop();
+    expect(log).toEqual(["start:a", "start:b", "stop:b", "stop:a"]);
+    expect(failures).toEqual([{ phase: "stop", observerName: "b", stage: 1 }]);
+  });
+
+  it("treats an observer that throws synchronously like one that rejects", async () => {
+    const log: string[] = [];
+    const subject = new LifecycleSubject();
+    subject.subscribe("a", 0, recordingObserver(log, "a"));
+    subject.subscribe("b", 1, {
+      onStart: async () => undefined,
+      onStop: () => {
+        throw new Error("sync stop failure");
+      },
+    });
+    await subject.onStart();
+    await expect(subject.onStop()).resolves.toBeUndefined();
+    expect(log).toEqual(["start:a", "stop:a"]);
+  });
+
+  it("ignores a reporter that throws", async () => {
+    const subject = new LifecycleSubject({
+      onError: () => {
+        throw new Error("reporter down");
+      },
+    });
+    subject.subscribe("a", 0, recordingObserver([], "a", { failOnStart: true }));
+    await expect(subject.onStart()).rejects.toThrow("fail-start:a");
+  });
+});
