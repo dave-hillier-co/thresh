@@ -5,6 +5,7 @@ import {
   TransactionalStateImpl,
   type ResolveStatus,
 } from "@thresh/transactions/transactional-state-impl";
+import type { TransactionsOptions } from "@thresh/transactions/transactions-options";
 import type { TransactionalStorageRegistry } from "@thresh/transactions/transactional-storage-registry";
 
 /** Every `TransactionalState` facet bound onto an instance, so `unbindTransactionalStates` can unload them. */
@@ -26,17 +27,18 @@ export async function bindTransactionalStates(
   registry: TransactionalStorageRegistry,
   resolveStatus?: ResolveStatus,
   time?: TimeProvider,
+  options?: Partial<TransactionsOptions>,
 ): Promise<void> {
   const states = boundStates.get(instance) ?? [];
   for (const field of getTransactionalFields(instance)) {
-    const storage = registry.get();
+    const storage = registry.get(field.provider);
     const state = new TransactionalStateImpl(
       field.stateName,
       grainId,
       field.initial,
       storage,
       resolveStatus,
-      undefined,
+      options,
       time,
     );
     (instance as Record<string, unknown>)[field.fieldName] = state;

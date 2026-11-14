@@ -523,6 +523,8 @@ export function usePersistentState<TState>(
 export interface UseTransactionalStateOptions<TState> {
   /** The state before any committed write. */
   initial: () => TState;
+  /** Transactional-storage provider name; defaults to the silo's default provider. */
+  provider?: string;
 }
 
 /**
@@ -541,6 +543,7 @@ export function useTransactionalState<TState>(
     fieldName,
     stateName,
     initial: options.initial as () => unknown,
+    ...(options.provider !== undefined ? { provider: options.provider } : {}),
   });
   const bound = (): TransactionalState<TState> => {
     const facet = (instance as Record<string, unknown>)[fieldName] as

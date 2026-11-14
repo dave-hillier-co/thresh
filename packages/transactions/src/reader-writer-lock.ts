@@ -134,6 +134,7 @@ export class ReaderWriterLock {
   private readonly holders = new Map<string, Holder>();
   private readonly waiters: Waiter[] = [];
   private holdTimer: TimerHandle | undefined;
+  private disposed = false;
 
   constructor(
     private readonly time: TimeProvider = systemTimeProvider,
@@ -213,6 +214,23 @@ export class ReaderWriterLock {
     return "ok";
   }
 
+  /**
+   * The resource is going away: cancel the hold bound and every waiter's
+   * acquisition deadline so no timer fires into a dead resource (or keeps the
+   * event loop alive), and settle queued requests as aborted. Holders are left
+   * as they are; the lock is not used again.
+   */
+  dispose(): void {
+    this.disposed = true;
+    this.clearHoldTimer();
+    for (const waiter of this.waiters.splice(0)) {
+      if (waiter.timer !== undefined) this.time.clearTimer(waiter.timer);
+      waiter.reject(
+        new TransactionAbortedError(waiter.transactionId, "transactional state unloaded"),
+      );
+    }
+  }
+
   /** Whether any transaction currently holds this lock. */
   get isHeld(): boolean {
     return this.holders.size > 0;
@@ -259,7 +277,7 @@ export class ReaderWriterLock {
    */
   private armHoldTimer(): void {
     const timeoutMs = this.options.lockTimeoutMs;
-    if (timeoutMs === undefined) return;
+    if (timeoutMs === undefined || this.disposed) return;
     this.clearHoldTimer();
     this.holdTimer = this.time.setTimer(() => {
       this.holdTimer = undefined;
@@ -335,6 +353,11 @@ export class ReaderWriterLock {
     deadline?: AcquireDeadline,
     isUpgrade = false,
   ): Promise<void> {
+    if (this.disposed) {
+      return Promise.reject(
+        new TransactionAbortedError(transactionId, "transactional state unloaded"),
+      );
+    }
     const conflicts = this.conflictingHolders(transactionId, mode);
     // Wait-die: wait only if older — by the total (timestamp, id) order —
     // than every conflicting holder; otherwise die.

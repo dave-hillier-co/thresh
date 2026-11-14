@@ -99,6 +99,9 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
   /** Bounds how long the prepared tentative waits for the coordinator; see {@link armPreparedTimer}. */
   private preparedTimer: TimerHandle | undefined;
 
+  /** Set by {@link unload}: no timer may be armed once the resource is gone. */
+  private unloaded = false;
+
   constructor(
     private readonly stateName: string,
     private readonly grainId: GrainId,
@@ -179,23 +182,27 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
    * activation's `load()` re-attempts recovery from scratch.
    */
   unload(): void {
+    this.unloaded = true;
     if (this.confirmationTimer !== undefined) {
       this.time.clearTimer(this.confirmationTimer);
       this.confirmationTimer = undefined;
     }
     this.confirmationDelayMs = 0;
     this.clearPreparedTimer();
+    this.lock.dispose();
   }
 
   /**
    * Orleans `ActivationLifetime.BlockDeactivation`: while this resource holds a
    * transaction lock (a tentative or prepared transaction, or a reader) or an
    * inherited prepared record whose outcome it does not know yet, its
-   * activation must not be idle-collected, migrated or rebalanced away —
-   * deactivating would break the lock, or strand the record until some later
-   * activation happens to load it. Both are bounded: an unprepared holder by
-   * the hold bound, a prepared one by {@link armPreparedTimer}, an in-doubt
-   * record by its TM's eventual answer.
+   * activation's deactivation is delayed — on every path: idle collection,
+   * migration, rebalancing, an explicit request — because deactivating would
+   * break the lock, or strand the record until some later activation happens
+   * to load it. The delay is Orleans' bounded one (five seconds, in the
+   * activation's deactivation pipeline): after it the deactivation proceeds,
+   * and `prepare` validation and the in-doubt resolution keep the outcome
+   * correct.
    */
   get blocksDeactivation(): boolean {
     return this.lock.isHeld || this.inDoubt.size > 0;
@@ -307,6 +314,7 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
    */
   private armPreparedTimer(transactionId: string, manager: ParticipantId): void {
     this.clearPreparedTimer();
+    if (this.unloaded) return;
     const isSelf = this.isSelf(manager);
     if (!isSelf && this.resolveStatus === undefined) return;
     const delay = isSelf
@@ -566,7 +574,7 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
 
   /** Schedule the next confirmation-worker pass, backing off exponentially up to the configured cap. */
   private scheduleConfirmationWorker(): void {
-    if (this.confirmationTimer !== undefined) return; // already scheduled
+    if (this.unloaded || this.confirmationTimer !== undefined) return; // gone, or already scheduled
     const base = this.options.confirmationIntervalMs;
     const max = this.options.confirmationMaxIntervalMs;
     this.confirmationDelayMs = Math.min(
