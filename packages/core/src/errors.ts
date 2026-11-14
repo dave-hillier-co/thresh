@@ -90,7 +90,13 @@ export class UnavailableExceptionFallbackException extends Error {
       // Never let a carried property overwrite the identity fields above. `cause`/`errors` are
       // deliberately NOT reserved — see the `errors` field doc above.
       if (RESERVED_FALLBACK_KEYS.has(key)) continue;
-      (this as unknown as Record<string, unknown>)[key] = value;
+      // Defined, not assigned: a carried `__proto__` key must stay data and never reach the setter.
+      Object.defineProperty(this, key, {
+        value,
+        writable: true,
+        enumerable: true,
+        configurable: true,
+      });
     }
   }
 }

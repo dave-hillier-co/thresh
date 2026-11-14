@@ -65,6 +65,7 @@ const builtInTags = new Set([
   "grainRef",
   "typedArray",
   "negZero",
+  "plainObject",
 ]);
 
 /**
@@ -447,10 +448,39 @@ function tagged(tag: string, fields: Record<string, unknown>): Record<string, un
 // one property hop away (`out.constructor.prototype.x = y` reaches every object of that
 // constructor). Every decode branch that copies wire keys onto a plain object literal must skip
 // these three rather than assign them.
+//
+// The keys are DATA, though, and a codec that drops them is not injective: `{ constructor: 1 }`
+// would come back as `{}`. So they are carried and rebuilt faithfully, never by assignment — see
+// `setOwn` for the decode side and the `plainObject` envelope for the encode side.
 const DANGEROUS_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
 function isDangerousKey(key: string): boolean {
   return DANGEROUS_KEYS.has(key);
+}
+
+/**
+ * Install `key` as an own, enumerable, writable data property by `[[DefineOwnProperty]]`, which —
+ * unlike assignment — never consults the inherited `__proto__` setter, so no key can replace or
+ * mutate a prototype.
+ */
+function setOwn(target: object, key: string, value: unknown): void {
+  Object.defineProperty(target, key, {
+    value,
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  });
+}
+
+/**
+ * Whether a plain object cannot travel as its own keys: it owns the tag key (a decoder would take
+ * it for an envelope of another type) or one of the dangerous keys (a consumer assigning decoded
+ * keys onto a fresh object would hit the `__proto__` setter). Such an object goes through the
+ * `plainObject` envelope instead, which carries its entries as data; every other object keeps the
+ * bare shape.
+ */
+function needsEscape(keys: readonly string[]): boolean {
+  return keys.some((k) => k === T || isDangerousKey(k));
 }
 
 /**
@@ -684,8 +714,7 @@ function encodeInner(
         // silently. Let it travel as an ordinary property instead.
         if (k === "name" || k === "message" || k === "stack" || k === "cause") continue;
         if (k === "errors" && value instanceof AggregateError) continue;
-        if (isDangerousKey(k)) continue;
-        properties[k] = encodeInner(v, seen, `${path}.${k}`, options);
+        setOwn(properties, k, encodeInner(v, seen, `${path}.${k}`, options));
       }
       const name = typeof value.name === "string" ? value.name : "Error";
       const fields: Record<string, unknown> = { name, message: value.message };
@@ -718,9 +747,19 @@ function encodeInner(
     if (seen.has(value)) throw new CircularReferenceError(path);
     seen.add(value);
     try {
+      const keys = Object.keys(value);
+      if (needsEscape(keys)) {
+        const source = value as Record<string, unknown>;
+        // `encodeElement`: an `undefined` member is a PRESENT key here, and the pair array has no
+        // way to omit it, so it is tagged like any other positional undefined.
+        const entries = keys.map((k) => [
+          k,
+          encodeElement(source[k], seen, `${path}.${k}`, options),
+        ]);
+        return tagged("plainObject", { entries });
+      }
       const out: Record<string, unknown> = {};
       for (const [k, v] of Object.entries(value)) {
-        if (isDangerousKey(k)) continue;
         out[k] = encodeInner(v, seen, `${path}.${k}`, options);
       }
       return out;
@@ -796,8 +835,7 @@ export function decodeValue(value: unknown, ctx: CodecContext = {}): unknown {
         const properties: Record<string, unknown> = {};
         if (raw !== null && typeof raw === "object") {
           for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
-            if (isDangerousKey(k)) continue;
-            properties[k] = decodeValue(v, ctx);
+            setOwn(properties, k, decodeValue(v, ctx));
           }
         }
         const errors = Array.isArray(obj.errors)
@@ -836,6 +874,19 @@ export function decodeValue(value: unknown, ctx: CodecContext = {}): unknown {
         const entries = obj.entries as [unknown, unknown][];
         return new Map(entries.map(([k, v]) => [decodeValue(k, ctx), decodeValue(v, ctx)]));
       }
+      case "plainObject": {
+        if (!Array.isArray(obj.entries)) {
+          throw new Error("decodeValue: malformed plainObject envelope (entries is not an array)");
+        }
+        const out: Record<string, unknown> = {};
+        for (const entry of obj.entries as unknown[]) {
+          if (!Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== "string") {
+            throw new Error("decodeValue: malformed plainObject envelope (entry is not a pair)");
+          }
+          setOwn(out, entry[0], decodeValue(entry[1], ctx));
+        }
+        return out;
+      }
       case "set": {
         const values = obj.values as unknown[];
         return new Set(values.map((v) => decodeValue(v, ctx)));
@@ -852,8 +903,8 @@ export function decodeValue(value: unknown, ctx: CodecContext = {}): unknown {
         if (surrogate !== undefined) {
           const fields: Record<string, unknown> = {};
           for (const [k, v] of Object.entries(obj)) {
-            if (k === T || k === V || isDangerousKey(k)) continue;
-            fields[k] = decodeValue(v, ctx);
+            if (k === T || k === V) continue;
+            setOwn(fields, k, decodeValue(v, ctx));
           }
           return surrogate.decode(fields, ctx);
         }
@@ -867,10 +918,7 @@ export function decodeValue(value: unknown, ctx: CodecContext = {}): unknown {
   }
 
   const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(obj)) {
-    if (isDangerousKey(k)) continue;
-    out[k] = decodeValue(v, ctx);
-  }
+  for (const [k, v] of Object.entries(obj)) setOwn(out, k, decodeValue(v, ctx));
   return out;
 }
 
