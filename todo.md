@@ -275,24 +275,41 @@ carrying a test that was observed failing first.
 
 Membership and partition ownership:
 
-- [ ] **M1** view changes are delivered by a one-shot wake-up to a loop that awaits store I/O
-- [ ] **M2** a silo's ring is frozen at construction; under Kubernetes it starts empty
-- [ ] **M3** join recovery runs with the read gate open (duplicate activations on join)
-- [ ] **M4** a silo that leaves in two steps is never cleaned out of peers' routing state
-- [ ] **M5** per-silo view versions break routine routing (the reproduced half of #72)
+- [x] **M1** view changes are delivered by a one-shot wake-up to a loop that awaits store I/O.
+      `updates()` has latest-value semantics and the host reconciles to the level.
+- [x] **M2** a silo's ring is frozen at construction; under Kubernetes it starts empty. The node
+      applies the current view in `start()`; ownership hooks run from one path.
+- [x] **M3** join recovery runs with the read gate open (duplicate activations on join). An
+      unknown previous owner now waits on every source, and the pull names the requester's ring.
+- [ ] **M4** **partly fixed.** Cleanup is driven by the member-set diff, so a removed silo is
+      cleared from the cache, the pool and the client directory. Still open: while a dead silo is
+      listed not-ready, calls to it surface a raw `ECONNREFUSED` (ties to option C above).
+- [x] **M5** per-silo view versions break routine routing (the reproduced half of #72). The
+      Kubernetes view version is the highest EndpointSlice `resourceVersion` observed. Residuals:
+      a watch that reports no revision falls back to a per-silo counter; a silo that listed after
+      a slice deletion can differ from one that saw the event until the next slice write; and a
+      not-ready joiner still counts itself in its own ring (the open half of #72).
 - [ ] **M6** the directory handoff fails open and has no range or version unit
 - [ ] **M7** stream, reminder and job ownership use three disciplines, none fenced
-- [ ] **M8** health signals do not measure what they name
+- [ ] **M8** **partly fixed.** `membershipHealthy` follows the applied view. `overloaded`,
+      `transportReady` and `live()` are unchanged.
 - [ ] **M9** silo replies use a reverse-dialled connection; responses match by id alone
 
 Transactions:
 
 - [ ] **T1** the caller-side agent drives 2PC; the TM is only a commit-record register
-- [ ] **T2** `prepare` validates nothing (a re-activated participant loses its write)
-- [ ] **T3** `status(): boolean` conflates "not yet decided" with "aborted"
-- [ ] **T4** nothing times out or is collected (holders, pings, commit records, exclusive turns)
+- [x] **T2** `prepare` validates nothing (a re-activated participant loses its write). `prepare`
+      carries the access counts and votes no unless the lock is still held with them.
+- [x] **T3** `status(): boolean` conflates "not yet decided" with "aborted". Status is
+      committed / undetermined / presumed abort.
+- [ ] **T4** **partly fixed.** A holder past `lockTimeoutMs` (8 s) is broken, waiters use
+      `lockAcquireTimeoutMs` (10 s), and protocol calls are always-interleave. Still open: commit
+      records are never collected (needs T1's Confirm phase); the prepared-participant ping is a
+      stand-in; the builder exposes no transaction options.
 - [ ] **T5** pending records are siblings but the storage contract encodes a chain (root of #78)
-- [ ] **T6** nothing blocks deactivation while a lock or prepared record is live
+- [x] **T6** nothing blocks deactivation while a lock or prepared record is live. Such an
+      activation is not collected or migrated. This is a hard block where Orleans delays by at
+      most 5 s; an explicit `deactivateOnIdle` does not honour it yet.
 
 Activation lifecycle:
 
@@ -307,13 +324,17 @@ Activation lifecycle:
 
 Wire surface and location transparency:
 
-- [ ] **W1** dispatch by bare method name: no declared wire surface
-- [ ] **W2** the value codec reserves keys inside user data
+- [x] **W1** dispatch by bare method name: no declared wire surface. Only a type's declared
+      methods dispatch, and references keep JavaScript protocol names local. Residual:
+      `JournaledGrain`'s `initialState` and `transitionState` remain callable.
+- [x] **W2** the value codec reserves keys inside user data. Objects owning `$thresh` or a
+      dangerous key travel in a `plainObject` envelope and round-trip as themselves.
 - [ ] **W3** local calls bypass the codec, so placement decides call semantics
 - [ ] **W4** no compatibility contract for the wire or stored state
 - [ ] **W5** a decode failure is a process fault
 - [ ] **W6** "safe to resend" has three definitions
-- [ ] **W7** the error taxonomy lives in parallel tables that have drifted
+- [x] **W7** the error taxonomy lives in parallel tables that have drifted. One table, a test
+      that enumerates every exported error, and `isThreshRuntimeError` classifies as Orleans does.
 - [ ] **W8** `GrainId` has two equalities
 
 Verification model:
@@ -326,12 +347,17 @@ Verification model:
 
 State and journaling:
 
-- [ ] **S1** the journal adaptor swallows the lost-writer signal and stays stale
+- [ ] **S1** **partly fixed.** A lost conditional append resyncs before it reports `false`. Still
+      open: unconditional events pending beside a failed conditional one are dropped with it, and
+      a lost unconditional `confirmEvents` leaves the adaptor stale.
 - [ ] **S2** one storage write per durable-collection mutation, no atomic unit
-- [ ] **S3** `JournaledGrain` event history is truncated by the shared compaction threshold
-- [ ] **S4** log sharing is inferred by object identity over a constant log name
+- [ ] **S3** **partly fixed.** Retention is now a named option, on by default — but retained
+      history is rewritten in full at every compaction, so the default needs revisiting.
+- [x] **S4** log sharing is inferred by object identity over a constant log name. Sharing is
+      decided by a storage's `backingKey`.
 - [ ] **S5** no shared facet contract
-- [ ] **S6** the in-memory grain store is not a model of the durable ones
+- [x] **S6** the in-memory grain store is not a model of the durable ones. It round-trips state
+      through the value codec.
 - [ ] **S7** the storage-backend seam covers three of six durable stores
 - [ ] **S8** `defineReducerGrain` effects are neither atomic nor durable
 
