@@ -104,9 +104,10 @@ orleansTest(
       const failures = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
       // At least one concurrent read-then-write must lose the upgrade race —
       // Orleans asserts `OrleansTransactionLockUpgradeException` or
-      // `OrleansBrokenTransactionLockException`; this framework has no
-      // "broken lock" variant (see the exclusive-lock file header), so every
-      // failure here is a `TransactionLockUpgradeError` (an initial-acquisition
+      // `OrleansBrokenTransactionLockException`. `TransactionBrokenLockError`
+      // is raised only when a held lock was broken (its hold bound expired),
+      // which this short race never reaches, so every failure here is a
+      // `TransactionLockUpgradeError` (an initial-acquisition
       // wait-die death is also possible in principle, but the golden-path
       // shape below rules it out) or, in a rare late-arriving-reader
       // interleaving, the generic wait-die `TransactionAbortedError`.

@@ -61,9 +61,12 @@ export function participantKey(id: ParticipantId): string {
  * A transactional resource enlisted in a transaction, driven by the agent at the
  * boundary through the two-phase protocol (Orleans `ITransactionalResource`):
  *
- * - `prepare` validates the resource still holds its lock with the expected
- *   access and durably stages its tentative state; it returns `false` (or
- *   throws) to veto the commit.
+ * - `prepare` validates the resource still holds its lock with exactly the
+ *   access the coordinator recorded for it (`accessCount`, Orleans
+ *   `ReaderWriterLock.ValidateLock`) and durably stages its tentative state; it
+ *   returns `false` (or throws) to veto the commit. A resource that has no
+ *   record of the transaction although the coordinator says it read or wrote
+ *   there (its lock was broken, or its activation replaced) must veto.
  * - `commit` makes the prepared tentative state the committed version.
  * - `abort` discards tentative state and releases locks.
  *
@@ -76,6 +79,7 @@ export function participantKey(id: ParticipantId): string {
 export interface TransactionParticipant {
   prepare(
     transactionId: string,
+    accessCount: AccessCounter,
     timeStamp: number,
     manager: ParticipantId,
   ): boolean | Promise<boolean>;

@@ -1,4 +1,9 @@
-import { TransactionAbortedError, TransactionLockUpgradeError } from "@thresh/core/errors";
+import {
+  TransactionAbortedError,
+  TransactionBrokenLockError,
+  TransactionLockUpgradeError,
+} from "@thresh/core/errors";
+import type { AccessCounter } from "@thresh/core/transaction-info";
 import {
   systemTimeProvider,
   type TimeProvider,
@@ -11,6 +16,28 @@ interface Holder {
   transactionId: string;
   priority: number;
   mode: LockMode;
+  /** Reads granted to this transaction while it held the lock (Orleans `TransactionRecord.NumberReads`). */
+  reads: number;
+  /** Writes granted to this transaction while it held the lock (Orleans `TransactionRecord.NumberWrites`). */
+  writes: number;
+}
+
+/**
+ * The outcome of {@link ReaderWriterLock.validate}, named after the Orleans
+ * `TransactionalStatus` values `ReaderWriterLock.ValidateLock` returns.
+ */
+export type LockValidation = "ok" | "brokenLock" | "lockValidationFailed";
+
+/**
+ * What one {@link ReaderWriterLock.enter} is for: whether it counts as a read
+ * or a write (an exclusive read takes a write lock but counts as a read, as in
+ * Orleans), and the access the caller's transaction has already recorded on
+ * this resource — so a transaction that should already hold the lock and does
+ * not is refused (Orleans `EnterLock`'s broken-lock checks).
+ */
+export interface LockAccess {
+  readonly isRead: boolean;
+  readonly counter?: AccessCounter | undefined;
 }
 
 /**
@@ -32,6 +59,7 @@ interface Waiter {
   transactionId: string;
   priority: number;
   mode: LockMode;
+  isRead: boolean;
   resolve: () => void;
   reject: (err: Error) => void;
   timer?: TimerHandle;
@@ -88,23 +116,90 @@ export class ReaderWriterLock {
     priority: number,
     mode: LockMode,
     deadline?: AcquireDeadline,
+    access?: LockAccess,
   ): Promise<void> {
+    const isRead = access?.isRead ?? mode === "read";
+    const counter = access?.counter;
     const held = this.holders.get(transactionId);
     if (held !== undefined) {
+      // Orleans `EnterLock`: re-entering with more recorded access than this
+      // lock granted means some of it was lost (the lock was broken and taken
+      // again from scratch).
+      if (counter !== undefined && (counter.reads > held.reads || counter.writes > held.writes)) {
+        return Promise.reject(
+          new TransactionBrokenLockError(transactionId, "when re-entering lock"),
+        );
+      }
       // Re-entrant. Upgrade read -> write if no other holder conflicts.
       if (mode === "write" && held.mode === "read") {
         if (this.conflictingHolders(transactionId, "write").length > 0) {
-          return this.blockOrDie(transactionId, priority, "write", deadline, /* isUpgrade */ true);
+          return this.blockOrDie(
+            transactionId,
+            priority,
+            "write",
+            isRead,
+            deadline,
+            /* isUpgrade */ true,
+          );
         }
         held.mode = "write";
       }
+      this.count(held, isRead);
       return Promise.resolve();
+    }
+    // Orleans `EnterLock`: a transaction that already read or wrote here is
+    // supposed to hold this lock; finding no record of it means the lock was
+    // broken, and taking it afresh would silently drop that earlier access.
+    if (counter !== undefined && counter.reads + counter.writes > 0) {
+      return Promise.reject(
+        new TransactionBrokenLockError(transactionId, "when trying to re-enter lock"),
+      );
     }
     if (this.conflictingHolders(transactionId, mode).length === 0) {
-      this.holders.set(transactionId, { transactionId, priority, mode });
+      this.grant(transactionId, priority, mode, isRead);
       return Promise.resolve();
     }
-    return this.blockOrDie(transactionId, priority, mode, deadline);
+    return this.blockOrDie(transactionId, priority, mode, isRead, deadline);
+  }
+
+  /**
+   * Whether `transactionId` still holds this lock with exactly `accessCount`
+   * (Orleans `ReaderWriterLock.ValidateLock`): `brokenLock` when it holds no
+   * lock here at all, `lockValidationFailed` when the reads or writes the
+   * coordinator recorded differ from those this lock granted. Unlike Orleans
+   * this does not roll the transaction back itself; the resource does, since it
+   * owns the tentative state.
+   */
+  validate(transactionId: string, accessCount: AccessCounter): LockValidation {
+    const held = this.holders.get(transactionId);
+    if (held === undefined) return "brokenLock";
+    if (held.reads !== accessCount.reads || held.writes !== accessCount.writes) {
+      return "lockValidationFailed";
+    }
+    return "ok";
+  }
+
+  /** Whether any transaction currently holds this lock. */
+  get isHeld(): boolean {
+    return this.holders.size > 0;
+  }
+
+  private grant(transactionId: string, priority: number, mode: LockMode, isRead: boolean): void {
+    const existing = this.holders.get(transactionId);
+    if (existing !== undefined) {
+      // A queued read-to-write upgrade: keep the reads already counted.
+      existing.mode = mode;
+      this.count(existing, isRead);
+      return;
+    }
+    const holder: Holder = { transactionId, priority, mode, reads: 0, writes: 0 };
+    this.count(holder, isRead);
+    this.holders.set(transactionId, holder);
+  }
+
+  private count(holder: Holder, isRead: boolean): void {
+    if (isRead) holder.reads += 1;
+    else holder.writes += 1;
   }
 
   /** Release a transaction's hold (and any queued request), then grant waiters. */
@@ -135,6 +230,7 @@ export class ReaderWriterLock {
     transactionId: string,
     priority: number,
     mode: LockMode,
+    isRead: boolean,
     deadline?: AcquireDeadline,
     isUpgrade = false,
   ): Promise<void> {
@@ -154,7 +250,7 @@ export class ReaderWriterLock {
       );
     }
     return new Promise<void>((resolve, reject) => {
-      const waiter: Waiter = { transactionId, priority, mode, resolve, reject };
+      const waiter: Waiter = { transactionId, priority, mode, isRead, resolve, reject };
       if (deadline !== undefined) {
         waiter.timer = this.time.setTimer(() => {
           // Time out only if still waiting; if the waiter was already granted
@@ -177,11 +273,7 @@ export class ReaderWriterLock {
       const queued = [...this.waiters].sort((a, b) => (isOlder(a, b) ? -1 : isOlder(b, a) ? 1 : 0));
       for (const waiter of queued) {
         if (this.conflictingHolders(waiter.transactionId, waiter.mode).length === 0) {
-          this.holders.set(waiter.transactionId, {
-            transactionId: waiter.transactionId,
-            priority: waiter.priority,
-            mode: waiter.mode,
-          });
+          this.grant(waiter.transactionId, waiter.priority, waiter.mode, waiter.isRead);
           this.waiters.splice(this.waiters.indexOf(waiter), 1);
           if (waiter.timer !== undefined) this.time.clearTimer(waiter.timer);
           waiter.resolve();

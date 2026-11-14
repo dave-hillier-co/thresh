@@ -1,5 +1,5 @@
 import { defineGrainInterface } from "./grain-interface";
-import type { ParticipantId } from "./transaction-info";
+import type { AccessCounter, ParticipantId } from "./transaction-info";
 
 /**
  * The system extension the transaction agent calls to drive a transactional
@@ -14,9 +14,15 @@ import type { ParticipantId } from "./transaction-info";
  * participant asks the TM via `status` whether the transaction committed.
  */
 export interface TransactionResource {
+  /**
+   * Validate that this resource still holds the transaction's lock with
+   * exactly `accessCount` (the reads and writes the coordinator recorded for
+   * it), then stage its tentative state; `false` vetoes the commit.
+   */
   prepare(
     stateName: string,
     transactionId: string,
+    accessCount: AccessCounter,
     timeStamp: number,
     manager: ParticipantId,
   ): Promise<boolean>;

@@ -1,6 +1,7 @@
 import type { GrainId } from "@thresh/core/grain-id";
 import type { PerformReadOptions, TransactionalState } from "@thresh/core/transactional-state";
 import type {
+  AccessCounter,
   ParticipantId,
   TransactionInfo,
   TransactionParticipant,
@@ -181,9 +182,13 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
     // transaction serializes with contenders rather than racing a read-to-write
     // upgrade against them.
     const mode = options?.exclusive === true ? "write" : "read";
-    await this.lock.enter(tx.id, tx.timeStamp, mode, {
-      timeoutMs: this.options.lockTimeoutMs,
-    });
+    await this.lock.enter(
+      tx.id,
+      tx.timeStamp,
+      mode,
+      { timeoutMs: this.options.lockTimeoutMs },
+      { isRead: true, counter: tx.participants.get(this.key)?.access },
+    );
     this.enlist(tx, 1, 0);
     const state = this.tentative?.transactionId === tx.id ? this.tentative.value : this.committed;
     return read(state);
@@ -194,9 +199,13 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
     // A read-only transaction may never write, regardless of contention —
     // reject before touching the lock (Orleans: OrleansReadOnlyViolatedException).
     if (tx.readOnly) throw new TransactionReadOnlyViolatedError(tx.id);
-    await this.lock.enter(tx.id, tx.timeStamp, "write", {
-      timeoutMs: this.options.lockTimeoutMs,
-    });
+    await this.lock.enter(
+      tx.id,
+      tx.timeStamp,
+      "write",
+      { timeoutMs: this.options.lockTimeoutMs },
+      { isRead: false, counter: tx.participants.get(this.key)?.access },
+    );
     this.enlist(tx, 0, 1);
     if (this.tentative?.transactionId !== tx.id) {
       const sequenceId = this.nextSequenceId();
@@ -214,12 +223,29 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
     return update(this.tentative.value);
   }
 
-  /** Durably stage this transaction's tentative state, recording its TM. */
+  /**
+   * Vote on the transaction: validate that this resource still holds its lock
+   * with exactly `accessCount` — the reads and writes the coordinator recorded
+   * for it — then durably stage its tentative state, recording its TM. Mirrors
+   * Orleans `TransactionQueue.NotifyOfPrepare` / `TransactionalResource.CommitReadOnly`,
+   * both of which start from `ReaderWriterLock.ValidateLock`: a transaction this
+   * activation holds no lock for (`brokenLock` — the lock was broken, or this is
+   * a fresh activation that never saw the transaction) or holds with different
+   * counts (`lockValidationFailed`, which also rolls it back here) votes no, so
+   * the transaction aborts rather than committing without a write it made. A
+   * read-only participant is validated the same way; it just has nothing to stage.
+   */
   async prepare(
     transactionId: string,
+    accessCount: AccessCounter,
     timeStamp: number,
     manager: ParticipantId,
   ): Promise<boolean> {
+    const validation = this.lock.validate(transactionId, accessCount);
+    if (validation !== "ok") {
+      if (validation === "lockValidationFailed") this.rollback(transactionId);
+      return false;
+    }
     if (this.tentative?.transactionId !== transactionId) return true; // read-only participant
     const pending: PendingTransactionState<T> = {
       sequenceId: this.tentative.sequenceId,
@@ -279,6 +305,14 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
       // would deadlock this grain state's ReaderWriterLock permanently.
       this.lock.release(transactionId);
     }
+  }
+
+  /** Drop an unprepared transaction's tentative state and its lock (Orleans `ReaderWriterLock.Rollback`). */
+  private rollback(transactionId: string): void {
+    if (this.tentative?.transactionId === transactionId && !this.tentative.prepared) {
+      this.tentative = undefined;
+    }
+    this.lock.release(transactionId);
   }
 
   async abort(transactionId: string): Promise<void> {

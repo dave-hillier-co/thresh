@@ -165,11 +165,12 @@ export class TransactionAgent {
     manager: ParticipantId,
   ): Promise<boolean> {
     if (e.participant !== undefined) {
-      return Promise.resolve(e.participant.prepare(info.id, info.timeStamp, manager));
+      return Promise.resolve(e.participant.prepare(info.id, e.access, info.timeStamp, manager));
     }
     return this.route(e.id, "prepare", [
       e.id.stateName,
       info.id,
+      e.access,
       info.timeStamp,
       manager,
     ]) as Promise<boolean>;

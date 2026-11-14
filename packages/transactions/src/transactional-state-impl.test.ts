@@ -445,7 +445,7 @@ describe("TransactionalStateImpl (Slice 2)", () => {
     await seed.load();
     const tx = agent.startTransaction();
     await inTransaction(tx, () => seed.performUpdate((s) => (s.cents = 250)));
-    await seed.prepare(tx.id, tx.timeStamp, manager);
+    await seed.prepare(tx.id, { reads: 0, writes: 1 }, tx.timeStamp, manager);
     // Crash: never commits/aborts, leaving the prepared record in-doubt.
 
     // The reactivated facet's resolver: unreachable on the first attempt (the
@@ -524,7 +524,7 @@ describe("TransactionalStateImpl (Slice 2)", () => {
     await crashed.load();
     const tx = agent.startTransaction();
     await inTransaction(tx, () => crashed.performUpdate((s) => (s.cents = cents)));
-    await crashed.prepare(tx.id, tx.timeStamp, tmManager);
+    await crashed.prepare(tx.id, { reads: 0, writes: 1 }, tx.timeStamp, tmManager);
     // Crash: never commits or aborts, leaving the prepared record in-doubt.
     return tx.id;
   }
@@ -560,7 +560,7 @@ describe("TransactionalStateImpl (Slice 2)", () => {
     // and recovery would then promote whatever record happens to sit at that id.
     const t2 = agent.startTransaction();
     await inTransaction(t2, () => activation.performUpdate((s) => (s.cents = 500)));
-    await activation.prepare(t2.id, t2.timeStamp, tmManager);
+    await activation.prepare(t2.id, { reads: 0, writes: 1 }, t2.timeStamp, tmManager);
 
     const staged = await storage.load("balance", grainId("a"));
     expect(staged.pendingStates.map((p) => [p.sequenceId, p.transactionId])).toEqual([
@@ -620,7 +620,7 @@ describe("TransactionalStateImpl (Slice 2)", () => {
     // A live transaction stages its own write at id 2, then its caller aborts it.
     const t2 = agent.startTransaction();
     await inTransaction(t2, () => activation.performUpdate((s) => (s.cents = 500)));
-    await activation.prepare(t2.id, t2.timeStamp, tmManager);
+    await activation.prepare(t2.id, { reads: 0, writes: 1 }, t2.timeStamp, tmManager);
     await agent.abort(t2);
 
     // Aborting T2 may only discard T2's record. T1 is a different transaction
@@ -665,7 +665,7 @@ describe("TransactionalStateImpl (Slice 2)", () => {
     // record: 500 at id 2 is the committed version from here on.
     const t2 = agent.startTransaction();
     await inTransaction(t2, () => activation.performUpdate((s) => (s.cents = 500)));
-    await activation.prepare(t2.id, t2.timeStamp, tmManager);
+    await activation.prepare(t2.id, { reads: 0, writes: 1 }, t2.timeStamp, tmManager);
     await activation.commit(t2.id);
 
     // The TM comes back and answers "T1 committed" — but the record that
@@ -778,7 +778,7 @@ describe("TransactionalStateImpl (Slice 2)", () => {
     await seed.load();
     const tx = agent.startTransaction();
     await inTransaction(tx, () => seed.performUpdate((s) => (s.cents = 250)));
-    await seed.prepare(tx.id, tx.timeStamp, manager);
+    await seed.prepare(tx.id, { reads: 0, writes: 1 }, tx.timeStamp, manager);
     // Crash: never commits/aborts, leaving the prepared record in-doubt.
 
     // Resolution writes (the ones carrying a commit or abort delta) fail until

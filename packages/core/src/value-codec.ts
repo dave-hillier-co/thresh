@@ -12,6 +12,7 @@ import {
   ThreshCancellationError,
   ThreshRuntimeError,
   TransactionAbortedError,
+  TransactionBrokenLockError,
   TransactionCascadingAbortError,
   TransactionInDoubtError,
   TransactionLockUpgradeError,
@@ -299,6 +300,9 @@ registerKnownError("TransactionReadOnlyViolatedError", TransactionReadOnlyViolat
 );
 registerKnownError("TransactionLockUpgradeError", TransactionLockUpgradeError, (m, p) =>
   withMessage(new TransactionLockUpgradeError(p.transactionId as string), m),
+);
+registerKnownError("TransactionBrokenLockError", TransactionBrokenLockError, (m, p) =>
+  withMessage(new TransactionBrokenLockError(p.transactionId as string, ""), m),
 );
 registerKnownError("TransactionOrphanCallError", TransactionOrphanCallError, (m, p) =>
   withMessage(
