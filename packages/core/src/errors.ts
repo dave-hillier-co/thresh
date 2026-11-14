@@ -25,6 +25,20 @@ export class ThreshRuntimeError extends Error {
 }
 
 /**
+ * The common base of the transaction failures — Orleans' `OrleansTransactionException`
+ * (`Orleans.Transactions/OrleansTransactionException.cs`), itself an `OrleansException`, and the
+ * base of `OrleansTransactionAbortedException`, `OrleansTransactionInDoubtException` and
+ * `OrleansTransactionsDisabledException`. Beneath {@link ThreshRuntimeError} for the same reason:
+ * a transliterated `catch (OrleansException)` must see them.
+ */
+export class ThreshTransactionError extends ThreshRuntimeError {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "ThreshTransactionError";
+  }
+}
+
+/**
  * Whether `error` is any Thresh grain-call failure — the one predicate that
  * stands in for a C# `catch (OrleansException)`.
  *
@@ -90,7 +104,13 @@ export class UnavailableExceptionFallbackException extends Error {
       // Never let a carried property overwrite the identity fields above. `cause`/`errors` are
       // deliberately NOT reserved — see the `errors` field doc above.
       if (RESERVED_FALLBACK_KEYS.has(key)) continue;
-      (this as unknown as Record<string, unknown>)[key] = value;
+      // Defined, not assigned: a carried `__proto__` key must stay data and never reach the setter.
+      Object.defineProperty(this, key, {
+        value,
+        writable: true,
+        enumerable: true,
+        configurable: true,
+      });
     }
   }
 }
@@ -188,7 +208,7 @@ export class GrainExtensionNotInstalledException extends ThreshRuntimeError {
  * the stored etag no longer matches the one the grain last read, so another
  * incarnation has written in between.
  */
-export class InconsistentStateError extends Error {
+export class InconsistentStateError extends ThreshRuntimeError {
   /**
    * Whether this error is still in the activation it originated in (Orleans'
    * `InconsistentStateException.IsSourceActivation`). The runtime deactivates
@@ -216,7 +236,7 @@ export class InconsistentStateError extends Error {
  * must configure transactional storage (e.g. `useMemoryTransactionalStorage`)
  * for `[Transaction]` calls to work.
  */
-export class TransactionsDisabledError extends Error {
+export class TransactionsDisabledError extends ThreshTransactionError {
   constructor() {
     super(
       "Orleans transactions have not been enabled. Transactions are disabled by default and must be configured to be used.",
@@ -333,7 +353,7 @@ export class GrainCallAbortedError extends ThreshCancellationError {
  * Propagates to
  * the originating call so the caller may retry.
  */
-export class TransactionAbortedError extends Error {
+export class TransactionAbortedError extends ThreshTransactionError {
   constructor(
     readonly transactionId: string,
     reason: string,
@@ -476,7 +496,7 @@ export class TransactionCascadingAbortError extends TransactionAbortedError {
  * `OrleansTransactionInDoubtException : OrleansTransactionException` (a
  * sibling of `OrleansTransactionAbortedException`, not a child of it).
  */
-export class TransactionInDoubtError extends Error {
+export class TransactionInDoubtError extends ThreshTransactionError {
   constructor(
     readonly transactionId: string,
     options?: { cause?: unknown },

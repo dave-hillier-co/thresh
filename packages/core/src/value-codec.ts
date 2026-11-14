@@ -11,7 +11,9 @@ import {
   RejectionError,
   ThreshCancellationError,
   ThreshRuntimeError,
+  ThreshTransactionError,
   TransactionAbortedError,
+  TransactionAlreadyResolvedError,
   TransactionCascadingAbortError,
   TransactionInDoubtError,
   TransactionLockUpgradeError,
@@ -22,6 +24,7 @@ import {
   type RejectionKind,
 } from "./errors";
 import { CancellationTokenPlaceholder, GrainCancellationToken } from "./grain-cancellation-token";
+import type { ResolvedStatus } from "./transaction-info";
 import { GrainId } from "./grain-id";
 import { keyToString, type GrainKeyKind } from "./grain-key";
 import { grainReferenceIdentity, type GrainReferenceIdentity } from "./grain-reference";
@@ -65,6 +68,7 @@ const builtInTags = new Set([
   "grainRef",
   "typedArray",
   "negZero",
+  "plainObject",
 ]);
 
 /**
@@ -236,114 +240,147 @@ function isKnownThreshError(value: Error, name: string): boolean {
   return ctor !== undefined && value instanceof ctor;
 }
 
-registerKnownError("ThreshRuntimeError", ThreshRuntimeError, (m) => new ThreshRuntimeError(m));
-registerKnownError("GrainCallError", GrainCallError, (m) => new GrainCallError(m));
-registerKnownError(
-  "GrainCallTimeoutError",
-  GrainCallTimeoutError,
-  (m) => new GrainCallTimeoutError(m),
-);
-registerKnownError(
-  "GrainExtensionNotInstalledException",
-  GrainExtensionNotInstalledException,
-  (m) => new GrainExtensionNotInstalledException(m),
-);
-registerKnownError(
-  "GatewayTooBusyException",
-  GatewayTooBusyException,
-  (m) => new GatewayTooBusyException(m),
-);
-registerKnownError(
-  "RejectionError",
-  RejectionError,
-  (m, p) => new RejectionError(m, p.kind as RejectionKind),
-);
-registerKnownError("LimitExceededException", LimitExceededException, (m, p) =>
-  withMessage(
-    new LimitExceededException(
-      p.limitName as string,
-      p.currentValue as number,
-      p.maxValue as number,
-    ),
-    m,
-  ),
-);
-registerKnownError(
-  "ThreshCancellationError",
-  ThreshCancellationError,
-  (m) => new ThreshCancellationError(m),
-);
-registerKnownError(
-  "ReadOnlyStateViolationError",
-  ReadOnlyStateViolationError,
-  (m) => new ReadOnlyStateViolationError(m),
-);
-registerKnownError("TransactionsDisabledError", TransactionsDisabledError, (m) =>
-  withMessage(new TransactionsDisabledError(), m),
-);
-registerKnownError("InconsistentStateError", InconsistentStateError, (m, p) => {
-  const error = new InconsistentStateError(
-    m,
-    p.expectedEtag as string | undefined,
-    p.storedEtag as string | undefined,
-  );
-  // Absent (an older sender) reads as the constructor default, `true`.
-  if (p.isSourceActivation === false) error.isSourceActivation = false;
-  return error;
-});
-registerKnownError("TransactionAbortedError", TransactionAbortedError, (m, p) =>
-  withMessage(new TransactionAbortedError(p.transactionId as string, ""), m),
-);
-registerKnownError("TransactionReadOnlyViolatedError", TransactionReadOnlyViolatedError, (m, p) =>
-  withMessage(new TransactionReadOnlyViolatedError(p.transactionId as string), m),
-);
-registerKnownError("TransactionLockUpgradeError", TransactionLockUpgradeError, (m, p) =>
-  withMessage(new TransactionLockUpgradeError(p.transactionId as string), m),
-);
-registerKnownError("TransactionOrphanCallError", TransactionOrphanCallError, (m, p) =>
-  withMessage(
-    new TransactionOrphanCallError(p.transactionId as string, p.pendingCalls as number),
-    m,
-  ),
-);
-registerKnownError("TransactionCascadingAbortError", TransactionCascadingAbortError, (m, p) =>
-  withMessage(new TransactionCascadingAbortError(p.transactionId as string), m),
-);
-registerKnownError("TransactionInDoubtError", TransactionInDoubtError, (m, p) =>
-  withMessage(new TransactionInDoubtError(p.transactionId as string), m),
-);
-registerKnownError("CircularReferenceError", CircularReferenceError, (m, p) =>
-  withMessage(new CircularReferenceError(p.path as string), m),
-);
-registerKnownError(
-  "UnsupportedValueError",
-  UnsupportedValueError,
-  (m, p) => new UnsupportedValueError(p.path as string, p.reason as string),
-);
+/**
+ * The ONE table of error classes that cross the wire as themselves: the wire name, the class that
+ * must really be the sender's error, and how to rebuild it. Registration derives from it, so a
+ * class is either listed here or it degrades to the fallback; `errors.taxonomy.test.ts` enumerates
+ * every class `errors.ts` exports and fails when one is missing.
+ */
+interface KnownErrorEntry {
+  readonly name: string;
+  readonly ctor: abstract new (...args: never[]) => Error;
+  readonly build: (message: string, props: Record<string, unknown>) => Error;
+}
 
-// JavaScript's built-in error classes, the analogue of Orleans rebuilding the `System.*` namespace
-// with no registration (`ExceptionSerializationOptions.SupportedNamespacePrefixes` defaults to
-// `{ "Microsoft", "System", "Azure" }`). Upstream depends on it: `GrainCallFilterTests` catches
-// `ArgumentOutOfRangeException` BY TYPE inside an outgoing filter on a cross-silo call. Without
-// these a grain throwing `new RangeError(...)` reaches its caller as the fallback and
-// `instanceof RangeError` is false, so the ported filter tests can only assert `.rejects.toThrow()`
-// where upstream pins the type. Safe for the same reason as the Thresh classes above: the table is
-// closed, and the `thresh` marker still requires the sender to have passed `instanceof`.
-// `Error` itself is deliberately NOT here. It would swallow the diagnostic: a subclass that never
-// sets `this.name` inherits "Error", so it would rebuild as a plain `Error` and the caller would
-// lose the `instanceof UnavailableExceptionFallbackException` signal that says "your type was not
-// reconstructed". The fallback is an `Error` anyway, so nothing is gained by claiming the base.
-registerKnownError("TypeError", TypeError, (m) => new TypeError(m));
-registerKnownError("RangeError", RangeError, (m) => new RangeError(m));
-registerKnownError("ReferenceError", ReferenceError, (m) => new ReferenceError(m));
-registerKnownError("SyntaxError", SyntaxError, (m) => new SyntaxError(m));
-registerKnownError("URIError", URIError, (m) => new URIError(m));
-registerKnownError("EvalError", EvalError, (m) => new EvalError(m));
-registerKnownError(
-  "AggregateError",
-  AggregateError,
-  (m, p) => new AggregateError((p.errors as unknown[]) ?? [], m),
-);
+function knownError(
+  name: string,
+  ctor: abstract new (...args: never[]) => Error,
+  build: (message: string, props: Record<string, unknown>) => Error,
+): KnownErrorEntry {
+  return { name, ctor, build };
+}
+
+const KNOWN_ERRORS: readonly KnownErrorEntry[] = [
+  knownError("ThreshRuntimeError", ThreshRuntimeError, (m) => new ThreshRuntimeError(m)),
+  knownError(
+    "ThreshTransactionError",
+    ThreshTransactionError,
+    (m) => new ThreshTransactionError(m),
+  ),
+  knownError("GrainCallError", GrainCallError, (m) => new GrainCallError(m)),
+  knownError("GrainCallTimeoutError", GrainCallTimeoutError, (m) => new GrainCallTimeoutError(m)),
+  knownError(
+    "GrainExtensionNotInstalledException",
+    GrainExtensionNotInstalledException,
+    (m) => new GrainExtensionNotInstalledException(m),
+  ),
+  knownError(
+    "GatewayTooBusyException",
+    GatewayTooBusyException,
+    (m) => new GatewayTooBusyException(m),
+  ),
+  knownError(
+    "RejectionError",
+    RejectionError,
+    (m, p) => new RejectionError(m, p.kind as RejectionKind),
+  ),
+  knownError("LimitExceededException", LimitExceededException, (m, p) =>
+    withMessage(
+      new LimitExceededException(
+        p.limitName as string,
+        p.currentValue as number,
+        p.maxValue as number,
+      ),
+      m,
+    ),
+  ),
+  knownError(
+    "ThreshCancellationError",
+    ThreshCancellationError,
+    (m) => new ThreshCancellationError(m),
+  ),
+  knownError(
+    "ReadOnlyStateViolationError",
+    ReadOnlyStateViolationError,
+    (m) => new ReadOnlyStateViolationError(m),
+  ),
+  knownError("TransactionsDisabledError", TransactionsDisabledError, (m) =>
+    withMessage(new TransactionsDisabledError(), m),
+  ),
+  knownError("InconsistentStateError", InconsistentStateError, (m, p) => {
+    const error = new InconsistentStateError(
+      m,
+      p.expectedEtag as string | undefined,
+      p.storedEtag as string | undefined,
+    );
+    // Absent (an older sender) reads as the constructor default, `true`.
+    if (p.isSourceActivation === false) error.isSourceActivation = false;
+    return error;
+  }),
+  knownError("TransactionAbortedError", TransactionAbortedError, (m, p) =>
+    withMessage(new TransactionAbortedError(p.transactionId as string, ""), m),
+  ),
+  knownError("TransactionAlreadyResolvedError", TransactionAlreadyResolvedError, (m, p) =>
+    withMessage(
+      new TransactionAlreadyResolvedError(p.transactionId as string, p.status as ResolvedStatus),
+      m,
+    ),
+  ),
+  knownError("TransactionReadOnlyViolatedError", TransactionReadOnlyViolatedError, (m, p) =>
+    withMessage(new TransactionReadOnlyViolatedError(p.transactionId as string), m),
+  ),
+  knownError("TransactionLockUpgradeError", TransactionLockUpgradeError, (m, p) =>
+    withMessage(new TransactionLockUpgradeError(p.transactionId as string), m),
+  ),
+  knownError("TransactionOrphanCallError", TransactionOrphanCallError, (m, p) =>
+    withMessage(
+      new TransactionOrphanCallError(p.transactionId as string, p.pendingCalls as number),
+      m,
+    ),
+  ),
+  knownError("TransactionCascadingAbortError", TransactionCascadingAbortError, (m, p) =>
+    withMessage(new TransactionCascadingAbortError(p.transactionId as string), m),
+  ),
+  knownError("TransactionInDoubtError", TransactionInDoubtError, (m, p) =>
+    withMessage(new TransactionInDoubtError(p.transactionId as string), m),
+  ),
+  knownError("CircularReferenceError", CircularReferenceError, (m, p) =>
+    withMessage(new CircularReferenceError(p.path as string), m),
+  ),
+  knownError(
+    "UnsupportedValueError",
+    UnsupportedValueError,
+    (m, p) => new UnsupportedValueError(p.path as string, p.reason as string),
+  ),
+  // GrainCallAbortedError and GrainTaskCanceledError travel under their own `callAborted` and
+  // `taskCanceled` tags, so they are not listed here.
+
+  // JavaScript's built-in error classes, the analogue of Orleans rebuilding the `System.*` namespace
+  // with no registration (`ExceptionSerializationOptions.SupportedNamespacePrefixes` defaults to
+  // `{ "Microsoft", "System", "Azure" }`). Upstream depends on it: `GrainCallFilterTests` catches
+  // `ArgumentOutOfRangeException` BY TYPE inside an outgoing filter on a cross-silo call. Without
+  // these a grain throwing `new RangeError(...)` reaches its caller as the fallback and
+  // `instanceof RangeError` is false, so the ported filter tests can only assert `.rejects.toThrow()`
+  // where upstream pins the type. Safe for the same reason as the Thresh classes above: the table is
+  // closed, and the `thresh` marker still requires the sender to have passed `instanceof`.
+  // `Error` itself is deliberately NOT here. It would swallow the diagnostic: a subclass that never
+  // sets `this.name` inherits "Error", so it would rebuild as a plain `Error` and the caller would
+  // lose the `instanceof UnavailableExceptionFallbackException` signal that says "your type was not
+  // reconstructed". The fallback is an `Error` anyway, so nothing is gained by claiming the base.
+  knownError("TypeError", TypeError, (m) => new TypeError(m)),
+  knownError("RangeError", RangeError, (m) => new RangeError(m)),
+  knownError("ReferenceError", ReferenceError, (m) => new ReferenceError(m)),
+  knownError("SyntaxError", SyntaxError, (m) => new SyntaxError(m)),
+  knownError("URIError", URIError, (m) => new URIError(m)),
+  knownError("EvalError", EvalError, (m) => new EvalError(m)),
+  knownError(
+    "AggregateError",
+    AggregateError,
+    (m, p) => new AggregateError((p.errors as unknown[]) ?? [], m),
+  ),
+];
+
+for (const { name, ctor, build } of KNOWN_ERRORS) registerKnownError(name, ctor, build);
 
 /**
  * Cap on the plain-string `stack` an error carries across the wire — proportionate to the
@@ -447,10 +484,39 @@ function tagged(tag: string, fields: Record<string, unknown>): Record<string, un
 // one property hop away (`out.constructor.prototype.x = y` reaches every object of that
 // constructor). Every decode branch that copies wire keys onto a plain object literal must skip
 // these three rather than assign them.
+//
+// The keys are DATA, though, and a codec that drops them is not injective: `{ constructor: 1 }`
+// would come back as `{}`. So they are carried and rebuilt faithfully, never by assignment — see
+// `setOwn` for the decode side and the `plainObject` envelope for the encode side.
 const DANGEROUS_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
 function isDangerousKey(key: string): boolean {
   return DANGEROUS_KEYS.has(key);
+}
+
+/**
+ * Install `key` as an own, enumerable, writable data property by `[[DefineOwnProperty]]`, which —
+ * unlike assignment — never consults the inherited `__proto__` setter, so no key can replace or
+ * mutate a prototype.
+ */
+function setOwn(target: object, key: string, value: unknown): void {
+  Object.defineProperty(target, key, {
+    value,
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  });
+}
+
+/**
+ * Whether a plain object cannot travel as its own keys: it owns the tag key (a decoder would take
+ * it for an envelope of another type) or one of the dangerous keys (a consumer assigning decoded
+ * keys onto a fresh object would hit the `__proto__` setter). Such an object goes through the
+ * `plainObject` envelope instead, which carries its entries as data; every other object keeps the
+ * bare shape.
+ */
+function needsEscape(keys: readonly string[]): boolean {
+  return keys.some((k) => k === T || isDangerousKey(k));
 }
 
 /**
@@ -684,8 +750,7 @@ function encodeInner(
         // silently. Let it travel as an ordinary property instead.
         if (k === "name" || k === "message" || k === "stack" || k === "cause") continue;
         if (k === "errors" && value instanceof AggregateError) continue;
-        if (isDangerousKey(k)) continue;
-        properties[k] = encodeInner(v, seen, `${path}.${k}`, options);
+        setOwn(properties, k, encodeInner(v, seen, `${path}.${k}`, options));
       }
       const name = typeof value.name === "string" ? value.name : "Error";
       const fields: Record<string, unknown> = { name, message: value.message };
@@ -718,9 +783,19 @@ function encodeInner(
     if (seen.has(value)) throw new CircularReferenceError(path);
     seen.add(value);
     try {
+      const keys = Object.keys(value);
+      if (needsEscape(keys)) {
+        const source = value as Record<string, unknown>;
+        // `encodeElement`: an `undefined` member is a PRESENT key here, and the pair array has no
+        // way to omit it, so it is tagged like any other positional undefined.
+        const entries = keys.map((k) => [
+          k,
+          encodeElement(source[k], seen, `${path}.${k}`, options),
+        ]);
+        return tagged("plainObject", { entries });
+      }
       const out: Record<string, unknown> = {};
       for (const [k, v] of Object.entries(value)) {
-        if (isDangerousKey(k)) continue;
         out[k] = encodeInner(v, seen, `${path}.${k}`, options);
       }
       return out;
@@ -796,8 +871,7 @@ export function decodeValue(value: unknown, ctx: CodecContext = {}): unknown {
         const properties: Record<string, unknown> = {};
         if (raw !== null && typeof raw === "object") {
           for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
-            if (isDangerousKey(k)) continue;
-            properties[k] = decodeValue(v, ctx);
+            setOwn(properties, k, decodeValue(v, ctx));
           }
         }
         const errors = Array.isArray(obj.errors)
@@ -836,6 +910,19 @@ export function decodeValue(value: unknown, ctx: CodecContext = {}): unknown {
         const entries = obj.entries as [unknown, unknown][];
         return new Map(entries.map(([k, v]) => [decodeValue(k, ctx), decodeValue(v, ctx)]));
       }
+      case "plainObject": {
+        if (!Array.isArray(obj.entries)) {
+          throw new Error("decodeValue: malformed plainObject envelope (entries is not an array)");
+        }
+        const out: Record<string, unknown> = {};
+        for (const entry of obj.entries as unknown[]) {
+          if (!Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== "string") {
+            throw new Error("decodeValue: malformed plainObject envelope (entry is not a pair)");
+          }
+          setOwn(out, entry[0], decodeValue(entry[1], ctx));
+        }
+        return out;
+      }
       case "set": {
         const values = obj.values as unknown[];
         return new Set(values.map((v) => decodeValue(v, ctx)));
@@ -852,8 +939,8 @@ export function decodeValue(value: unknown, ctx: CodecContext = {}): unknown {
         if (surrogate !== undefined) {
           const fields: Record<string, unknown> = {};
           for (const [k, v] of Object.entries(obj)) {
-            if (k === T || k === V || isDangerousKey(k)) continue;
-            fields[k] = decodeValue(v, ctx);
+            if (k === T || k === V) continue;
+            setOwn(fields, k, decodeValue(v, ctx));
           }
           return surrogate.decode(fields, ctx);
         }
@@ -867,10 +954,7 @@ export function decodeValue(value: unknown, ctx: CodecContext = {}): unknown {
   }
 
   const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(obj)) {
-    if (isDangerousKey(k)) continue;
-    out[k] = decodeValue(v, ctx);
-  }
+  for (const [k, v] of Object.entries(obj)) setOwn(out, k, decodeValue(v, ctx));
   return out;
 }
 

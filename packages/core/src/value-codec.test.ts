@@ -122,10 +122,14 @@ describe("value-codec", () => {
       expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
     });
 
-    it("drops __proto__/constructor/prototype keys rather than exposing them as data", () => {
+    it("keeps __proto__/constructor/prototype keys as own data, never as a prototype", () => {
       const payload = '{"a":1,"__proto__":{"polluted":true}}';
       const decoded = deserializeValue<Record<string, unknown>>(payload);
-      expect(decoded).toEqual({ a: 1 });
+      expect(Object.getPrototypeOf(decoded)).toBe(Object.prototype);
+      expect(Object.keys(decoded).sort()).toEqual(["__proto__", "a"]);
+      expect(Object.getOwnPropertyDescriptor(decoded, "__proto__")?.value).toEqual({
+        polluted: true,
+      });
     });
   });
 
