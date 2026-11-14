@@ -93,9 +93,11 @@ export class KafkaPartitionOwner {
    * Adopt this desired set of partitions: release whatever's no longer
    * wanted immediately, and kick off (or leave running) an acquire for
    * everything newly wanted. Idempotent — safe to call again with the same
-   * set, or while acquires from a previous call are still in flight.
+   * set, or while acquires from a previous call are still in flight. A no-op after `stop()`: a
+   * membership change that reaches a stopped owner starts no acquire against its client.
    */
   setWanted(indices: Iterable<number>): void {
+    if (this.stopped) return;
     this.wanted = new Set(indices);
 
     let changed = false;

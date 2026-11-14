@@ -405,13 +405,17 @@ admits it.
 
 The silo runs Orleans' staged lifecycle (`ServiceLifecycleStage`, `LifecycleSubject`): every
 subsystem starts at a named stage ascending and stops descending, and a participant whose stop
-throws is logged while the rest still stop. Two placements differ from Orleans. Storage clients
+throws is logged while the rest still stop. Three placements differ from Orleans. Storage clients
 (Redis, Postgres, Kafka metadata) and the membership watch sit at `RuntimeInitialize`, below the
 node at `RuntimeServices`, where Orleans initialises storage providers at `RuntimeStorageServices`
 above its messaging: here the node listens as soon as it starts and a peer's call can activate a
 grain at once, so the client a grain reads must already be connected, and it must close only after
 the node has deactivated every activation. The readiness flip is a participant at `Last`, so it
-publishes first on stop. Orleans' `LifecycleSubject.OnStart` does not itself unwind on failure; the
+publishes first on stop. The membership reconcile, which tells reminders, durable jobs and pulling
+stream agents which ranges they own (Orleans' ring-change listeners, which have no stage of their
+own), sits one stage above `Active`, so it stops before every service it feeds; from the moment
+stop begins it runs no ownership hook, and its stop waits, within the stop budget, for a reconcile
+already in flight. Orleans' `LifecycleSubject.OnStart` does not itself unwind on failure; the
 host does, calling `onStop` and rejecting with the original error, so a half-started silo leaves
 nothing listening, connected or armed. Three further departures keep that guarantee. Within one
 stage a stop runs the participants one at a time in the reverse of registration order, where
@@ -506,8 +510,11 @@ things differ:
   to the grain, so a delivery held on a deactivating activation is released with a reroute
   rejection and the provider redelivers it to the handler the next activation resumes. The
   subscriber is not told of an error.
-- There is no `ActivationTimeout`. Orleans cancels an `OnActivateAsync` that runs too long; here
-  calls wait for `onActivate` for as long as it takes.
+- `ActivationTimeout` (`SiloConfig.activationTimeout`, 30 s by default as in Orleans) fails an
+  activation whose state load and `onActivate` have not finished in time, rejecting its waiting
+  calls and removing it so a later call activates afresh. Orleans cancels `OnActivateAsync` through
+  its cancellation token; `onActivate` has no token to observe, so a hung one keeps running in the
+  background after the activation has given up on it.
 - A deactivation that cannot start because a request never finishes is abandoned once it has waited
   `maxRequestProcessingTimeMs`, even when no call is waiting on it, and whoever awaits it is
   released. Orleans checks for a stuck deactivation only when a message arrives, so with no message

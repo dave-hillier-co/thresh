@@ -20,6 +20,22 @@ function deferred<T>(): {
 }
 
 describe("KafkaPartitionOwner", () => {
+  it("acquires nothing for an ownership change that arrives after stop", async () => {
+    const acquired: number[] = [];
+    const client: PartitionOwnershipClient = {
+      acquire: async (i) => void acquired.push(i),
+      release: () => undefined,
+    };
+    const owner = new KafkaPartitionOwner(client, () => undefined);
+    owner.stop();
+
+    owner.setWanted([0, 1]);
+    await Promise.resolve();
+
+    expect(acquired).toEqual([]);
+    expect([...owner.currentlyOwned()]).toEqual([]);
+  });
+
   it("acquires every newly wanted partition and reports the owned set", async () => {
     const acquired: number[] = [];
     const released: number[] = [];

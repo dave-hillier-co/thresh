@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { SiloAddress } from "@thresh/core/silo-address";
 import type { MembershipService, MembershipSnapshot } from "@thresh/core/membership";
 import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
+import { PendingTimerTracker } from "@thresh/core/test-support/pending-timer-tracker";
 import type {
   CycleState,
   StopReason,
@@ -248,6 +249,39 @@ describe("ActivationRebalancerWorker — elected timer-driven singleton (slice 2
     } finally {
       worker.stop();
     }
+  });
+
+  it("leaves no timer armed once stopped, a timed suspension and a cycle in flight included", async () => {
+    const silos = [silo(0), silo(1)];
+    const clock = new FakeTimeProvider();
+    const time = new PendingTimerTracker(clock);
+    let finishCycle!: () => void;
+    const worker = new ActivationRebalancerWorker({
+      local: silo(0),
+      membership: membershipOf(silo(0), silos),
+      time,
+      runCycle: () =>
+        new Promise<RebalanceCycleResult>((resolve) => {
+          finishCycle = () =>
+            resolve({
+              nextState: { rebalancingCycle: 1, stagnantCycles: 0, previousEntropy: 0 },
+              imbalance: 0.3,
+              moved: 1,
+            });
+        }),
+      options: opts,
+      sessionCyclePeriodMs: period,
+    });
+    worker.start();
+    clock.advance(period); // a cycle starts
+    worker.suspend(10 * period);
+
+    worker.stop();
+    finishCycle();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(time.pendingTimers()).toEqual([]);
   });
 
   it("suspends indefinitely by default, reporting a (very large) suspension duration", async () => {

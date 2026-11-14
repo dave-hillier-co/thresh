@@ -379,6 +379,9 @@ describe("UnitTests.General.DeactivationTracingTests (migration)", () => {
     cluster = await TestCluster.start({
       initialSilos: 2,
       time,
+      // A directed migration is still rehydrating on its target when the sweep below leaps the
+      // fake clock 65 s; an activation timeout inside that leap would fail it, so keep it beyond.
+      activationTimeout: { minutes: 5 },
       grains: [
         {
           ctor: DeactivationMigrationTracingTestGrain,

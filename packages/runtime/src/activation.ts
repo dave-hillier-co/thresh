@@ -175,6 +175,14 @@ export interface ActivationOptions {
    * {@link ActivationData.awaitWithDeactivationTimeout}.
    */
   deactivationTimeoutMs?: number;
+  /**
+   * Orleans `CollectionOptions.ActivationTimeout`: give up on an activation whose state binding
+   * (or rehydration) and `onActivate` have not finished this long after the activate operation
+   * began (Orleans arms it in `ActivationData.Activate`, `cts.CancelAfter(ActivationTimeout)`).
+   * The activation then fails as one whose `onActivate` threw: its waiting calls are rejected and
+   * it leaves the catalog, so a later call activates afresh. Unset waits as long as it takes.
+   */
+  activationTimeoutMs?: number;
   /** Sink for soft-limit/stuck-turn/deactivation-timeout warnings; defaults to discarding them. */
   logger?: Logger;
   /**
@@ -449,6 +457,7 @@ export class ActivationData implements GrainContext {
   private extensionFactories?: Map<number, (activation: ActivationData) => object>;
 
   private readonly deactivationTimeoutMs: number | undefined;
+  private readonly activationTimeoutMs: number | undefined;
   private readonly logger: Logger;
   private readonly onStuckHook: ((activation: ActivationData) => void) | undefined;
   /**
@@ -473,6 +482,7 @@ export class ActivationData implements GrainContext {
     this.id = id;
     this.activationId = activationId;
     this.deactivationTimeoutMs = options.deactivationTimeoutMs;
+    this.activationTimeoutMs = options.activationTimeoutMs;
     this.logger = options.logger ?? defaultLogger;
     this.onStuckHook = options.onStuck;
     this.steps = options.deactivationSteps;
@@ -742,13 +752,15 @@ export class ActivationData implements GrainContext {
 
   private async activate(reason: ActivationReason): Promise<void> {
     try {
-      if (this.preActivate !== undefined) await this.preActivate();
-      // No call-chain id of its own (the call that triggered this activation
-      // is a different chain), but a section `onActivate` opens lands on this
-      // activation.
-      await runWithCallChain(undefined, this.callChainContext, () =>
-        this.instance.onActivate(reason),
-      );
+      await this.withinActivationTimeout(async () => {
+        if (this.preActivate !== undefined) await this.preActivate();
+        // No call-chain id of its own (the call that triggered this activation
+        // is a different chain), but a section `onActivate` opens lands on this
+        // activation.
+        await runWithCallChain(undefined, this.callChainContext, () =>
+          this.instance.onActivate(reason),
+        );
+      });
     } catch (error) {
       this.failActivation(error);
       return;
@@ -757,6 +769,42 @@ export class ActivationData implements GrainContext {
     // asking to go away from `onActivate`) owns the state from here, as in
     // Orleans: only an undisturbed activation goes valid.
     if (this._state === "activating") this.transition("valid");
+  }
+
+  /**
+   * Run the activation's work, but never past `activationTimeoutMs` (Orleans
+   * `CollectionOptions.ActivationTimeout`, which cancels `ActivateAsync`). JS cannot abort the
+   * work itself, so a hung `onActivate` keeps running in the background; the activation stops
+   * waiting for it and fails, which ends the activate operation and lets the deactivation
+   * pipeline remove it. A late settlement of the abandoned work is ignored.
+   */
+  private withinActivationTimeout(work: () => Promise<void>): Promise<void> {
+    const timeoutMs = this.activationTimeoutMs;
+    const running = work();
+    if (timeoutMs === undefined) return running;
+    return new Promise<void>((resolve, reject) => {
+      const handle = this.time.setTimer(() => {
+        this.logger.warn("activation exceeded ActivationTimeout; failing it", {
+          grainId: this.id.toString(),
+          activationTimeoutMs: timeoutMs,
+        });
+        reject(
+          new GrainCallError(
+            `activation of ${this.id.toString()} did not complete within ${timeoutMs}ms (ActivationTimeout)`,
+          ),
+        );
+      }, timeoutMs);
+      running.then(
+        () => {
+          this.time.clearTimer(handle);
+          resolve();
+        },
+        (error: unknown) => {
+          this.time.clearTimer(handle);
+          reject(error);
+        },
+      );
+    });
   }
 
   /**

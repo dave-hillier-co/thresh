@@ -62,6 +62,13 @@ export class LocalReminderService implements ReminderRegistry {
   private readonly minimumPeriodMs: number;
   /** Orleans `localTableSequence`: bumped at each reconcile read and each local (re)schedule. */
   private localSequence = 0;
+  /**
+   * Set by `stop()` and never cleared: a stopped service arms no timer again. A membership
+   * reconcile, a table read or a tick delivery still in flight when the silo stopped would
+   * otherwise re-arm the refresh (which then re-arms itself for ever) or a reminder tick, and
+   * keep the process alive after the silo is gone.
+   */
+  private stopped = false;
 
   constructor(
     private readonly table: ReminderTable,
@@ -115,6 +122,7 @@ export class LocalReminderService implements ReminderRegistry {
 
   /** On a membership change (or first start): adopt the given ranges and reconcile. */
   async refreshOwnership(ranges: readonly HashRange[]): Promise<void> {
+    if (this.stopped) return;
     this.ranges = ranges;
     try {
       await this.reconcile();
@@ -126,6 +134,7 @@ export class LocalReminderService implements ReminderRegistry {
   }
 
   stop(): void {
+    this.stopped = true;
     if (this.refreshHandle !== undefined) this.time.clearTimer(this.refreshHandle);
     this.refreshHandle = undefined;
     this.cancelAll();
@@ -167,7 +176,7 @@ export class LocalReminderService implements ReminderRegistry {
   }
 
   private scheduleRefresh(): void {
-    if (this.refreshIntervalMs <= 0) return;
+    if (this.stopped || this.refreshIntervalMs <= 0) return;
     if (this.refreshHandle !== undefined) this.time.clearTimer(this.refreshHandle);
     this.refreshHandle = this.time.setTimer(() => {
       this.scheduleRefresh(); // re-arm before reconciling, so the cadence is steady
@@ -219,6 +228,7 @@ export class LocalReminderService implements ReminderRegistry {
   }
 
   private scheduleEntry(entry: ReminderEntry, firstDueAt: Date = this.nextDueAt(entry)): void {
+    if (this.stopped) return;
     const key = this.key(entry.grainId, entry.name);
     this.cancel(key);
     const dueMs = Math.max(0, firstDueAt.getTime() - this.time.now());
@@ -232,7 +242,7 @@ export class LocalReminderService implements ReminderRegistry {
   private fire(entry: ReminderEntry): void {
     const key = this.key(entry.grainId, entry.name);
     const current = this.scheduled.get(key);
-    if (current === undefined) return;
+    if (current === undefined || this.stopped) return;
     const periodMs = durationToMs(entry.period);
     const firedAt = new Date(this.time.now());
     let scheduledNext: Scheduled | undefined;
