@@ -6,10 +6,9 @@ import type { GrainInterface } from "@thresh/core/grain-interface";
 import type { GrainKeyKind } from "@thresh/core/grain-key";
 import type { Registrable } from "@thresh/core/grain-registration";
 import type { KeyTypeOf } from "@thresh/core/key-kinds";
-import type { MembershipService, MembershipSnapshot } from "@thresh/core/membership";
 import { SiloAddress } from "@thresh/core/silo-address";
 import type { StreamProvider } from "@thresh/core/stream";
-import type { TimeProvider } from "@thresh/core/time-provider";
+import { systemTimeProvider, type TimeProvider } from "@thresh/core/time-provider";
 import {
   FaultInjectingTransport,
   NetworkFaults,
@@ -26,10 +25,11 @@ import { StaticMembershipService } from "@thresh/runtime/static-membership";
 import type { LoadSheddingOptions } from "@thresh/runtime/load-shedding";
 import type { PlacementStrategy } from "@thresh/runtime/placement/placement-strategy";
 import { MemoryTransactionalStorage } from "@thresh/transactions/memory-transactional-storage";
-import { createSilo, type SiloBuilder } from "@thresh/hosting/silo-builder";
+import { SiloBuilder, type SiloConfig } from "@thresh/hosting/silo-builder";
 import type { SiloHost } from "@thresh/hosting/silo-host";
 import { createClient, type ClientNode } from "@thresh/client/client-node";
 import { membershipGatewayProvider } from "@thresh/client/gateway-provider";
+import { CrashableTransport, SharedMembershipView, SiloClock } from "@thresh/testing/silo-crash";
 
 export type { GrainRegistrationSpec, ClientNode };
 
@@ -391,14 +391,26 @@ export class TestCluster {
   }
 
   /**
-   * Abrupt failure: detach the silo from the network and declare it dead to the
-   * survivors, without running any shutdown hooks — the in-process stand-in for
-   * a killed pod.
+   * Abrupt failure — the in-process stand-in for a crashed pod (Orleans
+   * `KillSiloAsync`, an ungraceful stop). The silo is declared dead to the
+   * survivors and its process is cut off: its transport is gone (peers dialling
+   * it are refused and nothing it sends arrives), every timer it armed is
+   * cancelled and none fires again (grain timers, reminder ticks, durable-job
+   * polls, idle collection), its pulling-stream agents stop, its view of
+   * membership freezes (so it runs no further ownership hooks). No shutdown
+   * code runs: no drain, no deactivation hook, no release of anything it held.
+   * Its activations stay in memory, unreachable. One thing an in-process
+   * stand-in cannot do is preempt JavaScript already running: a turn that was
+   * mid-flight finishes its own code (its outgoing calls fail; nothing new
+   * starts). `stopSilo` remains the graceful path.
    */
   async killSilo(handle: TestSiloHandle): Promise<void> {
     const silo = this.take(handle);
-    this.network.unregister(silo.address);
+    // The listener closes synchronously inside `crash()`, and the view drops the silo in the
+    // same tick, so no peer ever sees it listed but unreachable through this harness's doing.
+    const crashed = silo.crash();
     this.shared?.removeSilo(silo.address);
+    await crashed;
   }
 
   /** Kill-then-replace: a fresh silo joins with a new uid, like a restarted pod. */
@@ -463,12 +475,19 @@ export class TestCluster {
     } else {
       this.shared.addSilo(address, "active", metadata);
     }
-    const membership = new MembershipView(this.shared, address);
-    const builder = createSilo({
+    const membership = new SharedMembershipView(this.shared, address);
+    const clock = new SiloClock(this.options.time ?? systemTimeProvider);
+    const transport = new CrashableTransport(
+      new FaultInjectingTransport(
+        new InProcessTransport(this.network, this.clusterId),
+        this.faults,
+      ),
+    );
+    const builder = new TestSiloBuilder({
       clusterId: this.options.clusterId ?? "test-cluster",
       serviceId: this.options.serviceId ?? this.options.clusterId ?? "test-cluster",
       local: address,
-      ...(this.options.time !== undefined ? { time: this.options.time } : {}),
+      time: clock,
       ...(metadata !== undefined ? { metadata } : {}),
       ...(this.options.defaultResponseTimeout !== undefined
         ? { defaultResponseTimeout: this.options.defaultResponseTimeout }
@@ -501,12 +520,7 @@ export class TestCluster {
         : {}),
     })
       .useMembership(membership)
-      .useTransport(
-        new FaultInjectingTransport(
-          new InProcessTransport(this.network, this.clusterId),
-          this.faults,
-        ),
-      )
+      .useTransport(transport)
       .useMemoryStreams("default", undefined, this.streamProvider("default"))
       .useBroadcastChannels()
       .useMemoryDurableJobs(this.jobShardStore)
@@ -537,32 +551,42 @@ export class TestCluster {
       else builder.registerGrain(spec);
     }
     this.options.configureSilo?.(builder, { index, address }, this);
-    const silo: InternalSilo = { index, address, membership, host: builder.build() };
+    const host = builder.build();
+    const shared = new Set<StreamProvider>(this.memoryStreamProviders.values());
+    const crash = async (): Promise<void> => {
+      clock.stop();
+      membership.freeze();
+      const transportGone = transport.crash();
+      // Pulling agents poll on their own timers; stopping a provider only stops its polling. A
+      // provider shared with the survivors is theirs too and keeps running.
+      await Promise.all(
+        builder.givenStreamProviders
+          .filter((provider) => !shared.has(provider))
+          .map((provider) => (provider as { stop?: () => Promise<void> }).stop?.()),
+      );
+      await transportGone;
+    };
+    const silo: InternalSilo = { index, address, host, crash };
     this.live.push(silo);
     return silo;
   }
 }
 
 interface InternalSilo extends TestSiloHandle {
-  readonly membership: MembershipService;
+  /** Cut the silo off as a crash does; see `TestCluster.killSilo`. */
+  crash(): Promise<void>;
 }
 
-/** Reports each silo's own `localSilo()` while sharing one membership view. */
-class MembershipView implements MembershipService {
-  constructor(
-    private readonly shared: StaticMembershipService,
-    private readonly local: SiloAddress,
-  ) {}
+/** A `SiloBuilder` that remembers the stream providers it was given, so a crash can stop them. */
+class TestSiloBuilder extends SiloBuilder {
+  readonly givenStreamProviders: StreamProvider[] = [];
 
-  current(): MembershipSnapshot {
-    return this.shared.current();
+  constructor(config: SiloConfig) {
+    super(config);
   }
 
-  updates(): AsyncIterableIterator<MembershipSnapshot> {
-    return this.shared.updates();
-  }
-
-  localSilo(): SiloAddress {
-    return this.local;
+  override addStreamProvider(name: string, provider: StreamProvider): this {
+    this.givenStreamProviders.push(provider);
+    return super.addStreamProvider(name, provider);
   }
 }
