@@ -97,7 +97,8 @@ runtime, guarantees, and lifecycle are unchanged.
 
 `usePersistentState`, `useReducerState`, `useTransactionalState`, `useDurableState` /
 `useDurableDictionary` / `useDurableList` / `useDurableQueue` / `useDurableSet`,
-`useDurableJobHandler` and `useContext` take **no context argument**. They resolve the activation
+`useDurableJobHandler`, `useContext`, `useMayInterleave`, `useGrainFacet`, `useOnDehydrate` /
+`useOnRehydrate` and `useDependency` take **no context argument**. They resolve the activation
 being set up from an ambient slot that the runtime pushes around the factory call and pops in a
 `finally`. That slot is live only for the *synchronous* body of the factory, so:
 
@@ -114,6 +115,27 @@ The factory's **`ctx` parameter stays**, and it is how a grain reaches the runti
 capture it in the closure and use `ctx.runtime`, `ctx.id` and `ctx.getGrain` inside method bodies and
 lifecycle hooks. `useContext()` returns the same value, for helpers that would otherwise thread `ctx`
 through — but only during setup, like any other hook.
+
+### The two forms stay in lockstep
+
+Orleans has one authoring form (a class, with attributes and constructor injection), so the
+class-only features (`[MayInterleave]`, facet attributes, regex channel subscriptions, migration
+participation, constructor-injected services) each need a functional spelling here. They are: 
+`useMayInterleave`, `useGrainFacet`, the `regexImplicitChannelSubscriptions` option,
+`useOnDehydrate` / `useOnRehydrate` and `useDependency`. Departures from the class spelling:
+
+- **Per-silo dependencies are tokens, not constructor parameters.** Orleans resolves a grain's
+  constructor from DI; a class grain here gets the same through a `GrainActivator`, and a functional
+  grain asks `useDependency(token)` for a value registered with `SiloBuilder.addGrainDependency`.
+  A token is compared by identity and carries the type.
+- **The may-interleave predicate is per activation** for a functional grain (it is built inside the
+  factory), and per class for `@mayInterleave`. The admission rules are identical.
+- **Migration hooks are not methods of the grain.** They are installed as non-enumerable members
+  that the call surface refuses by name, so a functional grain does not expose them to callers.
+
+A feature matrix test (`packages/core/src/authoring-matrix.test.ts`) lists every decorator and hook
+and fails when one is added to one form without an entry for the other. Deliberately single-path:
+`JournaledGrain` and its custom-storage hooks (class), `defineReducerGrain` (functional).
 
 ### Definitions are interfaces
 
