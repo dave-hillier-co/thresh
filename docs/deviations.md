@@ -375,3 +375,16 @@ A few capabilities layer on top of the faithful model without changing it: **dur
 (a grain that journals each mutation and replays it on activation) and **durable jobs** (sharded,
 at-least-once scheduled grain invocation). A further, **not-yet-built** direction is **browser state
 replication** — a live read-view of grain state in the browser under a server-enforced trust model.
+
+## JournaledGrain history is kept inside the snapshotting log
+
+Orleans' log-storage consistency provider keeps the whole log and never snapshots it; its
+state-storage provider snapshots and keeps no events. A Thresh `JournaledGrain` on the journal
+substrate shares one log (and one snapshot threshold) with the grain's durable collections, so it
+has to do both: by default each compaction writes the grain's confirmed events as a retained-history
+frame ahead of the snapshot frames. Activation applies the snapshot for state and loads the retained
+events without folding them through `transitionState`, so history is complete and activation does
+not replay it. The departure from Orleans is cost: the history is held in memory and rewritten in
+full at every compaction (quadratic in events over a grain's lifetime), where Orleans' log storage
+appends. `retainJournaledEvents: false` restores snapshot-replaces-events for grains that do not
+need history.

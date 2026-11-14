@@ -10,9 +10,10 @@ interface LogEnvelope {
   /**
    * Frame kind: `"op"` = incremental mutation, `"snap"` = full-state snapshot,
    * `"vessel"` = buffered data kept for a currently-unregistered structure (see
-   * `RetirementRecord`).
+   * `RetirementRecord`), `"hist"` = history a machine keeps across compaction (see
+   * `DurableStateMachine.retainedHistory`); its payload is an array.
    */
-  k: "op" | "snap" | "vessel";
+  k: "op" | "snap" | "vessel" | "hist";
   /** Machine-specific payload (op/snapshot) or a `VesselPayload`; opaque to callers. */
   p: unknown;
 }
@@ -23,6 +24,8 @@ interface VesselPayload {
   count: number;
   /** Raw op/snapshot payloads applied to this name before/while unregistered. */
   ops: unknown[];
+  /** Retained-history payloads buffered for this name, restored ahead of `ops` on resurrection. */
+  history?: unknown[];
 }
 
 /**
@@ -35,6 +38,7 @@ interface VesselPayload {
  */
 interface RetirementRecord {
   ops: unknown[];
+  history: unknown[];
   compactionsSinceOrphaned: number;
 }
 
@@ -67,6 +71,7 @@ export class StateMachineManagerImpl implements StateMachineManager {
   private readonly retirementGraceCompactions: number;
   private readonly retiring = new Map<string, RetirementRecord>();
   private version: number | undefined;
+  /** Entries written since the log was last compacted: what the snapshot threshold counts. */
   private liveEntryCount = 0;
 
   constructor(
@@ -91,17 +96,23 @@ export class StateMachineManagerImpl implements StateMachineManager {
   async replay(): Promise<void> {
     const segment = await this.storage.read(this.logName, this.grainId);
     this.version = segment.version;
-    this.liveEntryCount = segment.entries.length;
+    this.liveEntryCount = 0;
     this.retiring.clear();
     for (const machine of this.machines.values()) machine.reset();
     for (const raw of segment.entries) {
       const env = deserializeValue<LogEnvelope>(raw);
+      // Retained history is not a mutation: it does not count towards the next compaction.
+      if (env.k !== "hist") this.liveEntryCount += 1;
       const machine = this.machines.get(env.m);
       if (machine !== undefined) {
         // Registered this activation: a vessel frame unwraps into the buffered
         // ops it holds (resurrection), applied in original order.
-        if (env.k === "vessel") {
-          for (const op of (env.p as VesselPayload).ops) machine.apply(op);
+        if (env.k === "hist") {
+          machine.applyHistory?.(env.p as unknown[]);
+        } else if (env.k === "vessel") {
+          const vessel = env.p as VesselPayload;
+          if (vessel.history !== undefined) machine.applyHistory?.(vessel.history);
+          for (const op of vessel.ops) machine.apply(op);
         } else {
           machine.apply(env.p);
         }
@@ -113,11 +124,17 @@ export class StateMachineManagerImpl implements StateMachineManager {
         const payload = env.p as VesselPayload;
         this.retiring.set(env.m, {
           ops: [...payload.ops],
+          history: [...(payload.history ?? [])],
           compactionsSinceOrphaned: payload.count,
         });
       } else {
-        const record = this.retiring.get(env.m) ?? { ops: [], compactionsSinceOrphaned: 0 };
-        record.ops.push(env.p);
+        const record = this.retiring.get(env.m) ?? {
+          ops: [],
+          history: [],
+          compactionsSinceOrphaned: 0,
+        };
+        if (env.k === "hist") record.history.push(...(env.p as unknown[]));
+        else record.ops.push(env.p);
         this.retiring.set(env.m, record);
       }
     }
@@ -153,9 +170,20 @@ export class StateMachineManagerImpl implements StateMachineManager {
   }
 
   async compact(): Promise<void> {
-    const frames = [...this.machines.values()].map((machine) =>
-      serializeValue({ m: machine.name, k: "snap", p: machine.snapshot() } satisfies LogEnvelope),
-    );
+    // History a machine keeps (a JournaledGrain's events) is written ahead of the snapshot frames:
+    // a snapshot makes activation fast, it does not license discarding history.
+    const frames: string[] = [];
+    for (const machine of this.machines.values()) {
+      const history = machine.retainedHistory?.() ?? [];
+      if (history.length === 0) continue;
+      frames.push(serializeValue({ m: machine.name, k: "hist", p: history } satisfies LogEnvelope));
+    }
+    const historyFrames = frames.length;
+    for (const machine of this.machines.values()) {
+      frames.push(
+        serializeValue({ m: machine.name, k: "snap", p: machine.snapshot() } satisfies LogEnvelope),
+      );
+    }
     // Work out the retirement bookkeeping this compaction implies, but only
     // commit it once the replace is durable: a failed compaction (swallowed by
     // the in-turn path in `append`, then retried) wrote nothing, so it must not
@@ -166,19 +194,24 @@ export class StateMachineManagerImpl implements StateMachineManager {
       // Grace period elapsed while still unregistered: purge for good by
       // simply not writing a frame for it.
       if (count >= this.retirementGraceCompactions) continue;
-      nextRetiring.set(name, { ops: record.ops, compactionsSinceOrphaned: count });
+      nextRetiring.set(name, {
+        ops: record.ops,
+        history: record.history,
+        compactionsSinceOrphaned: count,
+      });
       frames.push(
         serializeValue({
           m: name,
           k: "vessel",
-          p: { count, ops: record.ops } satisfies VesselPayload,
+          p: { count, ops: record.ops, history: record.history } satisfies VesselPayload,
         } satisfies LogEnvelope),
       );
     }
     this.version = await this.storage.replace(this.logName, this.grainId, frames, this.version);
-    this.liveEntryCount = frames.length;
+    this.liveEntryCount = frames.length - historyFrames;
     this.retiring.clear();
     for (const [name, record] of nextRetiring) this.retiring.set(name, record);
+    for (const machine of this.machines.values()) machine.compacted?.();
   }
 
   async clear(): Promise<void> {

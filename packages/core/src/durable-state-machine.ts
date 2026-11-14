@@ -16,6 +16,18 @@ export interface DurableStateMachine {
    * reconstructs current state in full. Used for compaction.
    */
   snapshot(): unknown;
+  /**
+   * Payloads this machine wants kept across a compaction in addition to its snapshot -- a
+   * `JournaledGrain`'s confirmed events, whose history is not state a snapshot can rebuild. The
+   * manager writes them ahead of the snapshot frames, and on replay hands them back through
+   * {@link applyHistory}, never `apply`: they restore history without folding it into state again.
+   * Absent or empty for a machine whose snapshot is the whole truth.
+   */
+  retainedHistory?(): unknown[];
+  /** Restores retained history on replay (see {@link retainedHistory}); must not alter state. */
+  applyHistory?(payloads: readonly unknown[]): void;
+  /** Called once a compaction has been written durably; a machine drops anything it will not retain. */
+  compacted?(): void;
 }
 
 /**

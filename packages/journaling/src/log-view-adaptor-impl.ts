@@ -19,6 +19,17 @@ type Frame<TState, TEvent> = { t: "event"; e: TEvent } | { t: "snap"; s: TState;
  */
 const MAX_APPEND_ATTEMPTS = 5;
 
+export interface LogViewAdaptorOptions {
+  /**
+   * Keep the confirmed event history across compaction (default `true`), as Orleans' log-storage
+   * consistency provider keeps the whole log: a snapshot makes activation fast but the grain's
+   * events stay retrievable. `false` is the explicit retention choice to let a snapshot replace the
+   * events below it, after which `retrieveLogSegment` throws for a range that starts below the
+   * snapshot's version.
+   */
+  retainEvents?: boolean;
+}
+
 /**
  * The `LogViewAdaptor` implementation, mirroring Orleans' state-storage /
  * log-storage adaptors collapsed into one: it maintains the confirmed view (by
@@ -56,12 +67,15 @@ export class LogViewAdaptorImpl<TState, TEvent>
   private unconfirmedCount = 0;
   /** The single in-flight `confirmSubmittedEntries` loop, if any (see below). */
   private confirmLoop: Promise<void> | undefined;
+  private readonly retainEvents: boolean;
 
   constructor(
     private readonly initial: () => TState,
     private readonly transition: (state: TState, event: TEvent) => TState,
     private readonly manager: StateMachineManager,
+    options: LogViewAdaptorOptions = {},
   ) {
+    this.retainEvents = options.retainEvents ?? true;
     this.confirmed = initial();
     this.tentative = this.confirmed;
   }
@@ -99,7 +113,9 @@ export class LogViewAdaptorImpl<TState, TEvent>
    * substrate's own storage CAS (a duplicate activation), which surfaces as an
    * `InconsistentStateError` from the append. That conflict reports `false` -- and `runConfirmLoop`
    * does not requeue the conflicting event, so it is dropped (from the tentative view too), never
-   * applied by a later confirm. Any other failure is a failed write: the log is re-read, which
+   * applied by a later confirm. Before reporting `false` the adaptor re-reads the log, so the
+   * confirmed view and version reflect storage and a retry computed from them can succeed (the
+   * same contract as the custom-storage adaptor). Any other failure is a failed write: the log is re-read, which
    * decides whether the write landed after all (then `true`), and the append is retried up to
    * {@link MAX_APPEND_ATTEMPTS} times before the event is dropped and `false` reported. A log that
    * cannot even be re-read rethrows. In every unsuccessful outcome the event leaves the pending
@@ -124,7 +140,14 @@ export class LogViewAdaptorImpl<TState, TEvent>
         await this.confirmSubmittedEntries();
         return true;
       } catch (error) {
-        if (error instanceof InconsistentStateError) return false;
+        if (error instanceof InconsistentStateError) {
+          // Lost the storage CAS: another writer moved the log. The runner has already dropped
+          // the batch. Refresh before reporting, as Orleans does before discarding stale
+          // conditional entries, so the confirmed view and version equal storage and a retry
+          // computed from them can succeed. A log that cannot be re-read rethrows.
+          await this.resync();
+          return false;
+        }
         // A failed write, as the custom-storage adaptor and Orleans treat it: re-read storage,
         // which decides whether the write landed after all, and retry on top of it. The events
         // must never stay pending past a `false` or a throw: their caller is told the append
@@ -266,7 +289,9 @@ export class LogViewAdaptorImpl<TState, TEvent>
       this.version += 1;
     } else {
       this.confirmed = frame.s;
-      this.confirmedEvents = [];
+      // Retained history (restored through `applyHistory`, ahead of this frame) stays; otherwise
+      // the snapshot replaces the events below it.
+      if (!this.retainEvents) this.confirmedEvents = [];
       // A snapshot written before the version travelled with it has no `v`;
       // fall back to what such a log always reported (a count from zero at the
       // snapshot) rather than poisoning the version with `undefined`.
@@ -275,6 +300,18 @@ export class LogViewAdaptorImpl<TState, TEvent>
     // Recompute (don't just mirror confirmed): events may have been raised
     // concurrently with the append that triggered this `apply`.
     this.tentative = this.pending.reduce(this.transition, this.confirmed);
+  }
+
+  retainedHistory(): unknown[] {
+    return this.retainEvents ? [...this.confirmedEvents] : [];
+  }
+
+  applyHistory(payloads: readonly unknown[]): void {
+    this.confirmedEvents.push(...(payloads as TEvent[]));
+  }
+
+  compacted(): void {
+    if (!this.retainEvents) this.confirmedEvents = [];
   }
 
   snapshot(): unknown {

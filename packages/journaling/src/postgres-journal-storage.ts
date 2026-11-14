@@ -2,7 +2,12 @@ import type { Pool, PoolClient } from "pg";
 import { raceSignal } from "@thresh/core/abort";
 import { InconsistentStateError } from "@thresh/core/errors";
 import type { GrainId } from "@thresh/core/grain-id";
-import type { JournalEntry, JournalSegment, JournalStorage } from "@thresh/core/journal-storage";
+import {
+  backingObjectId,
+  type JournalEntry,
+  type JournalSegment,
+  type JournalStorage,
+} from "@thresh/core/journal-storage";
 import { DEFAULT_SERVICE_ID } from "@thresh/core/default-service-id";
 
 export interface PostgresJournalStorageOptions {
@@ -47,6 +52,8 @@ export class PostgresJournalStorage implements JournalStorage {
   private readonly logs: string;
   private readonly entries: string;
   private readonly serviceId: string;
+  /** Two providers over one pool, tables and service share this key (see `JournalStorage.backingKey`). */
+  readonly backingKey: string;
 
   constructor(
     private readonly pool: Pool,
@@ -57,6 +64,7 @@ export class PostgresJournalStorage implements JournalStorage {
     this.logs = `${prefix}_logs`;
     this.entries = `${prefix}_entries`;
     this.serviceId = options.serviceId ?? DEFAULT_SERVICE_ID;
+    this.backingKey = `postgres:${backingObjectId(pool)}:${this.logs}:${this.entries}:${this.serviceId}`;
   }
 
   async start(): Promise<void> {
