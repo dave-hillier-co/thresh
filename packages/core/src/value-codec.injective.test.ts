@@ -112,7 +112,7 @@ describe("the codec is injective over plain data", () => {
 
     it("decodes __proto__, constructor and prototype as own data, never by assignment", () => {
       const before = Object.getOwnPropertyNames(Object.prototype).sort();
-      const back = deserializeValue<Record<string, any>>(wire);
+      const back = deserializeValue<{ a: object; m: Map<string, object> }>(wire);
       expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
       expect(Object.getOwnPropertyNames(Object.prototype).sort()).toEqual(before);
       expect(Object.getPrototypeOf(back)).toBe(Object.prototype);
