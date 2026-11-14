@@ -11,7 +11,9 @@ import {
   RejectionError,
   ThreshCancellationError,
   ThreshRuntimeError,
+  ThreshTransactionError,
   TransactionAbortedError,
+  TransactionAlreadyResolvedError,
   TransactionCascadingAbortError,
   TransactionInDoubtError,
   TransactionLockUpgradeError,
@@ -22,6 +24,7 @@ import {
   type RejectionKind,
 } from "./errors";
 import { CancellationTokenPlaceholder, GrainCancellationToken } from "./grain-cancellation-token";
+import type { ResolvedStatus } from "./transaction-info";
 import { GrainId } from "./grain-id";
 import { keyToString, type GrainKeyKind } from "./grain-key";
 import { grainReferenceIdentity, type GrainReferenceIdentity } from "./grain-reference";
@@ -237,114 +240,147 @@ function isKnownThreshError(value: Error, name: string): boolean {
   return ctor !== undefined && value instanceof ctor;
 }
 
-registerKnownError("ThreshRuntimeError", ThreshRuntimeError, (m) => new ThreshRuntimeError(m));
-registerKnownError("GrainCallError", GrainCallError, (m) => new GrainCallError(m));
-registerKnownError(
-  "GrainCallTimeoutError",
-  GrainCallTimeoutError,
-  (m) => new GrainCallTimeoutError(m),
-);
-registerKnownError(
-  "GrainExtensionNotInstalledException",
-  GrainExtensionNotInstalledException,
-  (m) => new GrainExtensionNotInstalledException(m),
-);
-registerKnownError(
-  "GatewayTooBusyException",
-  GatewayTooBusyException,
-  (m) => new GatewayTooBusyException(m),
-);
-registerKnownError(
-  "RejectionError",
-  RejectionError,
-  (m, p) => new RejectionError(m, p.kind as RejectionKind),
-);
-registerKnownError("LimitExceededException", LimitExceededException, (m, p) =>
-  withMessage(
-    new LimitExceededException(
-      p.limitName as string,
-      p.currentValue as number,
-      p.maxValue as number,
-    ),
-    m,
-  ),
-);
-registerKnownError(
-  "ThreshCancellationError",
-  ThreshCancellationError,
-  (m) => new ThreshCancellationError(m),
-);
-registerKnownError(
-  "ReadOnlyStateViolationError",
-  ReadOnlyStateViolationError,
-  (m) => new ReadOnlyStateViolationError(m),
-);
-registerKnownError("TransactionsDisabledError", TransactionsDisabledError, (m) =>
-  withMessage(new TransactionsDisabledError(), m),
-);
-registerKnownError("InconsistentStateError", InconsistentStateError, (m, p) => {
-  const error = new InconsistentStateError(
-    m,
-    p.expectedEtag as string | undefined,
-    p.storedEtag as string | undefined,
-  );
-  // Absent (an older sender) reads as the constructor default, `true`.
-  if (p.isSourceActivation === false) error.isSourceActivation = false;
-  return error;
-});
-registerKnownError("TransactionAbortedError", TransactionAbortedError, (m, p) =>
-  withMessage(new TransactionAbortedError(p.transactionId as string, ""), m),
-);
-registerKnownError("TransactionReadOnlyViolatedError", TransactionReadOnlyViolatedError, (m, p) =>
-  withMessage(new TransactionReadOnlyViolatedError(p.transactionId as string), m),
-);
-registerKnownError("TransactionLockUpgradeError", TransactionLockUpgradeError, (m, p) =>
-  withMessage(new TransactionLockUpgradeError(p.transactionId as string), m),
-);
-registerKnownError("TransactionOrphanCallError", TransactionOrphanCallError, (m, p) =>
-  withMessage(
-    new TransactionOrphanCallError(p.transactionId as string, p.pendingCalls as number),
-    m,
-  ),
-);
-registerKnownError("TransactionCascadingAbortError", TransactionCascadingAbortError, (m, p) =>
-  withMessage(new TransactionCascadingAbortError(p.transactionId as string), m),
-);
-registerKnownError("TransactionInDoubtError", TransactionInDoubtError, (m, p) =>
-  withMessage(new TransactionInDoubtError(p.transactionId as string), m),
-);
-registerKnownError("CircularReferenceError", CircularReferenceError, (m, p) =>
-  withMessage(new CircularReferenceError(p.path as string), m),
-);
-registerKnownError(
-  "UnsupportedValueError",
-  UnsupportedValueError,
-  (m, p) => new UnsupportedValueError(p.path as string, p.reason as string),
-);
+/**
+ * The ONE table of error classes that cross the wire as themselves: the wire name, the class that
+ * must really be the sender's error, and how to rebuild it. Registration derives from it, so a
+ * class is either listed here or it degrades to the fallback; `errors.taxonomy.test.ts` enumerates
+ * every class `errors.ts` exports and fails when one is missing.
+ */
+interface KnownErrorEntry {
+  readonly name: string;
+  readonly ctor: abstract new (...args: never[]) => Error;
+  readonly build: (message: string, props: Record<string, unknown>) => Error;
+}
 
-// JavaScript's built-in error classes, the analogue of Orleans rebuilding the `System.*` namespace
-// with no registration (`ExceptionSerializationOptions.SupportedNamespacePrefixes` defaults to
-// `{ "Microsoft", "System", "Azure" }`). Upstream depends on it: `GrainCallFilterTests` catches
-// `ArgumentOutOfRangeException` BY TYPE inside an outgoing filter on a cross-silo call. Without
-// these a grain throwing `new RangeError(...)` reaches its caller as the fallback and
-// `instanceof RangeError` is false, so the ported filter tests can only assert `.rejects.toThrow()`
-// where upstream pins the type. Safe for the same reason as the Thresh classes above: the table is
-// closed, and the `thresh` marker still requires the sender to have passed `instanceof`.
-// `Error` itself is deliberately NOT here. It would swallow the diagnostic: a subclass that never
-// sets `this.name` inherits "Error", so it would rebuild as a plain `Error` and the caller would
-// lose the `instanceof UnavailableExceptionFallbackException` signal that says "your type was not
-// reconstructed". The fallback is an `Error` anyway, so nothing is gained by claiming the base.
-registerKnownError("TypeError", TypeError, (m) => new TypeError(m));
-registerKnownError("RangeError", RangeError, (m) => new RangeError(m));
-registerKnownError("ReferenceError", ReferenceError, (m) => new ReferenceError(m));
-registerKnownError("SyntaxError", SyntaxError, (m) => new SyntaxError(m));
-registerKnownError("URIError", URIError, (m) => new URIError(m));
-registerKnownError("EvalError", EvalError, (m) => new EvalError(m));
-registerKnownError(
-  "AggregateError",
-  AggregateError,
-  (m, p) => new AggregateError((p.errors as unknown[]) ?? [], m),
-);
+function knownError(
+  name: string,
+  ctor: abstract new (...args: never[]) => Error,
+  build: (message: string, props: Record<string, unknown>) => Error,
+): KnownErrorEntry {
+  return { name, ctor, build };
+}
+
+const KNOWN_ERRORS: readonly KnownErrorEntry[] = [
+  knownError("ThreshRuntimeError", ThreshRuntimeError, (m) => new ThreshRuntimeError(m)),
+  knownError(
+    "ThreshTransactionError",
+    ThreshTransactionError,
+    (m) => new ThreshTransactionError(m),
+  ),
+  knownError("GrainCallError", GrainCallError, (m) => new GrainCallError(m)),
+  knownError("GrainCallTimeoutError", GrainCallTimeoutError, (m) => new GrainCallTimeoutError(m)),
+  knownError(
+    "GrainExtensionNotInstalledException",
+    GrainExtensionNotInstalledException,
+    (m) => new GrainExtensionNotInstalledException(m),
+  ),
+  knownError(
+    "GatewayTooBusyException",
+    GatewayTooBusyException,
+    (m) => new GatewayTooBusyException(m),
+  ),
+  knownError(
+    "RejectionError",
+    RejectionError,
+    (m, p) => new RejectionError(m, p.kind as RejectionKind),
+  ),
+  knownError("LimitExceededException", LimitExceededException, (m, p) =>
+    withMessage(
+      new LimitExceededException(
+        p.limitName as string,
+        p.currentValue as number,
+        p.maxValue as number,
+      ),
+      m,
+    ),
+  ),
+  knownError(
+    "ThreshCancellationError",
+    ThreshCancellationError,
+    (m) => new ThreshCancellationError(m),
+  ),
+  knownError(
+    "ReadOnlyStateViolationError",
+    ReadOnlyStateViolationError,
+    (m) => new ReadOnlyStateViolationError(m),
+  ),
+  knownError("TransactionsDisabledError", TransactionsDisabledError, (m) =>
+    withMessage(new TransactionsDisabledError(), m),
+  ),
+  knownError("InconsistentStateError", InconsistentStateError, (m, p) => {
+    const error = new InconsistentStateError(
+      m,
+      p.expectedEtag as string | undefined,
+      p.storedEtag as string | undefined,
+    );
+    // Absent (an older sender) reads as the constructor default, `true`.
+    if (p.isSourceActivation === false) error.isSourceActivation = false;
+    return error;
+  }),
+  knownError("TransactionAbortedError", TransactionAbortedError, (m, p) =>
+    withMessage(new TransactionAbortedError(p.transactionId as string, ""), m),
+  ),
+  knownError("TransactionAlreadyResolvedError", TransactionAlreadyResolvedError, (m, p) =>
+    withMessage(
+      new TransactionAlreadyResolvedError(p.transactionId as string, p.status as ResolvedStatus),
+      m,
+    ),
+  ),
+  knownError("TransactionReadOnlyViolatedError", TransactionReadOnlyViolatedError, (m, p) =>
+    withMessage(new TransactionReadOnlyViolatedError(p.transactionId as string), m),
+  ),
+  knownError("TransactionLockUpgradeError", TransactionLockUpgradeError, (m, p) =>
+    withMessage(new TransactionLockUpgradeError(p.transactionId as string), m),
+  ),
+  knownError("TransactionOrphanCallError", TransactionOrphanCallError, (m, p) =>
+    withMessage(
+      new TransactionOrphanCallError(p.transactionId as string, p.pendingCalls as number),
+      m,
+    ),
+  ),
+  knownError("TransactionCascadingAbortError", TransactionCascadingAbortError, (m, p) =>
+    withMessage(new TransactionCascadingAbortError(p.transactionId as string), m),
+  ),
+  knownError("TransactionInDoubtError", TransactionInDoubtError, (m, p) =>
+    withMessage(new TransactionInDoubtError(p.transactionId as string), m),
+  ),
+  knownError("CircularReferenceError", CircularReferenceError, (m, p) =>
+    withMessage(new CircularReferenceError(p.path as string), m),
+  ),
+  knownError(
+    "UnsupportedValueError",
+    UnsupportedValueError,
+    (m, p) => new UnsupportedValueError(p.path as string, p.reason as string),
+  ),
+  // GrainCallAbortedError and GrainTaskCanceledError travel under their own `callAborted` and
+  // `taskCanceled` tags, so they are not listed here.
+
+  // JavaScript's built-in error classes, the analogue of Orleans rebuilding the `System.*` namespace
+  // with no registration (`ExceptionSerializationOptions.SupportedNamespacePrefixes` defaults to
+  // `{ "Microsoft", "System", "Azure" }`). Upstream depends on it: `GrainCallFilterTests` catches
+  // `ArgumentOutOfRangeException` BY TYPE inside an outgoing filter on a cross-silo call. Without
+  // these a grain throwing `new RangeError(...)` reaches its caller as the fallback and
+  // `instanceof RangeError` is false, so the ported filter tests can only assert `.rejects.toThrow()`
+  // where upstream pins the type. Safe for the same reason as the Thresh classes above: the table is
+  // closed, and the `thresh` marker still requires the sender to have passed `instanceof`.
+  // `Error` itself is deliberately NOT here. It would swallow the diagnostic: a subclass that never
+  // sets `this.name` inherits "Error", so it would rebuild as a plain `Error` and the caller would
+  // lose the `instanceof UnavailableExceptionFallbackException` signal that says "your type was not
+  // reconstructed". The fallback is an `Error` anyway, so nothing is gained by claiming the base.
+  knownError("TypeError", TypeError, (m) => new TypeError(m)),
+  knownError("RangeError", RangeError, (m) => new RangeError(m)),
+  knownError("ReferenceError", ReferenceError, (m) => new ReferenceError(m)),
+  knownError("SyntaxError", SyntaxError, (m) => new SyntaxError(m)),
+  knownError("URIError", URIError, (m) => new URIError(m)),
+  knownError("EvalError", EvalError, (m) => new EvalError(m)),
+  knownError(
+    "AggregateError",
+    AggregateError,
+    (m, p) => new AggregateError((p.errors as unknown[]) ?? [], m),
+  ),
+];
+
+for (const { name, ctor, build } of KNOWN_ERRORS) registerKnownError(name, ctor, build);
 
 /**
  * Cap on the plain-string `stack` an error carries across the wire — proportionate to the
