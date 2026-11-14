@@ -36,12 +36,10 @@ describe("DefaultCluster.Tests.General.DeactivationTests", () => {
       const start = Date.now();
 
       await grain.setADeactivating(99, true); // deactivate grain after setting A value
-      // No real deadline is waited on: the fake clock is fast-forwarded past the
-      // idle-collection sweep interval so the requested deactivation runs, then
-      // a fresh call reactivates a new incarnation, exactly like upstream's
-      // "deactivate, then a call gets a new version" sequence.
-      time.advance(60_000);
-      await new Promise((r) => setTimeout(r, 0));
+      // The requested deactivation starts as soon as that call's turn
+      // finishes; the next call is held until it has run, then reactivates a
+      // new incarnation, exactly like upstream's "deactivate, then a call gets
+      // a new version" sequence.
 
       const newVersion = await grain.getVersion(); // get a new version from the new activation
       expect(newVersion).not.toBe(originalVersion);

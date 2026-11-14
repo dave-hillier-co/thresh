@@ -411,6 +411,26 @@ to activation counts. The default statistics source is Node's
 event-loop utilisation for CPU and process and OS memory for the rest, and a silo accepts any
 `EnvironmentStatisticsProvider` in its place (Orleans' `IEnvironmentStatisticsProvider`).
 
+## The activation lifecycle follows Orleans, with three differences
+
+As in Orleans' `ActivationData`, an activation has one lifecycle state, and activating,
+deactivating and dehydrating run on a queue of lifecycle operations that starts only when no
+request is running and admits no request while one is pending, on a reentrant grain too. A
+deactivation request (`deactivateOnIdle`, an escaped `InconsistentStateError`, `migrateOnIdle`,
+idle collection, a silo stop) moves the activation to deactivating at once: calls and stream
+deliveries that reach it are held and rerouted once it has gone, and timer ticks are dropped. Three
+things differ:
+
+- An activation that calls `deactivateOnIdle` from its own `onActivate` refuses the calls waiting on
+  it with "activation unavailable" instead of rerouting them, which is what Orleans' own
+  `DeactivateOnIdleWhileActivate` test observes as "Forwarding failed".
+- An explicit memory-stream subscription delivers through a handler closure rather than a message
+  to the grain, so a delivery held on a deactivating activation is released with a reroute
+  rejection and the provider redelivers it to the handler the next activation resumes. The
+  subscriber is not told of an error.
+- There is no `ActivationTimeout`. Orleans cancels an `OnActivateAsync` that runs too long; here
+  calls wait for `onActivate` for as long as it takes.
+
 ## A same-silo call shares its arguments unless asked not to
 
 Orleans deep-copies a call's arguments and its response even when caller and callee share a silo

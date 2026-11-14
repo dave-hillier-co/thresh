@@ -34,10 +34,8 @@ describe("DefaultCluster.Tests.General.StateClassTests", () => {
       const originalVersion = await grain.getVersion();
       await grain.setADeactivating(98, true); // deactivate grain after setting A
 
-      // requestDeactivation() just flags the activation stale; it is actually
-      // torn down by the next idle-collection sweep (default every 60s here),
-      // so fast-forward the fake clock past one sweep interval.
-      time.advance(60_001);
+      // The requested deactivation starts as soon as that call's turn
+      // finishes; the next call is held and reaches a fresh activation.
       await waitFor(async () => (await grain.getVersion()) !== originalVersion);
 
       const newVersion = await grain.getVersion(); // get a new version from the new activation

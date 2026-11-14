@@ -310,10 +310,10 @@ describe("DefaultCluster.Tests.TimerTests.TimerOrleansTest (migration)", () => {
       await flush();
       await grain.getCounter();
 
-      // Restart the grain: `deactivate()` requests deactivation on idle, which the
-      // fake clock's advance past the idle-collection sweep interval carries out.
+      // Restart the grain: `deactivate()` requests deactivation on idle, which
+      // starts as soon as that call's turn finishes; the next call is held and
+      // rerouted to a fresh activation.
       await grain.deactivate();
-      await advanceStepped(time, 60_000);
       let last = await grain.getCounter();
       expect(last === 0, "Restarted grains should have zero ticks. Actual: " + last).toBe(true);
 
