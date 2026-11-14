@@ -132,7 +132,7 @@ describe("TransactionCommitter", () => {
     // The commit record is the grain state's, not the committer's, so the
     // recovery query a sibling participant would make finds it. (Before the
     // fix the committer was elected and no record was written at all.)
-    expect(state.status(tx.id)).toBe(true);
+    expect(state.status(tx.id)).toBe("committed");
     expect(service.calls).toEqual([{ transactionId: tx.id, data: "pass" }]);
   });
 });

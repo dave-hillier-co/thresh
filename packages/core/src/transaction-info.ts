@@ -27,6 +27,21 @@ export interface AccessCounter {
   writes: number;
 }
 
+/**
+ * What a transaction manager knows of a transaction's fate, as it answers a
+ * prepared participant's status query (Orleans `TransactionQueue.NotifyOfPing`):
+ *
+ * - `committed`: it holds the commit record.
+ * - `undetermined`: it still holds the transaction itself — its own tentative
+ *   or prepared state — so it has not decided yet. The participant keeps its
+ *   prepared record and asks again later.
+ * - `presumedAbort`: it holds neither (Orleans `TransactionalStatus.PresumedAbort`,
+ *   "TM never heard of this transaction"). Since a manager records a commit only
+ *   while it still holds the transaction, this answer is final, and the
+ *   participant drops its record.
+ */
+export type TransactionOutcome = "committed" | "undetermined" | "presumedAbort";
+
 /** A transaction's status once resolution has begun: its participant set is closed. */
 export type ResolvedStatus = "resolving" | "committed" | "aborted";
 
@@ -105,14 +120,19 @@ export interface TransactionParticipant {
  * manager that cannot record one. See `electManager`.
  */
 export interface TransactionManager extends TransactionParticipant {
-  /** Durable commit record: the transaction has committed, whatever happens next. */
+  /**
+   * Durable commit record: the transaction has committed, whatever happens
+   * next. Refused with `TransactionAbortedError` when the manager no longer
+   * holds the transaction prepared — it may already have answered
+   * `presumedAbort` to a participant, so committing now would split the outcome.
+   */
   recordCommit(
     transactionId: string,
     timeStamp: number,
     writeParticipants: ParticipantId[],
   ): void | Promise<void>;
-  /** Whether `transactionId` committed — the query a recovering participant makes. */
-  status(transactionId: string): boolean | Promise<boolean>;
+  /** What this manager knows of `transactionId`'s fate — the query a prepared participant makes. */
+  status(transactionId: string): TransactionOutcome | Promise<TransactionOutcome>;
 }
 
 /**

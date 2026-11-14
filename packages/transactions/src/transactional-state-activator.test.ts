@@ -4,6 +4,7 @@ import { GrainId } from "@thresh/core/grain-id";
 import type { GrainType } from "@thresh/core/grain-type";
 import type { TimeProvider, TimerHandle } from "@thresh/core/time-provider";
 import type { TransactionalState } from "@thresh/core/transactional-state";
+import type { TransactionOutcome } from "@thresh/core/transaction-info";
 import { MemoryTransactionalStorage } from "@thresh/transactions/memory-transactional-storage";
 import {
   bindTransactionalStates,
@@ -78,7 +79,7 @@ describe("transactional-state-activator", () => {
     );
 
     let calls = 0;
-    const resolveStatus = async (): Promise<boolean> => {
+    const resolveStatus = async (): Promise<TransactionOutcome> => {
       calls += 1;
       throw new Error("TM unreachable");
     };
@@ -118,7 +119,7 @@ describe("transactional-state-activator", () => {
     );
 
     let calls = 0;
-    const resolveStatus = async (): Promise<boolean> => {
+    const resolveStatus = async (): Promise<TransactionOutcome> => {
       calls += 1;
       throw new Error("TM unreachable");
     };

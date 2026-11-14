@@ -1,5 +1,5 @@
 import { defineGrainInterface } from "./grain-interface";
-import type { AccessCounter, ParticipantId } from "./transaction-info";
+import type { AccessCounter, ParticipantId, TransactionOutcome } from "./transaction-info";
 
 /**
  * The system extension the transaction agent calls to drive a transactional
@@ -11,7 +11,7 @@ import type { AccessCounter, ParticipantId } from "./transaction-info";
  *
  * `status` and `recordCommit` serve recovery: the elected TM records a commit
  * record before participants commit (the atomic commit point), and an in-doubt
- * participant asks the TM via `status` whether the transaction committed.
+ * participant asks the TM via `status` what it knows of the transaction's fate.
  */
 export interface TransactionResource {
   /**
@@ -35,8 +35,8 @@ export interface TransactionResource {
     timeStamp: number,
     writeParticipants: ParticipantId[],
   ): Promise<void>;
-  /** TM only: whether the transaction committed (recovery query). */
-  status(stateName: string, transactionId: string): Promise<boolean>;
+  /** TM only: what the TM knows of the transaction's fate (a prepared participant's query). */
+  status(stateName: string, transactionId: string): Promise<TransactionOutcome>;
 }
 
 export const TransactionResourceInterface = defineGrainInterface<TransactionResource>(

@@ -4,6 +4,7 @@ import type {
   AccessCounter,
   ParticipantId,
   TransactionInfo,
+  TransactionOutcome,
   TransactionParticipant,
 } from "@thresh/core/transaction-info";
 import type {
@@ -18,7 +19,7 @@ import {
   type TimeProvider,
   type TimerHandle,
 } from "@thresh/core/time-provider";
-import { TransactionReadOnlyViolatedError } from "@thresh/core/errors";
+import { TransactionAbortedError, TransactionReadOnlyViolatedError } from "@thresh/core/errors";
 import { ReaderWriterLock } from "@thresh/transactions/reader-writer-lock";
 import { EMPTY_METADATA } from "@thresh/transactions/transactional-storage-apply";
 import {
@@ -39,8 +40,11 @@ interface Tentative<T> {
   prepared: boolean;
 }
 
-/** Asks the elected TM whether an in-doubt transaction committed (recovery). */
-export type ResolveStatus = (manager: ParticipantId, transactionId: string) => Promise<boolean>;
+/** Asks the elected TM what it knows of an in-doubt transaction's fate (recovery). */
+export type ResolveStatus = (
+  manager: ParticipantId,
+  transactionId: string,
+) => Promise<TransactionOutcome>;
 
 /**
  * A transactional-state resource (Orleans `TransactionalState`) for one named
@@ -259,12 +263,26 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
     return true;
   }
 
-  /** TM only: durably record the commit (the atomic point), before participants commit. */
+  /**
+   * TM only: durably record the commit (the atomic point), before participants
+   * commit. Refused unless this manager still holds the transaction prepared
+   * (Orleans `TransactionManager.PrepareAndCommit` validates the TM's own lock
+   * first): once it no longer holds it — its lock broke, it aborted, or this is
+   * a fresh activation that dropped its own record — it may already have
+   * answered {@link status} with `presumedAbort` to a participant that then
+   * dropped its write, so recording a commit now would split the outcome.
+   */
   async recordCommit(
     transactionId: string,
     timeStamp: number,
     writeParticipants: ParticipantId[],
   ): Promise<void> {
+    if (this.tentative?.transactionId !== transactionId || !this.tentative.prepared) {
+      throw new TransactionAbortedError(
+        transactionId,
+        "the transaction manager no longer holds the transaction",
+      );
+    }
     const metadata: TransactionalStateMetadata = {
       timeStamp: Math.max(this.metadata.timeStamp, timeStamp),
       commitRecords: {
@@ -286,9 +304,19 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
     this.metadata = metadata;
   }
 
-  /** TM only: whether the transaction committed (recovery query). */
-  status(transactionId: string): boolean {
-    return this.metadata.commitRecords[transactionId] !== undefined;
+  /**
+   * TM only: what this manager knows of the transaction's fate — the query a
+   * prepared participant makes (Orleans `TransactionQueue.NotifyOfPing`).
+   * `committed` once the commit record is held; `undetermined` while this
+   * manager still holds the transaction's own tentative or prepared state (it
+   * has not decided — the participant keeps its record and asks again);
+   * `presumedAbort` when it holds neither. That last answer is final because
+   * {@link recordCommit} refuses a transaction the manager no longer holds.
+   */
+  status(transactionId: string): TransactionOutcome {
+    if (this.metadata.commitRecords[transactionId] !== undefined) return "committed";
+    if (this.tentative?.transactionId === transactionId) return "undetermined";
+    return "presumedAbort";
   }
 
   async commit(transactionId: string): Promise<void> {
@@ -299,6 +327,13 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
         this.committed = tentative.value;
         this.committedSequenceId = tentative.sequenceId;
         this.tentative = undefined;
+      } else {
+        // A record this activation inherited in doubt (it replaced the one
+        // that prepared): the coordinator commits only after the TM recorded
+        // the commit, so this is the decision itself — apply it now rather
+        // than waiting for the confirmation worker to learn it.
+        const inDoubt = this.inDoubt.get(transactionId);
+        if (inDoubt !== undefined) await this.applyOutcome(inDoubt, "committed");
       }
     } finally {
       // Always release, even if the durable write threw: an unreleased lock
@@ -329,6 +364,11 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
           await this.storeState([], undefined, tentative.sequenceId - 1);
         }
         this.tentative = undefined;
+      } else {
+        // An inherited in-doubt record: the coordinator aborts only before any
+        // commit was recorded, so the record can go.
+        const inDoubt = this.inDoubt.get(transactionId);
+        if (inDoubt !== undefined) await this.applyOutcome(inDoubt, "presumedAbort");
       }
     } finally {
       // Always release, even if the durable write threw: an unreleased lock
@@ -353,29 +393,46 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
   /**
    * Attempt to resolve a single in-doubt record. Returns whether it resolved
    * (committed or aborted, either way persisted); a `false` return means the TM
-   * is unreachable and the record remains queued in {@link inDoubt}.
+   * is unreachable or has not decided yet (`undetermined`), and the record
+   * remains queued in {@link inDoubt} for the confirmation worker. Only a
+   * `presumedAbort` answer drops the record: an undecided TM may still commit.
    */
   private async resolveOne(pending: PendingTransactionState<T>): Promise<boolean> {
     const manager = pending.transactionManager;
     // If this resource is the TM, read its own commit record directly — routing
-    // a status query to ourselves while activating would deadlock.
+    // a status query to ourselves while activating would deadlock. A record of
+    // its own found here was left by an earlier activation, so this one does
+    // not hold the transaction and `status` answers committed or presumed
+    // abort, never undetermined; `recordCommit` then refuses a late commit.
     const isSelf =
       manager !== undefined &&
       manager.grainId.equals(this.grainId) &&
       manager.stateName === this.stateName;
-    let committed = false;
+    let outcome: TransactionOutcome = "presumedAbort";
     if (manager !== undefined && !isSelf) {
       try {
-        committed = await this.resolveStatus!(manager, pending.transactionId);
+        outcome = await this.resolveStatus!(manager, pending.transactionId);
       } catch {
         // TM unreachable (e.g. crashed too): stay in-doubt for the confirmation worker.
-        this.inDoubt.set(pending.transactionId, pending);
-        return false;
+        outcome = "undetermined";
       }
     } else if (isSelf) {
-      committed = this.status(pending.transactionId);
+      outcome = this.status(pending.transactionId);
     }
-    if (committed) {
+    if (outcome === "undetermined") {
+      this.inDoubt.set(pending.transactionId, pending);
+      return false;
+    }
+    await this.applyOutcome(pending, outcome);
+    return true;
+  }
+
+  /** Promote (`committed`) or drop (`presumedAbort`) one in-doubt record, and forget it. */
+  private async applyOutcome(
+    pending: PendingTransactionState<T>,
+    outcome: "committed" | "presumedAbort",
+  ): Promise<void> {
+    if (outcome === "committed") {
       // Promote only a record that is still above the committed version. One at
       // or below it has already been superseded — a later transaction's commit
       // promoted past it and took its place, or dropped it — so promoting it
@@ -395,7 +452,6 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
       await this.storeState([], undefined, pending.sequenceId - 1);
     }
     this.inDoubt.delete(pending.transactionId);
-    return true;
   }
 
   /** Schedule the next confirmation-worker pass, backing off exponentially up to the configured cap. */
