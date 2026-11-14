@@ -311,6 +311,13 @@ export interface SiloConfig {
    */
   deactivationTimeout?: Duration | false;
   /**
+   * Orleans `CollectionOptions.ActivationTimeout`: give up on an activation whose state load and
+   * `onActivate` have not finished this long after it began. Its waiting calls are rejected and
+   * it leaves the catalog, so a later call activates afresh. Defaults to 30s, as upstream; pass
+   * `false` to wait indefinitely.
+   */
+  activationTimeout?: Duration | false;
+  /**
    * Dev-mode `@readOnly` mutation guard (`GAP-READONLY-ENFORCEMENT`): when
    * `true`, a grain's persistent, reducer, durable-journaling
    * (`@durableState`/`@durableDictionary`/`@durableList`/`@durableQueue`/
@@ -394,6 +401,8 @@ const DEFAULT_MAX_ENQUEUED_REQUESTS_HARD_LIMIT = 10_000;
  */
 const DEFAULT_MAX_REQUEST_PROCESSING_TIME_MS = 2 * 60 * 60 * 1000;
 const DEFAULT_DEACTIVATION_TIMEOUT_MS = 30_000;
+/** Orleans `CollectionOptions.DEFAULT_ACTIVATION_TIMEOUT` (30s). */
+const DEFAULT_ACTIVATION_TIMEOUT_MS = 30_000;
 
 /**
  * One entry in this silo's grain-registration list. Exported (and aliased to
@@ -1941,6 +1950,14 @@ export class SiloBuilder {
               this.config.deactivationTimeout !== undefined
                 ? durationToMs(this.config.deactivationTimeout)
                 : DEFAULT_DEACTIVATION_TIMEOUT_MS,
+          }
+        : {}),
+      ...(this.config.activationTimeout !== false
+        ? {
+            activationTimeoutMs:
+              this.config.activationTimeout !== undefined
+                ? durationToMs(this.config.activationTimeout)
+                : DEFAULT_ACTIVATION_TIMEOUT_MS,
           }
         : {}),
       logger,

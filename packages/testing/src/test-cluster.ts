@@ -157,6 +157,12 @@ export interface TestClusterOptions {
   /** How often the idle-collection sweep runs on every silo (defaults to 60s). */
   collectionIntervalSeconds?: number;
   /**
+   * How long an activation's state load and `onActivate` may take before it fails
+   * (`SiloConfig.activationTimeout`, Orleans `CollectionOptions.ActivationTimeout`). On the
+   * injected `time`. Defaults to 30s.
+   */
+  activationTimeout?: Duration | false;
+  /**
    * How often every silo pushes its load snapshot to its peers (Orleans
    * `DeploymentLoadPublisherOptions`, defaults to 1s). Lower it in a test that
    * needs cross-silo load visibility without waiting a full period, or pass
@@ -668,6 +674,9 @@ export class TestCluster {
         : {}),
       ...(this.options.collectionIntervalSeconds !== undefined
         ? { collectionIntervalSeconds: this.options.collectionIntervalSeconds }
+        : {}),
+      ...(this.options.activationTimeout !== undefined
+        ? { activationTimeout: this.options.activationTimeout }
         : {}),
       ...(this.options.loadPublishIntervalMs !== undefined
         ? { loadPublishIntervalMs: this.options.loadPublishIntervalMs }
