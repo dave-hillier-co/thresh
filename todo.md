@@ -56,6 +56,11 @@ stores above. Worth a service dimension eventually for tidiness, not urgently.
   - **Reminders/durable jobs:** `setTimeout` overflow past ~24.8 days (#101), non-owner reminder
     update (#102), stranded job shards (#103), backoff from poll start (#114), reminder catch-up
     drift (#115).
+- [Design review — 2026-11-14](docs/project-review-2026-11-14.md) — a read for design issues rather
+  than line-level bugs: responsibilities in the wrong place, invariants held by timing, mechanisms
+  that should be one, and holes in the failure model. About 60 findings in nine groups, the most
+  serious reproduced by probes against the production wiring (Kubernetes membership composed with
+  the host and node) that no test in the suite exercises. Indexed below.
 - The 2026-09-02 correctness review's findings were fixed in-tree (transaction lock release /
   in-doubt `recordCommit`, transport `'error'` handling and per-peer fast-fail, monotonic stream
   cursors, drained durable-job stop, reminder `lastFiredAt`, codec prototype-pollution guard,
@@ -95,7 +100,7 @@ stores above. Worth a service dimension eventually for tidiness, not urgently.
 
 ### Findings from the 2026-09-22 review
 
-All filed as issues #67–#84 and fixed on `integration/2026-09-22-review-fixes` (**not yet on `main`**).
+All filed as issues #67–#84 and fixed on `integration/2026-09-22-review-fixes`, since merged to `main`.
 Every fix carries a test that was run and observed failing first; the full suite, typecheck, lint and
 all six runnable examples pass on the merged branch. Every finding's evidence, repro and severity is
 in [`docs/project-review-2026-09-22.md`](docs/project-review-2026-09-22.md).
@@ -261,6 +266,100 @@ Follow-ups surfaced while fixing them:
 - [ ] `shardActivationBufferMs` is resolved but unused (Thresh shards have no start time distinct from
       their jobs' due times).
 
+### Design review (2026-11-14)
+
+Every finding's evidence and direction is in
+[`docs/project-review-2026-11-14.md`](docs/project-review-2026-11-14.md); the ids below are its
+headings. Not filed as issues. Fixes land on `integration/2026-11-14-design-review-fixes`, each
+carrying a test that was observed failing first.
+
+Membership and partition ownership:
+
+- [ ] **M1** view changes are delivered by a one-shot wake-up to a loop that awaits store I/O
+- [ ] **M2** a silo's ring is frozen at construction; under Kubernetes it starts empty
+- [ ] **M3** join recovery runs with the read gate open (duplicate activations on join)
+- [ ] **M4** a silo that leaves in two steps is never cleaned out of peers' routing state
+- [ ] **M5** per-silo view versions break routine routing (the reproduced half of #72)
+- [ ] **M6** the directory handoff fails open and has no range or version unit
+- [ ] **M7** stream, reminder and job ownership use three disciplines, none fenced
+- [ ] **M8** health signals do not measure what they name
+- [ ] **M9** silo replies use a reverse-dialled connection; responses match by id alone
+
+Transactions:
+
+- [ ] **T1** the caller-side agent drives 2PC; the TM is only a commit-record register
+- [ ] **T2** `prepare` validates nothing (a re-activated participant loses its write)
+- [ ] **T3** `status(): boolean` conflates "not yet decided" with "aborted"
+- [ ] **T4** nothing times out or is collected (holders, pings, commit records, exclusive turns)
+- [ ] **T5** pending records are siblings but the storage contract encodes a chain (root of #78)
+- [ ] **T6** nothing blocks deactivation while a lock or prepared record is live
+
+Activation lifecycle:
+
+- [ ] **L1** deactivation has no single owner
+- [ ] **L2** lifecycle operations are ordinary turns; a deactivation request is a polled flag
+- [ ] **L3** a 5-value state plus about 13 flags; admission is decided in about ten places
+- [ ] **L4** directory registration lives outside the activation; cold-grain order rests on timing
+- [ ] **L5** the placement pipeline exists twice
+- [ ] **L6** the only environment-statistics source is a test stub, with public latches
+- [ ] **L7** idle collection is a sequential full-map sweep
+- [ ] **L8** a same-silo call has no default deadline
+
+Wire surface and location transparency:
+
+- [ ] **W1** dispatch by bare method name: no declared wire surface
+- [ ] **W2** the value codec reserves keys inside user data
+- [ ] **W3** local calls bypass the codec, so placement decides call semantics
+- [ ] **W4** no compatibility contract for the wire or stored state
+- [ ] **W5** a decode failure is a process fault
+- [ ] **W6** "safe to resend" has three definitions
+- [ ] **W7** the error taxonomy lives in parallel tables that have drifted
+- [ ] **W8** `GrainId` has two equalities
+
+Verification model:
+
+- [ ] **V1** the test harness is a parallel wiring exactly where production differs
+- [ ] **V2** the memory stream provider is a different model from the pulling providers
+- [ ] **V3** three host layers with different defaults
+- [ ] **V4** the parity metric covers neither the largest deviation nor functional grains
+- [ ] **V5** no fault-injection seam
+
+State and journaling:
+
+- [ ] **S1** the journal adaptor swallows the lost-writer signal and stays stale
+- [ ] **S2** one storage write per durable-collection mutation, no atomic unit
+- [ ] **S3** `JournaledGrain` event history is truncated by the shared compaction threshold
+- [ ] **S4** log sharing is inferred by object identity over a constant log name
+- [ ] **S5** no shared facet contract
+- [ ] **S6** the in-memory grain store is not a model of the durable ones
+- [ ] **S7** the storage-backend seam covers three of six durable stores
+- [ ] **S8** `defineReducerGrain` effects are neither atomic nor durable
+
+Streams, reminders and durable jobs:
+
+- [ ] **B1** pulling-stream delivery state is one cursor per physical queue (root of #97, #112)
+- [ ] **B2** retention and rewind are not part of the queue seam
+- [ ] **B3** durable-job shards are cluster-wide time buckets
+- [ ] **B4** a reminder registered on a non-owner loses its first tick
+- [ ] **B5** the `PullableQueue` contract assumes token order equals visibility order (root of #99)
+- [ ] **B6** Kafka holds no authoritative assignment or offsets
+
+Composition, configuration and operability:
+
+- [ ] **C1** the builder accumulates side effects; validation is a list of special cases
+- [ ] **C2** options live in four hand-synchronised layers
+- [ ] **C3** lifecycle is hook arrays, not a staged lifecycle
+- [ ] **C4** the logger is not a seam and the runtime is silent by default
+- [ ] **C5** `ClusterNode` stands in for a missing system-target abstraction
+- [ ] **C6** `GrainRuntime` is a god-interface
+- [ ] **C7** the silo builder statically imports every backing driver
+
+API boundary and consumer coupling:
+
+- [ ] **A1** nothing separates public API from internals
+- [ ] **A2** nothing runs BeneDB when Thresh changes
+- [ ] **A3** two authoring models are not in lockstep
+
 ## Beyond parity
 
 - [ ] [#38](https://github.com/dave-hillier-co/thresh/issues/38) Browser state
@@ -286,7 +385,7 @@ Follow-ups surfaced while fixing them:
 ## Orleans test-suite port (parity suite)
 
 The functional test suites of Orleans `v10.1.0` are ported 1:1 into `packages/parity`;
-`pnpm parity:scorecard [--run]` reports the standing: **570 ported / 0 gap / 742 excluded** over
+`pnpm parity:scorecard [--run]` reports the standing: **571 ported / 0 gap / 741 excluded** over
 ten in-scope suites (1312 declarations, every one accounted for). Earlier citations of
 502 / 0 / 475 — including the 2026-08-04 review's parity row — came from the scorecard's old
 regex parser, which could only see declarations whose first argument was an inline literal;
