@@ -91,11 +91,17 @@ describe("JournaledGrain history across compaction", () => {
   it("still re-activates from the snapshot rather than replaying every event", async () => {
     const storage = new MemoryJournalStorage();
     const grain = new Ledger();
-    await bindJournaledGrain(grain, id, registryOver(storage), { snapshotThreshold: 20, ...retain });
+    await bindJournaledGrain(grain, id, registryOver(storage), {
+      snapshotThreshold: 20,
+      ...retain,
+    });
     await raiseMany(grain, 100);
 
     const again = new Ledger();
-    await bindJournaledGrain(again, id, registryOver(storage), { snapshotThreshold: 20, ...retain });
+    await bindJournaledGrain(again, id, registryOver(storage), {
+      snapshotThreshold: 20,
+      ...retain,
+    });
     expect(again.sum).toBe(grain.sum);
     expect(again.head).toBe(100);
     // Only the events after the latest snapshot are folded through transitionState.

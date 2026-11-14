@@ -45,6 +45,10 @@ holds that history in memory, so a grain that raises events without bound pays f
 A conditional raise (`raiseConditionalEvent`) that returns `false` has lost a race to another
 writer. Before it returns, the confirmed state and version are refreshed from storage, so a retry
 computed from them can succeed. This holds for the journal substrate and for custom-storage grains.
+Only the conditional entries are dropped: an event raised unconditionally (`raiseEvent`) before it
+stays pending and is written on top of the refreshed view, as Orleans does. A `confirmEvents` that
+loses the race to another writer likewise re-reads storage and writes its events on top, rather
+than leaving the grain stale.
 
 Providers registered under different names over the same backing store (the same Postgres pool,
 tables and service id, or the same Redis client, prefix and service id) share one log per grain;
