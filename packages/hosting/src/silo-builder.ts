@@ -1426,7 +1426,14 @@ export class SiloBuilder {
   }
 
   useWebSocketTransport(): this {
-    this.transport = new WebSocketTransport(this.config.clusterId);
+    // `useLogging` may come after this call, so the logger is read at log time.
+    const logger: Logger = {
+      debug: (message, fields) => this.logger?.debug(message, fields),
+      info: (message, fields) => this.logger?.info(message, fields),
+      warn: (message, fields) => this.logger?.warn(message, fields),
+      error: (message, fields) => this.logger?.error(message, fields),
+    };
+    this.transport = new WebSocketTransport(this.config.clusterId, { logger });
     return this;
   }
 

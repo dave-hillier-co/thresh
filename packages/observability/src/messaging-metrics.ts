@@ -15,6 +15,8 @@ interface Instruments {
   sent: Counter;
   received: Counter;
   queueLatency: Histogram;
+  decodeFailed: Counter;
+  handlerFailed: Counter;
 }
 
 let instruments: Instruments | undefined;
@@ -36,6 +38,15 @@ function instrumentsOf(): Instruments {
           "Time an outbound message waited to acquire its connection before it could be sent",
         unit: "ms",
       }),
+      decodeFailed: meter.createCounter("thresh.messaging.decode.failed", {
+        description:
+          "Inbound frames that could not be decoded; the connection that carried one is closed",
+        unit: "{frame}",
+      }),
+      handlerFailed: meter.createCounter("thresh.messaging.handler.failed", {
+        description: "Inbound messages whose handler threw or rejected",
+        unit: "{message}",
+      }),
     };
   }
   return instruments;
@@ -51,4 +62,12 @@ export function recordMessageReceived(attrs: Attributes = {}): void {
 
 export function recordQueueLatency(ms: number, attrs: Attributes = {}): void {
   instrumentsOf().queueLatency.record(ms, attrs);
+}
+
+export function recordDecodeFailure(attrs: Attributes = {}): void {
+  instrumentsOf().decodeFailed.add(1, attrs);
+}
+
+export function recordHandlerFailure(attrs: Attributes = {}): void {
+  instrumentsOf().handlerFailed.add(1, attrs);
 }

@@ -376,4 +376,45 @@ describe("client-side cancellation binding for hosted objects", () => {
       await silo.listener.close();
     }
   });
+
+  it("answers an undecodable cancellation notification with an error response, not a process fault", async () => {
+    const clientId = new GrainId("$client", "c-bad-cancel");
+    const faults: unknown[] = [];
+    const onFault = (e: unknown) => void faults.push(e);
+    process.on("unhandledRejection", onFault);
+    const network = new InProcessNetwork();
+    const silo = await startFakeSilo(network);
+    const client = createClient({
+      clusterId: CLUSTER,
+      transport: new InProcessTransport(network, CLUSTER),
+      gateway: siloAddr,
+      clientId,
+    });
+    await client.connect();
+    try {
+      const identity = grainReferenceIdentity(
+        client.createObjectReference(IObserver, {} as never),
+      )!;
+      const correlationId = nextCorrelationId();
+      silo.send(
+        baseMessage({
+          correlationId,
+          targetGrain: identity.grainId,
+          interfaceId: ICancellationSourcesExtension.id,
+          method: "cancelRemoteToken",
+          body: Uint8Array.of(0xc1, 0xff),
+        }),
+      );
+      await waitFor(() => silo.replies.some((m) => m.correlationId === correlationId));
+      await new Promise((r) => setTimeout(r, 20));
+
+      const reply = silo.replies.find((m) => m.correlationId === correlationId);
+      expect(reply?.responseKind).toBe("error");
+      expect(faults).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onFault);
+      await client.close();
+      await silo.listener.close();
+    }
+  });
 });

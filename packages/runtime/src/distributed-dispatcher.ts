@@ -208,8 +208,12 @@ export class DistributedDispatcher implements Dispatcher {
     try {
       return await this.routeTo(found, req, opts);
     } catch (err) {
-      if (!isStaleActivationRejection(err) || retrying) throw err;
+      if (!isStaleActivationRejection(err)) throw err;
+      // Drop the route just cached even when this was the last attempt: a peer
+      // that could not be reached (a failed dial reports `unknownTarget`) must
+      // not stay the cached destination for the next call.
       this.deps.cache.invalidate(req.target);
+      if (retrying) throw err;
       return this.lookupAndInvoke(req, opts, true);
     }
   }

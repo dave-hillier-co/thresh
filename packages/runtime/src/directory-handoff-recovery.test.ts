@@ -12,6 +12,7 @@ import { ConsistentHashRing } from "@thresh/directory/consistent-hash-ring";
 import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
 import { InProcessNetwork, InProcessTransport } from "@thresh/messaging/in-process-transport";
 import type { Message } from "@thresh/messaging/message";
+import { connectFailure, type ConnectFailureCause } from "@thresh/messaging/transport";
 import type {
   Connection,
   ConnectionAcceptHandler,
@@ -140,6 +141,7 @@ class FlakyTransport implements Transport {
     private readonly inner: Transport,
     private readonly failTarget: SiloAddress,
     failures: number,
+    private readonly cause?: ConnectFailureCause,
   ) {
     this.remainingFailures = failures;
   }
@@ -153,6 +155,7 @@ class FlakyTransport implements Transport {
   async connect(to: SiloAddress, preamble: ConnectionPreamble): Promise<Connection> {
     if (to.equals(this.failTarget) && this.remainingFailures > 0) {
       this.remainingFailures--;
+      if (this.cause !== undefined) throw connectFailure(to, "simulated stall", this.cause);
       // `siloUnavailable`, not `unknownTarget`: a peer that is up but unreachable for
       // now. Recovery reads "nothing listening there" (`unknownTarget` at connect) as an
       // empty answer from a peer that hosts nothing, which is not what this simulates.
@@ -284,6 +287,73 @@ describe("directory handoff recovery (ACK-delete, retry, expiry)", () => {
       await node1.stop();
     }
   });
+
+  it.each(["timeout", "handshake"] as const)(
+    "does not read a %s dial failure as nothing listening: the peer may be alive, so recovery retries and still adopts its entries",
+    async (cause) => {
+      const network = new InProcessNetwork();
+      const addresses = [silo(0), silo(1)];
+      const membership = new StaticMembershipService(addresses[0]!, addresses);
+      const time = new FakeTimeProvider();
+      const stalling = new FlakyTransport(
+        new InProcessTransport(network, CLUSTER),
+        silo(1),
+        2,
+        cause,
+      );
+
+      const node0 = new ClusterNode({
+        local: silo(0),
+        clusterId: CLUSTER,
+        membership: new MembershipView(membership, silo(0)),
+        transport: new InProcessTransport(network, CLUSTER),
+        random: () => 0.99,
+      });
+      node0.registerGrain(CounterGrain, { interfaces: [ICounter] });
+      const node1 = new ClusterNode({
+        local: silo(1),
+        clusterId: CLUSTER,
+        membership: new MembershipView(membership, silo(1)),
+        transport: new InProcessTransport(network, CLUSTER),
+        random: () => 0.99,
+      });
+      node1.registerGrain(CounterGrain, { interfaces: [ICounter] });
+      await node0.start();
+      await node1.start();
+
+      const ring3 = new ConsistentHashRing([silo(0), silo(1), silo(2)]);
+      const key = counterKeyOwnedBy(ring3, silo(2));
+      try {
+        await node0.getGrain(ICounter, key).increment(5);
+        membership.addSilo(silo(2));
+        const node2 = new ClusterNode({
+          local: silo(2),
+          clusterId: CLUSTER,
+          membership: new MembershipView(membership, silo(2)),
+          transport: stalling,
+          time,
+          random: () => 0.99,
+          recovery: { maxAttempts: 5, backoffMs: 1_000 },
+        });
+        node2.registerGrain(CounterGrain, { interfaces: [ICounter] });
+        const startPromise = node2.start();
+        node0.updateView();
+        node1.updateView();
+        for (let i = 0; i < 10; i++) {
+          await Promise.resolve();
+          await Promise.resolve();
+          time.advance(1_000);
+        }
+        await startPromise;
+        // State intact: the entry was adopted after the retries, not skipped as "hosts nothing".
+        expect(await node2.getGrain(ICounter, key).increment(2)).toBe(7);
+        await node2.stop();
+      } finally {
+        await node0.stop();
+        await node1.stop();
+      }
+    },
+  );
 
   it("expires a retained handoff entry that its successor never pulls, past the retention window", async () => {
     const network = new InProcessNetwork();
