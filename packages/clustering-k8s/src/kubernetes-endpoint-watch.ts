@@ -4,7 +4,11 @@ import { WatchedEndpoints, type WatchEventType } from "@thresh/clustering-k8s/wa
 
 /** An EndpointSlice as returned by the Kubernetes API (the fields we read). */
 export interface RawEndpointSlice {
-  metadata?: { name?: string };
+  /**
+   * `resourceVersion` is the object's last-modified revision (on a DELETED watch event, the
+   * revision of the deletion); `KubernetesMembership` derives its view version from it.
+   */
+  metadata?: { name?: string; resourceVersion?: string };
   endpoints?: Array<{
     addresses?: string[];
     conditions?: { ready?: boolean };
@@ -54,6 +58,9 @@ export interface EndpointSliceSource {
 /** Strip the API metadata, keeping the fields the failure detector reads. */
 export function toEndpointSlice(raw: RawEndpointSlice): EndpointSlice {
   const slice: EndpointSlice = {};
+  if (raw.metadata?.resourceVersion !== undefined) {
+    slice.resourceVersion = raw.metadata.resourceVersion;
+  }
   if (raw.ports !== undefined) slice.ports = raw.ports;
   if (raw.endpoints !== undefined) {
     slice.endpoints = raw.endpoints.map((endpoint) => {
@@ -114,7 +121,7 @@ export class KubernetesEndpointWatch implements EndpointWatch {
     this.random = options.random ?? Math.random;
   }
 
-  subscribe(onSlices: (slices: EndpointSlice[]) => void): () => void {
+  subscribe(onSlices: (slices: EndpointSlice[], revision: number | undefined) => void): () => void {
     return this.endpoints.subscribe(onSlices);
   }
 
@@ -137,7 +144,7 @@ export class KubernetesEndpointWatch implements EndpointWatch {
         const name = raw.metadata?.name;
         if (name !== undefined) slices.set(name, toEndpointSlice(raw));
       }
-      this.endpoints.reset(slices);
+      this.endpoints.reset(slices, resourceVersion);
       if (!this.running) return;
 
       // Watch from this list's resourceVersion, not "now" — otherwise any change the API server
@@ -147,7 +154,9 @@ export class KubernetesEndpointWatch implements EndpointWatch {
         (type, raw) => {
           const name = raw.metadata?.name;
           if (name === undefined) return;
-          this.endpoints.apply(type, name, type === "DELETED" ? undefined : toEndpointSlice(raw));
+          // A DELETED event's object still carries the revision of the deletion, which the
+          // view version needs (see `WatchedEndpoints`).
+          this.endpoints.apply(type, name, toEndpointSlice(raw));
         },
         (err) => {
           this.stopWatch = undefined;

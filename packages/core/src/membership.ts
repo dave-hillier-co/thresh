@@ -12,17 +12,27 @@ export interface SiloMember {
 /**
  * A versioned snapshot of the live silo set.
  *
- * `version` numbers the views of ONE membership service: it is comparable only
- * between snapshots of that same service, and is otherwise opaque. In production
- * every silo has its own (each watching Kubernetes for itself), so equal versions
- * on two silos denote unrelated views; only the test/dev `StaticMembershipService`,
- * shared across an in-process cluster, is a single authority whose version means
- * the same view everywhere.
+ * `version` is a cluster-wide view identity, ordered: two silos holding the same
+ * view hold the same version, and a silo that has not yet observed a change holds
+ * a lower one than a silo that has. `DistributedGrainDirectory` and `ClusterNode`
+ * rely on exactly that across silos — the `staleView` rejection of a caller whose
+ * version is behind, and `awaitView` waiting for a caller's version to arrive.
  *
- * `DistributedGrainDirectory` and `ClusterNode` nevertheless compare these
- * versions across silos — a `staleView` rejection, and `awaitView` waiting for a
- * caller's version — which asks for exactly the cluster-wide view identity this
- * interface does not promise. See issue #72.
+ * Where it comes from depends on the provider:
+ *
+ * - **Kubernetes** (`KubernetesMembership`): the highest EndpointSlice
+ *   `resourceVersion` the silo's watch has observed — an etcd revision, one
+ *   cluster-wide increasing counter — so silos that have seen the same writes to the
+ *   service's slices agree on it without coordinating (issue #72; see
+ *   `WatchedEndpoints` and `docs/deviations.md`).
+ * - **Static/test** (`StaticMembershipService`): a counter on the one shared
+ *   instance, which is a single authority because every silo of an in-process
+ *   cluster reads it.
+ *
+ * A provider whose views are not derived from one shared, ordered source cannot
+ * honour this contract, and a counter kept per silo does not (it was issue #72's
+ * defect: identical views on two silos numbered 4 and 2 made one wait on the other
+ * until its calls timed out).
  */
 export interface MembershipSnapshot {
   version: number;
@@ -32,8 +42,65 @@ export interface MembershipSnapshot {
 /** The live silo set, derived from Kubernetes in production (see docs/05). */
 export interface MembershipService {
   current(): MembershipSnapshot;
+  /**
+   * The views published from now on, with latest-value semantics: an iterator that
+   * is behind `current()` yields it on its next step, whether or not it was waiting
+   * when the view was published, so a consumer that is busy when views change never
+   * loses one. Intermediate views may be coalesced; the latest is never skipped.
+   * (Orleans `AsyncEnumerable<T>`, which `ClusterMembershipService.MembershipUpdates`
+   * is built on.)
+   */
   updates(): AsyncIterable<MembershipSnapshot>;
   localSilo(): SiloAddress;
+}
+
+/**
+ * A latest-value feed of membership snapshots: the publishing half a
+ * `MembershipService` implementation keeps, and the `updates()` iterators it hands
+ * out. Mirrors Orleans `AsyncEnumerable<T>` (`src/Orleans.Core/Utils/AsyncEnumerable.cs`)
+ * in the property that matters — a publish is never lost because a consumer was busy,
+ * since each iterator compares its position against the latest snapshot rather than
+ * waiting for a one-shot wake-up — but coalesces: an iterator that fell several
+ * views behind yields only the latest, where Orleans walks the whole chain. Every
+ * consumer here re-reads `current()` to apply a view, so the intermediate views it
+ * would skip are ones it could not have applied anyway.
+ *
+ * An iterator starts positioned at the snapshot current when `updates()` was
+ * called: it yields views published after that, not the one already in force.
+ */
+export class MembershipFeed {
+  private snapshot: MembershipSnapshot;
+  private waiters: Array<() => void> = [];
+
+  constructor(initial: MembershipSnapshot) {
+    this.snapshot = initial;
+  }
+
+  current(): MembershipSnapshot {
+    return this.snapshot;
+  }
+
+  publish(snapshot: MembershipSnapshot): void {
+    this.snapshot = snapshot;
+    const waiters = this.waiters;
+    this.waiters = [];
+    for (const wake of waiters) wake();
+  }
+
+  updates(): AsyncIterableIterator<MembershipSnapshot> {
+    let seen = this.snapshot;
+    const iterator: AsyncIterableIterator<MembershipSnapshot> = {
+      [Symbol.asyncIterator]: () => iterator,
+      next: async (): Promise<IteratorResult<MembershipSnapshot>> => {
+        while (this.snapshot === seen) {
+          await new Promise<void>((resolve) => this.waiters.push(resolve));
+        }
+        seen = this.snapshot;
+        return { value: seen, done: false };
+      },
+    };
+    return iterator;
+  }
 }
 
 /** The silos that may host or own grains: those currently `active`. */

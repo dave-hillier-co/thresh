@@ -1,30 +1,31 @@
-import type {
-  MembershipService,
-  MembershipSnapshot,
-  SiloMember,
-  SiloStatus,
+import {
+  MembershipFeed,
+  type MembershipService,
+  type MembershipSnapshot,
+  type SiloMember,
+  type SiloStatus,
 } from "@thresh/core/membership";
 import type { SiloAddress } from "@thresh/core/silo-address";
 
 /**
  * A membership service backed by an explicit, mutable silo list. Used for local
  * development and multi-silo tests; Kubernetes-derived membership replaces it in
- * Phase 3. Mutating the view bumps the version and pushes the new snapshot to
- * `updates()` subscribers, mirroring how a real view change propagates.
+ * Phase 3. Mutating the view bumps the version and publishes the new snapshot to
+ * `updates()` iterators with latest-value semantics (see `MembershipFeed`),
+ * mirroring how a real view change propagates.
  */
 export class StaticMembershipService implements MembershipService {
-  private snapshot: MembershipSnapshot;
-  private waiters: Array<(s: MembershipSnapshot) => void> = [];
+  private readonly feed: MembershipFeed;
 
   constructor(
     private readonly local: SiloAddress,
     initial: readonly SiloAddress[],
     private readonly metadata?: (silo: SiloAddress) => Readonly<Record<string, string>> | undefined,
   ) {
-    this.snapshot = {
+    this.feed = new MembershipFeed({
       version: 1,
       silos: initial.map((address) => this.member(address, "active")),
-    };
+    });
   }
 
   /** Build a member, attaching the resolver's metadata for the silo when present. */
@@ -34,17 +35,15 @@ export class StaticMembershipService implements MembershipService {
   }
 
   current(): MembershipSnapshot {
-    return this.snapshot;
+    return this.feed.current();
   }
 
   localSilo(): SiloAddress {
     return this.local;
   }
 
-  async *updates(): AsyncIterableIterator<MembershipSnapshot> {
-    for (;;) {
-      yield await new Promise<MembershipSnapshot>((resolve) => this.waiters.push(resolve));
-    }
+  updates(): AsyncIterableIterator<MembershipSnapshot> {
+    return this.feed.updates();
   }
 
   /** Replace the whole view (all `active`), bumping the version. */
@@ -57,26 +56,23 @@ export class StaticMembershipService implements MembershipService {
     status: SiloStatus = "active",
     metadata?: Readonly<Record<string, string>>,
   ): void {
-    if (this.snapshot.silos.some((m) => m.address.equals(address))) return;
+    if (this.current().silos.some((m) => m.address.equals(address))) return;
     const member =
       metadata !== undefined ? { address, status, metadata } : this.member(address, status);
-    this.publish([...this.snapshot.silos, member]);
+    this.publish([...this.current().silos, member]);
   }
 
   removeSilo(address: SiloAddress): void {
-    this.publish(this.snapshot.silos.filter((m) => !m.address.equals(address)));
+    this.publish(this.current().silos.filter((m) => !m.address.equals(address)));
   }
 
   setStatus(address: SiloAddress, status: SiloStatus): void {
     this.publish(
-      this.snapshot.silos.map((m) => (m.address.equals(address) ? { ...m, status } : m)),
+      this.current().silos.map((m) => (m.address.equals(address) ? { ...m, status } : m)),
     );
   }
 
   private publish(silos: readonly SiloMember[]): void {
-    this.snapshot = { version: this.snapshot.version + 1, silos };
-    const waiters = this.waiters;
-    this.waiters = [];
-    for (const resolve of waiters) resolve(this.snapshot);
+    this.feed.publish({ version: this.current().version + 1, silos });
   }
 }

@@ -59,6 +59,32 @@ and the graceful drain. Silo identity is `podName` + `podUid` rather than Orlean
 | Gateway list provider (clients) | Kubernetes `Service` / DNS |
 | Cluster discovery providers | The Kubernetes control plane |
 
+### The membership version is the observed EndpointSlice revision
+
+Orleans numbers views with the membership table's `MembershipVersion`, one counter every silo reads
+from the same table. With no table, `MembershipSnapshot.version` under `KubernetesMembership` is the
+highest EndpointSlice `resourceVersion` the silo's watch has observed: each listed slice's, and each
+watch event's (a DELETED event carries the deletion's revision). For an etcd-backed resource that is
+the etcd modification revision, one cluster-wide increasing counter, so silos that have seen the
+same writes to the service's slices hold the same version and a silo whose watch lags holds a lower
+one — the cross-silo ordering the directory's `staleView` guard and `awaitView` depend on. Kubernetes
+documents `resourceVersion` as opaque; this relies on its etcd form, and a non-numeric value is
+treated as carrying no revision (the view then falls back to a per-silo counter, which only orders
+views within one silo).
+
+The list's own `resourceVersion` is not used as the version: it is the cluster's global revision at
+the moment of the list, which moves with writes to every other object, so a silo that listed later
+would number an identical view higher and its peers would wait on a version they never reach. It is
+used only when a re-list shows a change that no listed slice dates — a slice deleted while the watch
+was down. One gap remains: a silo that listed after such a deletion holds a lower version than a peer
+that saw the DELETED event, until the next write to the slices. Neither the version nor the view
+carries a rolling-upgrade compatibility story; the project has no deployments to upgrade.
+
+`MembershipService.updates()` has latest-value semantics like Orleans' `AsyncEnumerable<T>`, but
+coalesces: an iterator that fell several views behind yields only the latest, where Orleans walks
+every intermediate one. Every consumer re-reads `current()` to apply a view, and the host's
+reconciliation loops until the node's applied version equals it, so no view is ever left unapplied.
+
 ## Functional / reducer authoring
 
 Grains are authored as **factory closures** (`defineGrain` + hooks like `usePersistentState`) rather

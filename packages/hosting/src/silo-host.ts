@@ -4,7 +4,7 @@ import type { GrainInterface } from "@thresh/core/grain-interface";
 import type { GrainKeyKind } from "@thresh/core/grain-key";
 import type { KeyTypeOf } from "@thresh/core/key-kinds";
 import { type Logger, noopLogger } from "@thresh/core/logger";
-import type { MembershipService } from "@thresh/core/membership";
+import type { MembershipService, MembershipSnapshot } from "@thresh/core/membership";
 import type { StreamProvider } from "@thresh/core/stream";
 import type { GrainDirectory } from "@thresh/directory/grain-directory";
 import type { ClusterNode } from "@thresh/runtime/cluster-node";
@@ -106,6 +106,13 @@ export interface SiloHostParts {
  */
 export class SiloHost {
   private membershipWatch: AbortController | undefined;
+  private stopViewListener: (() => void) | undefined;
+  /** The in-flight view reconciliation (`reconcileView`), if one is running. */
+  private reconciling: Promise<void> | undefined;
+  /** Set when a reconcile is requested while one runs: it goes round again. */
+  private reconcileAgain = false;
+  /** The applied view version the ownership hooks last ran for. */
+  private hookedVersion: number | undefined;
 
   constructor(private readonly parts: SiloHostParts) {}
 
@@ -247,30 +254,41 @@ export class SiloHost {
       healthServer,
       healthPort,
       membership,
-      reminderService,
       rebalancerWorker,
       selfProbeWorker,
       onStart,
-      onOwnershipChange,
       startupTasks,
     } = this.parts;
+    // The membership watch's first list completes inside these (a
+    // `KubernetesEndpointWatch.start()` awaits it), so the view is populated before
+    // the node applies it.
     await this.runHooks(onStart);
+    // Positioned now, before the node applies the current view: every view published
+    // from here on is yielded once the watch below starts consuming, so none can fall
+    // between the start-up reconcile and the watch.
+    const updates = membership.updates();
+    // Listens, then applies `membership.current()` — the ring, and join recovery for
+    // the ranges it gains — so a startup task below can already call a grain.
     await node.start();
+    // Finish that join recovery before the startup tasks and readiness. Every owned
+    // operation waits for it anyway, so this only moves the wait ahead of them — and
+    // keeps the node's recovery dials to members not listening yet from still being
+    // in flight (and shared by the connection pool) when the first calls go out.
+    await node.recoverySettled();
     await this.runHooks(startupTasks);
     health.update({ transportReady: true });
     if (healthServer !== undefined && healthPort !== undefined) {
       await healthServer.listen(healthPort);
     }
-    const ranges = node.ownedHashRanges();
-    await this.runHooks(onOwnershipChange, ranges);
-    await reminderService?.refreshOwnership(ranges);
+    // Ownership hooks for the applied view, then every later one (level-triggered),
+    // whichever path applies it.
+    this.stopViewListener = node.onViewApplied(() => this.reconcileView());
+    this.reconcileView();
+    await this.reconciling;
     rebalancerWorker?.start();
     selfProbeWorker?.start();
-    this.watchMembership();
-    health.update({
-      membershipHealthy: membership.current().silos.length > 0,
-      started: true,
-    });
+    this.watchMembership(updates);
+    health.update({ membershipHealthy: node.hasAppliedView(), started: true });
   }
 
   async stop(): Promise<void> {
@@ -284,6 +302,7 @@ export class SiloHost {
       onBeforeDeactivate,
     } = this.parts;
     this.membershipWatch?.abort();
+    this.stopViewListener?.();
     rebalancerWorker?.stop();
     reminderService?.stop();
     // Contained, unlike `onStop`: these run before the drain, so one failing
@@ -311,41 +330,91 @@ export class SiloHost {
     await this.runHooks(onStop);
   }
 
-  /** React to membership view changes: rebuild the ring and refresh health. */
-  private watchMembership(): void {
-    const { node, health, membership, reminderService, onOwnershipChange } = this.parts;
-    const logger = this.parts.logger ?? noopLogger;
+  /**
+   * React to membership view changes. Each published view only REQUESTS a
+   * reconcile (`reconcileView`), which compares levels — the node's applied view
+   * against `membership.current()` — so a view published while a reconcile is busy
+   * in its hooks is picked up when they finish, never lost.
+   */
+  private watchMembership(updates: AsyncIterable<MembershipSnapshot>): void {
     const abort = new AbortController();
     this.membershipWatch = abort;
     void (async () => {
-      for await (const snapshot of membership.updates()) {
+      for await (const _snapshot of updates) {
         if (abort.signal.aborted) return;
-        try {
-          node.updateView();
-          // Ring changed: take over (or release) reminder ranges and stream queues.
-          const updated = node.ownedHashRanges();
-          await this.runHooks(onOwnershipChange, updated);
-          await reminderService?.refreshOwnership(updated);
-          health.update({ membershipHealthy: snapshot.silos.length > 0 });
-        } catch (error) {
-          // Never let a failed view change END the watch. `updates()` yields
-          // forever, so a rejection here would take this silo off membership for
-          // the rest of the process's life: no further ring rebuild, no
-          // reminder/stream-queue re-adoption, and health left reporting whatever
-          // the last view it managed to apply said (issue #70). `updateView()`
-          // applies the view before any hook below runs, so a failure here costs
-          // this view's adoption work, which the next view change retries — and
-          // the hooks do real I/O against Postgres/Redis/Kafka (durable-job
-          // shard claims, pulling-stream queue ownership), so a store blip is
-          // the expected trigger. Deliberately NOT flipping `membershipHealthy`:
-          // the watch is connected and the view is current, and flipping
-          // readiness would pull a serving silo out of the service over a
-          // transient store error. (`LocalReminderService.refreshOwnership`
-          // already swallows its own store errors and logs them.)
-          logger.error("membership view update failed", { version: snapshot.version, error });
-        }
+        this.reconcileView();
       }
     })();
+  }
+
+  /**
+   * Bring this silo in line with the current membership view, level-triggered:
+   * apply `membership.current()` to the node if it is behind, run the ownership
+   * hooks (stream queues, durable-job shards, reminder ranges) for the view the node
+   * has applied if they have not run for it yet, and go round again until neither
+   * is behind. Intermediate views may be coalesced; the latest is always applied.
+   *
+   * Single-flight: a request while a reconcile runs (a view published mid-hook, or
+   * the node applying a view on another path — the directory's stale-view refresh,
+   * `awaitView` catching up to a peer — which `onViewApplied` reports) marks it to
+   * go round again rather than starting a second, concurrent one.
+   */
+  private reconcileView(): void {
+    if (this.reconciling !== undefined) {
+      this.reconcileAgain = true;
+      return;
+    }
+    const running = this.reconcileLoop().finally(() => {
+      if (this.reconciling === running) this.reconciling = undefined;
+    });
+    this.reconciling = running;
+  }
+
+  private async reconcileLoop(): Promise<void> {
+    // Yield once so the caller's `this.reconciling` is set before any synchronous
+    // `updateView` below re-enters through `onViewApplied`.
+    await Promise.resolve();
+    const { node, health, membership, reminderService, onOwnershipChange } = this.parts;
+    const logger = this.parts.logger ?? noopLogger;
+    for (;;) {
+      this.reconcileAgain = false;
+      if (this.membershipWatch?.signal.aborted === true) return;
+      let failed = false;
+      try {
+        if (node.appliedViewVersion !== membership.current().version) node.updateView();
+        const version = node.appliedViewVersion;
+        if (version !== this.hookedVersion) {
+          // Recorded before the hooks run: a hook that fails is retried on the next
+          // view change, not in a tight loop against a store that is down.
+          this.hookedVersion = version;
+          const ranges = node.ownedHashRanges();
+          await this.runHooks(onOwnershipChange, ranges);
+          await reminderService?.refreshOwnership(ranges);
+        }
+      } catch (error) {
+        // Never let a failed view change END reconciliation (issue #70): a silo
+        // frozen on the last view it managed to apply would never rebuild its ring
+        // or re-adopt reminder ranges and stream queues again. `updateView()`
+        // applies the view before any hook runs, so a failure here costs this
+        // view's adoption work, which the next view change retries — and the hooks
+        // do real I/O against Postgres/Redis/Kafka (durable-job shard claims,
+        // pulling-stream queue ownership), so a store blip is the expected trigger.
+        // `membershipHealthy` below follows the applied view, not the hooks: a
+        // transient store error must not pull a serving silo out of the service.
+        // (`LocalReminderService.refreshOwnership` already swallows its own store
+        // errors and logs them.)
+        failed = true;
+        logger.error("membership view update failed", {
+          version: membership.current().version,
+          error,
+        });
+      }
+      health.update({ membershipHealthy: node.hasAppliedView() });
+      const behind =
+        node.appliedViewVersion !== membership.current().version ||
+        node.appliedViewVersion !== this.hookedVersion;
+      if (!this.reconcileAgain && (!behind || failed)) return;
+    }
   }
 }
 

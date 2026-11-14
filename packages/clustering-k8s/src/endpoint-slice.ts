@@ -22,6 +22,11 @@ export interface EndpointSlicePort {
 }
 
 export interface EndpointSlice {
+  /**
+   * The slice's `metadata.resourceVersion`: its last-modified revision, which the watch
+   * folds into the view version (see `WatchedEndpoints`).
+   */
+  resourceVersion?: string;
   endpoints?: EndpointSliceEndpoint[];
   ports?: EndpointSlicePort[];
 }
