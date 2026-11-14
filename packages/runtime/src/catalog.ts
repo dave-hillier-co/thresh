@@ -45,6 +45,13 @@ export interface RegisteredGrain {
 const DEFAULT_MAX_LOCAL_WORKERS = os.cpus().length || 4;
 
 /**
+ * How many deactivations one idle sweep runs at once — Orleans'
+ * `DeactivateActivationsFromCollector` bound,
+ * `MaxDegreeOfParallelism = Environment.ProcessorCount * 512`.
+ */
+const COLLECTION_CONCURRENCY = (os.cpus().length || 4) * 512;
+
+/**
  * Optional hook to construct/dispose grain instances instead of `new ctor()`
  * (Orleans `IGrainActivator`) — e.g. object pooling or non-DI construction.
  */
@@ -653,9 +660,20 @@ export class Catalog {
    * uses its own configured collection age (the periodic `ActivationCollector`).
    */
   async collectIdle(ageLimitOverrideMs?: number): Promise<void> {
-    for (const activation of this.selectStale(ageLimitOverrideMs)) {
-      await this.collectOne(activation, ageLimitOverrideMs);
-    }
+    // Selected in one pass, then deactivated through each activation's own
+    // pipeline with bounded concurrency (Orleans `Parallel.ForEachAsync` in
+    // `DeactivateActivationsFromCollector`), so a sweep's throughput is not
+    // one deactivation per hook latency. `collectOne` never rejects.
+    const stale = this.selectStale(ageLimitOverrideMs);
+    let next = 0;
+    const drain = async (): Promise<void> => {
+      while (next < stale.length) {
+        const activation = stale[next++]!;
+        await this.collectOne(activation, ageLimitOverrideMs);
+      }
+    };
+    const workers = Math.min(COLLECTION_CONCURRENCY, stale.length);
+    await Promise.all(Array.from({ length: workers }, drain));
   }
 
   /**
