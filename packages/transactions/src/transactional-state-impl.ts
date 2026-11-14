@@ -185,6 +185,7 @@ export class TransactionalStateImpl<T> implements TransactionalState<T>, Transac
     }
     this.confirmationDelayMs = 0;
     this.clearPreparedTimer();
+    this.lock.dispose();
   }
 
   /**
