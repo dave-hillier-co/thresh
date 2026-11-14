@@ -491,13 +491,21 @@ export class ClientNode implements Dispatcher {
     // `localObjects` lookup below, which would otherwise reject it as
     // "no object hosted".
     if (message.interfaceId === ICancellationSourcesExtension.id) {
-      const [tokenId] = this.serializer.deserialize<[string]>(message.body);
-      this.getOrCreateCancellationController(tokenId).abort();
-      if (message.direction === "oneWay") return;
-      await this.replyToCaller(
-        message,
-        responseTo(message, "success", this.serializer.serialize(undefined), this.localAddress),
-      );
+      try {
+        const [tokenId] = this.serializer.deserialize<[string]>(message.body);
+        this.getOrCreateCancellationController(tokenId).abort();
+        if (message.direction === "oneWay") return;
+        await this.replyToCaller(
+          message,
+          responseTo(message, "success", this.serializer.serialize(undefined), this.localAddress),
+        );
+      } catch (err) {
+        // An undecodable body is a fault of this one message, never an
+        // unhandled rejection: the caller gets an error response instead.
+        if (message.direction === "oneWay") return;
+        const { kind, body } = this.serializeError(err);
+        await this.replyToCaller(message, responseTo(message, kind, body, this.localAddress));
+      }
       return;
     }
     const entry = this.localObjects.get(message.targetGrain.toString());
