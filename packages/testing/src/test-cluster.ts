@@ -211,7 +211,7 @@ export interface TestClusterOptions {
    * (`SiloConfig.wireSemanticsForLocalCalls`): its arguments, result and thrown error make the
    * codec round trip, so a suite that happens to land caller and callee together still sees no
    * aliasing, class instances as the wire delivers them and error classes as the wire rebuilds
-   * them. Off by default.
+   * them. On by default; pass `false` for a test that pins local-only behaviour.
    */
   wireSemanticsForLocalCalls?: boolean;
 }
@@ -655,9 +655,8 @@ export class TestCluster {
         : {}),
       testHooks: true,
       ...(this.options.random !== undefined ? { random: this.options.random } : {}),
-      ...(this.options.wireSemanticsForLocalCalls === true
-        ? { wireSemanticsForLocalCalls: true }
-        : {}),
+      // On unless a test opts out: a same-silo call shows what a cross-silo call would.
+      wireSemanticsForLocalCalls: this.options.wireSemanticsForLocalCalls !== false,
       ...(this.options.collectionAgeSeconds !== undefined
         ? { collectionAgeSeconds: this.options.collectionAgeSeconds }
         : {}),

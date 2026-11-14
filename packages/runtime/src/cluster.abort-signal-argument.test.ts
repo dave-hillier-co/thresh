@@ -102,8 +102,9 @@ class SignalGrain extends Grain implements ISignalGrain {
 }
 
 /** Two silos, `random -> 0` so every activation lands on silo-0 and silo-1's calls cross the wire. */
-function buildCluster() {
+function buildCluster(options: { wireSemanticsForLocalCalls?: boolean } = {}) {
   return TestCluster.start({
+    ...options,
     clusterId: "abort-signal-argument-cluster",
     initialSilos: 2,
     random: () => 0,
@@ -265,7 +266,10 @@ describe("an AbortSignal nested inside an object argument", () => {
   });
 
   it("survives a CYCLIC argument graph (same-silo, where a cycle is legal)", async () => {
-    const cluster = await buildCluster();
+    // Opted out of wire semantics on purpose: this pins the local-only behaviour. A same-silo
+    // call with wire semantics round-trips the codec, which refuses a cycle, as a cross-silo
+    // call does; only a call that does not serialize can carry one.
+    const cluster = await buildCluster({ wireSemanticsForLocalCalls: false });
     try {
       const caller: TestSiloHandle = cluster.silos[0]!;
       const controller = new AbortController();

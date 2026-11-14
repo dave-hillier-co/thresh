@@ -234,7 +234,7 @@ export interface ClusterNodeOptions {
    * `[ResponseTimeout]`). Defaults to `callTimeoutMs`, so no call goes without a deadline.
    */
   defaultResponseTimeoutMs?: number;
-  /** See `SiloConfig.wireSemanticsForLocalCalls`. Off by default. */
+  /** See `SiloConfig.wireSemanticsForLocalCalls`. Off by default (`TestCluster` turns it on). */
   wireSemanticsForLocalCalls?: boolean;
   defaultCollectionAgeSeconds?: number;
   /**

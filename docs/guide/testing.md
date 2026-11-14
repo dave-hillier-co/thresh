@@ -13,9 +13,10 @@ closer:
   change reaches every silo in the same instant with the same version, and a stopped or killed
   silo leaves every view at once. Production silos each follow their own Kubernetes watch, so their
   views change one at a time and can differ. Pass `membership: "kubernetes"` to run that path.
-- **Serialization.** A call between silos round-trips the value codec; a call to a grain on the
-  same silo does not, so its arguments and result are shared objects and a thrown error keeps its
-  class. Pass `wireSemanticsForLocalCalls: true` to make same-silo calls behave like remote ones.
+- **Serialization.** A call between silos round-trips the value codec. In `TestCluster` so does a
+  call to a grain on the same silo, so a test never sees shared objects or a preserved error class
+  that a cross-silo call would lose. Pass `wireSemanticsForLocalCalls: false` to opt out. A silo
+  outside the harness does not copy local calls unless the option is set.
 - **Failure.** Nothing fails unless the test makes it fail: use `killSilo`, `cluster.faults` and the
   fault-injecting storage decorators below.
 
@@ -103,9 +104,10 @@ store's `backingKey`. Install them from `configureSilo`, for example
 
 ## Remote semantics for local calls
 
-`wireSemanticsForLocalCalls: true` (also a `SiloConfig` field) passes the arguments, the result and
+`wireSemanticsForLocalCalls` (also a `SiloConfig` field) passes the arguments, the result and
 a thrown error of every grain call through the codec round trip a message makes. A same-silo
 callee then gets copies, not the caller's objects. A class instance with no registered surrogate
 is flattened or refused, as on the wire. An error class the codec cannot rebuild arrives as
-`UnavailableExceptionFallbackException`, as a remote caller would see it. The option is off by
-default.
+`UnavailableExceptionFallbackException`, as a remote caller would see it. The option is on by
+default in `TestCluster` and off by default in a silo; a test that pins local-only behaviour, such as
+a cyclic argument, passes `false`.

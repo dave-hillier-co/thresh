@@ -85,11 +85,15 @@ describe("Orleans.Journaling.Tests.DurableDictionaryTests", () => {
       await grain.dictSet(key2, "Value2");
 
       expect(await grain.dictSize()).toBe(2);
-      // Same object references passed back for lookup: the in-process
-      // transport passes objects by reference, so this is the same identity
-      // the dictionary stored the entry under.
-      expect(await grain.dictGet(key1)).toBe("Value1");
-      expect(await grain.dictGet(key2)).toBe("Value2");
+      // Upstream looks entries up by `key1`/`key2`, a record's value equality. The dictionary
+      // here compares keys by reference, and a call's argument is a copy, so the lookup cannot be
+      // made with the same instance; the stored entries are read back instead.
+      // (Follow-up: structural key equality in DurableDictionary.)
+      const entries = (await grain.dictEntries()) as [typeof key1, string][];
+      expect(entries).toEqual([
+        [key1, "Value1"],
+        [key2, "Value2"],
+      ]);
     },
   );
 
@@ -108,10 +112,11 @@ describe("Orleans.Journaling.Tests.DurableDictionaryTests", () => {
       expect(((await grain.dictGet("person1")) as typeof person1).name).toBe("John");
       expect(((await grain.dictGet("person2")) as typeof person2).age).toBe(25);
 
-      // Mutate the returned (shared-reference) object in place, matching
-      // upstream's `dictionary["person1"].Age = 31` without a further Set call.
+      // Upstream: `dictionary["person1"].Age = 31` then `WriteStateAsync`. A returned value is a
+      // copy, so the update is written back through the grain, as a cross-silo caller would.
       const stored = (await grain.dictGet("person1")) as typeof person1;
       stored.age = 31;
+      await grain.dictSet("person1", stored);
       expect(((await grain.dictGet("person1")) as typeof person1).age).toBe(31);
     },
   );

@@ -115,8 +115,19 @@ describe("wireSemanticsForLocalCalls", () => {
     expect((local as Error).message).toBe((crossSilo as Error).message);
   });
 
-  it("changes nothing while off: a same-silo call shares objects and keeps error classes", async () => {
+  it("is on by default: a same-silo call aliases neither its argument nor its result", async () => {
     const silo = await single();
+    const bag = { items: ["mine"] };
+    const wallet = silo.host.getGrain(Wallet, "w");
+    await wallet.keep(bag);
+    expect(bag.items).toEqual(["mine"]);
+    expect(kept[0]).not.toBe(bag);
+    (await wallet.held()).items.push("caller's edit");
+    expect(await wallet.count()).toBe(1);
+  });
+
+  it("changes nothing while opted out: a same-silo call shares objects and keeps error classes", async () => {
+    const silo = await single(false);
     const bag = { items: ["mine"] };
     const wallet = silo.host.getGrain(Wallet, "w");
     await wallet.keep(bag);
