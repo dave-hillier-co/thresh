@@ -1,0 +1,160 @@
+import { afterEach, describe, expect, it } from "vitest";
+import { defineGrain } from "@thresh/core/define-grain";
+import { activeSilos } from "@thresh/core/membership";
+import { PreferLocalPlacement } from "@thresh/runtime/placement/prefer-local-placement";
+import {
+  TestCluster,
+  type TestClusterOptions,
+  type TestSiloHandle,
+} from "@thresh/testing/test-cluster";
+
+/**
+ * `TestCluster` on the production membership path: every silo runs its own
+ * `KubernetesMembership` over its own watch of one fake EndpointSlice API, and the test drives
+ * the API the way Kubernetes would. Mirrors the hand-composed scenarios in
+ * `packages/hosting/src/kubernetes-membership-view.test.ts`.
+ */
+const Counter = defineGrain("K8sHarnessCounter", () => {
+  let n = 0;
+  return { inc: async (): Promise<number> => ++n };
+});
+
+const clusters: TestCluster[] = [];
+afterEach(async () => {
+  for (const c of clusters.splice(0)) await c.dispose();
+});
+
+async function start(options: Partial<TestClusterOptions> = {}): Promise<TestCluster> {
+  const cluster = await TestCluster.start({
+    membership: "kubernetes",
+    grains: [Counter],
+    reminders: false,
+    callTimeout: { seconds: 2 },
+    ...options,
+  });
+  clusters.push(cluster);
+  return cluster;
+}
+
+const names = (cluster: TestCluster, silo: TestSiloHandle): string[] =>
+  activeSilos(cluster.viewOf(silo).membership)
+    .map((s) => s.podName)
+    .sort();
+
+describe("TestCluster on Kubernetes membership", () => {
+  it("joins a silo the Kubernetes way, and every silo converges on one view", async () => {
+    const cluster = await start({ initialSilos: 1 });
+    const [a] = cluster.silos as [TestSiloHandle];
+    const b = await cluster.startAdditionalSilo();
+
+    expect(names(cluster, a)).toEqual(["test-silo-0", "test-silo-1"]);
+    expect(names(cluster, b)).toEqual(["test-silo-0", "test-silo-1"]);
+    expect(cluster.viewOf(a).appliedVersion).toBe(cluster.viewOf(b).appliedVersion);
+    const results = await Promise.all(
+      Array.from({ length: 40 }, (_, i) =>
+        (i % 2 === 0 ? a : b).host.getGrain(Counter, `k${i}`).inc(),
+      ),
+    );
+    expect(results.filter((r) => r !== 1)).toEqual([]);
+  });
+
+  it("clears a crashed silo out once its pod goes not-ready and then away", async () => {
+    const cluster = await start({
+      initialSilos: 3,
+      defaultPlacementStrategy: new PreferLocalPlacement(),
+    });
+    const [a, b, d] = cluster.silos as [TestSiloHandle, TestSiloHandle, TestSiloHandle];
+    for (let i = 0; i < 10; i++) expect(await d.host.getGrain(Counter, `on-d-${i}`).inc()).toBe(1);
+    for (let i = 0; i < 10; i++) expect(await a.host.getGrain(Counter, `on-d-${i}`).inc()).toBe(2);
+
+    await cluster.killSilo(d);
+    // A crashed pod stays listed until Kubernetes notices.
+    expect(names(cluster, a)).toContain("test-silo-2");
+
+    await cluster.kubernetes.markNotReady(d);
+    expect(names(cluster, a)).not.toContain("test-silo-2");
+    await cluster.kubernetes.removePod(d);
+    expect(cluster.kubernetes.api.pods().map((p) => p.name)).not.toContain("test-silo-2");
+
+    // Its grains come back fresh on the survivors.
+    const results = await Promise.all(
+      Array.from({ length: 10 }, (_, i) =>
+        (i % 2 === 0 ? a : b).host.getGrain(Counter, `on-d-${i}`).inc(),
+      ),
+    );
+    expect(results).toEqual(Array.from({ length: 10 }, () => 1));
+  });
+
+  it("holds two different views at once while one silo's watch lags, then converges", async () => {
+    const cluster = await start({ initialSilos: 3 });
+    const [a, b, c] = cluster.silos as [TestSiloHandle, TestSiloHandle, TestSiloHandle];
+
+    cluster.kubernetes.hold(a);
+    await cluster.kubernetes.markNotReady(c);
+
+    expect(names(cluster, a)).toEqual(["test-silo-0", "test-silo-1", "test-silo-2"]);
+    expect(names(cluster, b)).toEqual(["test-silo-0", "test-silo-1"]);
+    expect(cluster.viewOf(a).appliedVersion).toBeLessThan(cluster.viewOf(b).appliedVersion);
+    expect(cluster.viewOf(a).appliedVersion).toBe(cluster.viewOf(a).membership.version);
+
+    await cluster.kubernetes.release(a);
+    expect(names(cluster, a)).toEqual(["test-silo-0", "test-silo-1"]);
+    expect(cluster.viewOf(a).appliedVersion).toBe(cluster.viewOf(b).appliedVersion);
+  });
+
+  it("catches a lagging silo up on a forced relist, held events and all", async () => {
+    const cluster = await start({ initialSilos: 3 });
+    const [a, b, c] = cluster.silos as [TestSiloHandle, TestSiloHandle, TestSiloHandle];
+    cluster.kubernetes.hold(a);
+    await cluster.kubernetes.markNotReady(c);
+    expect(names(cluster, a)).toHaveLength(3);
+
+    await cluster.kubernetes.relist(a);
+    expect(names(cluster, a)).toEqual(["test-silo-0", "test-silo-1"]);
+    expect(cluster.viewOf(a).appliedVersion).toBe(cluster.viewOf(b).appliedVersion);
+  });
+
+  it("flips a pod's readiness out of and back into the view", async () => {
+    const cluster = await start({ initialSilos: 2 });
+    const [a, b] = cluster.silos as [TestSiloHandle, TestSiloHandle];
+    await cluster.kubernetes.setReady(b, false);
+    expect(names(cluster, a)).toEqual(["test-silo-0"]);
+    await cluster.kubernetes.setReady(b, true);
+    expect(names(cluster, a)).toEqual(["test-silo-0", "test-silo-1"]);
+  });
+
+  it("advertises silo metadata through pod labels", async () => {
+    const cluster = await start({
+      initialSilos: 2,
+      siloMetadata: ({ index }) => ({ role: index === 0 ? "front" : "worker" }),
+    });
+    const [a] = cluster.silos as [TestSiloHandle];
+    const roles = cluster
+      .viewOf(a)
+      .membership.silos.map((m) => [m.address.podName, m.metadata?.role])
+      .sort();
+    expect(roles).toEqual([
+      ["test-silo-0", "front"],
+      ["test-silo-1", "worker"],
+    ]);
+  });
+
+  it("drains a gracefully stopped silo out of the view", async () => {
+    const cluster = await start({ initialSilos: 2 });
+    const [a, b] = cluster.silos as [TestSiloHandle, TestSiloHandle];
+    await cluster.stopSilo(b);
+    expect(names(cluster, a)).toEqual(["test-silo-0"]);
+    expect(cluster.kubernetes.api.pods().map((p) => p.name)).toEqual(["test-silo-0"]);
+  });
+});
+
+describe("TestCluster on the default membership", () => {
+  it("has no Kubernetes controls", async () => {
+    const cluster = await TestCluster.start({ initialSilos: 1, reminders: false });
+    clusters.push(cluster);
+    expect(() => cluster.kubernetes).toThrow(/membership: "kubernetes"/);
+    expect(cluster.viewOf(cluster.primary).appliedVersion).toBe(
+      cluster.viewOf(cluster.primary).membership.version,
+    );
+  });
+});

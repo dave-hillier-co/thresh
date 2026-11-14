@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "@thresh/client": "workspace:*",
+    "@thresh/clustering-k8s": "workspace:*",
     "@thresh/core": "workspace:*",
     "@thresh/durable-jobs": "workspace:*",
     "@thresh/hosting": "workspace:*",

@@ -29,7 +29,13 @@ import { SiloBuilder, type SiloConfig } from "@thresh/hosting/silo-builder";
 import type { SiloHost } from "@thresh/hosting/silo-host";
 import { createClient, type ClientNode } from "@thresh/client/client-node";
 import { membershipGatewayProvider } from "@thresh/client/gateway-provider";
+import {
+  activeSilos,
+  type MembershipService,
+  type MembershipSnapshot,
+} from "@thresh/core/membership";
 import { CrashableTransport, SharedMembershipView, SiloClock } from "@thresh/testing/silo-crash";
+import { KubernetesControls, SILO_METADATA_LABEL_PREFIX } from "@thresh/testing/test-kubernetes";
 
 export type { GrainRegistrationSpec, ClientNode };
 
@@ -174,6 +180,29 @@ export interface TestClusterOptions {
    * cluster starts, e.g. a refused connect that must hold from the first dial.
    */
   faults?: NetworkFaults;
+  /**
+   * Which membership the silos run on.
+   *
+   * `"static"` (the default) gives every silo a window onto ONE shared membership object: a
+   * view change reaches every silo at once with the same version, and a stopped or killed silo
+   * leaves every view in the same instant. That is a property of this fixture, not of
+   * production, where each silo follows its own watch.
+   *
+   * `"kubernetes"` is the production path: each silo runs `useKubernetesMembership` over its
+   * OWN watch of one fake EndpointSlice API server, which the test drives through
+   * `TestCluster.kubernetes` — readiness, two-step departure, a lagging watch, a forced relist.
+   * Views then change silo by silo and can differ; `viewOf` shows each silo's. A silo joins as
+   * a pod does (published not ready, started, then marked ready), a graceful stop marks its pod
+   * not ready before draining and removes it after, and a kill leaves its pod listed, ready,
+   * until the test takes it away (`kubernetes.depart`), as after a real crash.
+   */
+  membership?: "static" | "kubernetes";
+}
+
+/** One silo's membership as it stands: the view its membership holds, and the one its node applied. */
+export interface SiloView {
+  readonly membership: MembershipSnapshot;
+  readonly appliedVersion: number;
 }
 
 export interface TestSiloHandle {
@@ -184,9 +213,11 @@ export interface TestSiloHandle {
 
 /**
  * An in-process multi-silo cluster for tests — the analogue of
- * `Orleans.TestingHost.TestCluster`. Silos share one `InProcessNetwork`, a
- * mutable membership view, and one set of memory providers (so grain state,
- * reminders, journals and jobs survive a silo's death the way a durable
+ * `Orleans.TestingHost.TestCluster`. Silos share one `InProcessNetwork` (each
+ * behind its own fault-injecting transport, see `faults`), a membership (one
+ * shared static view by default, or each silo's own Kubernetes watch, see
+ * `TestClusterOptions.membership`), and one set of memory providers (so grain
+ * state, reminders, journals and jobs survive a silo's death the way a durable
  * backend would); ported functional tests only supply grains.
  */
 export class TestCluster {
@@ -201,6 +232,8 @@ export class TestCluster {
   // version equality meaning view equality — e.g. the directory's `staleView`
   // guard — and must keep sharing one service to do so.
   private shared: StaticMembershipService | undefined;
+  // Set only for `membership: "kubernetes"`.
+  private readonly k8s: KubernetesControls | undefined;
 
   // Cluster-wide "durable" backends, shared by every silo.
   readonly storage = new MemoryGrainStorage();
@@ -229,14 +262,61 @@ export class TestCluster {
     readonly network: InProcessNetwork,
   ) {
     this.faults = options.faults ?? new NetworkFaults(options.time);
+    this.k8s =
+      options.membership === "kubernetes"
+        ? new KubernetesControls(() =>
+            this.live.every((s) => {
+              const view = this.viewOf(s);
+              return view.appliedVersion === view.membership.version;
+            }),
+          )
+        : undefined;
   }
 
   static async start(options: TestClusterOptions = {}): Promise<TestCluster> {
     const cluster = new TestCluster(options, options.network ?? new InProcessNetwork());
     const count = options.initialSilos ?? 2;
+    if (cluster.k8s !== undefined) {
+      // Pods come up one at a time, each joining the cluster the ones before it formed.
+      for (let i = 0; i < count; i += 1) await cluster.startAdditionalSilo();
+      return cluster;
+    }
     for (let i = 0; i < count; i += 1) cluster.buildSilo();
     await Promise.all(cluster.live.map((s) => s.host.start()));
     return cluster;
+  }
+
+  /**
+   * The fake Kubernetes API server and the controls over it, for a cluster started with
+   * `membership: "kubernetes"`. Throws on the default static membership, which has no
+   * Kubernetes to drive.
+   */
+  get kubernetes(): KubernetesControls {
+    if (this.k8s === undefined) {
+      throw new Error(
+        'TestCluster.kubernetes needs a cluster started with membership: "kubernetes"',
+      );
+    }
+    return this.k8s;
+  }
+
+  /**
+   * `silo`'s membership view and the view version its node has applied — the pair that tells
+   * a silo whose watch lags (an older view) from one still applying a view it has (an applied
+   * version behind its own view's).
+   */
+  viewOf(silo: TestSiloHandle): SiloView {
+    // `SiloHost` exposes neither its membership nor its node; read them the way the hosting
+    // tests do. Introspection only.
+    const parts = (
+      silo.host as unknown as {
+        parts: { membership: MembershipService; node: { readonly appliedViewVersion: number } };
+      }
+    ).parts;
+    return {
+      membership: parts.membership.current(),
+      appliedVersion: parts.node.appliedViewVersion,
+    };
   }
 
   get silos(): ReadonlyArray<TestSiloHandle> {
@@ -307,7 +387,7 @@ export class TestCluster {
     // The same error `primary` raises: a cluster with no silos left (or one
     // already disposed) has nothing for a client to talk to.
     const membership = this.shared;
-    if (membership === undefined || this.live.length === 0) {
+    if ((membership === undefined && this.k8s === undefined) || this.live.length === 0) {
       throw new Error("TestCluster has no live silos");
     }
     const client = createClient({
@@ -316,7 +396,10 @@ export class TestCluster {
       // Every live silo is a gateway, the way Orleans' test client shares the
       // silos' membership table: a cluster that kills or restarts its primary
       // keeps a usable client instead of one pinned to a dead endpoint.
-      gateways: membershipGatewayProvider(membership),
+      gateways:
+        membership !== undefined
+          ? membershipGatewayProvider(membership)
+          : { getGateways: () => activeSilos(this.viewOf(this.primary).membership) },
     }).registerGrains(this.options.grains ?? []);
     await client.connect();
     return client;
@@ -369,6 +452,9 @@ export class TestCluster {
   async startAdditionalSilo(): Promise<TestSiloHandle> {
     const silo = this.buildSilo();
     await silo.host.start();
+    // A pod's readiness probe passes once the silo has started; only then is it in its peers'
+    // views.
+    await this.k8s?.setReady(silo, true);
     return silo;
   }
 
@@ -386,8 +472,20 @@ export class TestCluster {
   /** Graceful shutdown: the silo drains and departs the membership view. */
   async stopSilo(handle: TestSiloHandle): Promise<void> {
     const silo = this.take(handle);
+    await this.stopGracefully(silo);
+  }
+
+  /** Drain `silo` and take it out of membership, the way its kind of membership does. */
+  private async stopGracefully(silo: InternalSilo): Promise<void> {
+    if (this.k8s === undefined) {
+      await silo.host.stop();
+      this.shared?.removeSilo(silo.address);
+      return;
+    }
+    // A terminating pod fails its readiness probe first, drains, and its endpoint goes after.
+    await this.k8s.markNotReady(silo);
     await silo.host.stop();
-    this.shared?.removeSilo(silo.address);
+    await this.k8s.removePod(silo);
   }
 
   /**
@@ -445,8 +543,7 @@ export class TestCluster {
     const remaining = this.live;
     this.live = [];
     for (const silo of remaining) {
-      await silo.host.stop().catch(() => undefined);
-      this.shared?.removeSilo(silo.address);
+      await this.stopGracefully(silo).catch(() => undefined);
     }
   }
 
@@ -460,6 +557,7 @@ export class TestCluster {
   private buildSilo(): InternalSilo {
     const index = this.nextIndex;
     this.nextIndex += 1;
+    if (this.k8s !== undefined) return this.buildKubernetesSilo(index);
     const address = new SiloAddress(
       `test-silo-${index}`,
       `uid-${index}`,
@@ -476,6 +574,42 @@ export class TestCluster {
       this.shared.addSilo(address, "active", metadata);
     }
     const membership = new SharedMembershipView(this.shared, address);
+    return this.buildSiloOn(
+      index,
+      address,
+      metadata,
+      (builder) => builder.useMembership(membership),
+      () => membership.freeze(),
+    );
+  }
+
+  private buildKubernetesSilo(index: number): InternalSilo {
+    const k8s = this.kubernetes;
+    const { address, metadata, watch } = k8s.addPod(index, (address) =>
+      this.options.siloMetadata?.({ index, address }),
+    );
+    const silo = this.buildSiloOn(
+      index,
+      address,
+      metadata,
+      (builder) =>
+        builder.useKubernetesMembership(watch, {
+          portName: "silo",
+          metadataLabelPrefix: SILO_METADATA_LABEL_PREFIX,
+        }),
+      // A crashed pod's watch is gone with its process; its endpoint stays until Kubernetes acts.
+      () => k8s.disconnect({ address }),
+    );
+    return silo;
+  }
+
+  private buildSiloOn(
+    index: number,
+    address: SiloAddress,
+    metadata: Readonly<Record<string, string>> | undefined,
+    useMembership: (builder: SiloBuilder) => void,
+    stopFollowingMembership: () => void,
+  ): InternalSilo {
     const clock = new SiloClock(this.options.time ?? systemTimeProvider);
     const transport = new CrashableTransport(
       new FaultInjectingTransport(
@@ -488,6 +622,8 @@ export class TestCluster {
       serviceId: this.options.serviceId ?? this.options.clusterId ?? "test-cluster",
       local: address,
       time: clock,
+      // Nothing outside the process routes to these silos, so a drain has no one to wait for.
+      gracefulShutdownMs: 0,
       ...(metadata !== undefined ? { metadata } : {}),
       ...(this.options.defaultResponseTimeout !== undefined
         ? { defaultResponseTimeout: this.options.defaultResponseTimeout }
@@ -518,8 +654,9 @@ export class TestCluster {
       ...(this.options.clientDirectoryRefreshMs !== undefined
         ? { clientDirectoryRefreshMs: this.options.clientDirectoryRefreshMs }
         : {}),
-    })
-      .useMembership(membership)
+    });
+    useMembership(builder);
+    builder
       .useTransport(transport)
       .useMemoryStreams("default", undefined, this.streamProvider("default"))
       .useBroadcastChannels()
@@ -555,7 +692,7 @@ export class TestCluster {
     const shared = new Set<StreamProvider>(this.memoryStreamProviders.values());
     const crash = async (): Promise<void> => {
       clock.stop();
-      membership.freeze();
+      stopFollowingMembership();
       const transportGone = transport.crash();
       // Pulling agents poll on their own timers; stopping a provider only stops its polling. A
       // provider shared with the survivors is theirs too and keeps running.
