@@ -30,19 +30,25 @@ Journaling stores events, periodically snapshots state, and truncates the log. `
 collections. Configure memory, Redis or Postgres journaling (`addPostgresJournaling`) under the same
 provider name used by the grain.
 
-Compaction applies to durable collections: a grain that uses only those truncates its log to a
-snapshot at the threshold (`snapshotThreshold`, default 100 entries). A `JournaledGrain` shares that
-log but its events are history, not just state, so a snapshot never discards them by default: the
-snapshot lets activation start from the confirmed view without folding every event through
-`transitionState`, and `retrieveConfirmedEvents` still serves the full range, before and after
-re-activation. Letting a snapshot replace a `JournaledGrain`'s events is an explicit choice
-(`retainJournaledEvents: false` in the silo config); after it, a range starting below the latest
-snapshot's version throws. Retained events are held in memory and rewritten at each compaction, so
-a grain that raises events without bound pays for its history in both.
+Compaction truncates the log to a snapshot at the threshold (`snapshotThreshold`, default 100
+entries), for durable collections and for a `JournaledGrain` alike. A `JournaledGrain` therefore
+defaults to snapshot-plus-tail, which is what Orleans' StateStorage-based provider gives:
+activation starts from the snapshot, only the events since it are held, and
+`retrieveConfirmedEvents` throws for a range that starts below the snapshot's version; the error
+names the `retainEvents` option. Whole-log retention, which is what Orleans' LogStorage-based
+provider gives, is the opt-in: pass `retainEvents: true` to the journal binders, or set
+`retainJournaledEvents: true` in the silo config. With it, `retrieveConfirmedEvents` serves the full
+range before and after re-activation. Until the storage seam can snapshot without truncating,
+opting in costs a full rewrite of the retained history at every compaction, and the activation
+holds that history in memory, so a grain that raises events without bound pays for it in both.
 
 A conditional raise (`raiseConditionalEvent`) that returns `false` has lost a race to another
 writer. Before it returns, the confirmed state and version are refreshed from storage, so a retry
 computed from them can succeed. This holds for the journal substrate and for custom-storage grains.
+Only the conditional entries are dropped: an event raised unconditionally (`raiseEvent`) before it
+stays pending and is written on top of the refreshed view, as Orleans does. A `confirmEvents` that
+loses the race to another writer likewise re-reads storage and writes its events on top, rather
+than leaving the grain stale.
 
 Providers registered under different names over the same backing store (the same Postgres pool,
 tables and service id, or the same Redis client, prefix and service id) share one log per grain;

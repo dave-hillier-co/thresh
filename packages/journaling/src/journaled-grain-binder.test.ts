@@ -266,6 +266,26 @@ describe("JournaledGrain log-consistency protocol", () => {
 
   it("drops a conflicting conditional event from the tentative view too, not just the count", async () => {
     const memory = new MemoryJournalStorage();
+    const registry = new JournalStorageRegistry().add("default", memory);
+    const grain = new CounterGrain();
+    await bindJournaledGrain(grain, id, registry);
+    // Another activation of the same grain writes first, so the conditional append is stale.
+    const foreign = new CounterGrain();
+    await bindJournaledGrain(foreign, id, registry);
+    foreign.add(3);
+    await foreign.confirm();
+
+    expect(await grain.tryAdd(5)).toBe(false);
+
+    // The event was not applied and will not be: the tentative view and version agree with the
+    // confirmed ones, which reflect storage, rather than still showing it.
+    expect(grain.confirmed()).toEqual({ count: 3 });
+    expect(grain.tentative()).toEqual({ count: 3 });
+    expect(grain.tentativeVer()).toBe(grain.confirmedVersion());
+  });
+
+  it("retries a conditional append whose CAS failed without the log having moved", async () => {
+    const memory = new MemoryJournalStorage();
     const conflicting = new FailingAppendStorage(
       memory,
       1,
@@ -274,12 +294,9 @@ describe("JournaledGrain log-consistency protocol", () => {
     const grain = new CounterGrain();
     await bindJournaledGrain(grain, id, new JournalStorageRegistry().add("default", conflicting));
 
-    expect(await grain.tryAdd(5)).toBe(false);
-
-    // The event was not applied and will not be: the tentative view and
-    // version must agree with the confirmed ones rather than still show it.
-    expect(grain.confirmed()).toEqual({ count: 0 });
-    expect(grain.tentative()).toEqual({ count: 0 });
+    // Orleans re-reads after a lost write and retries entries whose position is still current.
+    expect(await grain.tryAdd(5)).toBe(true);
+    expect(grain.confirmed()).toEqual({ count: 5 });
     expect(grain.tentativeVer()).toBe(grain.confirmedVersion());
   });
 

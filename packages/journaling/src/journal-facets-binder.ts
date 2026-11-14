@@ -46,7 +46,7 @@ export async function bindJournalFacets(
     provider?: string;
     /** CAS attempts per confirm, for a custom-storage host. Ignored otherwise. */
     maxAttempts?: number;
-    /** Keep a JournaledGrain's events across compaction (default `true`). */
+    /** Keep a JournaledGrain's events across compaction (default `false`). */
     retainEvents?: boolean;
   } = {},
 ): Promise<void> {

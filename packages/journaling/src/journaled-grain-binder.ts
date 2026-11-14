@@ -55,8 +55,8 @@ export async function bindJournaledGrain(
     /** CAS attempts per confirm, for a custom-storage host. Ignored otherwise. */
     maxAttempts?: number;
     /**
-     * Keep the JournaledGrain's events across compaction (default `true`); `false` lets a snapshot
-     * replace them. See `LogViewAdaptorOptions.retainEvents`.
+     * Keep the JournaledGrain's events across compaction (default `false`: a snapshot replaces
+     * them); `true` opts in to whole-log retention. See `LogViewAdaptorOptions.retainEvents`.
      */
     retainEvents?: boolean;
   } = {},

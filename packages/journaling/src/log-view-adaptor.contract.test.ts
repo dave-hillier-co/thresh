@@ -19,6 +19,12 @@ class Counter extends JournaledGrain<State, Event> {
   tryAdd(amount: number): Promise<boolean> {
     return this.raiseConditionalEvent({ amount });
   }
+  raiseUnconditional(amount: number): void {
+    this.raiseEvent({ amount });
+  }
+  confirm(): Promise<void> {
+    return this.confirmEvents();
+  }
   get confirmed(): State {
     return this.state;
   }
@@ -103,5 +109,42 @@ describe.each(adaptors)("LogViewAdaptor.tryAppend contract: $name", ({ backing }
 
     expect((await activate()).confirmed).toEqual({ count: 111 });
     expect(stale.confirmed).toEqual({ count: 111 });
+  });
+});
+
+describe.each(adaptors)("LogViewAdaptor lost-CAS recovery contract: $name", ({ backing }) => {
+  it("a lost conditional append drops only the conditional entry; an unconditional one raised before it lands on top", async () => {
+    const activate = backing();
+    const stale = await activate();
+    expect(await stale.tryAdd(1)).toBe(true);
+    expect(await (await activate()).tryAdd(10)).toBe(true);
+
+    stale.raiseUnconditional(5);
+    expect(await stale.tryAdd(100)).toBe(false);
+
+    const truth = await activate();
+    expect(truth.confirmed).toEqual({ count: 16 });
+    expect(stale.confirmed).toEqual({ count: 16 });
+    expect(stale.confirmedVersionNumber).toBe(truth.confirmedVersionNumber);
+  });
+
+  it("an unconditional confirm that lost the race is re-applied on top and leaves the adaptor current", async () => {
+    const activate = backing();
+    const stale = await activate();
+    expect(await stale.tryAdd(1)).toBe(true);
+    expect(await (await activate()).tryAdd(10)).toBe(true);
+
+    stale.raiseUnconditional(5);
+    await stale.confirm();
+
+    const truth = await activate();
+    expect(truth.confirmed).toEqual({ count: 16 });
+    expect(stale.confirmed).toEqual({ count: 16 });
+    expect(stale.confirmedVersionNumber).toBe(truth.confirmedVersionNumber);
+
+    // Later confirms keep working: the adaptor is not stuck at its old version.
+    stale.raiseUnconditional(1);
+    await stale.confirm();
+    expect((await activate()).confirmed).toEqual({ count: 17 });
   });
 });

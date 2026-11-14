@@ -23,9 +23,26 @@ const frameworkBases = new WeakSet<object>();
 /** Marks a class as part of the framework: its prototype members are never remotely callable. */
 export function markFrameworkGrainBase<T extends abstract new (...args: never[]) => unknown>(
   base: T,
+  hooks: readonly string[] = [],
 ): T {
   frameworkBases.add(base);
+  if (hooks.length > 0) frameworkHooks.set(base, new Set(hooks));
   return base;
+}
+
+/**
+ * Framework hooks a subclass must define itself (`JournaledGrain.initialState`), by framework base.
+ * They live on the subclass's prototype, so the stop-at-the-framework-base rule does not remove
+ * them; they are excluded by name for any grain that descends from that base.
+ */
+const frameworkHooks = new WeakMap<object, ReadonlySet<string>>();
+
+function isFrameworkHook(proto: object, name: string): boolean {
+  for (let p: object | null = proto; p !== null; p = Object.getPrototypeOf(p) as object | null) {
+    const owner = Object.getOwnPropertyDescriptor(p, "constructor")?.value as object | undefined;
+    if (owner !== undefined && frameworkHooks.get(owner)?.has(name) === true) return true;
+  }
+  return false;
 }
 
 /** Names the runtime invokes itself, by exact name, on a grain instance. */
@@ -55,7 +72,7 @@ function prototypeSurface(proto: object): ReadonlySet<string> {
     const owner = Object.getOwnPropertyDescriptor(p, "constructor")?.value as object | undefined;
     if (owner !== undefined && frameworkBases.has(owner)) break;
     for (const name of Object.getOwnPropertyNames(p)) {
-      if (RUNTIME_INVOKED.has(name)) continue;
+      if (RUNTIME_INVOKED.has(name) || isFrameworkHook(proto, name)) continue;
       if (typeof Object.getOwnPropertyDescriptor(p, name)?.value === "function") names.add(name);
     }
   }
@@ -70,8 +87,9 @@ function hasOwnFunction(instance: object, name: string): boolean {
 /** Whether `name` may be invoked remotely on this grain instance. */
 export function isRemotelyCallable(instance: object, name: string): boolean {
   if (RUNTIME_INVOKED.has(name)) return false;
-  if (hasOwnFunction(instance, name)) return true;
   const proto = Object.getPrototypeOf(instance) as object | null;
+  if (proto !== null && isFrameworkHook(proto, name)) return false;
+  if (hasOwnFunction(instance, name)) return true;
   if (proto === null) return false;
   return prototypeSurface(proto).has(name);
 }

@@ -429,15 +429,16 @@ A few capabilities layer on top of the faithful model without changing it: **dur
 at-least-once scheduled grain invocation). A further, **not-yet-built** direction is **browser state
 replication** — a live read-view of grain state in the browser under a server-enforced trust model.
 
-## JournaledGrain history is kept inside the snapshotting log
+## JournaledGrain history is snapshot-plus-tail unless retention is opted in
 
 Orleans' log-storage consistency provider keeps the whole log and never snapshots it; its
 state-storage provider snapshots and keeps no events. A Thresh `JournaledGrain` on the journal
-substrate shares one log (and one snapshot threshold) with the grain's durable collections, so it
-has to do both: by default each compaction writes the grain's confirmed events as a retained-history
-frame ahead of the snapshot frames. Activation applies the snapshot for state and loads the retained
-events without folding them through `transitionState`, so history is complete and activation does
-not replay it. The departure from Orleans is cost: the history is held in memory and rewritten in
-full at every compaction (quadratic in events over a grain's lifetime), where Orleans' log storage
-appends. `retainJournaledEvents: false` restores snapshot-replaces-events for grains that do not
-need history.
+substrate shares one log (and one snapshot threshold) with the grain's durable collections, so by
+default it behaves like the state-storage provider: each compaction truncates the log to a snapshot
+and the activation holds only the events since it. Asking for events below the snapshot throws an
+error naming the `retainEvents` option. Whole-log retention (the log-storage provider's behaviour)
+is the opt-in (`retainEvents: true`, or `retainJournaledEvents: true` in the silo config): each
+compaction then writes the confirmed events as a retained-history frame ahead of the snapshot
+frames. Until the storage seam can snapshot without truncating, that costs a full rewrite of the
+history at every compaction (quadratic in events over a grain's lifetime) and holds it in memory,
+where Orleans' log storage appends, so it is off by default.
