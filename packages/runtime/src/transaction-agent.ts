@@ -118,7 +118,15 @@ export class TransactionAgent {
         try {
           await this.recordCommit(manager, info, writeParticipants);
         } catch (error) {
-          // We cannot tell whether the record actually persisted before this
+          // The TM refused outright: it no longer holds the transaction (its
+          // lock broke, or it was re-activated and dropped its own record), so
+          // it may already have told a participant `presumedAbort`. Nothing
+          // was recorded; the transaction is aborted, not in doubt.
+          if (error instanceof TransactionAbortedError) {
+            await this.abort(info);
+            throw error;
+          }
+          // Otherwise we cannot tell whether the record actually persisted before this
           // failed (e.g. the write landed but the ack was lost) — so this is
           // exactly the "unknown" case `TransactionInDoubtError` exists for,
           // not an abort: every participant here is already prepared, and
@@ -165,11 +173,12 @@ export class TransactionAgent {
     manager: ParticipantId,
   ): Promise<boolean> {
     if (e.participant !== undefined) {
-      return Promise.resolve(e.participant.prepare(info.id, info.timeStamp, manager));
+      return Promise.resolve(e.participant.prepare(info.id, e.access, info.timeStamp, manager));
     }
     return this.route(e.id, "prepare", [
       e.id.stateName,
       info.id,
+      e.access,
       info.timeStamp,
       manager,
     ]) as Promise<boolean>;
@@ -216,7 +225,9 @@ export class TransactionAgent {
       interfaceId: TransactionResourceInterface.id,
       method,
       args,
-      options: {},
+      // Always-interleave (see `TransactionResourceInterface`): a local
+      // dispatch takes the request's options as given.
+      options: TransactionResourceInterface.options[method] ?? {},
     });
   }
 

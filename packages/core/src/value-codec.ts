@@ -14,6 +14,7 @@ import {
   ThreshTransactionError,
   TransactionAbortedError,
   TransactionAlreadyResolvedError,
+  TransactionBrokenLockError,
   TransactionCascadingAbortError,
   TransactionInDoubtError,
   TransactionLockUpgradeError,
@@ -331,6 +332,9 @@ const KNOWN_ERRORS: readonly KnownErrorEntry[] = [
   ),
   knownError("TransactionLockUpgradeError", TransactionLockUpgradeError, (m, p) =>
     withMessage(new TransactionLockUpgradeError(p.transactionId as string), m),
+  ),
+  knownError("TransactionBrokenLockError", TransactionBrokenLockError, (m, p) =>
+    withMessage(new TransactionBrokenLockError(p.transactionId as string, ""), m),
   ),
   knownError("TransactionOrphanCallError", TransactionOrphanCallError, (m, p) =>
     withMessage(

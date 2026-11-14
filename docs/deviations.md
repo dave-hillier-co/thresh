@@ -353,6 +353,22 @@ in-memory instances every silo shares in one process (`TestCluster`), `allowWith
 A store the builder constructs itself is one per silo by construction, so only `allowInCluster`
 admits it.
 
+## A transaction resource holds its activation until the protocol lets go
+
+Orleans' `ActivationLifetime.BlockDeactivation` only delays a deactivation that has already begun,
+polling for up to five seconds while the lock worker or confirmation worker finishes. Thresh
+instead keeps the activation out of idle collection, migration and rebalancing altogether while a
+transactional-state resource holds a transaction lock or an inherited prepared record whose outcome
+it does not know. In Orleans the TM's commit queue and timeouts drive every transaction to an end;
+here the caller-side agent drives the protocol, so a resource deactivated mid-protocol loses its
+lock, or strands its record until a later activation loads it. Every case is bounded: an unprepared
+holder by `lockTimeoutMs` (Orleans `LockTimeout`), and a prepared one by its prepared-record timer.
+That timer differs from Orleans for the same reason. A TM that has prepared its own write applies
+Orleans' `PrepareTimeout` to the wait for the agent's `recordCommit`, and decides abort when it
+expires. `recordCommit` refuses a transaction the TM no longer holds, so that decision is final.
+An ordinary prepared participant asks its TM at Orleans' `RemoteTransactionPingFrequency`. An
+in-doubt record whose TM never answers keeps its activation alive until silo shutdown.
+
 ## Additions beyond Orleans
 
 A few capabilities layer on top of the faithful model without changing it: **durable journaling**

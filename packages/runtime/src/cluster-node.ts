@@ -73,6 +73,7 @@ import {
   participantKey,
   type ParticipantId,
   type TransactionInfo,
+  type TransactionOutcome,
 } from "@thresh/core/transaction-info";
 import { TransactionResourceInterface } from "@thresh/core/transaction-resource";
 import { ConsistentHashRing } from "@thresh/directory/consistent-hash-ring";
@@ -1199,14 +1200,17 @@ export class ClusterNode {
    * the dispatcher. Used by a recovering transactional resource to resolve an
    * in-doubt pending record left by a mid-commit failure.
    */
-  async resolveTransactionStatus(manager: ParticipantId, transactionId: string): Promise<boolean> {
+  async resolveTransactionStatus(
+    manager: ParticipantId,
+    transactionId: string,
+  ): Promise<TransactionOutcome> {
     return (await this.dispatcher.invoke({
       target: manager.grainId,
       interfaceId: TransactionResourceInterface.id,
       method: "status",
       args: [manager.stateName, transactionId],
-      options: {},
-    })) as boolean;
+      options: TransactionResourceInterface.options["status"] ?? {},
+    })) as TransactionOutcome;
   }
 
   /** Number of live grain activations hosted on this silo (for runtime metrics). */
@@ -3137,7 +3141,7 @@ export class ClusterNode {
     // stay on its own silo or the probe would silently exercise a peer.
     const candidates = this.catalog
       .liveActivations()
-      .filter((a) => this.isMigratableBy(a.id, "rebalancer"));
+      .filter((a) => this.isMigratableBy(a.id, "rebalancer") && !a.isDeactivationBlocked);
     // Fisher–Yates over a copy, deterministic under an injected RNG.
     for (let i = candidates.length - 1; i > 0; i--) {
       const j = Math.floor(random() * (i + 1));
@@ -3249,6 +3253,8 @@ export class ClusterNode {
     target: SiloAddress,
     description: string,
   ): Promise<boolean> {
+    // Holding a transaction lock or an undecided prepared record: stay put.
+    if (activation.isDeactivationBlocked) return false;
     const accepted = await this.migrateActivationTo(activation, target);
     await activation.deactivate({
       code: "migrating",

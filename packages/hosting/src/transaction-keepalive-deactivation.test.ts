@@ -105,16 +105,23 @@ describe("transactional keepalive lifecycle on grain deactivation (#23 follow-up
       expect(confirmationCallIndex).toBeGreaterThanOrEqual(0);
       const confirmationHandle = setTimerSpy.mock.results[confirmationCallIndex]!.value as unknown;
 
-      // Force-deactivate the (single, always-idle) activation — the hosting
-      // wiring under test must stop its facet's confirmation worker here.
+      // An unresolved prepared record holds its activation in place (T6,
+      // Orleans `BlockDeactivation`): idle collection leaves it alone and the
+      // worker keeps running.
       const management = silo.getGrain(IManagementGrain, 0n);
       await management.forceActivationCollection({ ms: 0 });
+      expect(silo.isActive(accountId("a"))).toBe(true);
+      expect(clearTimerSpy).not.toHaveBeenCalledWith(confirmationHandle);
+
+      // Shutting the silo down still deactivates it — the hosting wiring under
+      // test must stop its facet's confirmation worker there.
+      await silo.stop();
 
       // The confirmation worker's own timer handle was cleared: it can never
       // fire again, however far the clock moves.
       expect(clearTimerSpy).toHaveBeenCalledWith(confirmationHandle);
     } finally {
-      await silo.stop();
+      if (silo.isActive(accountId("a"))) await silo.stop();
     }
   });
 });

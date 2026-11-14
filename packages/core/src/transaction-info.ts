@@ -27,6 +27,21 @@ export interface AccessCounter {
   writes: number;
 }
 
+/**
+ * What a transaction manager knows of a transaction's fate, as it answers a
+ * prepared participant's status query (Orleans `TransactionQueue.NotifyOfPing`):
+ *
+ * - `committed`: it holds the commit record.
+ * - `undetermined`: it still holds the transaction itself — its own tentative
+ *   or prepared state — so it has not decided yet. The participant keeps its
+ *   prepared record and asks again later.
+ * - `presumedAbort`: it holds neither (Orleans `TransactionalStatus.PresumedAbort`,
+ *   "TM never heard of this transaction"). Since a manager records a commit only
+ *   while it still holds the transaction, this answer is final, and the
+ *   participant drops its record.
+ */
+export type TransactionOutcome = "committed" | "undetermined" | "presumedAbort";
+
 /** A transaction's status once resolution has begun: its participant set is closed. */
 export type ResolvedStatus = "resolving" | "committed" | "aborted";
 
@@ -61,9 +76,12 @@ export function participantKey(id: ParticipantId): string {
  * A transactional resource enlisted in a transaction, driven by the agent at the
  * boundary through the two-phase protocol (Orleans `ITransactionalResource`):
  *
- * - `prepare` validates the resource still holds its lock with the expected
- *   access and durably stages its tentative state; it returns `false` (or
- *   throws) to veto the commit.
+ * - `prepare` validates the resource still holds its lock with exactly the
+ *   access the coordinator recorded for it (`accessCount`, Orleans
+ *   `ReaderWriterLock.ValidateLock`) and durably stages its tentative state; it
+ *   returns `false` (or throws) to veto the commit. A resource that has no
+ *   record of the transaction although the coordinator says it read or wrote
+ *   there (its lock was broken, or its activation replaced) must veto.
  * - `commit` makes the prepared tentative state the committed version.
  * - `abort` discards tentative state and releases locks.
  *
@@ -76,6 +94,7 @@ export function participantKey(id: ParticipantId): string {
 export interface TransactionParticipant {
   prepare(
     transactionId: string,
+    accessCount: AccessCounter,
     timeStamp: number,
     manager: ParticipantId,
   ): boolean | Promise<boolean>;
@@ -101,14 +120,19 @@ export interface TransactionParticipant {
  * manager that cannot record one. See `electManager`.
  */
 export interface TransactionManager extends TransactionParticipant {
-  /** Durable commit record: the transaction has committed, whatever happens next. */
+  /**
+   * Durable commit record: the transaction has committed, whatever happens
+   * next. Refused with `TransactionAbortedError` when the manager no longer
+   * holds the transaction prepared — it may already have answered
+   * `presumedAbort` to a participant, so committing now would split the outcome.
+   */
   recordCommit(
     transactionId: string,
     timeStamp: number,
     writeParticipants: ParticipantId[],
   ): void | Promise<void>;
-  /** Whether `transactionId` committed — the query a recovering participant makes. */
-  status(transactionId: string): boolean | Promise<boolean>;
+  /** What this manager knows of `transactionId`'s fate — the query a prepared participant makes. */
+  status(transactionId: string): TransactionOutcome | Promise<TransactionOutcome>;
 }
 
 /**
@@ -123,6 +147,26 @@ export function isTransactionManager(
 ): participant is TransactionManager {
   const candidate = participant as Partial<TransactionManager>;
   return typeof candidate.recordCommit === "function" && typeof candidate.status === "function";
+}
+
+/**
+ * A transactional resource that can hold its activation in place (Orleans
+ * `IActivationLifetime.BlockDeactivation`): while `blocksDeactivation` is true
+ * — it holds a transaction lock, or a prepared record whose outcome it does not
+ * know yet — the activation is not idle-collected, migrated or rebalanced away,
+ * since doing so would break the lock or strand the record mid-protocol.
+ */
+export interface DeactivationBlocker {
+  readonly blocksDeactivation: boolean;
+}
+
+/** Whether `resource` is a {@link DeactivationBlocker} that is blocking right now. */
+export function blocksDeactivation(resource: unknown): boolean {
+  return (
+    typeof resource === "object" &&
+    resource !== null &&
+    (resource as Partial<DeactivationBlocker>).blocksDeactivation === true
+  );
 }
 
 /**

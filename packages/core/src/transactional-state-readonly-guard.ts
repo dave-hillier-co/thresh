@@ -26,7 +26,7 @@ export function guardTransactionalStateForReadOnly<T>(
   state: TransactionalState<T>,
   stateName: string,
 ): TransactionalState<T> {
-  return {
+  const guarded: TransactionalState<T> = {
     performRead<R>(read: (state: T) => R, options?: PerformReadOptions): Promise<R> {
       return state.performRead(read, options);
     },
@@ -34,4 +34,21 @@ export function guardTransactionalStateForReadOnly<T>(
       throw readOnlyViolation(stateName, "write transactional");
     },
   };
+  guardedOriginals.set(guarded, state);
+  return guarded;
+}
+
+/** Each guard back to the facet it wraps. */
+const guardedOriginals = new WeakMap<object, unknown>();
+
+/**
+ * The facet behind a field value that may be a read-only guard. The
+ * transaction protocol calls (`prepare`, `commit`, …) are always-interleave, so
+ * one can arrive while a `@readOnly` turn has the field swapped for its guard;
+ * they must still reach the real resource.
+ */
+export function unguardedTransactionalState(value: unknown): unknown {
+  return typeof value === "object" && value !== null
+    ? (guardedOriginals.get(value) ?? value)
+    : value;
 }

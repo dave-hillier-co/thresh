@@ -62,7 +62,10 @@ import { getReducerFields } from "@thresh/core/reducer-state-metadata";
 import { guardReducerStateForReadOnly } from "@thresh/core/reducer-state-readonly-guard";
 import { getDurableFields } from "@thresh/core/durable-state-metadata";
 import { guardDurableFieldForReadOnly } from "@thresh/core/durable-state-readonly-guard";
-import { guardTransactionalStateForReadOnly } from "@thresh/core/transactional-state-readonly-guard";
+import {
+  guardTransactionalStateForReadOnly,
+  unguardedTransactionalState,
+} from "@thresh/core/transactional-state-readonly-guard";
 import type { InvocationRequest } from "@thresh/core/request";
 import {
   type CallChainReentrantGrainContext,
@@ -78,7 +81,7 @@ import {
   StreamConsumerInterface,
   type StreamHandler,
 } from "@thresh/core/stream";
-import type { TransactionParticipant } from "@thresh/core/transaction-info";
+import { blocksDeactivation, type TransactionParticipant } from "@thresh/core/transaction-info";
 import { TransactionResourceInterface } from "@thresh/core/transaction-resource";
 import { getTransactionalFields } from "@thresh/core/transactional-state-metadata";
 import { deadlineSignal } from "@thresh/runtime/ambient-signal";
@@ -1130,8 +1133,23 @@ export class ActivationData implements GrainContext {
     if (this.scheduler.busy) return false;
     const now = this.time.now();
     if (now < this.keepAliveUntilMs) return false;
+    if (this.isDeactivationBlocked) return false;
     if (this.deactivateRequested) return true;
     return now - this.lastActiveMs >= (ageLimitOverrideMs ?? this.collectionAgeMs);
+  }
+
+  /**
+   * Whether a transactional-state facet holds a transaction lock or a prepared
+   * record whose outcome is unknown (Orleans `ActivationLifetime.BlockDeactivation`):
+   * the idle sweep and migration leave such an activation in place.
+   */
+  get isDeactivationBlocked(): boolean {
+    const instance = this._instance as Grain | undefined;
+    if (instance === undefined) return false;
+    const record = instance as unknown as Record<string, unknown>;
+    return getTransactionalFields(instance).some((field) =>
+      blocksDeactivation(unguardedTransactionalState(record[field.fieldName])),
+    );
   }
 
   /**
@@ -1184,10 +1202,8 @@ export class ActivationData implements GrainContext {
    * `invoke()` — so a plain call, or any call on a silo that never opted in,
    * never allocates a proxy. Transaction-resource system calls (`prepare`/
    * `commit`/`abort`/`status`, routed through `invokeTransactionResource`)
-   * are unaffected: they run as exclusive (non-`readOnly`) turns, and the
-   * scheduler never runs an exclusive turn concurrently with a `readOnly`
-   * one (see `TurnScheduler`), so by the time one starts this closure has
-   * already restored the real transactional-state facet.
+   * are always-interleave, so one may run while this guard is in place;
+   * `invokeTransactionResource` unwraps the guard to reach the real facet.
    */
   private applyReadOnlyGuard(): () => void {
     const record = this.instance as unknown as Record<string, unknown>;
@@ -1547,12 +1563,13 @@ export class ActivationData implements GrainContext {
   private async invokeTransactionResource(req: InvocationRequest): Promise<unknown> {
     const [stateName, ...rest] = req.args as [string, ...unknown[]];
     const field = getTransactionalFields(this.instance).find((f) => f.stateName === stateName);
+    // Unguarded: an always-interleave protocol call may land mid-`@readOnly` turn.
     const resource =
       field === undefined
         ? undefined
-        : ((this.instance as unknown as Record<string, unknown>)[field.fieldName] as
-            | TransactionParticipant
-            | undefined);
+        : (unguardedTransactionalState(
+            (this.instance as unknown as Record<string, unknown>)[field.fieldName],
+          ) as TransactionParticipant | undefined);
     if (resource === undefined) {
       throw new GrainCallError(
         `grain ${this.id.toString()} has no transactional state "${stateName}"`,

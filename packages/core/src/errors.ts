@@ -427,6 +427,22 @@ export class TransactionLockUpgradeError extends TransactionAbortedError {
 }
 
 /**
+ * Raised when a transaction finds it no longer holds a lock it is supposed to
+ * hold on a transactional resource (Orleans
+ * `OrleansBrokenTransactionLockException`): the lock was broken — its hold
+ * bound expired, or the activation that held it was replaced — so the reads and
+ * writes it made there are gone. Thrown by `ReaderWriterLock.enter`
+ * (`@thresh/transactions`) when a transaction that has already accessed the
+ * resource re-enters and finds no record of itself.
+ */
+export class TransactionBrokenLockError extends TransactionAbortedError {
+  constructor(transactionId: string, situation: string) {
+    super(transactionId, `the transaction lock was broken ${situation}`);
+    this.name = "TransactionBrokenLockError";
+  }
+}
+
+/**
  * Raised when a transaction's root call attempts to resolve while it still has
  * outstanding "orphaned" calls it forked but never awaited to completion
  * (Orleans `OrleansOrphanCallException`, a subtype of

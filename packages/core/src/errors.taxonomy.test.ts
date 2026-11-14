@@ -31,6 +31,8 @@ const factories: Record<string, () => Error> = {
     new errors.TransactionAlreadyResolvedError("tx1", "committed"),
   TransactionReadOnlyViolatedError: () => new errors.TransactionReadOnlyViolatedError("tx1"),
   TransactionLockUpgradeError: () => new errors.TransactionLockUpgradeError("tx1"),
+  TransactionBrokenLockError: () =>
+    new errors.TransactionBrokenLockError("tx1", "when re-entering lock"),
   TransactionOrphanCallError: () => new errors.TransactionOrphanCallError("tx1", 2),
   ReadOnlyStateViolationError: () => new errors.ReadOnlyStateViolationError("read only"),
   TransactionCascadingAbortError: () => new errors.TransactionCascadingAbortError("tx1"),
@@ -123,6 +125,11 @@ describe("error taxonomy", () => {
         "TransactionLockUpgradeError",
         true,
         `OrleansTransactionLockUpgradeException : ...TransientFailureException (${orleansTx})`,
+      ],
+      [
+        "TransactionBrokenLockError",
+        true,
+        `OrleansBrokenTransactionLockException : ...TransientFailureException (${orleansTx})`,
       ],
       [
         "TransactionOrphanCallError",
