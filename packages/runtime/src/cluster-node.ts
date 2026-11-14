@@ -4,6 +4,7 @@ import { clientIdOf, isClient } from "@thresh/core/client-grain-id";
 import { GrainCallError, RejectionError } from "@thresh/core/errors";
 import type { Grain } from "@thresh/core/grain";
 import type { GrainClass } from "@thresh/core/grain-class";
+import type { DependencyToken } from "@thresh/core/grain-dependency";
 import { grainAddressEquals, type GrainAddress } from "@thresh/core/grain-address";
 import { GrainId } from "@thresh/core/grain-id";
 import type { GrainInterface } from "@thresh/core/grain-interface";
@@ -291,6 +292,8 @@ export interface ClusterNodeOptions {
   durableJobScheduler?: () => DurableJobScheduler | undefined;
   /** Resolves this silo's grain-service registry, for a grain's `runtime.getGrainService()`. */
   grainServiceRegistry?: () => GrainServiceRegistry | undefined;
+  /** This silo's per-silo grain dependencies, for a functional grain's `useDependency`. */
+  grainDependencies?: ReadonlyMap<DependencyToken<unknown>, unknown>;
   /** Resolves the stream provider a grain's `getStreamProvider` returns. */
   streamProvider?: (name?: string) => StreamProvider | undefined;
   /**
@@ -863,6 +866,9 @@ export class ClusterNode {
         : {}),
       ...(options.grainServiceRegistry !== undefined
         ? { grainServiceRegistry: options.grainServiceRegistry }
+        : {}),
+      ...(options.grainDependencies !== undefined
+        ? { grainDependencies: options.grainDependencies }
         : {}),
       ...(options.streamProvider !== undefined ? { streamProvider: options.streamProvider } : {}),
       ...(this.broadcastProviderNames.length > 0

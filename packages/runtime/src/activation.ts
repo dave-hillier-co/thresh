@@ -30,7 +30,11 @@ import {
 import type { Grain } from "@thresh/core/grain";
 import type { GrainContext } from "@thresh/core/grain-context";
 import type { GrainId } from "@thresh/core/grain-id";
-import { getGrainMetadata, type GrainConstructor } from "@thresh/core/grain-metadata";
+import {
+  getGrainMetadata,
+  getInstanceMayInterleave,
+  type GrainConstructor,
+} from "@thresh/core/grain-metadata";
 import { MigrationBag } from "@thresh/core/grain-migration-participant";
 import type { GrainRuntime } from "@thresh/core/grain-runtime";
 import type { GrainTimer, TimerOptions } from "@thresh/core/grain-timer";
@@ -245,7 +249,8 @@ export class ActivationData implements GrainContext {
   set instance(value: Grain) {
     this._instance = value;
     this.scheduler.setMayInterleave(
-      getGrainMetadata(value.constructor as GrainConstructor)?.mayInterleave,
+      getGrainMetadata(value.constructor as GrainConstructor)?.mayInterleave ??
+        getInstanceMayInterleave(value),
     );
   }
 

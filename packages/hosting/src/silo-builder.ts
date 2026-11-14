@@ -1,5 +1,6 @@
 import { durationToMs, type Duration } from "@thresh/core/duration";
 import type { GrainClass } from "@thresh/core/grain-class";
+import type { DependencyToken } from "@thresh/core/grain-dependency";
 import type { GrainRegistrationSpec } from "@thresh/core/grain-registration-spec";
 import type {
   IncomingGrainCallFilter,
@@ -470,6 +471,7 @@ export class SiloBuilder {
   private readonly incomingCallFilters: IncomingGrainCallFilter[] = [];
   private readonly outgoingCallFilters: OutgoingGrainCallFilter[] = [];
   private grainActivator: GrainActivator | undefined;
+  private readonly grainDependencies = new Map<DependencyToken<unknown>, unknown>();
   private metricsEnabled = false;
   private readonly registrations: Registration[] = [];
   private readonly grainExtensions = new Map<number, () => object>();
@@ -1247,6 +1249,18 @@ export class SiloBuilder {
   }
 
   /**
+   * Register a per-silo dependency for functional grains: a grain factory asks
+   * for it with `useDependency(token)`. The functional counterpart of handing a
+   * class grain its dependencies through the grain activator's constructor call;
+   * the value belongs to this silo only, so two silos built in one process may
+   * register different values under the same token.
+   */
+  addGrainDependency<T>(token: DependencyToken<T>, value: T): this {
+    this.grainDependencies.set(token, value);
+    return this;
+  }
+
+  /**
    * Enable OpenTelemetry tracing: register the tracing call filters (CLIENT span
    * outgoing, SERVER span incoming) and set W3C trace-context propagation. Spans
    * are emitted through the global OpenTelemetry tracer, so register an OTel SDK
@@ -1906,6 +1920,7 @@ export class SiloBuilder {
         ? { outgoingCallFilters: this.outgoingCallFilters }
         : {}),
       ...(this.grainActivator !== undefined ? { grainActivator: this.grainActivator } : {}),
+      ...(this.grainDependencies.size > 0 ? { grainDependencies: this.grainDependencies } : {}),
       ...(this.grainExtensions.size > 0 ? { grainExtensionFactories: this.grainExtensions } : {}),
       ...(this.placementFilters !== undefined
         ? { placementFilterRegistry: this.placementFilters }

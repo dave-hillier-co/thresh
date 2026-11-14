@@ -9,6 +9,8 @@ import {
   markImplicitSubscription,
   markReentrant,
   setGrainOptions,
+  setInstanceMayInterleave,
+  type MayInterleavePredicate,
   type GrainConstructor,
   type GrainOptions,
 } from "./grain-metadata";
@@ -30,6 +32,10 @@ import { registerReducerField } from "./reducer-state-metadata";
 import type { TransactionalState } from "./transactional-state";
 import { registerTransactionalField } from "./transactional-state-metadata";
 import type { ActivationReason, DeactivationReason } from "./reasons";
+import { ConstructorChannelNamespacePredicateProvider } from "./channel-namespace-predicate";
+import type { DependencyToken } from "./grain-dependency";
+import { getGrainFacetFields, registerGrainFacetField } from "./grain-facet-metadata";
+import type { DehydrationContext, RehydrationContext } from "./grain-migration-participant";
 
 /**
  * The runtime services and identity a grain factory is handed, mirroring the
@@ -56,6 +62,19 @@ export type DeactivateHandler = (
   reason: DeactivationReason,
   signal?: AbortSignal,
 ) => void | Promise<void>;
+
+/**
+ * A hook run on the source silo when the activation migrates, to write its
+ * in-memory state into the bag the target silo reads. Registered with
+ * {@link useOnDehydrate}. Synchronous, like `IGrainMigrationParticipant.onDehydrate`.
+ */
+export type DehydrateHandler = (context: DehydrationContext) => void;
+
+/**
+ * A hook run on the target silo when a migrated activation comes up, to restore
+ * what {@link DehydrateHandler}s wrote. Registered with {@link useOnRehydrate}.
+ */
+export type RehydrateHandler = (context: RehydrationContext) => void;
 
 /**
  * What a grain factory returns: the grain's behaviour towards messages — the
@@ -151,7 +170,42 @@ export interface DefineGrainOptions<
    * `BROADCAST_CHANNEL_OBSERVER` member from the factory to receive them.
    */
   implicitChannelSubscriptions?: readonly string[];
+  /**
+   * Regular expressions over broadcast-channel namespaces to implicitly subscribe to
+   * (the functional equivalent of `@regexImplicitChannelSubscription`, Orleans'
+   * `[RegexImplicitChannelSubscription]`). A grain with key `K` receives every item
+   * published to the channel `(namespace, K)` of any namespace a pattern matches;
+   * return a `BROADCAST_CHANNEL_OBSERVER` member from the factory to receive them.
+   */
+  regexImplicitChannelSubscriptions?: readonly string[];
 }
+
+/**
+ * Every option `defineGrain` accepts, keyed by name. Typed against
+ * `DefineGrainOptions`, so adding an option without listing it here is a compile
+ * error; the authoring feature-matrix test reads it to find options a class
+ * decorator has no counterpart for.
+ */
+export const DEFINE_GRAIN_OPTION_NAMES = {
+  name: true,
+  placement: true,
+  strategy: true,
+  role: true,
+  placementFilters: true,
+  stateless: true,
+  maxLocalWorkers: true,
+  collectionAgeSeconds: true,
+  immovable: true,
+  key: true,
+  interfaceOptions: true,
+  interfaceName: true,
+  version: true,
+  extension: true,
+  reentrant: true,
+  implicitSubscriptions: true,
+  implicitChannelSubscriptions: true,
+  regexImplicitChannelSubscriptions: true,
+} as const satisfies Record<keyof DefineGrainOptions | keyof GrainOptions, true>;
 
 /** The activation a factory is currently running for, and the setup handed to it. */
 interface ActiveSetup {
@@ -212,6 +266,8 @@ function createSetup(context: GrainContext): GrainSetup {
 // number of times, including from helpers it composes.
 const activateHandlers = createFieldRegistry<ActivateHandler>();
 const deactivateHandlers = createFieldRegistry<DeactivateHandler>();
+const dehydrateHandlers = createFieldRegistry<DehydrateHandler>();
+const rehydrateHandlers = createFieldRegistry<RehydrateHandler>();
 
 /**
  * Register a hook to run when the activation comes up, before the first
@@ -238,6 +294,125 @@ export function useOnActivate(handler: ActivateHandler): void {
  */
 export function useOnDeactivate(handler: DeactivateHandler): void {
   deactivateHandlers.register(activeSetup("useOnDeactivate").instance, handler);
+}
+
+/**
+ * Register a hook that gathers the activation's in-memory state when it migrates
+ * to another silo — the functional counterpart of implementing
+ * `IGrainMigrationParticipant.onDehydrate` (Orleans `IGrainMigrationParticipant`).
+ *
+ * Unlike a class grain's method, the hook is NOT part of the grain's call
+ * surface and cannot be reached by a remote caller. Hooks run in registration
+ * order on the migrating activation's turn; one that throws contributes nothing
+ * to the bag and migration carries on, as for a class participant.
+ */
+export function useOnDehydrate(handler: DehydrateHandler): void {
+  const { instance } = activeSetup("useOnDehydrate");
+  installMigrationParticipant(instance);
+  dehydrateHandlers.register(instance, handler);
+}
+
+/**
+ * Register a hook that restores state on the target silo after a migration —
+ * the counterpart of {@link useOnDehydrate} and of
+ * `IGrainMigrationParticipant.onRehydrate`. Not part of the call surface. Runs
+ * after state facets are bound (without being read from storage) and before
+ * `onActivate`; it only runs for an activation that arrived by migration.
+ */
+export function useOnRehydrate(handler: RehydrateHandler): void {
+  const { instance } = activeSetup("useOnRehydrate");
+  installMigrationParticipant(instance);
+  rehydrateHandlers.register(instance, handler);
+}
+
+/**
+ * Make the activation a migration participant the way the runtime recognises one
+ * (`isMigrationParticipant`: both hooks present on the instance), without
+ * putting them on the call surface: they are non-enumerable own members named
+ * in `RUNTIME_INVOKED`, which `isRemotelyCallable` refuses by name. Installed on
+ * first use so a grain that registers neither hook is not a participant at all
+ * (the runtime opens no Dehydrate span for it).
+ */
+function installMigrationParticipant(instance: object): void {
+  if (Object.prototype.hasOwnProperty.call(instance, "onDehydrate")) return;
+  Object.defineProperty(instance, "onDehydrate", {
+    value: (context: DehydrationContext): void => {
+      for (const handler of dehydrateHandlers.getFields(instance)) handler(context);
+    },
+    writable: true,
+    enumerable: false,
+    configurable: true,
+  });
+  Object.defineProperty(instance, "onRehydrate", {
+    value: (context: RehydrationContext): void => {
+      for (const handler of rehydrateHandlers.getFields(instance)) handler(context);
+    },
+    writable: true,
+    enumerable: false,
+    configurable: true,
+  });
+}
+
+/**
+ * Register an admission predicate for calls that would otherwise queue behind
+ * the running turn — the functional counterpart of `@mayInterleave` (Orleans
+ * `[MayInterleave]`). Given the incoming call's method name and arguments it
+ * returns whether the call may interleave. The predicate is per activation, so
+ * it may close over the factory's state. One per activation: a second call
+ * replaces the first.
+ */
+export function useMayInterleave(predicate: MayInterleavePredicate): void {
+  setInstanceMayInterleave(activeSetup("useMayInterleave").instance, predicate);
+}
+
+export interface UseGrainFacetOptions<TConfig = unknown> {
+  /** Which registered factory binds the facet; defaults to the one registered as `"default"`. */
+  name?: string;
+  /** Passed to the factory unchanged. */
+  config?: TConfig;
+}
+
+/** A handle to a third-party facet; `get()` throws until the runtime has bound it. */
+export interface GrainFacetHandle<T> {
+  get(): T;
+}
+
+/**
+ * The functional counterpart of `@grainFacet`: attach a third-party facet of
+ * family `kind`, built by the factory a silo builder registered with
+ * `addGrainFacetFactory(kind, name, factory)`. The runtime binds it before
+ * `onActivate`, through the same facet registry the decorator uses.
+ */
+export function useGrainFacet<T, TConfig = unknown>(
+  kind: string,
+  options: UseGrainFacetOptions<TConfig> = {},
+): GrainFacetHandle<T> {
+  const { instance } = activeSetup("useGrainFacet");
+  const fieldName = `__thresh_facet$${kind}$${getGrainFacetFields(instance).length}`;
+  registerGrainFacetField(instance, {
+    fieldName,
+    kind,
+    ...(options.name !== undefined ? { providerName: options.name } : {}),
+    ...(options.config !== undefined ? { config: options.config } : {}),
+  });
+  return {
+    get: (): T => {
+      const facet = (instance as Record<string, unknown>)[fieldName] as T | undefined;
+      if (facet === undefined) throw new Error(`grain facet "${kind}" not yet bound`);
+      return facet;
+    },
+  };
+}
+
+/**
+ * Ask for a per-silo dependency a silo builder registered with
+ * `addGrainDependency(token, value)` — the functional path's counterpart of the
+ * constructor arguments a `GrainActivator` hands a class grain. Resolved
+ * immediately, so the value is in hand for the rest of the factory; throws if
+ * the silo hosting this activation registered none.
+ */
+export function useDependency<T>(token: DependencyToken<T>): T {
+  return activeSetup("useDependency").setup.runtime.getDependency(token);
 }
 
 /**
@@ -324,6 +499,12 @@ export function defineGrain<T extends object>(
               "useOnActivate / useOnDeactivate, not returned in the message surface",
           );
         }
+        if (key === "onDehydrate" || key === "onRehydrate") {
+          throw new Error(
+            `grain "${name}" returned ${key} from its factory; migration hooks are registered ` +
+              "with useOnDehydrate / useOnRehydrate, not returned in the message surface",
+          );
+        }
         Object.defineProperty(this, key, {
           value,
           writable: true,
@@ -365,6 +546,7 @@ export function defineGrain<T extends object>(
     reentrant,
     implicitSubscriptions,
     implicitChannelSubscriptions,
+    regexImplicitChannelSubscriptions,
     key,
     interfaceOptions,
     interfaceName,
@@ -379,6 +561,16 @@ export function defineGrain<T extends object>(
   }
   for (const namespace of implicitChannelSubscriptions ?? []) {
     markBroadcastSubscription(FunctionalGrain as GrainConstructor, namespace);
+  }
+
+  for (const pattern of regexImplicitChannelSubscriptions ?? []) {
+    markBroadcastSubscription(
+      FunctionalGrain as GrainConstructor,
+      ConstructorChannelNamespacePredicateProvider.formatPattern(
+        "RegexChannelNamespacePredicate",
+        pattern,
+      ),
+    );
   }
 
   // The definition is its own interface. `defineGrainInterface` merges into any
