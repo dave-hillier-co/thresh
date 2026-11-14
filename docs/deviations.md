@@ -379,25 +379,61 @@ in-memory instances every silo shares in one process (`TestCluster`), `allowWith
 A store the builder constructs itself is one per silo by construction, so only `allowInCluster`
 admits it.
 
-## A transaction resource delays deactivation, but its own protocol timers differ
+## A transaction resource delays deactivation for a bounded time
 
 As in Orleans (`ActivationLifetime.BlockDeactivation` and `OnStopAsync`), a transactional-state
-resource that holds a transaction lock or an inherited prepared record whose outcome it does not know
-only delays a deactivation that has begun: after `onDeactivate`, the activation's deactivation
-pipeline polls every 10 ms, on the silo's clock, for up to five seconds for the block to clear, then
-proceeds. Every path honours it: idle collection, a forced collection, migration and rebalancing, an
-explicit `deactivateOnIdle` and silo shutdown. Calls that arrive meanwhile are held and rerouted once
-the activation has gone, as Orleans holds them, so the wait ends early only through what the
-activation itself drives: a local agent's commit, the lock timeout, the prepared-record timer.
+resource that holds a transaction lock, has a transaction in its commit queue, or is still confirming
+a commit only delays a deactivation that has begun: after `onDeactivate`, the activation's
+deactivation pipeline polls every 10 ms, on the silo's clock, for up to five seconds for the block to
+clear, then proceeds. Every path honours it: idle collection, a forced collection, migration and
+rebalancing, an explicit `deactivateOnIdle` and silo shutdown. Calls that arrive meanwhile are held
+and rerouted once the activation has gone, as Orleans holds them, so the wait ends early only through
+what the resource itself drives: its commit queue, the lock timeout, its pings and confirmations. A
+resource deactivated after the five-second bound loses its lock, or leaves its prepared record or
+commit record for the next activation to load and resume.
 
-Those timers differ from Orleans. In Orleans the TM's commit queue and timeouts drive every
-transaction to an end; here the caller-side agent drives the protocol. An unprepared holder is
-bounded by `lockTimeoutMs` (Orleans `LockTimeout`), and a prepared one by its prepared-record timer. A
-TM that has prepared its own write applies Orleans' `PrepareTimeout` to the wait for the agent's
-`recordCommit`, and decides abort when it expires. `recordCommit` refuses a transaction the TM no
-longer holds, so that decision is final. An ordinary prepared participant asks its TM at Orleans'
-`RemoteTransactionPingFrequency`. A resource deactivated after the five-second bound loses its lock,
-or leaves its record for the next activation to load and resolve.
+## The transaction protocol departs from Orleans in a few places
+
+The commit protocol is Orleans': the agent sends a one-way `prepare` to every participant but the TM
+and awaits `prepareAndCommit` on the TM, or `commitReadOnly` on every participant of a read-only
+transaction; the TM's commit queue collects the votes, writes the commit with its own state, answers
+the agent, confirms or cancels the participants, and removes the commit record once all have
+confirmed; a prepared participant pings its TM at `RemoteTransactionPingFrequency`; pending states
+form a chain. These are the places it differs:
+
+- **The TM answers no ping while it still holds the transaction in its lock.** Orleans' TM presumes
+  an abort for any transaction it does not find in its commit queue or its confirmation worker, which
+  is safe only while the ping frequency (60 s) exceeds the lock timeout (8 s): a `prepareAndCommit`
+  that arrives later would otherwise commit a transaction a participant has already dropped. Here the
+  TM stays silent until its lock times out, and the next ping is answered.
+- **`TransactionCommitter` is outside the protocol.** Upstream's committer has its own storage-backed
+  commit queue and is elected TM ahead of every writer, running its operation as a precondition of
+  the commit write, so a failing operation aborts every participant. The port's committer is
+  memory-only and cannot be reached by participant id: the agent commits it after the elected TM has
+  made the commit durable, and aborts it otherwise. A failing operation therefore leaves the other
+  participants committed and the caller sees `TransactionInDoubtError`, which is what the ported
+  `TocFaultTransactionMemoryTests.MultiGrainWriteTransactionWithCommitException` asserts, where
+  upstream asserts the participants rolled back. A transaction whose only writer is a committer
+  commits it directly.
+- **No deactivation after repeated storage failures.** Orleans deactivates the grain after ten
+  consecutive storage failures, or after a storage conflict (an etag mismatch from a duplicate
+  activation). The commit queue here aborts what it holds and restores from storage each time, but
+  asks for no deactivation.
+- **A storage batch that will never be written fails what waits on it.** Orleans drops such a batch
+  silently, so a commit-record collection waiting on it waits for ever; here the collection retries
+  after `confirmationRetryDelayMs`.
+- **On load, prepared records are queued again in sequence order**, where Orleans orders them by time
+  stamp. The agent does not merge the participants' clocks into the transaction's time stamp
+  (Orleans `TransactionInfo.RecordRead`/`RecordWrite` and `MergeUtcNow`), so time stamps from
+  different TMs are not ordered causally here; the sequence ids are, because each pending state is
+  built on the one before it.
+- **A transaction leaves the lock the moment its role is known.** The lock is the port's wait-die
+  `ReaderWriterLock`, not Orleans' lock groups, so a reader whose role is known enters the commit
+  queue at once, where Orleans releases group members only in time-stamp order. Only reads are
+  reordered this way; a writer holds the lock alone, so the chain of pending states is unaffected.
+- **A `prepared` vote that arrives before the agent's `prepareAndCommit` is kept by transaction id**,
+  where Orleans keys it by time stamp. As upstream, such votes for a transaction the TM never hears
+  of again are never discarded.
 
 ## Resource-optimized placement scores raw readings over every candidate
 
