@@ -197,6 +197,14 @@ export interface TestClusterOptions {
    * until the test takes it away (`kubernetes.depart`), as after a real crash.
    */
   membership?: "static" | "kubernetes";
+  /**
+   * Make every silo give a call to a grain on the same silo the semantics of a cross-silo call
+   * (`SiloConfig.wireSemanticsForLocalCalls`): its arguments, result and thrown error make the
+   * codec round trip, so a suite that happens to land caller and callee together still sees no
+   * aliasing, class instances as the wire delivers them and error classes as the wire rebuilds
+   * them. Off by default.
+   */
+  wireSemanticsForLocalCalls?: boolean;
 }
 
 /** One silo's membership as it stands: the view its membership holds, and the one its node applied. */
@@ -633,6 +641,9 @@ export class TestCluster {
         ? { loadShedding: this.options.loadShedding }
         : {}),
       ...(this.options.random !== undefined ? { random: this.options.random } : {}),
+      ...(this.options.wireSemanticsForLocalCalls === true
+        ? { wireSemanticsForLocalCalls: true }
+        : {}),
       ...(this.options.collectionAgeSeconds !== undefined
         ? { collectionAgeSeconds: this.options.collectionAgeSeconds }
         : {}),

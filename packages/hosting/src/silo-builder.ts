@@ -203,6 +203,13 @@ export interface SiloConfig {
    * minutes); see `ClusterNodeOptions.clientDirectoryRefreshMs`.
    */
   clientDirectoryRefreshMs?: number;
+  /**
+   * Give a call to a grain on THIS silo the semantics of a call to another silo: its arguments,
+   * result and thrown error make the codec round trip a message would (no shared objects, class
+   * instances and error classes as the wire delivers them). Off by default; for tests, so a
+   * single-silo suite sees what a second silo would break. See `WireSemanticsDispatcher`.
+   */
+  wireSemanticsForLocalCalls?: boolean;
   /** Injectable RNG for deterministic placement in examples/tests. */
   random?: () => number;
   /** How often each silo re-reads its reminder ranges from the table (defaults to 60s). */
@@ -1721,6 +1728,9 @@ export class SiloBuilder {
       membership: this.membership,
       transport: this.transport,
       ...(time !== undefined ? { time } : {}),
+      ...(this.config.wireSemanticsForLocalCalls === true
+        ? { wireSemanticsForLocalCalls: true }
+        : {}),
       ...(this.config.collectionAgeSeconds !== undefined
         ? { defaultCollectionAgeSeconds: this.config.collectionAgeSeconds }
         : {}),
