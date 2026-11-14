@@ -1,3 +1,6 @@
+import os from "node:os";
+import { performance, type EventLoopUtilization } from "node:perf_hooks";
+
 /**
  * Load shedding (Orleans `LoadSheddingOptions` + `OverloadDetector` +
  * `TestHooksEnvironmentStatisticsProvider`, `src/Orleans.Core/Configuration/Options/LoadSheddingOptions.cs`
@@ -22,21 +25,92 @@ export const DEFAULT_LOAD_SHEDDING_OPTIONS: LoadSheddingOptions = {
   cpuThreshold: 95,
 };
 
+/**
+ * One reading of the silo's environment (Orleans `EnvironmentStatistics`, the value
+ * `IEnvironmentStatisticsProvider.GetEnvironmentStatistics` returns).
+ */
 export interface EnvironmentStatistics {
+  /** CPU utilisation, 0-100. */
   cpuUsagePercentage: number;
+  /** Memory the process currently uses, in bytes. */
+  memoryUsageBytes: number;
+  /** Memory still available to the process, in bytes. */
+  availableMemoryBytes: number;
+  /** The most memory the process can use, in bytes. */
+  maximumAvailableMemoryBytes: number;
 }
 
 /**
- * A silo's CPU-usage source with a test-only override (Orleans
- * `TestHooksEnvironmentStatisticsProvider`). This framework has no real
- * OS-level CPU sampler wired in yet, so the un-latched reading is a steady
- * `0` (never overloaded on its own) until a test latches a value.
+ * The silo's statistics source (Orleans `IEnvironmentStatisticsProvider`). Inject one through
+ * the silo builder; the default is `NodeEnvironmentStatisticsProvider`. Implementations are
+ * read on demand and must not start timers that outlive the silo.
  */
-export class TestHooksEnvironmentStatisticsProvider {
-  private latchedCpuUsagePercentage: number | undefined;
+export interface EnvironmentStatisticsProvider {
+  getEnvironmentStatistics(): EnvironmentStatistics;
+}
+
+/**
+ * The default provider: Node's event-loop utilisation as the CPU reading, and process and OS
+ * memory for the rest. Each read reports utilisation over the window since the previous read
+ * (`perf_hooks.performance.eventLoopUtilization(previous)`), so there is no sampling timer to
+ * leak; the first read covers the process lifetime. Unlike Orleans' provider the readings are
+ * raw, not Kalman-filtered.
+ */
+export class NodeEnvironmentStatisticsProvider implements EnvironmentStatisticsProvider {
+  private previous: EventLoopUtilization | undefined;
+  private cached: { at: number; statistics: EnvironmentStatistics } | undefined;
 
   getEnvironmentStatistics(): EnvironmentStatistics {
-    return { cpuUsagePercentage: this.latchedCpuUsagePercentage ?? 0 };
+    const now = performance.now();
+    // The gateway asks on every client request: a reading younger than the minimum window is
+    // reused, which also keeps each CPU window long enough to mean something.
+    if (this.cached !== undefined && now - this.cached.at < MIN_READING_WINDOW_MS) {
+      return this.cached.statistics;
+    }
+    const maximum = maximumAvailableMemoryBytes();
+    const statistics: EnvironmentStatistics = {
+      cpuUsagePercentage: this.readCpuUsagePercentage(),
+      memoryUsageBytes: Math.min(process.memoryUsage.rss(), maximum),
+      availableMemoryBytes: Math.min(Math.max(os.freemem(), 1), maximum),
+      maximumAvailableMemoryBytes: maximum,
+    };
+    this.cached = { at: now, statistics };
+    return statistics;
+  }
+
+  private readCpuUsagePercentage(): number {
+    const current = performance.eventLoopUtilization();
+    const window =
+      this.previous === undefined ? current : performance.eventLoopUtilization(current, this.previous);
+    this.previous = current;
+    return Math.min(100, Math.max(0, window.utilization * 100));
+  }
+}
+
+const MIN_READING_WINDOW_MS = 100;
+
+/** The cgroup limit when the process has one, otherwise physical memory. */
+function maximumAvailableMemoryBytes(): number {
+  const constrained = process.constrainedMemory();
+  const total = os.totalmem();
+  return constrained > 0 && constrained < total ? constrained : total;
+}
+
+/**
+ * Wraps a real provider with a test-only CPU override (Orleans
+ * `TestHooksEnvironmentStatisticsProvider`): while latched, the CPU reading is the latched
+ * value and every other reading passes through from the wrapped provider.
+ */
+export class TestHooksEnvironmentStatisticsProvider implements EnvironmentStatisticsProvider {
+  private latchedCpuUsagePercentage: number | undefined;
+
+  constructor(private readonly inner: EnvironmentStatisticsProvider) {}
+
+  getEnvironmentStatistics(): EnvironmentStatistics {
+    const live = this.inner.getEnvironmentStatistics();
+    return this.latchedCpuUsagePercentage === undefined
+      ? live
+      : { ...live, cpuUsagePercentage: this.latchedCpuUsagePercentage };
   }
 
   /** Force the reported CPU usage to `value` until `unlatchHardwareStatistics()`. */
@@ -44,7 +118,7 @@ export class TestHooksEnvironmentStatisticsProvider {
     this.latchedCpuUsagePercentage = value;
   }
 
-  /** Clear a latch set by `latchCpuUsage`, reverting to the live (currently always-0) reading. */
+  /** Clear a latch set by `latchCpuUsage`, reverting to the wrapped provider's reading. */
   unlatchHardwareStatistics(): void {
     this.latchedCpuUsagePercentage = undefined;
   }
@@ -82,7 +156,7 @@ export class OverloadDetector {
   enabled: boolean;
 
   constructor(
-    private readonly statistics: TestHooksEnvironmentStatisticsProvider,
+    private readonly statistics: EnvironmentStatisticsProvider,
     private readonly options: LoadSheddingOptions,
   ) {
     this.enabled = options.loadSheddingEnabled;

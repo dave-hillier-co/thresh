@@ -458,6 +458,7 @@ export class TestCluster {
       ...(this.options.loadShedding !== undefined
         ? { loadShedding: this.options.loadShedding }
         : {}),
+      testHooks: true,
       ...(this.options.random !== undefined ? { random: this.options.random } : {}),
       ...(this.options.collectionAgeSeconds !== undefined
         ? { collectionAgeSeconds: this.options.collectionAgeSeconds }

@@ -46,6 +46,7 @@ function buildSilo(
     clusterId: CLUSTER,
     membership: new StaticMembershipService(local, membershipAddrs),
     transport: new InProcessTransport(network, CLUSTER),
+    testHooks: true, // the latches are test-only, off unless the silo is built with them
     ...(loadShedding !== undefined ? { loadShedding } : {}),
   });
   silo.registerGrain(PingGrain, { interfaces: [IPing] });

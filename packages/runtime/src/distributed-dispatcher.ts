@@ -10,7 +10,6 @@ import type { GrainDirectory } from "@thresh/directory/grain-directory";
 import type { LocationCache } from "@thresh/directory/location-cache";
 import {
   withActivateGrainSpan,
-  withFilterPlacementCandidatesSpan,
   withPlaceGrainSpan,
   withRegisterDirectoryEntrySpan,
 } from "@thresh/observability/activation-tracing";
@@ -23,6 +22,7 @@ import {
 import type { PlacementFilter } from "@thresh/runtime/placement/placement-filter";
 import { dispatchDetachingOneWay } from "@thresh/runtime/one-way-dispatch";
 import { resolvePlacementHint } from "@thresh/runtime/placement/placement-hint";
+import { selectPlacementTarget } from "@thresh/runtime/placement/select-placement-target";
 import type {
   PlacementContext,
   PlacementStrategy,
@@ -466,34 +466,28 @@ export class DistributedDispatcher implements Dispatcher {
         ...this.deps.placementContext(),
         grainId: req.target,
       };
-      // Hard metadata filters first: prune the candidate set by silo metadata; if
-      // none qualify, placement fails (the grain has a constraint nothing satisfies).
-      let candidates: readonly SiloAddress[] = this.deps.activeSilos();
-      for (const filter of this.deps.filtersFor(req.target.type)) {
-        candidates = withFilterPlacementCandidatesSpan(
-          { filterType: filter.constructor.name },
-          () => filter.filter(req.target.type, candidates, ctx),
-        );
-      }
-      if (candidates.length === 0) {
+      // The shared pipeline (also used by migration): hard metadata filters prune the
+      // candidates (none left means the grain has a constraint nothing satisfies), then
+      // version narrowing, then a caller-set RequestContext hint (Orleans
+      // `IPlacementDirector.PlacementHintKey`), then the grain's strategy.
+      const versionFilter = this.deps.versionFilter;
+      const targetSilo = await selectPlacementTarget({
+        grainType: req.target.type,
+        candidates: this.deps.activeSilos(),
+        filters: this.deps.filtersFor(req.target.type),
+        strategy: this.deps.placementFor(req.target.type),
+        context: ctx,
+        ...(versionFilter !== undefined
+          ? { versionFilter: (candidates) => versionFilter(req, candidates) }
+          : {}),
+        hint: (candidates) => resolvePlacementHint(req.headers, candidates),
+      });
+      if (targetSilo === undefined) {
         throw new RejectionError(
           `no placement candidates for ${req.target.type} after filtering`,
           "noCandidates",
         );
       }
-      // Version-aware placement: prefer compatible silos within the eligible set,
-      // but fall back to it when none qualify (best-effort — never fails on version).
-      if (this.deps.versionFilter !== undefined) {
-        const compatible = await this.deps.versionFilter(req, candidates);
-        if (compatible.length > 0) candidates = compatible;
-      }
-      // Directed placement: a caller-set RequestContext hint (Orleans
-      // `IPlacementDirector.PlacementHintKey`) wins over the strategy when it
-      // names a live candidate; otherwise fall through to the strategy as before.
-      const strategy = this.deps.placementFor(req.target.type);
-      const targetSilo =
-        resolvePlacementHint(req.headers, candidates) ??
-        strategy.choose(req.target.type, candidates, ctx);
       this.deps.recordEdge?.(req, targetSilo);
       return targetSilo.equals(this.deps.local)
         ? this.deliverLocalWithinPlacementSpan(req, opts)
