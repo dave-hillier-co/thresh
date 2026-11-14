@@ -105,8 +105,7 @@ export class MemoryJobShardStore implements JobShardStore {
       if (record.adoptedCount > options.maxAdoptedCount) {
         record.poisoned = true;
         record.owner = undefined;
-        // Reported once, on the claim that poisons it; later claims get `undefined`.
-        return { ...record };
+        return undefined;
       }
     }
     record.owner = owner;

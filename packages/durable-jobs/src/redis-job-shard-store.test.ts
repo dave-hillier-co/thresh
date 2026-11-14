@@ -127,7 +127,7 @@ describe.skipIf(client === undefined)("RedisJobShardStore", () => {
       adoptFromDead: [owner],
       maxAdoptedCount: 3,
     });
-    expect(poisoned?.poisoned).toBe(true);
+    expect(poisoned).toBeUndefined();
     // A poisoned shard is never claimable again, even when unowned.
     expect(await store.claimShard(8, "silo-5", { maxAdoptedCount: 3 })).toBeUndefined();
   });
@@ -141,7 +141,7 @@ describe.skipIf(client === undefined)("RedisJobShardStore", () => {
         adoptFromDead: ["silo-dead"],
         maxAdoptedCount: 3,
       });
-      expect(claimed?.poisoned).toBe(false);
+      expect(claimed).toBeDefined();
       await store.releaseShard(10, "silo-live");
       await store.claimShard(10, "silo-dead", { maxAdoptedCount: 3 });
     }

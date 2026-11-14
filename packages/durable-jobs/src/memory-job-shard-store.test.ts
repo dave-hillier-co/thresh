@@ -24,14 +24,14 @@ describe("MemoryJobShardStore adoption count", () => {
         adoptFromDead: ["dead"],
         maxAdoptedCount: 3,
       });
-      expect(adopted?.poisoned).toBe(false);
+      expect(adopted).toBeDefined();
       await store.releaseShard(1, "live");
     }
     const [record] = await store.listShards();
     expect(record).toMatchObject({ adoptedCount: 0, poisoned: false });
   });
 
-  it("poisons a shard adopted from dead owners past the maximum and reports it on the claim", async () => {
+  it("poisons a shard adopted from dead owners past the maximum", async () => {
     const store = await storeWithJob();
     let last;
     for (let i = 0; i < 4; i++) {
@@ -41,9 +41,9 @@ describe("MemoryJobShardStore adoption count", () => {
         maxAdoptedCount: 3,
       });
     }
-    expect(last?.poisoned).toBe(true);
+    expect(last).toBeUndefined();
     expect((await store.listShards())[0]?.poisoned).toBe(true);
-    // Once poisoned it is never claimed again, and is not re-reported.
+    // Once poisoned it is never claimed again.
     expect(await store.claimShard(1, "x", { maxAdoptedCount: 3 })).toBeUndefined();
   });
 });

@@ -58,10 +58,8 @@ export interface JobShardStore {
    * (when `adoptFromDead` lists dead silo ring keys) currently owned by a dead
    * silo — in which case `adoptedCount` is incremented. A poisoned shard is never
    * claimable. Returns the resulting record on success, or `undefined` if the
-   * claim lost (another silo owns it, or it was already poisoned). The one claim
-   * whose adoption pushes the count past `maxAdoptedCount` poisons the shard and
-   * returns its record with `poisoned: true` (so the caller can log and count it
-   * exactly once); that record is not a claim.
+   * claim lost (another silo owns it, or it is poisoned, including by this very
+   * claim: the adoption that pushes the count past `maxAdoptedCount` poisons it).
    */
   claimShard(
     shardKey: number,

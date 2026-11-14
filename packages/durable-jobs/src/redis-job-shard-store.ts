@@ -57,7 +57,7 @@ if ownerDead then
   if adopted > tonumber(ARGV[2]) then
     redis.call('HSET', KEYS[1], 'poisoned', '1', 'adoptedCount', adopted)
     redis.call('HDEL', KEYS[1], 'owner')
-    return cjson.encode({ adoptedCount = adopted, poisoned = true })
+    return nil
   end
 end
 redis.call('HSET', KEYS[1], 'owner', ARGV[1], 'adoptedCount', adopted, 'poisoned', '0')
@@ -174,17 +174,8 @@ export class RedisJobShardStore implements JobShardStore {
       ],
     })) as string | null;
     if (result == null) return undefined;
-    const parsed = JSON.parse(result) as {
-      owner?: string;
-      adoptedCount: number;
-      poisoned: boolean;
-    };
-    return {
-      shardKey,
-      owner: parsed.owner,
-      adoptedCount: parsed.adoptedCount,
-      poisoned: parsed.poisoned,
-    };
+    const parsed = JSON.parse(result) as { owner: string; adoptedCount: number; poisoned: boolean };
+    return { shardKey, owner: parsed.owner, adoptedCount: parsed.adoptedCount, poisoned: false };
   }
 
   async releaseShard(shardKey: number, owner: string): Promise<void> {

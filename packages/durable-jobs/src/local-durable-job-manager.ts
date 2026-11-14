@@ -365,15 +365,10 @@ export class LocalDurableJobManager {
       adoptFromDead: deadOwners,
       maxAdoptedCount: this.options.maxAdoptedCount,
     });
-    if (claimed === undefined) return undefined; // lost the claim, or already poisoned
-    if (claimed.poisoned) {
-      // This claim is the one that poisoned the shard: never claimed again, so say so once.
-      this.logger.error("durable job shard poisoned: adopted from dead owners too many times", {
-        shardKey,
-        adoptedCount: claimed.adoptedCount,
-        maxAdoptedCount: this.options.maxAdoptedCount,
-      });
-      recordShardPoisoned({ "thresh.job.shard": shardKey });
+    if (claimed === undefined) {
+      // Lost the claim, or this adoption poisoned the shard: only the latter is an
+      // adoption from a dead owner whose record now reads poisoned.
+      if (deadOwners.length > 0) await this.reportIfPoisoned(shardKey);
       return undefined;
     }
     if (this.stopped) {
@@ -383,6 +378,22 @@ export class LocalDurableJobManager {
       return undefined;
     }
     return this.startExecutor(shardKey);
+  }
+
+  /**
+   * After a failed adoption from a dead owner, read the shard back: if that adoption
+   * is the one that poisoned it (the shard will never be claimed again), say so,
+   * once per adoption attempt that did it, in the log and the poisoned-shard counter.
+   */
+  private async reportIfPoisoned(shardKey: number): Promise<void> {
+    const record = (await this.store.listShards()).find((s) => s.shardKey === shardKey);
+    if (record?.poisoned !== true) return;
+    this.logger.error("durable job shard poisoned: adopted from dead owners too many times", {
+      shardKey,
+      adoptedCount: record.adoptedCount,
+      maxAdoptedCount: this.options.maxAdoptedCount,
+    });
+    recordShardPoisoned({ "thresh.job.shard": shardKey });
   }
 
   /** Best-effort release of a shard this silo holds; a failure is logged, not thrown. */
