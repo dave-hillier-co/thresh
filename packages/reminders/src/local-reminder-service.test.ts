@@ -188,10 +188,12 @@ describe("LocalReminderService — GetReminder(s)", () => {
 });
 
 describe("LocalReminderService — catch-up after downtime (initial due time)", () => {
-  it("skips missed ticks and resumes on the startAt + n*period grid instead of firing immediately", async () => {
-    // Orleans' CalculateInitialDueTime: a reminder whose first tick is long
-    // past does not fire at once — it waits for the next startAt + n*period
-    // boundary, and later ticks stay on that grid.
+  it("fires a reminder that never fired promptly when its first tick was missed, then stays on the grid", async () => {
+    // Orleans' CalculateInitialDueTime would skip to the next boundary, but here a
+    // registration made on a silo that does not own the range is only discovered
+    // at the owner's next refresh, so "never fired and already due" must fire
+    // promptly instead of losing a whole period (review finding B4). Later ticks
+    // stay on the startAt + n*period grid.
     const time = new FakeTimeProvider();
     const table = new MemoryReminderTable();
     const fires: number[] = [];
@@ -214,16 +216,17 @@ describe("LocalReminderService — catch-up after downtime (initial due time)", 
       minimumPeriod: { ms: 0 },
     });
     await serviceB.refreshOwnership([WHOLE]);
+    time.advance(0);
     await flush();
-    expect(fires).toEqual([]); // no catch-up fire for the missed ticks at 2000 and 3000
+    expect(fires).toEqual([3400]); // one prompt tick, not one per missed boundary
 
     time.advance(600); // grid boundary startAt + 3*period = 4000
     await flush();
-    expect(fires).toEqual([4000]);
+    expect(fires).toEqual([3400, 4000]);
 
     time.advance(1000); // next tick stays on the grid: 5000, not 4000 + drift
     await flush();
-    expect(fires).toEqual([4000, 5000]);
+    expect(fires).toEqual([3400, 4000, 5000]);
 
     serviceB.stop();
   });

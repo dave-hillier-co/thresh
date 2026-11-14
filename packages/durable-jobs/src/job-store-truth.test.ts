@@ -117,9 +117,7 @@ describe("a job is not stranded by a lost forward", () => {
     await flush();
 
     expect(ran).toEqual(["stranded"]);
-    expect(
-      records.some((r) => r.level === "error" && r.message.includes("forward")),
-    ).toBe(true);
+    expect(records.some((r) => r.level === "error" && r.message.includes("forward"))).toBe(true);
     await owner.stop();
   });
 
@@ -203,11 +201,7 @@ class FailingStore extends MemoryJobShardStore {
     if (this.failing) throw new Error("run-start down");
     return super.persistRunStart(shardKey, jobId, runId);
   }
-  override async persistRunComplete(
-    shardKey: number,
-    jobId: string,
-    runId: string,
-  ): Promise<void> {
+  override async persistRunComplete(shardKey: number, jobId: string, runId: string): Promise<void> {
     if (this.failing) throw new Error("run-complete down");
     return super.persistRunComplete(shardKey, jobId, runId);
   }

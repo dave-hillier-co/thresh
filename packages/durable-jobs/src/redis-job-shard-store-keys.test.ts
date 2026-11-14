@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { GrainId } from "@thresh/core/grain-id";
-import {
-  RedisJobShardStore,
-  type RedisClient,
-} from "@thresh/durable-jobs/redis-job-shard-store";
+import { RedisJobShardStore, type RedisClient } from "@thresh/durable-jobs/redis-job-shard-store";
 
 /** A client that records every key it is addressed with, and answers nothing. */
 function recordingClient(): { client: RedisClient; keys: string[] } {
@@ -56,12 +53,10 @@ describe("RedisJobShardStore keys", () => {
   it("carry the service id after the prefix", async () => {
     const { client, keys } = recordingClient();
     await touchEveryKey(new RedisJobShardStore(client, { keyPrefix: "p", serviceId: "svc" }));
-    expect(new Set(keys)).toEqual(
-      new Set(["p:svc:job:s:5", "p:svc:job:shards", "p:svc:job:m:5"]),
-    );
+    expect(new Set(keys)).toEqual(new Set(["p:svc:job:s:5", "p:svc:job:shards", "p:svc:job:m:5"]));
   });
 
-  it("default the service id to \"default\", and partition two services", async () => {
+  it('default the service id to "default", and partition two services', async () => {
     const a = recordingClient();
     await touchEveryKey(new RedisJobShardStore(a.client));
     expect(a.keys.every((k) => k.startsWith("thresh:default:job:"))).toBe(true);

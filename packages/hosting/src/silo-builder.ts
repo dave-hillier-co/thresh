@@ -1681,8 +1681,6 @@ export class SiloBuilder {
         grainServiceRegistry.stop();
       });
     }
-    const membership = this.membership;
-
     const activationOptions: ActivationOptions = {
       maxEnqueuedRequestsSoftLimit:
         this.config.scheduling?.maxEnqueuedRequestsSoftLimit ??

@@ -178,11 +178,14 @@ export class LocalDurableJobManager {
       return undefined;
     });
     if (accepted === false) {
-      this.logger.warn("durable job forward was not accepted; the owner will find it in the store", {
-        shardKey,
-        jobId: job.id,
-        owner,
-      });
+      this.logger.warn(
+        "durable job forward was not accepted; the owner will find it in the store",
+        {
+          shardKey,
+          jobId: job.id,
+          owner,
+        },
+      );
     }
   }
 
