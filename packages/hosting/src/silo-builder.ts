@@ -212,6 +212,12 @@ export interface SiloConfig {
   /** Durable-journal snapshot threshold: snapshot + truncate past this many log entries (default 100). */
   snapshotThreshold?: number;
   /**
+   * Whether a `JournaledGrain` keeps its confirmed events across a journal snapshot (default
+   * `true`: snapshots speed activation but never discard event history). `false` is the explicit
+   * retention choice to let a snapshot replace the events below it.
+   */
+  retainJournaledEvents?: boolean;
+  /**
    * Silo-wide default per-method response timeout (Orleans `[ResponseTimeout]`
    * default), applied to any grain call whose interface doesn't set its own
    * `responseTimeout`. Off by default: no call races a deadline unless one is
@@ -1657,6 +1663,7 @@ export class SiloBuilder {
     const journalStorage = this.journalStorage;
     const grainFacets = this.grainFacets;
     const snapshotThreshold = this.config.snapshotThreshold;
+    const retainJournaledEvents = this.config.retainJournaledEvents;
     const time = this.config.time;
     let reminderService: LocalReminderService | undefined;
     let jobManager: LocalDurableJobManager | undefined;
@@ -1794,6 +1801,7 @@ export class SiloBuilder {
           await bindJournalFacets(instance, grainId, journalStorage, {
             replay: true,
             ...(snapshotThreshold !== undefined ? { snapshotThreshold } : {}),
+            ...(retainJournaledEvents !== undefined ? { retainEvents: retainJournaledEvents } : {}),
           });
         }
         if (transactionalStorage !== undefined) {

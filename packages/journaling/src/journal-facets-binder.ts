@@ -46,6 +46,8 @@ export async function bindJournalFacets(
     provider?: string;
     /** CAS attempts per confirm, for a custom-storage host. Ignored otherwise. */
     maxAttempts?: number;
+    /** Keep a JournaledGrain's events across compaction (default `true`). */
+    retainEvents?: boolean;
   } = {},
 ): Promise<void> {
   const isJournaledGrain = instance instanceof JournaledGrain;
@@ -74,7 +76,11 @@ export async function bindJournalFacets(
   });
 
   registerDurableMachines(instance, fields, manager);
-  installJournalViewAdaptor(instance, manager);
+  installJournalViewAdaptor(
+    instance,
+    manager,
+    opts.retainEvents !== undefined ? { retainEvents: opts.retainEvents } : {},
+  );
 
   if (opts.replay ?? true) await manager.replay();
 }
