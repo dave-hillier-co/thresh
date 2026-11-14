@@ -116,6 +116,9 @@ export class WebSocketTransport implements Transport {
 
     return {
       address: boundAddress,
+      onClose: (callback) => {
+        server.once("close", callback);
+      },
       close: async () => {
         await new Promise<void>((resolve) => {
           for (const client of server.clients) client.terminate(); // else close() waits forever

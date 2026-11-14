@@ -3,7 +3,7 @@ import type { SiloAddress } from "@thresh/core/silo-address";
 import type { GrainInterface } from "@thresh/core/grain-interface";
 import type { GrainKeyKind } from "@thresh/core/grain-key";
 import type { KeyTypeOf } from "@thresh/core/key-kinds";
-import { type Logger, noopLogger } from "@thresh/core/logger";
+import { type Logger, defaultLogger } from "@thresh/core/logger";
 import type { MembershipService, MembershipSnapshot } from "@thresh/core/membership";
 import type { StreamProvider } from "@thresh/core/stream";
 import type { GrainDirectory } from "@thresh/directory/grain-directory";
@@ -247,6 +247,28 @@ export class SiloHost {
     for (const hook of hooks ?? []) await hook(...args);
   }
 
+  /**
+   * `runHooks` for the start and stop phases: a hook that throws is logged with the phase it
+   * belongs to, then rethrown, so the failure still reaches the caller of `start`/`stop` but also
+   * leaves a line saying which phase it came from. (The ownership hooks of the membership path are
+   * logged by `reconcileLoop`, which catches them.)
+   */
+  private async runPhase(
+    phase: "onStart" | "startupTasks" | "onStop",
+    hooks: ReadonlyArray<() => Promise<void>> | undefined,
+  ): Promise<void> {
+    try {
+      await this.runHooks(hooks);
+    } catch (error) {
+      const logger = this.parts.logger ?? defaultLogger;
+      logger.error(phase === "onStop" ? "silo stop hook failed" : "silo start hook failed", {
+        phase,
+        error,
+      });
+      throw error;
+    }
+  }
+
   async start(): Promise<void> {
     const {
       node,
@@ -262,7 +284,7 @@ export class SiloHost {
     // The membership watch's first list completes inside these (a
     // `KubernetesEndpointWatch.start()` awaits it), so the view is populated before
     // the node applies it.
-    await this.runHooks(onStart);
+    await this.runPhase("onStart", onStart);
     // Positioned now, before the node applies the current view: every view published
     // from here on is yielded once the watch below starts consuming, so none can fall
     // between the start-up reconcile and the watch.
@@ -275,8 +297,10 @@ export class SiloHost {
     // keeps the node's recovery dials to members not listening yet from still being
     // in flight (and shared by the connection pool) when the first calls go out.
     await node.recoverySettled();
-    await this.runHooks(startupTasks);
+    await this.runPhase("startupTasks", startupTasks);
     health.update({ transportReady: true });
+    // Readiness follows the listener, not the moment it was last seen up.
+    node.onListenerClosed(() => health.update({ transportReady: false }));
     if (healthServer !== undefined && healthPort !== undefined) {
       await healthServer.listen(healthPort);
     }
@@ -309,7 +333,7 @@ export class SiloHost {
     // provider stop must not skip deactivating every activation, closing the
     // transport and the rest of the teardown (Orleans logs a lifecycle stage
     // that fails to stop and carries on stopping).
-    const logger = this.parts.logger ?? noopLogger;
+    const logger = this.parts.logger ?? defaultLogger;
     for (const hook of onBeforeDeactivate ?? []) {
       try {
         await hook();
@@ -327,7 +351,7 @@ export class SiloHost {
     await shutdown.drain();
     selfProbeWorker?.stop();
     await healthServer?.close();
-    await this.runHooks(onStop);
+    await this.runPhase("onStop", onStop);
   }
 
   /**
@@ -340,9 +364,17 @@ export class SiloHost {
     const abort = new AbortController();
     this.membershipWatch = abort;
     void (async () => {
-      for await (const _snapshot of updates) {
-        if (abort.signal.aborted) return;
-        this.reconcileView();
+      try {
+        for await (const _snapshot of updates) {
+          if (abort.signal.aborted) return;
+          this.reconcileView();
+        }
+      } catch (error) {
+        // The feed itself failed: nothing is left to drive reconciliation, which is exactly the
+        // frozen-view failure that must not be silent.
+        (this.parts.logger ?? defaultLogger).error("membership watch ended with an error", {
+          error,
+        });
       }
     })();
   }
@@ -375,7 +407,7 @@ export class SiloHost {
     // `updateView` below re-enters through `onViewApplied`.
     await Promise.resolve();
     const { node, health, membership, reminderService, onOwnershipChange } = this.parts;
-    const logger = this.parts.logger ?? noopLogger;
+    const logger = this.parts.logger ?? defaultLogger;
     for (;;) {
       this.reconcileAgain = false;
       if (this.membershipWatch?.signal.aborted === true) return;

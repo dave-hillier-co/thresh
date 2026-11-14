@@ -4,7 +4,7 @@ import { GrainCallError, RejectionError } from "@thresh/core/errors";
 import type { Grain } from "@thresh/core/grain";
 import type { GrainClass } from "@thresh/core/grain-class";
 import type { IncomingGrainCallFilter } from "@thresh/core/grain-call-filter";
-import { noopLogger } from "@thresh/core/logger";
+import { defaultLogger } from "@thresh/core/logger";
 import type { BroadcastChannelProvider } from "@thresh/core/broadcast-channel";
 import type { GrainAddress } from "@thresh/core/grain-address";
 import type { GrainId } from "@thresh/core/grain-id";
@@ -659,7 +659,7 @@ export class Catalog {
       this.options.deactivateState?.(activation.instance, activation.id);
       this.options.onDeactivated?.(activation);
     } catch (error) {
-      (this.options.activationOptions?.logger ?? noopLogger).warn(
+      (this.options.activationOptions?.logger ?? defaultLogger).warn(
         "activation disposal failed during idle collection",
         { grainId: activation.id.toString(), error },
       );

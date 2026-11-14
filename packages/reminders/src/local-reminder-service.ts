@@ -1,7 +1,7 @@
 import { durationToMs, type Duration } from "@thresh/core/duration";
 import type { GrainId } from "@thresh/core/grain-id";
 import { isHashInRanges, type HashRange } from "@thresh/core/hash-ring";
-import { noopLogger, type Logger } from "@thresh/core/logger";
+import { defaultLogger, type Logger } from "@thresh/core/logger";
 import { recordReminderFired, recordReminderMissed } from "@thresh/observability/reminder-metrics";
 import type {
   ReminderEntry,
@@ -73,7 +73,7 @@ export class LocalReminderService implements ReminderRegistry {
     options: ReminderServiceOptions = {},
   ) {
     this.ranges = ranges;
-    this.logger = options.logger ?? noopLogger;
+    this.logger = options.logger ?? defaultLogger;
     this.minimumPeriodMs =
       options.minimumPeriod === undefined
         ? DEFAULT_MINIMUM_PERIOD_MS

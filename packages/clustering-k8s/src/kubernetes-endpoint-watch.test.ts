@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { activeSilos } from "@thresh/core/membership";
+import type { LogFields, Logger } from "@thresh/core/logger";
 import { SiloAddress } from "@thresh/core/silo-address";
+import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
 import { KubernetesMembership } from "@thresh/clustering-k8s/kubernetes-membership";
 import {
   KubernetesEndpointWatch,
@@ -404,6 +406,122 @@ describe("KubernetesEndpointWatch", () => {
       await vi.advanceTimersByTimeAsync(50);
       // No reconnect after stop.
       expect(source.listCount).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("KubernetesEndpointWatch failure reporting", () => {
+  interface Entry {
+    level: string;
+    message: string;
+    fields: LogFields | undefined;
+  }
+  function recorder(): { logger: Logger; entries: Entry[] } {
+    const entries: Entry[] = [];
+    const at =
+      (level: string) =>
+      (message: string, fields?: LogFields): void => {
+        entries.push({ level, message, fields });
+      };
+    return {
+      entries,
+      logger: { debug: at("debug"), info: at("info"), warn: at("warn"), error: at("error") },
+    };
+  }
+
+  it("logs a watch that drops with an error, and counts it", async () => {
+    vi.useFakeTimers();
+    try {
+      const source = new FakeSource();
+      const { logger, entries } = recorder();
+      const watch = new KubernetesEndpointWatch(source, { reconnectMs: 10, logger });
+      await watch.start();
+      source.endWatch(new Error("410 gone"));
+
+      expect(entries.map((e) => [e.level, e.message])).toEqual([
+        ["warn", "kubernetes endpoint watch dropped"],
+      ]);
+      expect(entries[0]!.fields).toMatchObject({ error: "410 gone", consecutiveFailures: 1 });
+      expect(watch.status().reconnectFailures).toBe(1);
+      expect(watch.status().connected).toBe(false);
+      watch.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not log or count a clean close", async () => {
+    vi.useFakeTimers();
+    try {
+      const source = new FakeSource();
+      const { logger, entries } = recorder();
+      const watch = new KubernetesEndpointWatch(source, { reconnectMs: 10, logger });
+      await watch.start();
+      source.endWatch();
+      expect(entries).toEqual([]);
+      expect(watch.status().reconnectFailures).toBe(0);
+      watch.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("logs a failed relist instead of swallowing it, and reconnects once the API is back", async () => {
+    vi.useFakeTimers();
+    try {
+      const source = new FakeSource();
+      source.listError = new Error("connection refused");
+      const { logger, entries } = recorder();
+      const watch = new KubernetesEndpointWatch(source, {
+        reconnectMs: 10,
+        random: () => 0,
+        logger,
+      });
+      await watch.start();
+
+      expect(entries.map((e) => e.message)).toEqual(["kubernetes endpoint relist failed"]);
+      expect(watch.status()).toMatchObject({ connected: false, reconnectFailures: 1 });
+
+      source.listError = undefined;
+      await vi.advanceTimersByTimeAsync(10);
+      expect(watch.status().connected).toBe(true);
+      watch.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports when it last synced, on the injected clock", async () => {
+    const time = new FakeTimeProvider();
+    const source = new FakeSource();
+    const watch = new KubernetesEndpointWatch(source, { time });
+    expect(watch.status().lastSyncedAtMs).toBeUndefined();
+    time.advance(5_000);
+    await watch.start();
+    expect(watch.status().lastSyncedAtMs).toBe(5_000);
+    time.advance(2_000);
+    source.push("MODIFIED", rawSlice("silo-0", "u0", "10.0.0.1"));
+    expect(watch.status()).toMatchObject({ lastSyncedAtMs: 7_000, nowMs: 7_000 });
+    watch.stop();
+  });
+
+  it("adopts the silo's logger unless one was given in its options", async () => {
+    vi.useFakeTimers();
+    try {
+      const own = recorder();
+      const silo = recorder();
+      const withOwn = new KubernetesEndpointWatch(new FakeSource(), { logger: own.logger });
+      withOwn.adoptLogger(silo.logger);
+      const without = new KubernetesEndpointWatch(
+        Object.assign(new FakeSource(), { listError: new Error("down") }),
+      );
+      without.adoptLogger(silo.logger);
+      await without.start();
+      expect(silo.entries.map((e) => e.message)).toEqual(["kubernetes endpoint relist failed"]);
+      expect(own.entries).toEqual([]);
+      without.stop();
     } finally {
       vi.useRealTimers();
     }

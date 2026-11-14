@@ -1,4 +1,4 @@
-import { type Logger, noopLogger } from "@thresh/core/logger";
+import { type Logger, defaultLogger } from "@thresh/core/logger";
 import type { Catalog } from "@thresh/runtime/catalog";
 import type { TimeProvider, TimerHandle } from "@thresh/runtime/time-provider";
 
@@ -12,7 +12,7 @@ export class ActivationCollector {
     private readonly catalog: Catalog,
     private readonly time: TimeProvider,
     private readonly intervalMs: number,
-    logger: Logger = noopLogger,
+    logger: Logger = defaultLogger,
   ) {
     this.logger = logger;
   }

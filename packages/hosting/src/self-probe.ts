@@ -22,6 +22,7 @@
  * `TimeProvider.setTimer`, so the whole loop is deterministic under a fake
  * clock in tests, and a failed tick never kills the loop.
  */
+import { defaultLogger, type Logger } from "@thresh/core/logger";
 import type { HealthCheck } from "@thresh/hosting/health-check";
 import type { TimeProvider, TimerHandle } from "@thresh/core/time-provider";
 import { withCallOptions } from "@thresh/runtime/invocation-context";
@@ -44,6 +45,8 @@ export interface SelfProbeWorkerOptions {
   timeoutMs?: number;
   /** Consecutive misses before readiness flips false. Defaults to 3 (Orleans `NumMissedProbesLimit`). */
   missedThreshold?: number;
+  /** Where the readiness flip and its recovery are reported (defaults to `defaultLogger`). */
+  logger?: Logger;
 }
 
 /**
@@ -55,6 +58,7 @@ export class SelfProbeWorker {
   private handle: TimerHandle | undefined;
   private stopped = true;
   private consecutiveMisses = 0;
+  private readonly logger: Logger;
   private readonly intervalMs: number;
   private readonly timeoutMs: number;
   private readonly missedThreshold: number;
@@ -63,6 +67,7 @@ export class SelfProbeWorker {
     this.intervalMs = options.intervalMs ?? DEFAULT_INTERVAL_MS;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.missedThreshold = options.missedThreshold ?? DEFAULT_MISSED_THRESHOLD;
+    this.logger = options.logger ?? defaultLogger;
   }
 
   /** Begin probing, one interval from now. */
@@ -88,19 +93,33 @@ export class SelfProbeWorker {
   }
 
   private async tick(): Promise<void> {
+    const { health, time } = this.options;
     try {
       await this.probeOnce();
       this.consecutiveMisses = 0;
-      // A recovered silo re-enters service — but never flip a signal a drain
+      health.update({ probeFailingSinceMs: undefined });
+      // A recovered silo re-enters service -- but never flip a signal a drain
       // already owns: a probe that misses (or, here, succeeds) only because
       // the silo is mid-shutdown says nothing about the dispatcher's health.
-      if (!this.options.health.isDraining()) {
-        this.options.health.update({ dispatcherResponsive: true });
+      if (!health.isDraining()) {
+        if (!health.ready().checks.dispatcherResponsive) {
+          this.logger.info("self-probe recovered; the silo is ready again");
+        }
+        health.update({ dispatcherResponsive: true });
       }
-    } catch {
+    } catch (error) {
       this.consecutiveMisses += 1;
-      if (this.consecutiveMisses >= this.missedThreshold && !this.options.health.isDraining()) {
-        this.options.health.update({ dispatcherResponsive: false });
+      if (this.consecutiveMisses === 1) health.update({ probeFailingSinceMs: time.now() });
+      if (this.consecutiveMisses >= this.missedThreshold && !health.isDraining()) {
+        // Reported on the flip only: a wedged dispatcher misses every interval, and one line per
+        // miss would drown the line that matters.
+        if (health.ready().checks.dispatcherResponsive) {
+          this.logger.warn("self-probe failed; the silo is no longer ready", {
+            consecutiveMisses: this.consecutiveMisses,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        health.update({ dispatcherResponsive: false });
       }
     } finally {
       if (!this.stopped) this.scheduleNext();

@@ -17,6 +17,8 @@ interface Endpoint {
   clusterId: string;
   address: SiloAddress;
   onAccept?: ConnectionAcceptHandler;
+  /** Fired once when the endpoint is unregistered, however that happens. */
+  onUnregistered?: () => void;
 }
 
 /**
@@ -30,8 +32,11 @@ export class InProcessNetwork {
     this.endpoints.set(endpoint.address.endpoint, endpoint);
   }
 
+  /** Remove the endpoint at `address`: its listener is gone, whether it closed or the fabric dropped it. */
   unregister(address: SiloAddress): void {
+    const endpoint = this.endpoints.get(address.endpoint);
     this.endpoints.delete(address.endpoint);
+    endpoint?.onUnregistered?.();
   }
 
   lookup(address: SiloAddress): Endpoint | undefined {
@@ -58,7 +63,11 @@ export class InProcessTransport implements Transport {
     onMessage: MessageHandler,
     onAccept?: ConnectionAcceptHandler,
   ): Promise<Listener> {
+    const closed: Array<() => void> = [];
     this.network.register({
+      onUnregistered: () => {
+        for (const callback of closed.splice(0)) callback();
+      },
       onMessage: (message, from) => {
         recordMessageReceived({
           "thresh.peer": from.endpoint,
@@ -72,6 +81,9 @@ export class InProcessTransport implements Transport {
     });
     return {
       address,
+      onClose: (callback) => {
+        closed.push(callback);
+      },
       close: async () => this.network.unregister(address),
     };
   }

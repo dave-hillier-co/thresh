@@ -2,7 +2,7 @@ import { GrainCallAbortedError } from "@thresh/core/errors";
 import type { InvokeMethodOptions } from "@thresh/core/invoke-options";
 import type { MayInterleavePredicate } from "@thresh/core/grain-metadata";
 import { LimitExceededException } from "@thresh/core/errors";
-import { type Logger, noopLogger } from "@thresh/core/logger";
+import { type Logger, defaultLogger } from "@thresh/core/logger";
 import {
   systemTimeProvider,
   type TimeProvider,
@@ -191,7 +191,7 @@ export class TurnScheduler {
     this.maxRequestProcessingTimeMs = options.maxRequestProcessingTimeMs;
     this.onStuck = options.onStuck;
     this.time = options.time ?? systemTimeProvider;
-    this.logger = options.logger ?? noopLogger;
+    this.logger = options.logger ?? defaultLogger;
     this.grainId = options.grainId;
   }
 
