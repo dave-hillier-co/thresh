@@ -59,6 +59,7 @@ import { loggingFilter } from "@thresh/observability/logging";
 import { MemoryTransactionalStorage } from "@thresh/transactions/memory-transactional-storage";
 import { RedisTransactionalStorage } from "@thresh/transactions/redis-transactional-storage";
 import { TransactionalStorageRegistry } from "@thresh/transactions/transactional-storage-registry";
+import type { TransactionsOptions } from "@thresh/transactions/transactions-options";
 import type { TransactionalStateStorage } from "@thresh/core/transactional-storage";
 import type { JournalStorage } from "@thresh/core/journal-storage";
 import { MemoryJournalStorage } from "@thresh/journaling/memory-journal-storage";
@@ -237,6 +238,13 @@ export interface SiloConfig {
    * to shedding disabled; see `ClusterNodeOptions.loadShedding`.
    */
   loadShedding?: Partial<LoadSheddingOptions>;
+  /**
+   * Transactions tunables (Orleans `TransactionalStateOptions`): `lockTimeoutMs`,
+   * `lockAcquireTimeoutMs`, `prepareTimeoutMs`, `remoteTransactionPingFrequencyMs`
+   * and the confirmation worker's backoff. Any field left unset takes Orleans'
+   * default (see `defaultTransactionsOptions`).
+   */
+  transactionsOptions?: Partial<TransactionsOptions>;
   /**
    * Per-activation turn-scheduler back-pressure/watchdog config (Orleans
    * `SchedulingOptions`). Any field left unset falls back to this builder's
@@ -1660,6 +1668,7 @@ export class SiloBuilder {
       ? undefined
       : (this.transactionalStorage ??
         new TransactionalStorageRegistry().add("default", new MemoryTransactionalStorage()));
+    const transactionsOptions = this.config.transactionsOptions;
     const journalStorage = this.journalStorage;
     const grainFacets = this.grainFacets;
     const snapshotThreshold = this.config.snapshotThreshold;
@@ -1811,6 +1820,7 @@ export class SiloBuilder {
             transactionalStorage,
             (manager, txId) => node.resolveTransactionStatus(manager, txId),
             time,
+            transactionsOptions,
           );
         }
         if (grainFacets !== undefined) {

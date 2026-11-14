@@ -22,6 +22,7 @@ import { StaticMembershipService } from "@thresh/runtime/static-membership";
 import type { LoadSheddingOptions } from "@thresh/runtime/load-shedding";
 import type { PlacementStrategy } from "@thresh/runtime/placement/placement-strategy";
 import { MemoryTransactionalStorage } from "@thresh/transactions/memory-transactional-storage";
+import type { TransactionsOptions } from "@thresh/transactions/transactions-options";
 import { createSilo, type SiloBuilder } from "@thresh/hosting/silo-builder";
 import type { SiloHost } from "@thresh/hosting/silo-host";
 import { createClient, type ClientNode } from "@thresh/client/client-node";
@@ -60,6 +61,8 @@ export interface TestClusterOptions {
    * `.UseTransactions()`).
    */
   transactions?: boolean;
+  /** Transactions tunables forwarded to every silo (see `SiloConfig.transactionsOptions`). */
+  transactionsOptions?: Partial<TransactionsOptions>;
   /**
    * Whether silos are built with a reminder service. Defaults to `true` (every
    * silo gets the cluster-wide `reminderTable`); pass `false` to build silos
@@ -455,6 +458,9 @@ export class TestCluster {
         ? { defaultResponseTimeout: this.options.defaultResponseTimeout }
         : {}),
       ...(this.options.callTimeout !== undefined ? { callTimeout: this.options.callTimeout } : {}),
+      ...(this.options.transactionsOptions !== undefined
+        ? { transactionsOptions: this.options.transactionsOptions }
+        : {}),
       ...(this.options.loadShedding !== undefined
         ? { loadShedding: this.options.loadShedding }
         : {}),
