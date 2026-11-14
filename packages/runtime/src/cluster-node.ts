@@ -86,6 +86,7 @@ import { LocationCache } from "@thresh/directory/location-cache";
 import { ConnectionManager } from "@thresh/messaging/connection-manager";
 import { CorrelationTable } from "@thresh/messaging/correlation-table";
 import { requestEnvelope } from "@thresh/messaging/request-envelope";
+import { sendReply } from "@thresh/messaging/send-reply";
 import {
   nextCorrelationId,
   responseTo,
@@ -619,14 +620,11 @@ export class ClusterNode {
   /** Connections held open to clients accepted on this silo, keyed by `clientId.toString()`. */
   private readonly clientConnections = new Map<string, Connection>();
   /**
-   * The same held connections, keyed by the client's synthetic identity
-   * endpoint (`preamble.siloAddress.endpoint`) instead of its `clientId`. This
-   * is what `reply()` consults: a client's `SiloAddress` is never dialable
-   * (issue #65 — the client leg no longer listens), so answering one means
-   * writing back down the accepted connection it is already holding open,
-   * found by the address it stamped as `sendingSilo`.
+   * The connection each inbound request arrived on, which is where its reply
+   * goes (see `reply`). Keyed by the request object itself, so an entry lives
+   * exactly as long as some handler still holds the request.
    */
-  private readonly clientConnectionsByEndpoint = new Map<string, Connection>();
+  private readonly arrivedOn = new WeakMap<Message, Connection>();
   /**
    * Every client this silo currently claims to host, keyed by `clientId.toString()`
    * — both connected (present in `clientConnections`) and disconnected-but-not-
@@ -636,14 +634,6 @@ export class ClusterNode {
    */
   private readonly localClientIds = new Map<string, GrainId>();
   /** When a locally held client connection closed, keyed like `localClientIds` (Orleans `ClientState.DisconnectedSince`). */
-  /**
-   * The correlation-table peer tag of each accepted client connection: every
-   * call forwarded down that socket is registered under it, so the socket
-   * closing can fail exactly those calls (`recordClosedClientConnection`)
-   * instead of leaving each to its full call timeout.
-   */
-  private readonly clientConnectionTags = new WeakMap<Connection, string>();
-  private nextClientConnectionTag = 0;
   private readonly clientDisconnectedSince = new Map<string, number>();
   /**
    * This silo's environment-statistics source (Orleans `IEnvironmentStatisticsProvider`),
@@ -806,16 +796,16 @@ export class ClusterNode {
       options.local,
       options.clusterId,
       undefined,
-      (m) => this.onMessage(m),
+      (m, _from, connection) => this.onMessage(m, connection),
       // A pooled connection dying underneath a pending call would otherwise
-      // hang it until the call timeout; fail just that peer's calls fast.
+      // hang it until the call timeout; fail exactly the calls sent on it, fast.
       // "siloUnavailable", not "unknownTarget": the callee may already be
       // mid-turn when the connection drops, so this must NOT be treated as a
       // stale, safe-to-resend rejection (Orleans `CallbackData.OnTargetSiloFail`
       // -> `SiloUnavailableException`; see the doc on `RejectionKind`).
-      (peer) =>
+      (peer, _err, connection) =>
         this.correlation.rejectFor(
-          peer.toString(),
+          connection,
           new RejectionError(`connection to ${peer.toString()} was lost`, "siloUnavailable"),
         ),
     );
@@ -1456,7 +1446,7 @@ export class ClusterNode {
   async start(): Promise<void> {
     this.listener = await this.options.transport.listen(
       this.options.local,
-      (message) => this.onMessage(message),
+      (message, _from, connection) => this.onMessage(message, connection),
       (preamble, connection) => this.onClientAccept(preamble, connection),
     );
     this.collector.start();
@@ -2283,12 +2273,13 @@ export class ClusterNode {
       method: "",
       body,
     };
-    const pending = this.sendAndAwait(conn, message, target.toString());
+    const pending = this.sendAndAwait(conn, message);
     return this.interpretResponse(await pending);
   }
 
   /**
-   * Register the call's correlation entry, put the request on the wire, and hand
+   * Register the call's correlation entry, bound to the connection it is sent
+   * on, put the request on the wire, and hand
    * back the promise its reply will complete — the one shape every awaitable send
    * in this node takes, so no site can arm an entry a failed send would strand.
    *
@@ -2298,8 +2289,12 @@ export class ClusterNode {
    * entry is released here, failing the call with the send's own error, rather
    * than left in the table to fire its deadline on nobody's call.
    */
-  private sendAndAwait(conn: Connection, message: Message, peer?: string): Promise<Message> {
-    const pending = this.correlation.register(message.correlationId, this.callTimeoutMs, peer);
+  private sendAndAwait(conn: Connection, message: Message): Promise<Message> {
+    // The call's identity: its id, this process's epoch (the reply carries it
+    // back) and the connection it goes out on (only a reply arriving there
+    // completes it, and losing that connection fails it).
+    message.correlationEpoch = this.correlation.epoch;
+    const pending = this.correlation.register(message.correlationId, this.callTimeoutMs, conn);
     try {
       conn.send(message);
     } catch (err) {
@@ -2343,14 +2338,14 @@ export class ClusterNode {
           ? await scheduler.receiveForwardedJob(job)
           : false;
       await this.reply(
-        replyTo,
+        message,
         responseTo(message, "success", this.serializer.serialize(accepted), this.options.local),
       );
     } catch (err) {
       const body = this.serializer.serialize({
         message: err instanceof Error ? err.message : String(err),
       });
-      await this.reply(replyTo, responseTo(message, "error", body, this.options.local));
+      await this.reply(message, responseTo(message, "error", body, this.options.local));
     }
   }
 
@@ -2361,14 +2356,14 @@ export class ClusterNode {
       const payload = this.serializer.deserialize<MigrationPayload>(message.body);
       const accepted = await this.acceptMigration(payload);
       await this.reply(
-        replyTo,
+        message,
         responseTo(message, "success", this.serializer.serialize(accepted), this.options.local),
       );
     } catch (err) {
       const body = this.serializer.serialize({
         message: err instanceof Error ? err.message : String(err),
       });
-      await this.reply(replyTo, responseTo(message, "error", body, this.options.local));
+      await this.reply(message, responseTo(message, "error", body, this.options.local));
     }
   }
 
@@ -2403,11 +2398,10 @@ export class ClusterNode {
 
   /**
    * Fires when the transport accepts an inbound connection. A plain silo peer
-   * carries no `clientId` in its preamble — ignore it (silo-to-silo traffic
-   * uses `onMessage` directly, not this hook). A client connection is held —
-   * by `clientId` AND by its synthetic identity endpoint, since `reply()`
-   * only has the latter to look up — so this silo can answer it and push to
-   * its client-hosted observers down the SAME socket the client dialled
+   * carries no `clientId` in its preamble — nothing to hold: its requests are
+   * answered down the connection each arrived on (`reply`). A client connection
+   * is held by `clientId`, so this silo can push to its client-hosted
+   * observers down the SAME socket the client dialled
    * (Orleans' duplex gateway model), recorded in the local `ClientDirectory`,
    * and gossiped to every other active silo so the whole cluster learns which
    * gateway the client is on. A reconnect (the client's socket to this same
@@ -2420,24 +2414,17 @@ export class ClusterNode {
     if (clientId === undefined) return;
     const key = clientId.toString();
     this.clientConnections.set(key, connection);
-    this.clientConnectionsByEndpoint.set(preamble.siloAddress.endpoint, connection);
     this.clientDisconnectedSince.delete(key);
     this.localClientIds.set(key, clientId);
-    this.clientConnectionTags.set(
-      connection,
-      `client-connection:${key}#${(this.nextClientConnectionTag += 1)}`,
-    );
     this.clientDirectory.register(clientId, this.options.local);
     this.broadcastClientGossip({ op: "register", clientId, gateway: this.options.local });
-    connection.onClose?.(() =>
-      this.recordClosedClientConnection(clientId, preamble.siloAddress.endpoint, connection),
-    );
+    connection.onClose?.(() => this.recordClosedClientConnection(clientId, connection));
   }
 
   /**
    * The transport dropped this connection on its own (Orleans
    * `Gateway.RecordClosedConnection`). Fail every call already written to this
-   * socket (tagged by `clientConnectionTags`) and free the local send path, so
+   * socket (each is bound to it in the correlation table) and free the local send path, so
    * a later call fails fast with "client not connected" instead of writing to a
    * dead socket and waiting out the caller's full response timeout. This
    * deliberately differs from Orleans, which queues messages for a
@@ -2449,24 +2436,16 @@ export class ClusterNode {
    * reconnect may already have replaced this entry before the old socket's
    * close callback runs.
    */
-  private recordClosedClientConnection(
-    clientId: GrainId,
-    endpoint: string,
-    connection: Connection,
-  ): void {
+  private recordClosedClientConnection(clientId: GrainId, connection: Connection): void {
     const key = clientId.toString();
     // Calls already written to this socket can never be answered over it:
     // fail them now, whether or not a reconnect has already replaced it.
-    const tag = this.clientConnectionTags.get(connection);
-    if (tag !== undefined) {
-      this.correlation.rejectFor(
-        tag,
-        new RejectionError(`connection to client ${key} was lost`, "unknownTarget"),
-      );
-    }
+    this.correlation.rejectFor(
+      connection,
+      new RejectionError(`connection to client ${key} was lost`, "unknownTarget"),
+    );
     if (this.clientConnections.get(key) !== connection) return;
     this.clientConnections.delete(key);
-    this.clientConnectionsByEndpoint.delete(endpoint);
     this.clientDisconnectedSince.set(key, this.time.now());
   }
 
@@ -2598,7 +2577,7 @@ export class ClusterNode {
       conn.send(message);
       return undefined;
     }
-    const pending = this.sendAndAwait(conn, message, this.clientConnectionTags.get(conn));
+    const pending = this.sendAndAwait(conn, message);
     return this.interpretResponse(await pending);
   }
 
@@ -2613,7 +2592,7 @@ export class ClusterNode {
     if (conn === undefined) {
       if (message.direction === "oneWay" || replyTo === undefined) return;
       await this.reply(
-        replyTo,
+        message,
         responseTo(
           message,
           "rejection",
@@ -2636,7 +2615,7 @@ export class ClusterNode {
       return;
     }
     try {
-      const pending = this.sendAndAwait(conn, forward, this.clientConnectionTags.get(conn));
+      const pending = this.sendAndAwait(conn, forward);
       const clientResponse = await pending;
       if (replyTo === undefined) return;
       const relayed = responseTo(
@@ -2645,11 +2624,11 @@ export class ClusterNode {
         clientResponse.body,
         this.options.local,
       );
-      await this.reply(replyTo, relayed);
+      await this.reply(message, relayed);
     } catch (err) {
       if (replyTo === undefined) return;
       const { kind, body } = this.serializeError(err);
-      await this.reply(replyTo, responseTo(message, kind, body, this.options.local));
+      await this.reply(message, responseTo(message, kind, body, this.options.local));
     }
   }
 
@@ -2682,7 +2661,7 @@ export class ClusterNode {
       conn.send(message);
       return undefined;
     }
-    const pending = this.sendAndAwait(conn, message, silo.toString());
+    const pending = this.sendAndAwait(conn, message);
     const response = await pending;
     // The callee had to forward this call on to its own CAS winner: `silo` is
     // a stale address for `req.target`, so evict it here rather than routing
@@ -2759,11 +2738,18 @@ export class ClusterNode {
     throw new GrainCallError(payload.message);
   }
 
-  private onMessage(message: Message): void {
+  /**
+   * Every inbound message, with the connection it arrived on. A response
+   * completes only the call that went out on that connection (see
+   * `CorrelationTable.complete`); a request remembers the connection, which is
+   * where `reply` answers it.
+   */
+  private onMessage(message: Message, connection: Connection | undefined): void {
     if (message.direction === "response") {
-      this.correlation.complete(message);
+      this.correlation.complete(message, connection);
       return;
     }
+    if (connection !== undefined) this.arrivedOn.set(message, connection);
     this.runInbound(message, this.inboundHandlerFor(message));
   }
 
@@ -2826,7 +2812,7 @@ export class ClusterNode {
       if (message.direction !== "request" || replyTo === undefined) return;
       try {
         const { kind, body } = this.serializeError(err);
-        void this.reply(replyTo, responseTo(message, kind, body, this.options.local));
+        void this.reply(message, responseTo(message, kind, body, this.options.local));
       } catch {
         // The error itself could not be encoded; the caller's deadline is the backstop.
       }
@@ -2854,12 +2840,12 @@ export class ClusterNode {
       const op = this.serializer.deserialize<DirectoryOp>(message.body);
       const result = await this.applyDirectoryOp(op);
       await this.reply(
-        replyTo,
+        message,
         responseTo(message, "success", this.serializer.serialize(result), this.options.local),
       );
     } catch (err) {
       const { kind, body } = this.serializeError(err);
-      await this.reply(replyTo, responseTo(message, kind, body, this.options.local));
+      await this.reply(message, responseTo(message, kind, body, this.options.local));
     }
   }
 
@@ -2940,7 +2926,7 @@ export class ClusterNode {
     const replyTo = message.sendingSilo;
     if (replyTo === undefined) return;
     await this.reply(
-      replyTo,
+      message,
       responseTo(
         message,
         "success",
@@ -3015,7 +3001,7 @@ export class ClusterNode {
     const stats = this.serializer.deserialize<LoadSnapshot>(message.body);
     this.remoteLoadStats.set(replyTo.ringKey, stats);
     await this.reply(
-      replyTo,
+      message,
       responseTo(message, "success", this.serializer.serialize(null), this.options.local),
     );
   }
@@ -3036,7 +3022,7 @@ export class ClusterNode {
     const replyTo = message.sendingSilo;
     if (replyTo === undefined) return;
     await this.reply(
-      replyTo,
+      message,
       responseTo(
         message,
         "success",
@@ -3085,7 +3071,7 @@ export class ClusterNode {
     const replyTo = message.sendingSilo;
     if (replyTo === undefined) return;
     await this.reply(
-      replyTo,
+      message,
       responseTo(
         message,
         "success",
@@ -3136,7 +3122,7 @@ export class ClusterNode {
     const types = this.serializer.deserialize<string[] | null>(message.body);
     const ids = this.localDetailedGrainIds(types ?? undefined);
     await this.reply(
-      replyTo,
+      message,
       responseTo(message, "success", this.serializer.serialize(ids), this.options.local),
     );
   }
@@ -3186,7 +3172,7 @@ export class ClusterNode {
     if (replyTo === undefined) return;
     const id = this.serializer.deserialize<GrainId>(message.body);
     await this.reply(
-      replyTo,
+      message,
       responseTo(
         message,
         "success",
@@ -3230,7 +3216,7 @@ export class ClusterNode {
     const ageLimitMs = this.serializer.deserialize<number>(message.body);
     await this.catalog.collectIdle(ageLimitMs);
     await this.reply(
-      replyTo,
+      message,
       responseTo(message, "success", this.serializer.serialize(null), this.options.local),
     );
   }
@@ -3277,12 +3263,12 @@ export class ClusterNode {
     if (replyTo === undefined) return;
     try {
       await this.reply(
-        replyTo,
+        message,
         responseTo(message, "success", this.serializer.serialize(null), this.options.local),
       );
     } catch (err) {
       const { kind, body } = this.serializeError(err);
-      await this.reply(replyTo, responseTo(message, kind, body, this.options.local));
+      await this.reply(message, responseTo(message, kind, body, this.options.local));
     }
   }
 
@@ -3331,12 +3317,12 @@ export class ClusterNode {
       }>(message.body);
       const result = await this.executeProviderCommand(providerName, command, arg);
       await this.reply(
-        replyTo,
+        message,
         responseTo(message, "success", this.serializer.serialize(result), this.options.local),
       );
     } catch (err) {
       const { kind, body } = this.serializeError(err);
-      await this.reply(replyTo, responseTo(message, kind, body, this.options.local));
+      await this.reply(message, responseTo(message, kind, body, this.options.local));
     }
   }
 
@@ -3412,7 +3398,7 @@ export class ClusterNode {
     );
     const moved = await this.migrateRandomActivations(target, count);
     await this.reply(
-      replyTo,
+      message,
       responseTo(message, "success", this.serializer.serialize(moved), this.options.local),
     );
   }
@@ -3526,12 +3512,12 @@ export class ClusterNode {
           ? { type: "exchangedRecently", acceptedGrainIds: [], givenGrainIds: [] }
           : await this.repartitioner.acceptExchangeRequest(request);
       await this.reply(
-        replyTo,
+        message,
         responseTo(message, "success", this.serializer.serialize(response), this.options.local),
       );
     } catch (err) {
       const { kind, body } = this.serializeError(err);
-      await this.reply(replyTo, responseTo(message, kind, body, this.options.local));
+      await this.reply(message, responseTo(message, kind, body, this.options.local));
     }
   }
 
@@ -3646,7 +3632,7 @@ export class ClusterNode {
       if (message.direction === "oneWay" || replyTo === undefined) return;
       const rejection: RejectionPayload = { message: "Gateway too busy", kind: "overloaded" };
       await this.reply(
-        replyTo,
+        message,
         responseTo(message, "rejection", this.serializer.serialize(rejection), this.options.local),
       );
       return;
@@ -3711,7 +3697,7 @@ export class ClusterNode {
       );
       if (forwardedTo !== undefined) response.staleCacheEntry = true;
       this.attachParticipants(response, transaction);
-      await this.reply(replyTo, response);
+      await this.reply(message, response);
     } catch (err) {
       if (message.direction === "oneWay" || replyTo === undefined) {
         // No reply channel to carry it back on: report it the way a detached one-way dispatch does.
@@ -3724,7 +3710,7 @@ export class ClusterNode {
       const response = responseTo(message, kind, body, this.options.local);
       if (forwardedTo !== undefined) response.staleCacheEntry = true;
       this.attachParticipants(response, transaction);
-      await this.reply(replyTo, response);
+      await this.reply(message, response);
     }
   }
 
@@ -3778,24 +3764,21 @@ export class ClusterNode {
   }
 
   /**
-   * Answer `to`, preferring a held accepted connection over dialling. A
-   * client's address is never dialable (issue #65) so a reply to one always
-   * takes this path, resolved by `clientConnectionsByEndpoint`; a silo peer's
-   * address IS dialable, so a miss here just falls through to the normal
-   * dial-and-pool path unchanged.
+   * Answer `request` down the connection it arrived on — to a silo as to a
+   * client, never down a second connection dialled back to `sendingSilo`
+   * (Orleans answers on the connection a message came in on). A reply that
+   * cannot be sent is logged and counted: the request has already run, and
+   * its caller will see the connection loss or its own timeout, so there is
+   * nothing to retry here, but it is never dropped silently.
    */
-  private async reply(to: SiloAddress, message: Message): Promise<void> {
-    try {
-      const held = this.clientConnectionsByEndpoint.get(to.endpoint);
-      if (held !== undefined) {
-        held.send(message);
-        return;
-      }
-      const conn = await this.connections.get(to);
-      conn.send(message);
-    } catch {
-      // The caller has gone (e.g. drained mid-call); dropping the reply is fine —
-      // it will re-resolve on retry.
-    }
+  private async reply(request: Message, response: Message): Promise<void> {
+    const failed = sendReply(this.arrivedOn.get(request), request, response);
+    if (failed === undefined) return;
+    this.logger.warn("could not send a reply down the connection its request arrived on", {
+      to: request.sendingSilo?.toString() ?? "unknown",
+      system: request.system ?? "grain",
+      correlationId: String(request.correlationId),
+      error: String(failed.failure),
+    });
   }
 }

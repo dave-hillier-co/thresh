@@ -6,17 +6,28 @@ import { GrainId } from "@thresh/core/grain-id";
 import { SiloAddress } from "@thresh/core/silo-address";
 import { CorrelationTable } from "@thresh/messaging/correlation-table";
 import { JsonSerializer } from "@thresh/messaging/json-serializer";
-import { nextCorrelationId, responseTo, type Message } from "@thresh/messaging/message";
-import type { Connection, ConnectionPreamble, Listener } from "@thresh/messaging/transport";
+import {
+  PROCESS_EPOCH,
+  nextCorrelationId,
+  responseTo,
+  type Message,
+} from "@thresh/messaging/message";
+import {
+  PROTOCOL_VERSION,
+  type Connection,
+  type ConnectionPreamble,
+  type Listener,
+} from "@thresh/messaging/transport";
 import { WebSocketTransport } from "@thresh/messaging/web-socket-transport";
 
 const CLUSTER = "c1";
 const body = new JsonSerializer();
 const loopback = (name: string) => new SiloAddress(name, `uid-${name}`, "127.0.0.1:0");
 const preamble = (self: SiloAddress, clusterId = CLUSTER): ConnectionPreamble => ({
-  protocolVersion: 2,
+  protocolVersion: PROTOCOL_VERSION,
   siloAddress: self,
   clusterId,
+  epoch: 1,
 });
 const splitHostPort = (endpoint: string): { host: string; port: number } => {
   const i = endpoint.lastIndexOf(":");
@@ -40,6 +51,7 @@ const request = (
   payload: number,
 ): Message => ({
   correlationId,
+  correlationEpoch: PROCESS_EPOCH,
   direction,
   targetGrain: new GrainId("Doubler", "x"),
   interfaceId: 0,

@@ -53,6 +53,7 @@ import { SiloAddress } from "@thresh/core/silo-address";
 import { ConnectionManager } from "@thresh/messaging/connection-manager";
 import { CorrelationTable } from "@thresh/messaging/correlation-table";
 import { requestEnvelope } from "@thresh/messaging/request-envelope";
+import { sendReply } from "@thresh/messaging/send-reply";
 import {
   nextCorrelationId,
   responseTo,
@@ -162,6 +163,8 @@ export class ClientNode implements Dispatcher {
   private readonly now: () => number;
   private readonly clientId: GrainId;
   private readonly localObjects = new Map<string, LocalObjectEntry>();
+  /** The connection each inbound hosted-object request arrived on, where its reply goes. */
+  private readonly arrivedOn = new WeakMap<Message, Connection>();
   /**
    * Per-client store of `AbortController`s for cancellation tokens bound on
    * this client's hosted-object dispatch path, keyed by `tokenId` — the
@@ -194,7 +197,14 @@ export class ClientNode implements Dispatcher {
       this.localAddress,
       config.clusterId,
       this.clientId,
-      (m) => this.onMessage(m),
+      (m, _from, connection) => this.onMessage(m, connection),
+      // A gateway connection lost under a pending call fails exactly the calls
+      // sent on it, now, rather than at their timeout.
+      (gateway, _err, connection) =>
+        this.correlation.rejectFor(
+          connection,
+          new RejectionError(`connection to ${gateway.toString()} was lost`, "siloUnavailable"),
+        ),
     );
     this.serializer =
       config.serializer ??
@@ -443,7 +453,10 @@ export class ClientNode implements Dispatcher {
    * another gateway, and a request that never left can never be answered.
    */
   private sendAndAwait(conn: Connection, message: Message, timeoutMs: number): Promise<Message> {
-    const pending = this.correlation.register(message.correlationId, timeoutMs);
+    // The call's identity: its id, this process's epoch and the connection it
+    // goes out on (see `CorrelationTable`).
+    message.correlationEpoch = this.correlation.epoch;
+    const pending = this.correlation.register(message.correlationId, timeoutMs, conn);
     try {
       conn.send(message);
     } catch (err) {
@@ -453,14 +466,16 @@ export class ClientNode implements Dispatcher {
     return pending;
   }
 
-  private onMessage(message: Message): void {
+  /** Every message a gateway sends back down a connection this client dialled, with that connection. */
+  private onMessage(message: Message, connection: Connection | undefined): void {
     if (message.direction === "response") {
-      this.correlation.complete(message);
+      this.correlation.complete(message, connection);
       return;
     }
     // The only other traffic a client receives is a grain calling back into
     // one of its hosted observer objects (`createObjectReference`).
     if (isObserverGrainId(message.targetGrain)) {
+      if (connection !== undefined) this.arrivedOn.set(message, connection);
       void this.dispatchToLocalObject(message);
     }
     // Any other inbound request/oneWay targets a real grain — a client hosts
@@ -632,16 +647,13 @@ export class ClientNode implements Dispatcher {
     return new GrainCancellationToken({ tokenId: found.tokenId, signal: controller.signal });
   }
 
-  /** Send a reply for a hosted-object dispatch back to the calling silo. */
+  /**
+   * Send a reply for a hosted-object dispatch down the connection its request
+   * arrived on. A reply that cannot be sent is counted: the hosted object has
+   * already run, and the calling silo sees the connection loss or its timeout.
+   */
   private async replyToCaller(request: Message, response: Message): Promise<void> {
-    if (request.sendingSilo === undefined) return;
-    try {
-      const conn = await this.connections.get(request.sendingSilo);
-      conn.send(response);
-    } catch {
-      // The caller has gone; dropping the reply is fine, matching the silo's
-      // own best-effort reply behaviour.
-    }
+    sendReply(this.arrivedOn.get(request), request, response);
   }
 
   /**

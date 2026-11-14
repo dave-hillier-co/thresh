@@ -101,20 +101,23 @@ class GatedTransport implements Transport {
     onMessage: MessageHandler,
     onAccept?: ConnectionAcceptHandler,
   ): Promise<Listener> {
-    const gated: MessageHandler = (message, from) => {
-      const isHeld = !this.open && from.equals(this.holdFrom) && this.holds(message);
-      if (!isHeld) return onMessage(message, from);
-      this.parked.push(() => void onMessage(message, from));
-      return undefined;
-    };
-    return this.inner.listen(address, gated, onAccept);
+    return this.inner.listen(address, this.gated(onMessage), onAccept);
   }
+  /** A reply arrives on the connection this side dialled, so it is gated there too. */
   connect(
     to: SiloAddress,
     preamble: ConnectionPreamble,
     onMessage?: MessageHandler,
   ): Promise<Connection> {
-    return this.inner.connect(to, preamble, onMessage);
+    return this.inner.connect(to, preamble, onMessage && this.gated(onMessage));
+  }
+  private gated(onMessage: MessageHandler): MessageHandler {
+    return (message, from, connection) => {
+      const isHeld = !this.open && from.equals(this.holdFrom) && this.holds(message);
+      if (!isHeld) return onMessage(message, from, connection);
+      this.parked.push(() => void onMessage(message, from, connection));
+      return undefined;
+    };
   }
   /** Deliver every parked request and stop parking. */
   release(): void {
@@ -152,7 +155,11 @@ class FlakyTransport implements Transport {
   ): Promise<Listener> {
     return this.inner.listen(address, onMessage, onAccept);
   }
-  async connect(to: SiloAddress, preamble: ConnectionPreamble): Promise<Connection> {
+  async connect(
+    to: SiloAddress,
+    preamble: ConnectionPreamble,
+    onMessage?: MessageHandler,
+  ): Promise<Connection> {
     if (to.equals(this.failTarget) && this.remainingFailures > 0) {
       this.remainingFailures--;
       if (this.cause !== undefined) throw connectFailure(to, "simulated stall", this.cause);
@@ -161,7 +168,7 @@ class FlakyTransport implements Transport {
       // empty answer from a peer that hosts nothing, which is not what this simulates.
       throw new RejectionError("simulated transient network failure", "siloUnavailable");
     }
-    return this.inner.connect(to, preamble);
+    return this.inner.connect(to, preamble, onMessage);
   }
 }
 
