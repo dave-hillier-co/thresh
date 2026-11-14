@@ -99,6 +99,27 @@ describe("toEndpointSlice", () => {
 });
 
 describe("KubernetesEndpointWatch", () => {
+  it("carries each slice's resourceVersion through to the membership version", async () => {
+    const source = new FakeSource();
+    source.items = [
+      { ...rawSlice("silo-0", "u0", "10.0.0.1"), metadata: { name: "s", resourceVersion: "40" } },
+    ];
+    source.resourceVersion = "900"; // the list's global revision: not a view identity
+    const watch = new KubernetesEndpointWatch(source);
+    const local = new SiloAddress("silo-0", "u0", "10.0.0.1:11111");
+    const membership = new KubernetesMembership(local, watch, { portName: "silo" });
+    await watch.start();
+    expect(membership.current().version).toBe(40);
+
+    source.push("MODIFIED", {
+      ...rawSlice("silo-1", "u1", "10.0.0.2"),
+      metadata: { name: "s", resourceVersion: "57" },
+    });
+    expect(membership.current().version).toBe(57);
+    source.push("DELETED", { metadata: { name: "s", resourceVersion: "63" } });
+    expect(membership.current().version).toBe(63);
+  });
+
   it("lists existing slices on start so membership reflects ready silos", async () => {
     const source = new FakeSource();
     source.items = [rawSlice("silo-0", "u0", "10.0.0.1"), rawSlice("silo-1", "u1", "10.0.0.2")];
