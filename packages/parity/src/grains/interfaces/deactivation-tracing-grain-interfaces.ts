@@ -15,6 +15,7 @@ export interface IDeactivationTracingTestGrain extends GrainKey<bigint> {
 
 export const IDeactivationTracingTestGrain = defineGrainInterface<IDeactivationTracingTestGrain>(
   "UnitTests.GrainInterfaces.IDeactivationTracingTestGrain",
+  { key: "integer" },
 );
 
 /** Deactivation tracing with a persistent-state write from inside `onDeactivate`. */
@@ -26,6 +27,7 @@ export interface IDeactivationWithWorkTracingTestGrain extends GrainKey<bigint> 
 export const IDeactivationWithWorkTracingTestGrain =
   defineGrainInterface<IDeactivationWithWorkTracingTestGrain>(
     "UnitTests.GrainInterfaces.IDeactivationWithWorkTracingTestGrain",
+    { key: "integer" },
   );
 
 /** Deactivation tracing where `onDeactivate` throws. */
@@ -36,6 +38,7 @@ export interface IDeactivationWithExceptionTracingTestGrain extends GrainKey<big
 export const IDeactivationWithExceptionTracingTestGrain =
   defineGrainInterface<IDeactivationWithExceptionTracingTestGrain>(
     "UnitTests.GrainInterfaces.IDeactivationWithExceptionTracingTestGrain",
+    { key: "integer" },
   );
 
 /** Deactivation tracing for an escaped `InconsistentStateError` (Orleans' `InconsistentStateException`). */
@@ -47,6 +50,7 @@ export interface IInconsistentStateDeactivationGrain extends GrainKey<bigint> {
 export const IInconsistentStateDeactivationGrain =
   defineGrainInterface<IInconsistentStateDeactivationGrain>(
     "UnitTests.GrainInterfaces.IInconsistentStateDeactivationGrain",
+    { key: "integer" },
   );
 
 /** A grain whose constructor throws, so activation never completes. */
@@ -57,6 +61,7 @@ export interface IActivationFailureDeactivationGrain extends GrainKey<bigint> {
 export const IActivationFailureDeactivationGrain =
   defineGrainInterface<IActivationFailureDeactivationGrain>(
     "UnitTests.GrainInterfaces.IActivationFailureDeactivationGrain",
+    { key: "integer" },
   );
 
 /**
@@ -76,4 +81,5 @@ export interface IDeactivationMigrationTracingTestGrain extends GrainKey<bigint>
 export const IDeactivationMigrationTracingTestGrain =
   defineGrainInterface<IDeactivationMigrationTracingTestGrain>(
     "UnitTests.GrainInterfaces.IDeactivationMigrationTracingTestGrain",
+    { key: "integer" },
   );

@@ -30,6 +30,7 @@ interface IStatelessWorkerStreamConsumerGrain extends GrainKey<bigint> {
 const IStatelessWorkerStreamConsumerGrain =
   defineGrainInterface<IStatelessWorkerStreamConsumerGrain>(
     "UnitTests.GrainInterfaces.IStatelessWorkerStreamConsumerGrain",
+    { key: "integer" },
   );
 
 /** Ported from `StatelessWorkerStreamConsumerGrain`: `[StatelessWorker(1)]`. */

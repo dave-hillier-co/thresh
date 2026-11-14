@@ -18,15 +18,19 @@ export { ICountersGrain };
 // their own `GrainInterface`, identical in shape to `ICountersGrain`.
 export const ICountersGrainStateStoreNonReentrant = defineGrainInterface<ICountersGrain>(
   "TestGrainInterfaces.ICountersGrain.StateStoreNonReentrant",
+  { key: "integer" },
 );
 export const ICountersGrainStateStoreReentrant = defineGrainInterface<ICountersGrain>(
   "TestGrainInterfaces.ICountersGrain.StateStoreReentrant",
+  { key: "integer" },
 );
 export const ICountersGrainLogStoreNonReentrant = defineGrainInterface<ICountersGrain>(
   "TestGrainInterfaces.ICountersGrain.LogStoreNonReentrant",
+  { key: "integer" },
 );
 export const ICountersGrainLogStoreReentrant = defineGrainInterface<ICountersGrain>(
   "TestGrainInterfaces.ICountersGrain.LogStoreReentrant",
+  { key: "integer" },
 );
 
 interface CountersState {

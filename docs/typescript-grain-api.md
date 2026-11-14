@@ -108,6 +108,8 @@ type Account = GrainKey<bigint> & {
 
 Both paths resolve to the same key type. The older `GrainWithStringKey`,
 `GrainWithIntegerKey`, and compound-key marker names remain supported as aliases
-of `GrainKey<TKey>`, so a marked interface keeps its caller key type with no
-edit. If no kind is declared and no marker is present,
-`getGrain` defaults to `string` keys.
+of `GrainKey<TKey>`, so a marked interface keeps its caller key type. A marker
+is erased at runtime, so a marked interface with a non-string key must also
+state the kind as a value, `defineGrainInterface<Account>("Account", { key: "integer" })`;
+without it the call does not compile. If no kind is declared and no marker is
+present, `getGrain` defaults to `string` keys.

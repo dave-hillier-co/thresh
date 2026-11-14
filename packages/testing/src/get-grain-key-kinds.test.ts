@@ -21,7 +21,9 @@ interface IMarkedCounter extends GrainWithIntegerKey {
 const IDeclaredCounter = defineGrainInterface<ICounter, "integer">("testing.IDeclaredCounter", {
   key: "integer",
 });
-const IMarkedCounterDef = defineGrainInterface<IMarkedCounter>("testing.IMarkedCounter");
+const IMarkedCounterDef = defineGrainInterface<IMarkedCounter>("testing.IMarkedCounter", {
+  key: "integer",
+});
 const IStringCounter = defineGrainInterface<ICounter>("testing.IStringCounter");
 
 function keyKindsAreEnforced(

@@ -100,7 +100,7 @@ describe("the GrainKey<TKey> marker", () => {
 
   it("agrees with a kind declared on the definition instead", () => {
     type Marked = GrainKeyMarker<bigint> & { ping(): Promise<void> };
-    const IIntersected = defineGrainInterface<Marked>("test.IIntersected");
+    const IIntersected = defineGrainInterface<Marked>("test.IIntersected", { key: "integer" });
     const IDeclared = defineGrainInterface<IUnmarked, "integer">("test.IDeclaredKind", {
       key: "integer",
     });
@@ -192,7 +192,9 @@ describe("KeyKindFromMarker", () => {
 });
 
 describe("the `key` option", () => {
-  const IMarkedInteger = defineGrainInterface<IIntegerKeyed>("test.IMarkedInteger");
+  const IMarkedInteger = defineGrainInterface<IIntegerKeyed>("test.IMarkedInteger", {
+    key: "integer",
+  });
   const IOptionInteger = defineGrainInterface<IUnmarked, "integer">("test.IOptionInteger", {
     key: "integer",
   });
@@ -209,10 +211,10 @@ describe("the `key` option", () => {
     expect(true).toBe(true);
   });
 
-  it("leaves `key` absent when the kind comes from a marker", () => {
-    // The kind is still carried in the type; only the runtime field is absent.
+  it("records the kind a marked interface states beside its marker", () => {
+    // The type carries the kind for callers; the stated value carries it for the runtime.
     expectTypeOf<KeyArgOf<typeof IMarkedInteger>>().toEqualTypeOf<bigint>();
-    expect(IMarkedInteger.key).toBeUndefined();
+    expect(IMarkedInteger.key).toBe("integer");
   });
 
   it("defaults an undeclared, unmarked interface to a string key", () => {
@@ -225,8 +227,8 @@ describe("the `key` option", () => {
 describe("AnyGrainInterface", () => {
   it("accepts a definition of any declared kind", () => {
     const erased: AnyGrainInterface[] = [
-      defineGrainInterface<IIntegerKeyed>("test.IErasedInteger"),
-      defineGrainInterface<IGuidCompoundKeyed>("test.IErasedCompound"),
+      defineGrainInterface<IIntegerKeyed>("test.IErasedInteger", { key: "integer" }),
+      defineGrainInterface<IGuidCompoundKeyed>("test.IErasedCompound", { key: "guid-compound" }),
       defineGrainInterface<IUnmarked, "guid">("test.IErasedGuid", { key: "guid" }),
     ];
     expect(erased).toHaveLength(3);
@@ -256,10 +258,10 @@ describe("the core getGrain seams", () => {
   });
 
   it("still takes it from a legacy marker when no kind is declared", () => {
-    const IMarked = defineGrainInterface<IIntegerKeyed>("test.ISeamMarked");
+    const IMarked = defineGrainInterface<IIntegerKeyed>("test.ISeamMarked", { key: "integer" });
     expectTypeOf<GrainRuntime["getGrain"]>().toBeCallableWith(IMarked, 1n);
     expectTypeOf<GrainSetup["getGrain"]>().toBeCallableWith(IMarked, 1n);
-    expect(IMarked.key).toBeUndefined();
+    expect(IMarked.key).toBe("integer");
   });
 
   it("reaches the protected accessor on the Grain base class", () => {

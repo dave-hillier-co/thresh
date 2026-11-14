@@ -13,4 +13,5 @@ export interface INullStateGrain extends GrainKey<bigint> {
 
 export const INullStateGrain = defineGrainInterface<INullStateGrain>(
   "UnitTests.GrainInterfaces.INullStateGrain",
+  { key: "integer" },
 );

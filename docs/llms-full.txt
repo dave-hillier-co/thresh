@@ -607,11 +607,19 @@ summary of the deliberate deviations. [`EPICS.md`](../EPICS.md) tracks what is s
   interface a `defineGrain` definition carries) is the thing callers pass to `getGrain`. Its **id is
   `stableHash32(name)`** — the name *is* the wire identity, so a rename is a wire break with no
   compile-time signal (see below).
-- **A grain's key kind is a type argument, not a marker interface.** `"string"` (the default),
-  `"integer"`, `"guid"`, `"integer-compound"` or `"guid-compound"`, stated once —
-  `defineGrainInterface<ICounter, "integer">("ICounter")` — and it determines the type of the `key`
-  argument at every `getGrain`. The legacy `GrainWith*Key` phantom markers still work and still imply
-  the same kind, but they are deprecated; new code states the kind.
+- **A grain's key kind is stated as a value, and it types the key.** `"string"` (the default, which
+  needs no statement), `"integer"`, `"guid"`, `"integer-compound"` or `"guid-compound"`, stated as
+  `defineGrainInterface<ICounter, "integer">("ICounter", { key: "integer" })` (or `{ key }` on
+  `defineGrain`); it determines the type of the `key` argument at every `getGrain`. The
+  `GrainWith*Key` phantom markers still type the key, but a non-string kind that is only a marker
+  or a type argument does not compile: it is erased at runtime, so the runtime could not read a key
+  that arrived as text.
+  As in Orleans, a grain id is its type plus the key text: the kind is not part of identity, and
+  the grain type decides how the text is read. The declared kind is enforced by `getGrain`, used to
+  read the key of an implicitly subscribed grain, and used to canonicalise every id before the
+  catalog, directory or ring sees it, so `"005"`, `"+5"` and `5n` (or an upper-case guid string and
+  the `Guid`) are one grain and one activation, and the grain sees its key as its declared kind
+  whichever arrived first.
 - **Serialization is registered at runtime** (`@serializable`) rather than source-generated;
   MessagePack is the default wire format.
 - **Transport is WebSocket over HTTP**, behind an abstraction.
@@ -1149,7 +1157,9 @@ type Account = GrainKey<bigint> & {
 
 Both paths resolve to the same key type. The older `GrainWithStringKey`,
 `GrainWithIntegerKey`, and compound-key marker names remain supported as aliases
-of `GrainKey<TKey>`, so a marked interface keeps its caller key type with no
-edit. If no kind is declared and no marker is present,
-`getGrain` defaults to `string` keys.
+of `GrainKey<TKey>`, so a marked interface keeps its caller key type. A marker
+is erased at runtime, so a marked interface with a non-string key must also
+state the kind as a value, `defineGrainInterface<Account>("Account", { key: "integer" })`;
+without it the call does not compile. If no kind is declared and no marker is
+present, `getGrain` defaults to `string` keys.
 

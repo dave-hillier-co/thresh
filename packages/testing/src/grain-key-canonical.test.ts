@@ -24,6 +24,10 @@ const ICanonicalGuid = defineGrainInterface<ICanonicalGuid>("ICanonicalGuid.iden
   key: "guid",
 });
 
+interface IMarkerOnly extends GrainKey<bigint> {
+  keyAsSeen(): Promise<string>;
+}
+
 let constructed = 0;
 
 function describeKey(grainId: GrainId): string {
@@ -112,5 +116,17 @@ describe("a string-built id with non-canonical key text names the grain its type
         .keyAsSeen();
       expect(constructed).toBe(1);
     });
+  });
+});
+
+describe("an interface whose key kind is only a type marker", () => {
+  it("requires the kind to be stated as a value", () => {
+    // @ts-expect-error a bigint marker alone is erased at runtime: the kind must be stated
+    const unstated = defineGrainInterface<IMarkerOnly>("IMarkerOnly.identity.unstated");
+    expect(unstated.key).toBeUndefined();
+    const stated = defineGrainInterface<IMarkerOnly>("IMarkerOnly.identity.stated", {
+      key: "integer",
+    });
+    expect(stated.key).toBe("integer");
   });
 });

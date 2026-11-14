@@ -14,6 +14,7 @@ export interface IDoSomethingEmptyGrain extends IDoSomething, GrainKey<bigint> {
 
 export const IDoSomethingEmptyGrain = defineGrainInterface<IDoSomethingEmptyGrain>(
   "TestGrainInterfaces.IDoSomethingEmptyGrain",
+  { key: "integer" },
 );
 
 export interface IDoSomethingEmptyWithMoreGrain extends IDoSomethingEmptyGrain {
@@ -22,6 +23,7 @@ export interface IDoSomethingEmptyWithMoreGrain extends IDoSomethingEmptyGrain {
 
 export const IDoSomethingEmptyWithMoreGrain = defineGrainInterface<IDoSomethingEmptyWithMoreGrain>(
   "TestGrainInterfaces.IDoSomethingEmptyWithMoreGrain",
+  { key: "integer" },
 );
 
 // Deliberately empty: mirrors the upstream interface-hierarchy shape exactly.
@@ -30,6 +32,7 @@ export interface IDoSomethingWithMoreEmptyGrain extends IDoSomethingEmptyWithMor
 
 export const IDoSomethingWithMoreEmptyGrain = defineGrainInterface<IDoSomethingWithMoreEmptyGrain>(
   "TestGrainInterfaces.IDoSomethingWithMoreEmptyGrain",
+  { key: "integer" },
 );
 
 export interface IDoSomethingWithMoreGrain extends IDoSomething, GrainKey<bigint> {
@@ -41,6 +44,7 @@ export interface IDoSomethingWithMoreGrain extends IDoSomething, GrainKey<bigint
 
 export const IDoSomethingWithMoreGrain = defineGrainInterface<IDoSomethingWithMoreGrain>(
   "TestGrainInterfaces.IDoSomethingWithMoreGrain",
+  { key: "integer" },
 );
 
 export interface IDoSomethingCombinedGrain
@@ -52,4 +56,5 @@ export interface IDoSomethingCombinedGrain
 
 export const IDoSomethingCombinedGrain = defineGrainInterface<IDoSomethingCombinedGrain>(
   "TestGrainInterfaces.IDoSomethingCombinedGrain",
+  { key: "integer" },
 );

@@ -14,6 +14,7 @@ export interface IReminderTestGrain extends GrainKey<bigint> {
 
 export const IReminderTestGrain = defineGrainInterface<IReminderTestGrain>(
   "UnitTests.GrainInterfaces.IReminderTestGrain",
+  { key: "integer" },
 );
 
 // Upstream's IReminderTestGrain2 is much larger (persistent state, counters, file-backed
@@ -27,4 +28,5 @@ export interface IReminderTestGrain2 extends GrainKey<Guid> {
 
 export const IReminderTestGrain2 = defineGrainInterface<IReminderTestGrain2>(
   "UnitTests.GrainInterfaces.IReminderTestGrain2",
+  { key: "guid" },
 );

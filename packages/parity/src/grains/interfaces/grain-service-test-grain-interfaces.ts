@@ -23,6 +23,7 @@ export interface IGrainServiceTestGrain extends GrainKey<bigint> {
 
 export const IGrainServiceTestGrain = defineGrainInterface<IGrainServiceTestGrain>(
   "UnitTests.GrainInterfaces.IGrainServiceTestGrain",
+  { key: "integer" },
 );
 
 /**

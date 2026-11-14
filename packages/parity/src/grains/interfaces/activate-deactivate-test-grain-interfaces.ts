@@ -14,6 +14,7 @@ export interface IActivateDeactivateWatcherGrain extends GrainKey<bigint> {
 export const IActivateDeactivateWatcherGrain =
   defineGrainInterface<IActivateDeactivateWatcherGrain>(
     "UnitTests.GrainInterfaces.IActivateDeactivateWatcherGrain",
+    { key: "integer" },
   );
 
 // Note: upstream self-manages activate/deactivate watching via copy-pasted
@@ -28,6 +29,7 @@ export interface ISimpleActivateDeactivateTestGrain extends GrainKey<bigint> {
 export const ISimpleActivateDeactivateTestGrain =
   defineGrainInterface<ISimpleActivateDeactivateTestGrain>(
     "UnitTests.GrainInterfaces.ISimpleActivateDeactivateTestGrain",
+    { key: "integer" },
   );
 
 // Upstream's tail-call variant exercises a .NET IL tail-call code path in
@@ -41,6 +43,7 @@ export interface ITailCallActivateDeactivateTestGrain extends GrainKey<bigint> {
 export const ITailCallActivateDeactivateTestGrain =
   defineGrainInterface<ITailCallActivateDeactivateTestGrain>(
     "UnitTests.GrainInterfaces.ITailCallActivateDeactivateTestGrain",
+    { key: "integer" },
   );
 
 export interface ILongRunningActivateDeactivateTestGrain extends GrainKey<bigint> {
@@ -51,6 +54,7 @@ export interface ILongRunningActivateDeactivateTestGrain extends GrainKey<bigint
 export const ILongRunningActivateDeactivateTestGrain =
   defineGrainInterface<ILongRunningActivateDeactivateTestGrain>(
     "UnitTests.GrainInterfaces.ILongRunningActivateDeactivateTestGrain",
+    { key: "integer" },
   );
 
 export interface IBadActivateDeactivateTestGrain extends GrainKey<bigint> {
@@ -61,6 +65,7 @@ export interface IBadActivateDeactivateTestGrain extends GrainKey<bigint> {
 export const IBadActivateDeactivateTestGrain =
   defineGrainInterface<IBadActivateDeactivateTestGrain>(
     "UnitTests.GrainInterfaces.IBadActivateDeactivateTestGrain",
+    { key: "integer" },
   );
 
 export interface IBadConstructorTestGrain extends GrainKey<bigint> {
@@ -69,6 +74,7 @@ export interface IBadConstructorTestGrain extends GrainKey<bigint> {
 
 export const IBadConstructorTestGrain = defineGrainInterface<IBadConstructorTestGrain>(
   "UnitTests.GrainInterfaces.IBadConstructorTestGrain",
+  { key: "integer" },
 );
 
 export interface ITaskActionActivateDeactivateTestGrain extends GrainKey<bigint> {
@@ -79,6 +85,7 @@ export interface ITaskActionActivateDeactivateTestGrain extends GrainKey<bigint>
 export const ITaskActionActivateDeactivateTestGrain =
   defineGrainInterface<ITaskActionActivateDeactivateTestGrain>(
     "UnitTests.GrainInterfaces.ITaskActionActivateDeactivateTestGrain",
+    { key: "integer" },
   );
 
 export interface ICreateGrainReferenceTestGrain extends GrainKey<bigint> {
@@ -88,6 +95,7 @@ export interface ICreateGrainReferenceTestGrain extends GrainKey<bigint> {
 
 export const ICreateGrainReferenceTestGrain = defineGrainInterface<ICreateGrainReferenceTestGrain>(
   "UnitTests.GrainInterfaces.ICreateGrainReferenceTestGrain",
+  { key: "integer" },
 );
 
 export interface IDeactivatingWhileActivatingTestGrain extends GrainKey<bigint> {
@@ -97,4 +105,5 @@ export interface IDeactivatingWhileActivatingTestGrain extends GrainKey<bigint> 
 export const IDeactivatingWhileActivatingTestGrain =
   defineGrainInterface<IDeactivatingWhileActivatingTestGrain>(
     "UnitTests.GrainInterfaces.IDeactivatingWhileActivatingTestGrain",
+    { key: "integer" },
   );

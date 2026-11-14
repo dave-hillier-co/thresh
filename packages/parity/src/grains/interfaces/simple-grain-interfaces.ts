@@ -16,4 +16,5 @@ export interface ISimpleGrain extends GrainKey<bigint> {
 // getAxBArgs.
 export const ISimpleGrain = defineGrainInterface<ISimpleGrain>(
   "UnitTests.GrainInterfaces.ISimpleGrain",
+  { key: "integer" },
 );

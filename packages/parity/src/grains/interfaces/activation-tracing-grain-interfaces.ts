@@ -30,6 +30,7 @@ export interface IActivityGrain extends GrainKey<bigint> {
 
 export const IActivityGrain = defineGrainInterface<IActivityGrain>(
   "UnitTests.GrainInterfaces.IActivityGrain",
+  { key: "integer" },
 );
 
 export interface IPersistentStateActivityGrain extends GrainKey<bigint> {
@@ -39,4 +40,5 @@ export interface IPersistentStateActivityGrain extends GrainKey<bigint> {
 
 export const IPersistentStateActivityGrain = defineGrainInterface<IPersistentStateActivityGrain>(
   "UnitTests.GrainInterfaces.IPersistentStateActivityGrain",
+  { key: "integer" },
 );

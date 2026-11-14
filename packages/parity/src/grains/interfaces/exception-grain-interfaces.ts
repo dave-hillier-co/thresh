@@ -16,4 +16,5 @@ export interface IExceptionGrain extends GrainKey<bigint> {
 
 export const IExceptionGrain = defineGrainInterface<IExceptionGrain>(
   "UnitTests.GrainInterfaces.IExceptionGrain",
+  { key: "integer" },
 );

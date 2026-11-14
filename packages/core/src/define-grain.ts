@@ -1,7 +1,11 @@
 import { Grain } from "./grain";
 import type { GrainContext } from "./grain-context";
 import type { SelfFilteringGrain } from "./grain-call-filter";
-import { defineGrainInterface, type GrainInterface } from "./grain-interface";
+import {
+  defineGrainInterface,
+  type GrainInterface,
+  type GrainInterfaceDefinition,
+} from "./grain-interface";
 import type { GrainKeyKind } from "./grain-key";
 import type { InvokeMethodOptions } from "./invoke-options";
 import {
@@ -396,7 +400,7 @@ export function defineGrain<T extends object>(
       ...(version !== undefined ? { version } : {}),
       ...(extension !== undefined ? { extension } : {}),
       ...(key !== undefined ? { key } : {}),
-    },
+    } as GrainInterfaceDefinition<T, GrainKeyKind> & { key: GrainKeyKind },
     FunctionalGrain,
   );
   return Object.assign(iface, { grain: FunctionalGrain });

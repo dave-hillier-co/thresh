@@ -35,4 +35,5 @@ export interface ITraceContextPropagationGrain extends GrainKey<bigint> {
 
 export const ITraceContextPropagationGrain = defineGrainInterface<ITraceContextPropagationGrain>(
   "UnitTests.GrainInterfaces.ITraceContextPropagationGrain",
+  { key: "integer" },
 );

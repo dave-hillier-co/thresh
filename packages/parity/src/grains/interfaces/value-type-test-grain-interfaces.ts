@@ -16,4 +16,5 @@ export interface IValueTypeTestGrain extends GrainKey<Guid> {
 
 export const IValueTypeTestGrain = defineGrainInterface<IValueTypeTestGrain>(
   "UnitTests.GrainInterfaces.IValueTypeTestGrain",
+  { key: "guid" },
 );
