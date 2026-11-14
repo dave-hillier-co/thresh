@@ -1,5 +1,7 @@
+import { RejectionError } from "@thresh/core/errors";
 import type { GrainId } from "@thresh/core/grain-id";
 import type { SiloAddress } from "@thresh/core/silo-address";
+import type { TimeProvider } from "@thresh/core/time-provider";
 import type { Message } from "@thresh/messaging/message";
 
 /** Identifies a peer when a connection is established, mirroring Orleans' ConnectionPreamble. */
@@ -48,6 +50,55 @@ export type ConnectionAcceptHandler = (
 /** Current preamble wire version. Bump (and validate on accept) whenever the duplex contract changes. */
 export const PROTOCOL_VERSION = 2;
 
+/** Orleans' `ConnectionOptions.OpenConnectionTimeout` default: how long a dial may take. */
+export const CONNECT_TIMEOUT_MS = 5_000;
+
+/**
+ * The one failure `Transport.connect` reports for a peer it could not reach:
+ * nothing listening, a listener that closed or refused during the handshake, or
+ * a dial that outlasted `CONNECT_TIMEOUT_MS`. Orleans' `ConnectionManager`
+ * wraps all of these in a `ConnectionFailedException`, and `MessageCenter`
+ * turns it into a `Transient` rejection of the message. The kind is
+ * `unknownTarget`, this runtime's reroutable refusal: a failed dial means the
+ * request was never written to any socket, so the callee cannot have started
+ * the turn and a resend is safe. That is the opposite of `siloUnavailable`,
+ * which means an ESTABLISHED connection died mid-call and is deliberately not
+ * resendable (issue #88).
+ */
+export function connectFailure(to: SiloAddress, reason: string): RejectionError {
+  return new RejectionError(`unable to connect to ${to.toString()}: ${reason}`, "unknownTarget");
+}
+
+/**
+ * Bounds a dial: rejects with `connectFailure` once `timeoutMs` elapse on
+ * `time`, calling `onTimeout` so the transport can abandon the half-open dial.
+ * The timer is armed synchronously, so a fake clock can advance it at once.
+ */
+export function boundDial<T>(
+  time: TimeProvider,
+  timeoutMs: number,
+  to: SiloAddress,
+  dial: Promise<T>,
+  onTimeout?: () => void,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = time.setTimer(() => {
+      onTimeout?.();
+      reject(connectFailure(to, `timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    dial.then(
+      (value) => {
+        time.clearTimer(timer);
+        resolve(value);
+      },
+      (err: unknown) => {
+        time.clearTimer(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
 /** Abstracts silo-to-silo and client-to-silo message transport. */
 export interface Transport {
   listen(
@@ -61,6 +112,10 @@ export interface Transport {
    * makes the dialled connection duplex: a silo answering a client, or
    * pushing to a client-hosted observer, does so over the socket the client
    * dialled, never by dialling the client back.
+   *
+   * Rejects with `connectFailure` (a `RejectionError` of kind `unknownTarget`)
+   * for ANY failure to reach the peer, on every transport: never a raw socket
+   * error such as ECONNREFUSED.
    */
   connect(
     to: SiloAddress,

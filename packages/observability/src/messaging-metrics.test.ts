@@ -7,6 +7,8 @@ import {
   PeriodicExportingMetricReader,
 } from "@opentelemetry/sdk-metrics";
 import {
+  recordDecodeFailure,
+  recordHandlerFailure,
   recordMessageReceived,
   recordMessageSent,
   recordQueueLatency,
@@ -48,5 +50,15 @@ describe("messaging metrics", () => {
     const latency = await metric("thresh.messaging.queue.latency");
     expect(latency).toBeDefined();
     expect(latency!.dataPoints[0]!.attributes["thresh.peer"]).toBe("silo-1:1000");
+  });
+
+  it("counts undecodable frames and failed handlers", async () => {
+    recordDecodeFailure({ "thresh.peer": "silo-1:1000" });
+    recordHandlerFailure({ "thresh.message.kind": "ping" });
+
+    const decode = await metric("thresh.messaging.decode.failed");
+    const handler = await metric("thresh.messaging.handler.failed");
+    expect(decode!.dataPoints[0]!.value).toBe(1);
+    expect(handler!.dataPoints[0]!.value).toBe(1);
   });
 });

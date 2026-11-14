@@ -1,9 +1,13 @@
 import { RejectionError } from "@thresh/core/errors";
 import type { SiloAddress } from "@thresh/core/silo-address";
+import { systemTimeProvider, type TimeProvider } from "@thresh/core/time-provider";
 import { recordMessageReceived } from "@thresh/observability/messaging-metrics";
 import type { Message } from "@thresh/messaging/message";
 import {
+  CONNECT_TIMEOUT_MS,
   PROTOCOL_VERSION,
+  boundDial,
+  connectFailure,
   type Connection,
   type ConnectionAcceptHandler,
   type ConnectionPreamble,
@@ -25,6 +29,20 @@ interface Endpoint {
  */
 export class InProcessNetwork {
   private readonly endpoints = new Map<string, Endpoint>();
+  private readonly blackholes = new Set<string>();
+
+  /**
+   * Fault injection: dials to `address` are accepted but the handshake never
+   * completes, as with a host that drops packets. The dial only ends when the
+   * transport's connect timeout fires.
+   */
+  blackhole(address: SiloAddress): void {
+    this.blackholes.add(address.endpoint);
+  }
+
+  isBlackholed(address: SiloAddress): boolean {
+    return this.blackholes.has(address.endpoint);
+  }
 
   register(endpoint: Endpoint): void {
     this.endpoints.set(endpoint.address.endpoint, endpoint);
@@ -51,6 +69,10 @@ export class InProcessTransport implements Transport {
   constructor(
     private readonly network: InProcessNetwork,
     private readonly clusterId: string,
+    private readonly options: {
+      readonly timeProvider?: TimeProvider;
+      readonly connectTimeoutMs?: number;
+    } = {},
   ) {}
 
   async listen(
@@ -85,25 +107,36 @@ export class InProcessTransport implements Transport {
    * that passed no `onMessage` cannot receive anything back, so `send` throws
    * rather than silently dropping.
    */
-  async connect(
+  connect(
+    to: SiloAddress,
+    preamble: ConnectionPreamble,
+    onMessage?: MessageHandler,
+  ): Promise<Connection> {
+    const dial = this.network.isBlackholed(to)
+      ? new Promise<Connection>(() => undefined)
+      : this.dial(to, preamble, onMessage);
+    return boundDial(
+      this.options.timeProvider ?? systemTimeProvider,
+      this.options.connectTimeoutMs ?? CONNECT_TIMEOUT_MS,
+      to,
+      dial,
+    );
+  }
+
+  private async dial(
     to: SiloAddress,
     preamble: ConnectionPreamble,
     onMessage?: MessageHandler,
   ): Promise<Connection> {
     const endpoint = this.network.lookup(to);
-    if (endpoint === undefined) {
-      throw new RejectionError(`no listener at ${to.toString()}`, "unknownTarget");
-    }
+    if (endpoint === undefined) throw connectFailure(to, "no listener");
     if (endpoint.clusterId !== preamble.clusterId) {
-      throw new RejectionError(
-        `cluster mismatch: ${preamble.clusterId} != ${endpoint.clusterId}`,
-        "unknownTarget",
-      );
+      throw connectFailure(to, `cluster mismatch: ${preamble.clusterId} != ${endpoint.clusterId}`);
     }
     if (preamble.protocolVersion !== PROTOCOL_VERSION) {
-      throw new RejectionError(
+      throw connectFailure(
+        to,
         `protocol version mismatch: ${preamble.protocolVersion} != ${PROTOCOL_VERSION}`,
-        "unknownTarget",
       );
     }
     const network = this.network;
@@ -130,7 +163,11 @@ export class InProcessTransport implements Transport {
           notifyAcceptedSideClosed = callback;
         },
       };
-      endpoint.onAccept(preamble, duplexConnection);
+      try {
+        endpoint.onAccept(preamble, duplexConnection);
+      } catch (err) {
+        throw connectFailure(to, `listener refused the connection (${String(err)})`);
+      }
     }
     return {
       send: (message) => network.deliver(to, message, from),
