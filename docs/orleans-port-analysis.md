@@ -105,7 +105,7 @@ Risks: `stateless` option parsed but never honored; `@readOnly` not enforced at 
 
 ### `@thresh/runtime`
 
-Faithful: turn scheduler with Orleans-style reentrancy semantics; activation state machine (`creating`/`activating`/`valid`/`deactivating`/`invalid`); per-activation FIFO queue; catalog by grain ID; directory CAS for single-activation; idle-collection deactivation; stream/broadcast delivery as system extensions; grain timers cleared on deactivate; request-context propagation via `AsyncLocalStorage`; placement strategies and version-aware pre-filtering.
+Faithful: turn scheduler with Orleans-style reentrancy semantics; activation state machine (`creating`/`activating`/`valid`/`failed`/`deactivating`/`invalid`); per-activation FIFO queue; catalog by grain ID; directory CAS for single-activation; idle-collection deactivation; stream/broadcast delivery as system extensions; grain timers cleared on deactivate; request-context propagation via `AsyncLocalStorage`; placement strategies and version-aware pre-filtering.
 
 Gaps: no `CancellationToken` through the call chain; no deactivation timeout (`cts.CancelAfter(DeactivationTimeout)` in Orleans); no `MaxEnqueuedRequestsSoftLimit`/`HardLimit`; no stuck-activation detection (`MaxRequestProcessingTime`); no system targets or management grain; simplified `DeactivationReason` (no enumerated codes); rejection types collapsed into a `kind` string; no per-activation `IServiceScope`; no `IGrainLifecycle` observable events.
 

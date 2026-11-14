@@ -1,3 +1,4 @@
+import { isStaleActivationRejection } from "@thresh/core/errors";
 import type { GrainId } from "@thresh/core/grain-id";
 import { keyToString, type GrainKey } from "@thresh/core/grain-key";
 import type { GrainType } from "@thresh/core/grain-type";
@@ -165,9 +166,14 @@ class MemoryStream<T> implements AsyncStream<T> {
             event: e.event,
             token: new SequenceToken(e.token),
           }));
+          const handler: StreamHandler<T> = sub.handler;
           try {
             await sub.handler.onNextBatch(items);
           } catch (err) {
+            if (isStaleActivationRejection(err)) {
+              if (sub.handler !== handler) continue;
+              break;
+            }
             await sub.handler.onError?.(err);
             break; // leave the cursor so the batch is redelivered
           }
@@ -182,9 +188,18 @@ class MemoryStream<T> implements AsyncStream<T> {
           continue;
         }
         const entry = this.events[sub.cursor]!;
+        const handler: StreamHandler<T> = sub.handler;
         try {
-          await sub.handler.onNext(entry.event, new SequenceToken(entry.token));
+          await handler.onNext(entry.event, new SequenceToken(entry.token));
         } catch (err) {
+          // The consumer's activation went away without running it (a held
+          // delivery released for a reroute): not the subscriber's error.
+          // Deliver it to the handler the next activation resumed with, or
+          // leave the cursor for that resume.
+          if (isStaleActivationRejection(err)) {
+            if (sub.handler !== handler) continue;
+            break;
+          }
           await sub.handler.onError?.(err);
           break; // leave the cursor so the event is redelivered
         }

@@ -299,9 +299,9 @@ export interface SiloConfig {
   };
   /**
    * Orleans `CollectionOptions.DeactivationTimeout`: force deactivation to
-   * proceed once `onDeactivate` has run this long, even if the hook itself
-   * hasn't settled. Defaults to 30s; pass `false` to disable (wait
-   * indefinitely, the pre-existing behaviour).
+   * proceed once this long has passed since it was requested (Orleans arms it
+   * in `Deactivate`), even if `onDeactivate` hasn't settled. Defaults to 30s;
+   * pass `false` to disable (wait indefinitely, the pre-existing behaviour).
    */
   deactivationTimeout?: Duration | false;
   /**

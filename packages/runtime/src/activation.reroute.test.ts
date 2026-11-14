@@ -103,9 +103,9 @@ describe("calls reaching a deactivating activation are held and rerouted (GH #91
     const ext = castGrainReference(ref, IGrainManagementExtension);
     await ext.deactivateOnIdle();
 
-    // Fire two calls back-to-back: the first observes the pending
-    // deactivateOnIdle and drives `finalizeStale`; the second must be held
-    // behind it rather than being handed the dying activation directly.
+    // Fire two calls back-to-back while the deactivation deactivateOnIdle
+    // started may still be finishing: both must be held and rerouted to the
+    // fresh activation rather than served by the dying one.
     const [first, second] = [ref.ping(), ref.ping()];
     await expect(first).resolves.toEqual(expect.any(String));
     await expect(second).resolves.toEqual(expect.any(String));

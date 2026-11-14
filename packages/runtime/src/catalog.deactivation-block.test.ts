@@ -97,8 +97,9 @@ const paths: Array<[string, Path]> = [
   [
     "deactivateOnIdle",
     (h) => {
+      // The request starts the deactivation itself; joining it waits for the end.
       h.activation.requestDeactivation();
-      return h.catalog.getOrCreate(h.id);
+      return h.activation.deactivate({ code: "application-requested", description: "joined" });
     },
   ],
 ];
