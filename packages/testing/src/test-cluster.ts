@@ -163,6 +163,12 @@ export interface TestClusterOptions {
    */
   activationTimeout?: Duration | false;
   /**
+   * How long a turn may run before a request waiting behind it has the activation deactivated
+   * as stuck (`SiloConfig.scheduling.maxRequestProcessingTime`, Orleans
+   * `SiloMessagingOptions.MaxRequestProcessingTime`). On the injected `time`. Defaults to 2h.
+   */
+  maxRequestProcessingTime?: Duration;
+  /**
    * How often every silo pushes its load snapshot to its peers (Orleans
    * `DeploymentLoadPublisherOptions`, defaults to 1s). Lower it in a test that
    * needs cross-silo load visibility without waiting a full period, or pass
@@ -677,6 +683,9 @@ export class TestCluster {
         : {}),
       ...(this.options.activationTimeout !== undefined
         ? { activationTimeout: this.options.activationTimeout }
+        : {}),
+      ...(this.options.maxRequestProcessingTime !== undefined
+        ? { scheduling: { maxRequestProcessingTime: this.options.maxRequestProcessingTime } }
         : {}),
       ...(this.options.loadPublishIntervalMs !== undefined
         ? { loadPublishIntervalMs: this.options.loadPublishIntervalMs }
