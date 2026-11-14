@@ -101,11 +101,10 @@ describe("Orleans.Journaling.Tests.DurableValueTests", () => {
       expect(stored.name).toBe("John Doe");
       expect(stored.age).toBe(30);
 
-      // In-process transport passes objects by reference (no serialization
-      // boundary), so mutating the returned object mutates the grain's live
-      // in-memory value directly, matching upstream's `durableValue.Value.Age = 31`
-      // without a further explicit Set call.
+      // Upstream: `durableValue.Value.Age = 31` then `WriteStateAsync`. A returned value is a
+      // copy, so the update is written back through the grain, as a cross-silo caller would.
       stored.age = 31;
+      await grain.setValue(stored);
       await grain.writeState();
       expect(((await grain.getValue()) as typeof person).age).toBe(31);
     },

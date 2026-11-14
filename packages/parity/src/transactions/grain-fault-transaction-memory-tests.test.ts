@@ -45,6 +45,7 @@ import {
   TransactionOrphanCallError,
   TransactionReadOnlyViolatedError,
 } from "@thresh/core/errors";
+import { registerSurrogate } from "@thresh/core/value-codec";
 import { TestCluster } from "@thresh/testing/test-cluster";
 import { orleansTest } from "@thresh/testing/orleans-test";
 
@@ -59,6 +60,15 @@ class AddAndThrowError extends Error {
     this.name = "AddAndThrowError";
   }
 }
+
+// Upstream marks the exception `[GenerateSerializer]`, so it crosses a silo boundary as itself;
+// the codec rebuilds an error class only when one is registered. The cause check below depends on it.
+registerSurrogate<AddAndThrowError>({
+  tag: "parity.AddAndThrowError",
+  test: (value) => value instanceof AddAndThrowError,
+  encode: (error) => ({ message: error.message }),
+  decode: (fields) => new AddAndThrowError(String(fields["message"])),
+});
 
 interface Counter {
   value: number;

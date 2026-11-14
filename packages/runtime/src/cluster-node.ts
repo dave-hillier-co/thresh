@@ -236,11 +236,10 @@ export interface ClusterNodeOptions {
   /**
    * Silo-wide default per-method response timeout (ms), applied to any call
    * whose interface doesn't set its own `options.responseTimeout` (Orleans
-   * `[ResponseTimeout]`). Off by default (`undefined`): no deadline races the
-   * call unless one is explicitly configured, here or per-method.
+   * `[ResponseTimeout]`). Defaults to `callTimeoutMs`, so no call goes without a deadline.
    */
   defaultResponseTimeoutMs?: number;
-  /** See `SiloConfig.wireSemanticsForLocalCalls`. Off by default. */
+  /** See `SiloConfig.wireSemanticsForLocalCalls`. Off by default (`TestCluster` turns it on). */
   wireSemanticsForLocalCalls?: boolean;
   defaultCollectionAgeSeconds?: number;
   /**
@@ -815,7 +814,8 @@ export class ClusterNode {
     this.factory = new GrainFactory(
       (interfaceId) => this.resolveGrainType(interfaceId),
       time,
-      options.defaultResponseTimeoutMs,
+      // Orleans applies `ResponseTimeout` to a call whether its target is local or remote.
+      options.defaultResponseTimeoutMs ?? this.callTimeoutMs,
     );
     this.serializer =
       options.serializer ??

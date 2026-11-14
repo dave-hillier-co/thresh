@@ -482,7 +482,18 @@ same call to another silo round-trips the value codec. `SiloConfig.wireSemantics
 (and `TestClusterOptions.wireSemanticsForLocalCalls`) restores placement-independence by passing
 the arguments, the result and a thrown error of every call through that codec round trip. The codec
 is the copier here, so the option also flattens or refuses class instances and rebuilds error
-classes exactly as the wire does. It is off by default.
+classes exactly as the wire does. It is off by default in a silo and on by default in
+`TestCluster`, so a test sees what a cross-silo call would.
+
+This is an open choice, not a settled one. Copying in production would match Orleans and make
+placement invisible to grain code, at the price of an encode and a decode on every local call,
+a loss of class identity on arguments and results (a class instance with no surrogate arrives
+flattened, an unregistered error class arrives as `UnavailableExceptionFallbackException`), and
+a refusal for values the wire cannot carry, such as a cyclic argument or a function. Not copying
+keeps local calls cheap and lets a grain pass its own objects to a neighbour, at the price of
+aliasing no cross-silo call has: a callee can mutate its caller's argument, a caller can mutate
+a grain's returned state, and a suite that lands caller and callee together passes where a
+multi-silo deployment fails. The production default stays off.
 
 ## A process epoch rides the preamble and the correlation, not the silo address
 

@@ -68,7 +68,7 @@ What an interleaved call may observe is a contract, pinned by
 
 Call-chain reentrancy is off by default, as in Orleans. A non-reentrant grain that calls back into
 itself — directly, or through other grains (`A -> B -> A`) — waits on its own running turn and fails
-with `GrainCallTimeoutError` when the call's response timeout elapses. To allow it, wrap the calls in
+with `GrainCallTimeoutError` when the call's response timeout elapses (30 seconds unless the method, `defaultResponseTimeout` or `callTimeout` says otherwise, for a call to a grain on the same silo as for one on another). To allow it, wrap the calls in
 `RequestContext.allowCallChainReentrancy` (Orleans' `AllowCallChainReentrancy`):
 
 ```ts
