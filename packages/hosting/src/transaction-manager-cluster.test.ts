@@ -142,6 +142,10 @@ async function start(): Promise<{ cluster: TestCluster; storage: HookedStorage }
       { ctor: TellerGrain.grain, interfaces: [Teller] },
     ],
     callTimeout: { ms: 1_000 },
+    // The caller's own (same-silo) call must outlive the protocol call it makes, so that the
+    // outcome the agent reports — in doubt, when the TM's answer is lost — reaches the caller
+    // rather than the caller's deadline firing at the same instant as the inner one.
+    defaultResponseTimeout: { seconds: 10 },
     transactionsOptions: {
       remoteTransactionPingFrequencyMs: 200,
       lockTimeoutMs: 1_000,

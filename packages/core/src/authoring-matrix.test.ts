@@ -139,6 +139,11 @@ const matrix: readonly Feature[] = [
     functional: { uses: ["useDurableSet"] },
   },
   {
+    name: "write durable state (the one flush of every buffered durable mutation)",
+    class: { uses: ["api:Grain.writeDurableState() on the class base"] },
+    functional: { uses: ["useWriteDurableState"] },
+  },
+  {
     name: "third-party facets",
     class: { uses: ["grainFacet"] },
     functional: { uses: ["useGrainFacet"] },
