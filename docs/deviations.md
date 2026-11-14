@@ -422,6 +422,28 @@ the arguments, the result and a thrown error of every call through that codec ro
 is the copier here, so the option also flattens or refuses class instances and rebuilds error
 classes exactly as the wire does. It is off by default.
 
+## A process epoch rides the preamble and the correlation, not the silo address
+
+Orleans carries a generation in `SiloAddress`, so a restarted silo at the same endpoint is a
+different address, and a message meant for its predecessor is recognised as stale. Thresh's
+`SiloAddress` keeps its identity (`podName` + `podUid` + endpoint, no generation), so the
+generation lives elsewhere: each process picks a random epoch at load (`PROCESS_EPOCH`), carries it
+in every connection preamble it dials, and stamps it on every request it awaits; the response
+carries it back. A pending call completes only on a response with its own id, this epoch, and
+arriving on the connection the request went out on. A late reply meant for a container's previous
+incarnation therefore completes nothing in its successor, even though correlation ids restart at 1
+in every process. Such a response is dropped and counted (`thresh.messaging.response.misrouted`).
+
+## Each silo dials its own connection for the requests it sends
+
+Replies travel down the connection their request arrived on, as in Orleans, so a silo never dials
+a peer to answer it. Orleans also registers an accepted silo connection in its connection manager,
+so a silo may send its own requests to that peer over the connection the peer opened. Thresh does
+not: a silo sends its requests over a connection it dialled, one per peer, so two silos that call
+each other hold one connection in each direction, each carrying one side's requests and the other
+side's replies. A caller detects the loss of the connection its call went out on; that is the only
+connection its reply can arrive on.
+
 ## Additions beyond Orleans
 
 A few capabilities layer on top of the faithful model without changing it: **durable journaling**
