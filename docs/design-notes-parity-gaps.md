@@ -46,7 +46,8 @@ from `ProcessPendingRequests` for a request `MayInvokeRequest` refuses). A long 
 on, or one every arrival may interleave with (a fully reentrant grain), is never deactivated.
 Deactivation marks the activation `invalid`, disposes its timers, rejects every queued and later
 turn with `RejectionError("noActivation")`, and unregisters it from the catalog and directory
-(`TurnScheduler`'s `onStuck` → `ActivationData.handleStuckTurn` → `Catalog.handleStuckActivation`).
+(`TurnScheduler`'s `onStuck` → `ActivationData.handleStuckTurn`, which runs the deactivation
+pipeline's unregister and removal steps).
 Those rejected calls never ran, so they are re-delivered to a fresh activation, Orleans' reroute:
 `LocalDispatcher` retries that exact rejection, and `DistributedDispatcher` re-resolves a cached
 route on `noActivation`. Like upstream, it never interrupts the wedged turn itself (JS has no thread

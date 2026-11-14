@@ -185,7 +185,7 @@ describe("onDeactivate receives an optional ambient signal", () => {
   it("passes undefined through when the caller supplies none", async () => {
     const activation = makeActivation(new FakeTimeProvider());
     await activation.invoke(call("hasSignal"));
-    await activation.runDeactivateHook({ code: "idle", description: "test" });
+    await activation.deactivate({ code: "idle", description: "test" });
     const grain = activation.instance as ProbeGrain;
     expect(grain.lastDeactivateSignalGiven).toBe(false);
   });
@@ -194,7 +194,10 @@ describe("onDeactivate receives an optional ambient signal", () => {
     const activation = makeActivation(new FakeTimeProvider());
     await activation.invoke(call("hasSignal"));
     const controller = new AbortController();
-    await activation.runDeactivateHook({ code: "idle", description: "test" }, controller.signal);
+    await activation.deactivate(
+      { code: "idle", description: "test" },
+      { signal: controller.signal },
+    );
     const grain = activation.instance as ProbeGrain;
     expect(grain.lastDeactivateSignal).toBe(controller.signal);
   });

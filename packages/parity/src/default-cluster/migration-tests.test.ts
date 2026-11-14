@@ -268,12 +268,9 @@ describe("DefaultCluster.Tests.General.MigrationTests", () => {
     expect(await grain.getState()).not.toBe(expectedState);
   });
 
-  // After a failed `onRehydrate` the target's directory entry still points at
-  // the (now-invalid) migrated activation. The next call routes there via the
-  // directory, finds it invalid, removes the stale pointer, and reactivates
-  // fresh on that same silo (without the carried state) — rather than recursing
-  // without bound between the directory and this silo. See the deliverLocal
-  // stale-pointer repair in packages/runtime/src/distributed-dispatcher.ts.
+  // A failed `onRehydrate` is logged and the migrated activation comes up on
+  // the target without the carried state, as Orleans' `RehydrateInternal`
+  // does (see `ActivationData.applyRehydration`).
   orleansTest("DefaultCluster.Tests.General.MigrationTests.FailRehydrationTest", async () => {
     const key = randomIntegerKey();
     const grain = cluster.getGrain(IMigrationTestGrain, key);

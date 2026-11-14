@@ -150,11 +150,12 @@ export function isTransactionManager(
 }
 
 /**
- * A transactional resource that can hold its activation in place (Orleans
+ * A transactional resource that can delay its activation's deactivation (Orleans
  * `IActivationLifetime.BlockDeactivation`): while `blocksDeactivation` is true
  * — it holds a transaction lock, or a prepared record whose outcome it does not
- * know yet — the activation is not idle-collected, migrated or rebalanced away,
- * since doing so would break the lock or strand the record mid-protocol.
+ * know yet — a deactivation (idle collection, migration, rebalancing, an
+ * explicit `deactivateOnIdle`) waits for it to clear, for at most five seconds
+ * (Orleans `ActivationLifetime.OnStopAsync`), then proceeds.
  */
 export interface DeactivationBlocker {
   readonly blocksDeactivation: boolean;

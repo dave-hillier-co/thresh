@@ -43,31 +43,32 @@ function buildCatalog(): Catalog {
 }
 
 describe("Catalog.collectIdle racing a reactivation", () => {
-  it("does not delete a freshly created activation from the map", async () => {
+  it("a lookup while the hook runs neither finalizes the old activation nor loses the next one", async () => {
     const catalog = buildCatalog();
     const id = new GrainId(metadata.grainType, "a");
     const a = await catalog.getOrCreate(id);
     await flush();
 
-    // While `collectOne` is awaiting `a`'s deactivate hook, simulate another
-    // concurrent operation finishing `a`'s deactivation and reactivating the
-    // same grain id — exactly the interleaving `collectIdle`'s per-key
-    // delete must tolerate: by the time the sweep gets back around to `a`,
-    // the map already points at a different, live activation for this key.
-    let b: Awaited<ReturnType<Catalog["getOrCreate"]>> | undefined;
+    // While `collectOne` is awaiting `a`'s deactivate hook, another caller
+    // looks the grain up (issue #106's interleaving). Deactivation has one
+    // owner (L1): the lookup gets `a` itself, still deactivating, whose calls
+    // are held and rerouted once it has finished — nobody finalizes `a` under
+    // its running hook, and nothing is left behind for the sweep to delete.
+    let seenDuringHook: Awaited<ReturnType<Catalog["getOrCreate"]>> | undefined;
     raceHook.current = async () => {
-      a.finalizeDeactivation();
-      b = await catalog.getOrCreate(id);
+      seenDuringHook = await catalog.getOrCreate(id);
     };
 
     // ageLimitOverrideMs = 0 forces collection of `a` regardless of age.
     await catalog.collectIdle(0);
 
-    expect(b).toBeDefined();
+    expect(seenDuringHook).toBe(a);
+    expect(a.state).toBe("invalid");
+    expect(catalog.get(id)).toBeUndefined();
+    const b = await catalog.getOrCreate(id);
+    await flush();
     expect(b).not.toBe(a);
-    // `b` must still be the live, valid activation for `id` — collectIdle
-    // must not have deleted it out from under the reactivation.
     expect(catalog.countFor(id)).toBe(1);
-    expect(b!.state).toBe("valid");
+    expect(b.state).toBe("valid");
   });
 });
