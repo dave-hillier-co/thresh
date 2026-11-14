@@ -22,6 +22,7 @@ const preamble: ConnectionPreamble = {
   protocolVersion: PROTOCOL_VERSION,
   siloAddress: SELF,
   clusterId: CLUSTER,
+  epoch: 1,
 };
 
 /** How each transport is made to present the three unreachable-peer situations. */

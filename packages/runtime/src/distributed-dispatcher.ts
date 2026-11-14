@@ -1,5 +1,5 @@
 import { newActivationId } from "@thresh/core/activation-id";
-import { isStaleActivationRejection, RejectionError } from "@thresh/core/errors";
+import { RejectionError } from "@thresh/core/errors";
 import type { GrainAddress } from "@thresh/core/grain-address";
 import type { GrainId } from "@thresh/core/grain-id";
 import type { GrainType } from "@thresh/core/grain-type";
@@ -13,6 +13,8 @@ import {
   withPlaceGrainSpan,
   withRegisterDirectoryEntrySpan,
 } from "@thresh/observability/activation-tracing";
+import { mayResend, refusedBeforeExecution } from "@thresh/messaging/resend-policy";
+import { admit } from "@thresh/runtime/admission";
 import type { Catalog } from "@thresh/runtime/catalog";
 import {
   withCallDeadline,
@@ -170,7 +172,7 @@ export class DistributedDispatcher implements Dispatcher {
     // — makes the same diversion, so a wire-arrived call joins the receiving
     // silo's own pool rather than being pinned to it by a directory entry.
     if (this.deps.catalog.isStatelessWorkerType(withDeadline.target.type)) {
-      return this.deps.catalog.pickOrScaleWorker(withDeadline.target).invoke(withDeadline, opts);
+      return admit(this.deps.catalog.pickOrScaleWorker(withDeadline.target), withDeadline, opts);
     }
 
     const cached = this.deps.cache.get(withDeadline.target);
@@ -178,7 +180,9 @@ export class DistributedDispatcher implements Dispatcher {
       try {
         return await this.routeTo(cached, withDeadline, opts);
       } catch (err) {
-        if (!isStaleActivationRejection(err)) throw err;
+        // Resent only when it did not run and its target moved (`mayResend`): a call whose
+        // own turn threw, even a stale-kind rejection, has run and is not sent again.
+        if (!mayResend(err)) throw err;
         this.deps.cache.invalidate(withDeadline.target); // stale entry: re-resolve below
       }
     }
@@ -202,13 +206,13 @@ export class DistributedDispatcher implements Dispatcher {
     opts?: InvokeCallOptions,
     retrying = false,
   ): Promise<unknown> {
-    const found = await this.deps.directory.lookup(req.target);
+    const found = await this.routing(() => this.deps.directory.lookup(req.target));
     if (found === undefined) return this.placeAndInvoke(req, opts);
     this.deps.cache.put(found);
     try {
       return await this.routeTo(found, req, opts);
     } catch (err) {
-      if (!isStaleActivationRejection(err)) throw err;
+      if (!mayResend(err)) throw err;
       // Drop the route just cached even when this was the last attempt: a peer
       // that could not be reached (a failed dial reports `unknownTarget`) must
       // not stay the cached destination for the next call.
@@ -227,11 +231,11 @@ export class DistributedDispatcher implements Dispatcher {
     // — which would pin the grain here and serve every later call, from every
     // silo, from that one activation.
     if (this.deps.catalog.isStatelessWorkerType(req.target.type)) {
-      return this.deps.catalog.pickOrScaleWorker(req.target).invoke(req, opts);
+      return admit(this.deps.catalog.pickOrScaleWorker(req.target), req, opts);
     }
 
     const existing = await this.deps.catalog.resolveLive(req.target);
-    if (existing !== undefined) return existing.invoke(req, opts);
+    if (existing !== undefined) return admit(existing, req, opts);
 
     // Placement + directory registration + (if we won) activation all run
     // inside a "place grain" span (Runtime source), so they share the trace
@@ -253,7 +257,7 @@ export class DistributedDispatcher implements Dispatcher {
     opts?: InvokeCallOptions,
   ): Promise<unknown> {
     const existing = await this.deps.catalog.resolveLive(req.target);
-    if (existing !== undefined) return existing.invoke(req, opts);
+    if (existing !== undefined) return admit(existing, req, opts);
     return this.claimAndActivateLocally(req, opts);
   }
 
@@ -277,7 +281,7 @@ export class DistributedDispatcher implements Dispatcher {
       const act = await this.deps.catalog.resolveLive(req.target);
       // The claim we waited on brought the activation up here: queue this call
       // on it, behind the claimant's own turn.
-      if (act !== undefined) return act.invoke(req, opts);
+      if (act !== undefined) return admit(act, req, opts);
       // It produced no local activation (the CAS was won by another silo, or
       // the activation failed to come up), so claim in our own right — but
       // re-check the gate first, since another caller may have started one in
@@ -313,11 +317,13 @@ export class DistributedDispatcher implements Dispatcher {
   ): Promise<unknown> {
     return withActivateGrainSpan({ grainType: req.target.type }, async () => {
       const winner = await withRegisterDirectoryEntrySpan({ grainId: req.target.toString() }, () =>
-        this.deps.directory.register({
-          grainId: req.target,
-          silo: this.deps.local,
-          activationId,
-        }),
+        this.routing(() =>
+          this.deps.directory.register({
+            grainId: req.target,
+            silo: this.deps.local,
+            activationId,
+          }),
+        ),
       );
       this.deps.cache.put(winner);
 
@@ -336,7 +342,7 @@ export class DistributedDispatcher implements Dispatcher {
           act.state !== "invalid" &&
           act.activationId === winner.activationId
         ) {
-          const turn = act.invoke(req, opts);
+          const turn = admit(act, req, opts);
           admitted();
           return await turn;
         }
@@ -360,7 +366,7 @@ export class DistributedDispatcher implements Dispatcher {
         // gate is better off re-resolving than queueing behind a repair it
         // cannot see.
         admitted();
-        await this.deps.directory.unregister(winner);
+        await this.routing(() => this.deps.directory.unregister(winner));
         this.deps.cache.invalidate(req.target);
         return this.deliverLocal(req, opts);
       }
@@ -387,9 +393,11 @@ export class DistributedDispatcher implements Dispatcher {
   ): Promise<unknown> {
     const forwardCount = (req.forwardCount ?? 0) + 1;
     if (forwardCount > MAX_FORWARD_COUNT) {
-      throw new RejectionError(
-        `forward count exceeded (${MAX_FORWARD_COUNT}) resolving ${req.target.toString()}`,
-        "noActivation",
+      throw refusedBeforeExecution(
+        new RejectionError(
+          `forward count exceeded (${MAX_FORWARD_COUNT}) resolving ${req.target.toString()}`,
+          "noActivation",
+        ),
       );
     }
     opts?.onForward?.(to);
@@ -420,7 +428,7 @@ export class DistributedDispatcher implements Dispatcher {
     let act: Awaited<ReturnType<Catalog["activateLocal"]>> | undefined;
     try {
       act = await this.deps.catalog.activateLocal(req.target, activationId);
-      const turn = act.invoke(req, opts);
+      const turn = admit(act, req, opts);
       admitted();
       return await turn;
     } catch (err) {
@@ -453,7 +461,7 @@ export class DistributedDispatcher implements Dispatcher {
       // or forwards if the grain in fact lives on another silo.
       return this.deliverLocal(req, opts);
     }
-    return act.invoke(req, opts);
+    return admit(act, req, opts);
   }
 
   private async placeAndInvoke(req: InvocationRequest, opts?: InvokeCallOptions): Promise<unknown> {
@@ -487,9 +495,11 @@ export class DistributedDispatcher implements Dispatcher {
         hint: (candidates) => resolvePlacementHint(req.headers, candidates),
       });
       if (targetSilo === undefined) {
-        throw new RejectionError(
-          `no placement candidates for ${req.target.type} after filtering`,
-          "noCandidates",
+        throw refusedBeforeExecution(
+          new RejectionError(
+            `no placement candidates for ${req.target.type} after filtering`,
+            "noCandidates",
+          ),
         );
       }
       this.deps.recordEdge?.(req, targetSilo);
@@ -497,5 +507,19 @@ export class DistributedDispatcher implements Dispatcher {
         ? this.deliverLocalWithinPlacementSpan(req, opts)
         : this.deps.remote.send(targetSilo, req);
     });
+  }
+
+  /**
+   * A routing step's own refusal — the grain directory rejecting a lookup or a registration (a
+   * stale view, a moved range) — refuses the request before it runs, so it is marked as one; a
+   * failure that is not a refusal (a timeout talking to the directory's owner) is left as it is.
+   */
+  private async routing<T>(step: () => Promise<T>): Promise<T> {
+    try {
+      return await step();
+    } catch (err) {
+      if (err instanceof RejectionError) refusedBeforeExecution(err);
+      throw err;
+    }
   }
 }

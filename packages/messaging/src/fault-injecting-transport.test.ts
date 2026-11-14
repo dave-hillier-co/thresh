@@ -51,7 +51,7 @@ async function fabric(faults: NetworkFaults) {
       .get(from.podName)!
       .connect(
         to,
-        { protocolVersion: PROTOCOL_VERSION, siloAddress: from, clusterId: CLUSTER },
+        { protocolVersion: PROTOCOL_VERSION, siloAddress: from, clusterId: CLUSTER, epoch: 1 },
         (msg) => {
           duplexReceived.push(msg.method);
         },
@@ -166,6 +166,30 @@ describe("FaultInjectingTransport", () => {
     time.advance(10);
     await flush();
     expect(f.received.get("silo-b")).toEqual(["1", "4", "3"]);
+  });
+
+  it("severs the established connections on a link at the accepting end, and only those", async () => {
+    const faults = new NetworkFaults();
+    const f = await fabric(faults);
+    const ab = await f.dial(A, B);
+    const ac = await f.dial(A, C);
+    const lost: string[] = [];
+    ab.onClose?.(() => lost.push("a->b"));
+    ac.onClose?.(() => lost.push("a->c"));
+
+    expect(await faults.sever({ from: "silo-a", to: "silo-b" })).toBe(1);
+    await flush();
+
+    expect(lost).toEqual(["a->b"]);
+    expect(() => ab.send(message("after", A))).toThrow();
+    ac.send(message("still up", A));
+    await flush();
+    expect(f.received.get("silo-c")).toEqual(["still up"]);
+    // A new connection on the severed link is unaffected.
+    const again = await f.dial(A, B);
+    again.send(message("redialled", A));
+    await flush();
+    expect(f.received.get("silo-b")).toEqual(["redialled"]);
   });
 
   it("heals every fault at once", async () => {

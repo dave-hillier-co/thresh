@@ -30,6 +30,7 @@ const preamble = (self: SiloAddress): ConnectionPreamble => ({
   protocolVersion: PROTOCOL_VERSION,
   siloAddress: self,
   clusterId: CLUSTER,
+  epoch: 1,
 });
 const NOT_MESSAGEPACK = Uint8Array.of(0xc1, 0xff, 0x00);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

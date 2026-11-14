@@ -76,9 +76,13 @@ cluster.faults.failConnects({ from: a.address, to: b.address }); // RejectionErr
 const cut = cluster.faults.partition([a.address], [b.address, c.address]);
 cut.heal();
 cluster.faults.schedule({ from: a.address, to: b.address }, ["deliver", "drop", { delayMs: 50 }]);
+await cluster.faults.sever({ from: a.address, to: b.address }); // calls pending on it: "siloUnavailable"
 ```
 
-Faults are applied where a message is sent, to requests and replies alike. Each fault holds until
+Faults are applied where a message is sent, to requests and replies alike; a reply travels back down
+the connection its request came in on, so a fault from `b` to `a` reaches `b`'s replies to `a`'s
+calls. `sever` closes the connections already open on a link at the accepting end, as a reset socket
+would: the dialler sees each one lost and fails exactly the calls pending on it. Each fault holds until
 healed, or for the given `count` of messages. A schedule decides the next messages on a link one at
 a time, then the link goes back to the standing rules. Nothing is random. Connections are pooled, so
 a refused connect only bites a link that has not connected yet; arm one before the cluster starts by

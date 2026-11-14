@@ -79,13 +79,26 @@ export class CrashableTransport implements Transport {
     onAccept?: ConnectionAcceptHandler,
   ): Promise<Listener> {
     if (this.dead) throw this.gone(address);
+    // One wrapper per accepted connection, so the accept hook and the handler see the same object.
+    const wrappers = new WeakMap<Connection, Connection>();
+    const wrapperOf = (connection: Connection): Connection => {
+      let wrapped = wrappers.get(connection);
+      if (wrapped === undefined) {
+        wrapped = this.severable(connection);
+        wrappers.set(connection, wrapped);
+      }
+      return wrapped;
+    };
     const listener = await this.inner.listen(
       address,
-      (message, from) => (this.dead ? undefined : onMessage(message, from)),
+      (message, from, connection) =>
+        this.dead
+          ? undefined
+          : onMessage(message, from, connection === undefined ? undefined : wrapperOf(connection)),
       onAccept === undefined
         ? undefined
         : (preamble, connection) => {
-            if (!this.dead) onAccept(preamble, this.severable(connection));
+            if (!this.dead) onAccept(preamble, wrapperOf(connection));
           },
     );
     this.listeners.push(listener);
@@ -98,14 +111,17 @@ export class CrashableTransport implements Transport {
     onMessage?: MessageHandler,
   ): Promise<Connection> {
     if (this.dead) throw this.gone(to);
+    const wrapper: { connection?: Connection } = {};
     const connection = await this.inner.connect(
       to,
       preamble,
       onMessage === undefined
         ? undefined
-        : (message, from) => (this.dead ? undefined : onMessage(message, from)),
+        : (message, from, via) =>
+            this.dead ? undefined : onMessage(message, from, wrapper.connection ?? via),
     );
-    return this.severable(connection);
+    wrapper.connection = this.severable(connection);
+    return wrapper.connection;
   }
 
   /** Close every listener and cut every connection, for good. */

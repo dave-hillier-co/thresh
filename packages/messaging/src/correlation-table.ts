@@ -1,5 +1,6 @@
 import { GrainCallTimeoutError } from "@thresh/core/errors";
-import type { Message } from "@thresh/messaging/message";
+import { recordMisroutedResponse } from "@thresh/observability/messaging-metrics";
+import { PROCESS_EPOCH, type Message } from "@thresh/messaging/message";
 
 /** Injectable timer so call-timeout behaviour is deterministic in tests. */
 export interface CorrelationTimer {
@@ -16,14 +17,20 @@ interface Pending {
   resolve: (message: Message) => void;
   reject: (err: unknown) => void;
   timer: unknown;
-  peer?: string;
+  /** The connection the request went out on; only a response arriving on it completes the call. */
+  connection?: object;
 }
 
 /**
- * Matches a response to the promise of its awaiting request, keyed by
- * correlation id. Response interpretation (success vs error vs rejection) is
- * the dispatcher's job; this only resolves on arrival, rejects on timeout, and
- * fails everything outstanding when a connection drops.
+ * Matches a response to the promise of its awaiting request. A call's identity
+ * is its correlation id, this process's epoch (stamped on the request and
+ * copied onto its response) and the connection the request went out on: a
+ * response completes a call only when all three agree, so a late reply meant
+ * for this container's previous incarnation, or one arriving on some other
+ * connection, completes nothing — it is ignored and counted (`misrouted`).
+ * Response interpretation (success vs error vs rejection) is the dispatcher's
+ * job; this only resolves on arrival, rejects on timeout, and fails exactly
+ * the calls pending on a connection when that connection drops.
  *
  * Every promise this hands out carries a catch-all of its own (see `register`),
  * because a caller is free to stop awaiting one: a call abandoned during a
@@ -35,11 +42,24 @@ interface Pending {
  */
 export class CorrelationTable {
   private readonly pending = new Map<string, Pending>();
+  private misroutedCount = 0;
 
-  constructor(private readonly timer: CorrelationTimer = realTimer) {}
+  constructor(
+    private readonly timer: CorrelationTimer = realTimer,
+    /** Stamped on every request this table awaits; a response must carry it back. */
+    readonly epoch: number = PROCESS_EPOCH,
+  ) {}
 
-  /** `peer` tags the call with the connection it went out on, for `rejectFor`. */
-  register(correlationId: bigint, timeoutMs?: number, peer?: string): Promise<Message> {
+  /** Responses that named an outstanding call but arrived on another connection or epoch. */
+  get misrouted(): number {
+    return this.misroutedCount;
+  }
+
+  /**
+   * Arm a call. `connection` binds it to the connection its request goes out on: only a
+   * response arriving there completes it, and `rejectFor(connection)` fails it.
+   */
+  register(correlationId: bigint, timeoutMs?: number, connection?: object): Promise<Message> {
     const key = correlationId.toString();
     const promise = new Promise<Message>((resolve, reject) => {
       let handle: unknown;
@@ -53,7 +73,7 @@ export class CorrelationTable {
         resolve,
         reject,
         timer: handle,
-        ...(peer !== undefined ? { peer } : {}),
+        ...(connection !== undefined ? { connection } : {}),
       });
     });
     // Marks this promise as handled so its rejection can never surface unobserved. A caller that
@@ -63,11 +83,24 @@ export class CorrelationTable {
     return promise;
   }
 
-  /** Resolve the pending promise for this response. Returns false if unknown. */
-  complete(message: Message): boolean {
+  /**
+   * Resolve the pending call this response answers, when it arrived on `connection` — the one
+   * the call went out on — and carries this table's epoch. Returns false, completing nothing,
+   * otherwise: for an id with nothing outstanding (a reply after its call timed out), and for a
+   * known id on the wrong connection or epoch, which is also counted.
+   */
+  complete(message: Message, connection?: object): boolean {
     const key = message.correlationId.toString();
     const entry = this.pending.get(key);
     if (entry === undefined) return false;
+    const wrongConnection = entry.connection !== undefined && entry.connection !== connection;
+    if (wrongConnection || message.correlationEpoch !== this.epoch) {
+      this.misroutedCount += 1;
+      recordMisroutedResponse({
+        "thresh.misrouted.reason": wrongConnection ? "connection" : "epoch",
+      });
+      return false;
+    }
     this.pending.delete(key);
     this.clearTimer(entry);
     entry.resolve(message);
@@ -99,10 +132,10 @@ export class CorrelationTable {
     this.pending.clear();
   }
 
-  /** Fail the outstanding calls tagged with this peer, e.g. when its connection is lost. */
-  rejectFor(peer: string, err: unknown): void {
+  /** Fail exactly the outstanding calls bound to `connection`, e.g. when it is lost. */
+  rejectFor(connection: object, err: unknown): void {
     for (const [key, entry] of this.pending) {
-      if (entry.peer !== peer) continue;
+      if (entry.connection !== connection) continue;
       this.pending.delete(key);
       this.clearTimer(entry);
       entry.reject(err);

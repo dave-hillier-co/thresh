@@ -71,14 +71,14 @@ class HoldingTransport implements Transport {
     onMessage: MessageHandler,
     onAccept?: ConnectionAcceptHandler,
   ): Promise<Listener> {
-    const gated: MessageHandler = (message, from) => {
+    const gated: MessageHandler = (message, from, connection) => {
       const isHeld =
         !this.open &&
         message.direction === "request" &&
         message.system === "directory" &&
         from.equals(this.holdFrom);
-      if (!isHeld) return onMessage(message, from);
-      this.parked.push(() => void onMessage(message, from));
+      if (!isHeld) return onMessage(message, from, connection);
+      this.parked.push(() => void onMessage(message, from, connection));
       return undefined;
     };
     return this.inner.listen(address, gated, onAccept);

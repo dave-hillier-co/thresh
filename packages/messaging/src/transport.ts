@@ -12,9 +12,27 @@ export interface ConnectionPreamble {
   clusterId: string;
   /** Identity of a connecting client, when the peer is a client rather than a silo. */
   clientId?: GrainId;
+  /**
+   * The dialling process's epoch (`PROCESS_EPOCH`), fixed for the life of that process. Two
+   * incarnations of a container share a `SiloAddress` (it has no generation here, unlike
+   * Orleans'); the epoch is what tells them apart, and it is also stamped on every request the
+   * process sends (`Message.correlationEpoch`) so a late reply meant for a predecessor can
+   * complete nothing in its successor.
+   */
+  epoch: number;
 }
 
-export type MessageHandler = (message: Message, from: SiloAddress) => void | Promise<void>;
+/**
+ * Receives one inbound message. `connection` is the connection it arrived on, writing back to
+ * its sender: the answer to a request goes down it, never down a second connection dialled back
+ * to `from` (Orleans answers on the connection the request came in on). A transport passes it
+ * for every message; the parameter is optional only so a handler may ignore it.
+ */
+export type MessageHandler = (
+  message: Message,
+  from: SiloAddress,
+  connection?: Connection,
+) => void | Promise<void>;
 
 export interface Listener {
   readonly address: SiloAddress;
@@ -28,7 +46,11 @@ export interface Listener {
 }
 
 export interface Connection {
-  /** Fire-and-forget; a response to a dialler arrives on its `onMessage` hook, not here. */
+  /**
+   * Fire-and-forget; a response to a dialler arrives on its `onMessage` hook, not here. Throws
+   * when the connection is already closed (by either end): a message that cannot leave must
+   * not look as though it did.
+   */
   send(message: Message): void;
   close(reason?: string): Promise<void>;
   /**
@@ -44,9 +66,11 @@ export interface Connection {
 /**
  * Fires once per accepted inbound connection, giving the listener the peer's
  * preamble and a duplex `Connection` it can hold to reach that peer later
- * (mirroring how Orleans' gateway learns a client connection on accept). The
+ * (mirroring how Orleans learns a client or silo connection on accept). The
  * connection writes back down the ACCEPTED socket — this is the peer's own
- * reachability, not a separate dial to an address it advertised.
+ * reachability, not a separate dial to an address it advertised. It is the
+ * same object the listener's `MessageHandler` receives for every message that
+ * arrives on that socket.
  */
 export type ConnectionAcceptHandler = (
   preamble: ConnectionPreamble,
@@ -54,7 +78,7 @@ export type ConnectionAcceptHandler = (
 ) => void;
 
 /** Current preamble wire version. Bump (and validate on accept) whenever the duplex contract changes. */
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 /** Orleans' `ConnectionOptions.OpenConnectionTimeout` default: how long a dial may take. */
 export const CONNECT_TIMEOUT_MS = 5_000;

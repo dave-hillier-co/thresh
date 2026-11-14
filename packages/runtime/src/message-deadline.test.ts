@@ -68,8 +68,8 @@ class ArrivalCountingTransport implements Transport {
   ): Promise<Listener> {
     return this.inner.listen(
       address,
-      (message, from) => {
-        const result = onMessage(message, from);
+      (message, from, connection) => {
+        const result = onMessage(message, from, connection);
         if (message.direction === "request" && message.method === "run") {
           this.arrivals += 1;
           this.waiters = this.waiters.filter((w) => {
