@@ -576,10 +576,10 @@ export class SiloBuilder {
     jobs?: DurableJobsOptions;
   }): this {
     const client = this.createManagedRedisClient(options);
-    this.jobShardStore = new RedisJobShardStore(
-      client,
-      toConfigOption("keyPrefix", options.keyPrefix),
-    );
+    this.jobShardStore = new RedisJobShardStore(client, {
+      ...toConfigOption("keyPrefix", options.keyPrefix),
+      serviceId: this.serviceIdentity,
+    });
     this.durableJobsOptions = options.jobs ?? {};
     return this;
   }
