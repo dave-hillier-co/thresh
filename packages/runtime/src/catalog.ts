@@ -65,6 +65,33 @@ export interface GrainActivator {
   createInstance(ctor: GrainClass, id: GrainId): Grain;
   /** Called when an activation using this activator is deactivated (idle collection or explicit). */
   disposeInstance?(instance: Grain, id: GrainId): void | Promise<void>;
+  /**
+   * Whether this activator builds `ctor`. Several activators can be registered, each for the
+   * classes it claims (see {@link composeGrainActivators}); one that omits `claims` claims every
+   * class, so the single-activator form is unchanged.
+   */
+  claims?(ctor: GrainClass): boolean;
+}
+
+/**
+ * One activator out of several. A class goes to the first activator that claims it, in
+ * registration order; one claimed by none is constructed with `constructGrain`. Disposal goes back
+ * to whichever activator built the instance.
+ */
+export function composeGrainActivators(activators: readonly GrainActivator[]): GrainActivator {
+  const builtBy = new WeakMap<Grain, GrainActivator>();
+  return {
+    createInstance(ctor, id) {
+      const activator = activators.find((a) => a.claims === undefined || a.claims(ctor));
+      if (activator === undefined) return constructGrain(ctor);
+      const instance = activator.createInstance(ctor, id);
+      builtBy.set(instance, activator);
+      return instance;
+    },
+    async disposeInstance(instance, id) {
+      await builtBy.get(instance)?.disposeInstance?.(instance, id);
+    },
+  };
 }
 
 export interface CatalogOptions {
