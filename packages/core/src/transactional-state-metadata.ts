@@ -6,6 +6,8 @@ export interface TransactionalStateField {
   stateName: string;
   /** The state before any committed write. */
   initial: () => unknown;
+  /** Transactional-storage provider name (Orleans' `storageName`); absent means the default provider. */
+  provider?: string;
 }
 
 // Per-instance registry populated by the decorator's initializer during

@@ -188,6 +188,8 @@ export function reducerState<TState, TEvent>(
 export interface TransactionalStateOptions<TState> {
   /** The state before any committed write. */
   initial: () => TState;
+  /** Transactional-storage provider name; defaults to the silo's default provider. */
+  provider?: string;
 }
 
 /**
@@ -208,6 +210,7 @@ export function transactionalState<TState>(
         fieldName,
         stateName,
         initial: options.initial as () => unknown,
+        ...(options.provider !== undefined ? { provider: options.provider } : {}),
       });
     });
   };
