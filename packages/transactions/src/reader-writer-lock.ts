@@ -353,6 +353,11 @@ export class ReaderWriterLock {
     deadline?: AcquireDeadline,
     isUpgrade = false,
   ): Promise<void> {
+    if (this.disposed) {
+      return Promise.reject(
+        new TransactionAbortedError(transactionId, "transactional state unloaded"),
+      );
+    }
     const conflicts = this.conflictingHolders(transactionId, mode);
     // Wait-die: wait only if older — by the total (timestamp, id) order —
     // than every conflicting holder; otherwise die.

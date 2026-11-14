@@ -148,7 +148,7 @@ describe("transaction timers and options through the silo", () => {
     }
   });
 
-  it("leaves no transactions timer pending after the activation is collected", async () => {
+  it("leaves no transactions timer pending after a released-lock activation is collected (the unload-with-live-lock cases are in the transactions package, as collection refuses a held lock)", async () => {
     const clock = new TransactionTimerTracker(new FakeTimeProvider());
     const cluster = await buildCluster(clock);
     try {
