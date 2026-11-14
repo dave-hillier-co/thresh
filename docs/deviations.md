@@ -201,7 +201,7 @@ Two bounds on that walk. It does **not** descend into class instances (or grain 
 rebuilding one would hand a same-silo callee a plain object where its signature declares the class —
 so a signal held by a class-typed record still does not cross a silo boundary. And a value graph
 containing a cycle is left alone at the point it closes, since a cyclic argument is legal on a
-same-silo call, which never serializes.
+same-silo call, which does not serialize unless `wireSemanticsForLocalCalls` is on.
 
 ## A cancellation crosses a silo boundary AS a cancellation
 
@@ -394,6 +394,17 @@ Orleans' `PrepareTimeout` to the wait for the agent's `recordCommit`, and decide
 expires. `recordCommit` refuses a transaction the TM no longer holds, so that decision is final.
 An ordinary prepared participant asks its TM at Orleans' `RemoteTransactionPingFrequency`. An
 in-doubt record whose TM never answers keeps its activation alive until silo shutdown.
+
+## A same-silo call shares its arguments unless asked not to
+
+Orleans deep-copies a call's arguments and its response even when caller and callee share a silo
+(unless a type is `[Immutable]`), so placement never changes what a callee can see or mutate.
+Thresh hands a same-silo callee the caller's own objects, and an error keeps its class, while the
+same call to another silo round-trips the value codec. `SiloConfig.wireSemanticsForLocalCalls`
+(and `TestClusterOptions.wireSemanticsForLocalCalls`) restores placement-independence by passing
+the arguments, the result and a thrown error of every call through that codec round trip. The codec
+is the copier here, so the option also flattens or refuses class instances and rebuilds error
+classes exactly as the wire does. It is off by default.
 
 ## Additions beyond Orleans
 
