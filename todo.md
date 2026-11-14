@@ -271,7 +271,8 @@ Follow-ups surfaced while fixing them:
 Every finding's evidence and direction is in
 [`docs/project-review-2026-11-14.md`](docs/project-review-2026-11-14.md); the ids below are its
 headings. Not filed as issues. Fixes land on `integration/2026-11-14-design-review-fixes`, each
-carrying a test that was observed failing first.
+carrying a test that was observed failing first. Redis-, Postgres- and Kafka-backed paths were not
+executed locally in either wave: the Redis job-shard scripts and keys changed and must run in CI.
 
 Membership and partition ownership:
 
@@ -281,19 +282,25 @@ Membership and partition ownership:
       applies the current view in `start()`; ownership hooks run from one path.
 - [x] **M3** join recovery runs with the read gate open (duplicate activations on join). An
       unknown previous owner now waits on every source, and the pull names the requester's ring.
-- [ ] **M4** **partly fixed.** Cleanup is driven by the member-set diff, so a removed silo is
-      cleared from the cache, the pool and the client directory. Still open: while a dead silo is
-      listed not-ready, calls to it surface a raw `ECONNREFUSED` (ties to option C above).
+- [ ] **M4** **partly fixed.** A removed silo is cleared from the cache, the pool and the client
+      directory, and a peer that cannot be reached fails with the transports' one `ConnectFailure`
+      (the cached route is dropped). Still open: calls to a silo that is dead but still listed
+      keep failing until Kubernetes removes it (option C above).
 - [x] **M5** per-silo view versions break routine routing (the reproduced half of #72). The
       Kubernetes view version is the highest EndpointSlice `resourceVersion` observed. Residuals:
       a watch that reports no revision falls back to a per-silo counter; a silo that listed after
       a slice deletion can differ from one that saw the event until the next slice write; and a
       not-ready joiner still counts itself in its own ring (the open half of #72).
 - [ ] **M6** the directory handoff fails open and has no range or version unit
-- [ ] **M7** stream, reminder and job ownership use three disciplines, none fenced
-- [ ] **M8** **partly fixed.** `membershipHealthy` follows the applied view. `overloaded`,
-      `transportReady` and `live()` are unchanged.
-- [ ] **M9** silo replies use a reverse-dialled connection; responses match by id alone
+- [ ] **M7** **partly fixed.** A graceful release resets a job shard's adoption count, poisoning
+      is logged and counted, and job ownership follows the node's applied view. Still open: the
+      three services have no shared ownership abstraction and no fencing epoch on their writes.
+- [x] **M8** health signals do not measure what they name. `membershipHealthy` follows the
+      applied view, `overloaded` follows the load-shedding detector, `transportReady` follows the
+      listener, and liveness can fail after sustained self-probe failure (opt-in). Residual: a
+      listener `error` event still leaves `transportReady` true.
+- [ ] **M9** **partly fixed.** A dial is bounded at 5 s. Still open: replies use a
+      reverse-dialled connection, and responses match by id alone with no process epoch.
 
 Transactions:
 
@@ -303,35 +310,46 @@ Transactions:
 - [x] **T3** `status(): boolean` conflates "not yet decided" with "aborted". Status is
       committed / undetermined / presumed abort.
 - [ ] **T4** **partly fixed.** A holder past `lockTimeoutMs` (8 s) is broken, waiters use
-      `lockAcquireTimeoutMs` (10 s), and protocol calls are always-interleave. Still open: commit
-      records are never collected (needs T1's Confirm phase); the prepared-participant ping is a
-      stand-in; the builder exposes no transaction options.
+      `lockAcquireTimeoutMs` (10 s), protocol calls are always-interleave, no timer outlives its
+      resource, and the options are settable through the builder and `TestCluster`. Still open:
+      commit records are never collected (needs T1's Confirm phase), and the prepared-participant
+      ping is a stand-in.
 - [ ] **T5** pending records are siblings but the storage contract encodes a chain (root of #78)
-- [x] **T6** nothing blocks deactivation while a lock or prepared record is live. Such an
-      activation is not collected or migrated. This is a hard block where Orleans delays by at
-      most 5 s; an explicit `deactivateOnIdle` does not honour it yet.
+- [x] **T6** nothing blocks deactivation while a lock or prepared record is live. Deactivation
+      waits for the block on every path, bounded at Orleans' 5 s.
 
 Activation lifecycle:
 
-- [ ] **L1** deactivation has no single owner
+- [x] **L1** deactivation has no single owner. One joinable pipeline on the activation, in
+      Orleans' order, used by every path; no invalid entry waits in the catalog for a sweep.
 - [ ] **L2** lifecycle operations are ordinary turns; a deactivation request is a polled flag
 - [ ] **L3** a 5-value state plus about 13 flags; admission is decided in about ten places
 - [ ] **L4** directory registration lives outside the activation; cold-grain order rests on timing
-- [ ] **L5** the placement pipeline exists twice
-- [ ] **L6** the only environment-statistics source is a test stub, with public latches
-- [ ] **L7** idle collection is a sequential full-map sweep
+- [x] **L5** the placement pipeline exists twice. Migration targets come from the same pipeline
+      as new activations; directed movers pass a hint; stateless workers and system grains never
+      migrate.
+- [x] **L6** the only environment-statistics source is a test stub, with public latches. An
+      injectable provider with a Node default feeds load shedding and placement; the latches
+      work only on a silo built with test hooks. Resource-optimized scoring uses its weights but
+      has no Kalman filtering or candidate subset yet (the open part of #74).
+- [x] **L7** idle collection is a sequential full-map sweep. Stale activations are selected in
+      one pass and deactivated with bounded concurrency; sweeps never overlap.
 - [ ] **L8** a same-silo call has no default deadline
 
 Wire surface and location transparency:
 
 - [x] **W1** dispatch by bare method name: no declared wire surface. Only a type's declared
-      methods dispatch, and references keep JavaScript protocol names local. Residual:
-      `JournaledGrain`'s `initialState` and `transitionState` remain callable.
+      methods dispatch, references keep JavaScript protocol names local, and a `JournaledGrain`'s
+      framework hooks are excluded.
 - [x] **W2** the value codec reserves keys inside user data. Objects owning `$thresh` or a
       dangerous key travel in a `plainObject` envelope and round-trip as themselves.
-- [ ] **W3** local calls bypass the codec, so placement decides call semantics
+- [ ] **W3** **partly fixed.** `wireSemanticsForLocalCalls` (silo config and `TestCluster`)
+      round-trips same-silo calls through the codec; it is off by default. Forced on, 11 tests
+      fail: 7 pass values the wire refuses, 3 rely on aliasing, 1 pins local-only semantics.
 - [ ] **W4** no compatibility contract for the wire or stored state
-- [ ] **W5** a decode failure is a process fault
+- [x] **W5** a decode failure is a process fault. An undecodable frame closes that connection
+      and is counted; one failure policy wraps every system handler. Residual: a frame that
+      decodes to a non-message object is delivered to the handler, whose failure is contained.
 - [ ] **W6** "safe to resend" has three definitions
 - [x] **W7** the error taxonomy lives in parallel tables that have drifted. One table, a test
       that enumerates every exported error, and `isThreshRuntimeError` classifies as Orleans does.
@@ -339,43 +357,60 @@ Wire surface and location transparency:
 
 Verification model:
 
-- [ ] **V1** the test harness is a parallel wiring exactly where production differs
-- [ ] **V2** the memory stream provider is a different model from the pulling providers
+- [ ] **V1** **partly fixed.** `TestCluster` can run every silo on its own Kubernetes
+      membership over a shared fake API, with held and released views, and a kill is now a
+      crash. The default is still the shared static membership.
+- [ ] **V2** **partly fixed.** A shared memory stream provider binds per silo and delivers
+      through a live one. The memory and pulling providers are still different models.
 - [ ] **V3** three host layers with different defaults
 - [ ] **V4** the parity metric covers neither the largest deviation nor functional grains
-- [ ] **V5** no fault-injection seam
+- [x] **V5** no fault-injection seam. A fault-injecting transport (drop, delay, fail connects,
+      partition) and storage decorators ship in the harness.
 
 State and journaling:
 
-- [ ] **S1** **partly fixed.** A lost conditional append resyncs before it reports `false`. Still
-      open: unconditional events pending beside a failed conditional one are dropped with it, and
-      a lost unconditional `confirmEvents` leaves the adaptor stale.
+- [x] **S1** the journal adaptor swallows the lost-writer signal and stays stale. A lost
+      append resyncs; only the conditional entries are dropped; a lost unconditional confirm is
+      retried on top of the refreshed view.
 - [ ] **S2** one storage write per durable-collection mutation, no atomic unit
-- [ ] **S3** **partly fixed.** Retention is now a named option, on by default — but retained
-      history is rewritten in full at every compaction, so the default needs revisiting.
+- [x] **S3** `JournaledGrain` event history is truncated by the shared compaction threshold.
+      Truncation is the documented default and whole-history retention is opt-in. Opting in
+      rewrites the history at every compaction until the storage seam can snapshot without
+      truncating.
 - [x] **S4** log sharing is inferred by object identity over a constant log name. Sharing is
       decided by a storage's `backingKey`.
 - [ ] **S5** no shared facet contract
 - [x] **S6** the in-memory grain store is not a model of the durable ones. It round-trips state
       through the value codec.
-- [ ] **S7** the storage-backend seam covers three of six durable stores
+- [ ] **S7** **partly fixed.** A transactional state uses the storage provider it names. Still
+      open: the storage backend does not cover transactional storage or job shards, and neither
+      has a Postgres store.
 - [ ] **S8** `defineReducerGrain` effects are neither atomic nor durable
 
 Streams, reminders and durable jobs:
 
 - [ ] **B1** pulling-stream delivery state is one cursor per physical queue (root of #97, #112)
 - [ ] **B2** retention and rewind are not part of the queue seam
-- [ ] **B3** durable-job shards are cluster-wide time buckets
-- [ ] **B4** a reminder registered on a non-owner loses its first tick
+- [ ] **B3** **partly fixed.** The owner re-reads its shard, so a lost forward no longer strands
+      a job; failures are logged; Redis keys carry the service id. Shards are still cluster-wide
+      time buckets.
+- [ ] **B4** **partly fixed.** A never-fired reminder found past its due time fires promptly, so
+      the first tick is late by at most one refresh, not one period. Registration is still not
+      routed to the range owner as Orleans does.
 - [ ] **B5** the `PullableQueue` contract assumes token order equals visibility order (root of #99)
 - [ ] **B6** Kafka holds no authoritative assignment or offsets
 
 Composition, configuration and operability:
 
-- [ ] **C1** the builder accumulates side effects; validation is a list of special cases
+- [ ] **C1** **partly fixed.** An unknown stream provider name and a filter that would be
+      ignored are refused. The builder still creates resources at call time and validates by
+      special case.
 - [ ] **C2** options live in four hand-synchronised layers
 - [ ] **C3** lifecycle is hook arrays, not a staged lifecycle
-- [ ] **C4** the logger is not a seam and the runtime is silent by default
+- [x] **C4** the logger is not a seam and the runtime is silent by default. One `logger` on the
+      silo configuration reaches the node, dispatchers, reminders, jobs, the endpoint watch, the
+      self-probe and the WebSocket transport; the default writes warn and error to the console.
+      Residual: the Redis, Postgres and Kafka stream providers and grain services do not take it.
 - [ ] **C5** `ClusterNode` stands in for a missing system-target abstraction
 - [ ] **C6** `GrainRuntime` is a god-interface
 - [ ] **C7** the silo builder statically imports every backing driver
