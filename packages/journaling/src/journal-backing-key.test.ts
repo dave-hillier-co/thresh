@@ -22,9 +22,9 @@ describe("journal provider backing identity", () => {
     const a = new PostgresJournalStorage(pool);
     expect(sharesJournalBacking(a, new PostgresJournalStorage(pool))).toBe(true);
     expect(sharesJournalBacking(a, new PostgresJournalStorage({} as Pool))).toBe(false);
-    expect(sharesJournalBacking(a, new PostgresJournalStorage(pool, { tablePrefix: "other" }))).toBe(
-      false,
-    );
+    expect(
+      sharesJournalBacking(a, new PostgresJournalStorage(pool, { tablePrefix: "other" })),
+    ).toBe(false);
     expect(sharesJournalBacking(a, new PostgresJournalStorage(pool, { serviceId: "svc" }))).toBe(
       false,
     );
