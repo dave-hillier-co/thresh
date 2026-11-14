@@ -47,6 +47,27 @@ import type { TransactionAgent } from "@thresh/runtime/transaction-agent";
  * settles on the first rejection it observes — so this only matters for the
  * aggregate shapes that don't collapse on their own.
  */
+/**
+ * Property names that JavaScript itself, or common tooling (JSON, template
+ * strings, util.inspect, test-framework matchers, React), reads off an arbitrary
+ * value. A reference must never turn one into a remote call: it would be a call
+ * the author never made, to a method the grain does not declare, whose rejection
+ * nobody awaits. `then` is hidden for the same reason (a reference is not
+ * thenable). `toString` is separate: it answers locally. `inspect` is deliberately
+ * absent: Node reads `Symbol.for("nodejs.util.inspect.custom")`, not the string
+ * `inspect` (since Node 11), and `inspect` is a legitimate grain method name.
+ */
+const PROTOCOL_NAMES: ReadonlySet<string> = new Set([
+  "then",
+  "toJSON",
+  "valueOf",
+  "toLocaleString",
+  "constructor",
+  "asymmetricMatch",
+  "nodeType",
+  "$$typeof",
+]);
+
 function singleRootCause(error: unknown): unknown {
   if (error instanceof AggregateError && error.errors.length > 0) {
     return singleRootCause(error.errors[0]);
@@ -155,17 +176,20 @@ export class GrainFactory {
         // wire codec's "is this a grain ref?" check rely on `in`).
         has: (_t, prop): boolean => {
           if (prop === GRAIN_REF) return true;
-          // Keep `"then" in ref` false too, for the same reason `get` hides it.
-          if (prop === "then") return false;
+          // Keep `in` consistent with `get`: a hidden protocol name is absent.
+          if (typeof prop === "string" && (PROTOCOL_NAMES.has(prop) || prop === "toString")) {
+            return prop === "toString";
+          }
           return typeof prop === "string";
         },
         get: (_t, prop, receiver): unknown => {
           if (prop === GRAIN_REF) return { grainId: target, interfaceId: def.id };
           if (prop === GRAIN_REF_CAST) return this.castTo(def, target, receiver);
           if (typeof prop !== "string") return undefined;
-          // Never appear thenable: a grain ref must not resolve `.then` to a
-          // dispatcher, or awaiting/Promise.resolve-ing one would invoke it.
-          if (prop === "then") return undefined;
+          // Never appear thenable, JSON-serializable or coercible through a
+          // remote call: a protocol name resolves to nothing (see PROTOCOL_NAMES).
+          if (PROTOCOL_NAMES.has(prop)) return undefined;
+          if (prop === "toString") return (): string => `GrainReference(${target.toString()})`;
           const options = def.options[prop] ?? {};
           // `async` so a synchronous boundary-validation throw (e.g. a `join`
           // method called with no ambient transaction) surfaces as a rejected

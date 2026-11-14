@@ -6,6 +6,7 @@ import {
   type BroadcastChannelHandler,
 } from "@thresh/core/broadcast-channel";
 import type { Duration } from "@thresh/core/duration";
+import { isRemotelyCallable } from "@thresh/core/remote-method-surface";
 import {
   DurableJobConsumerInterface,
   durableJobHandler,
@@ -1305,6 +1306,12 @@ export class ActivationData implements GrainContext {
     const iface = getGrainInterface(req.interfaceId);
     if (iface?.extension === true) {
       return await this.invokeExtension(req, iface.name);
+    }
+    // Only the grain type's declared method surface is dispatched: a runtime
+    // hook, a framework base-class member or an Object.prototype name is
+    // refused without touching the instance (see `remote-method-surface`).
+    if (!isRemotelyCallable(this.instance, req.method)) {
+      throw new GrainCallError(`grain ${this.id.toString()} has no method ${req.method}`);
     }
     const fn = (this.instance as unknown as Record<string, unknown>)[req.method];
     if (typeof fn !== "function") {

@@ -1,3 +1,4 @@
+import { markFrameworkGrainBase } from "./remote-method-surface";
 import type { GrainContext } from "./grain-context";
 import type { GrainId } from "./grain-id";
 import type { GrainInterface } from "./grain-interface";
@@ -49,3 +50,5 @@ export abstract class Grain {
     return Promise.resolve();
   }
 }
+
+markFrameworkGrainBase(Grain);
