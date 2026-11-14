@@ -173,7 +173,10 @@ describe("WebSocketTransport: a frame that fails to decode", () => {
     });
     const address = server.address();
     const port = typeof address === "object" && address !== null ? address.port : 0;
-    const lost = Promise.withResolvers<void>();
+    let markLost: () => void = () => undefined;
+    const lost = new Promise<void>((resolve) => {
+      markLost = resolve;
+    });
     const before = await decodeFailures();
 
     const connection: Connection = await new WebSocketTransport(CLUSTER, { logger }).connect(
@@ -181,8 +184,8 @@ describe("WebSocketTransport: a frame that fails to decode", () => {
       preamble(loopback("C")),
       () => undefined,
     );
-    connection.onClose?.(() => lost.resolve());
-    await lost.promise;
+    connection.onClose?.(() => markLost());
+    await lost;
 
     expect(await decodeFailures()).toBe(before + 1);
     expect(logger.warnings.join("\n")).toMatch(/undecodable/);

@@ -34,6 +34,7 @@ import type {
   OutgoingGrainCallFilter,
 } from "@thresh/core/grain-call-filter";
 import { type Logger, noopLogger } from "@thresh/core/logger";
+import { recordHandlerFailure } from "@thresh/observability/messaging-metrics";
 import type { GrainReferenceIdentity } from "@thresh/core/grain-reference";
 import { RemindableInterface, type ReminderRegistry, type TickStatus } from "@thresh/core/reminder";
 import {
@@ -461,14 +462,15 @@ interface RecoveryReArm {
 }
 
 /**
- * Whether a send failed because nothing is listening at the peer's endpoint: the
- * in-process transport's `unknownTarget` for an unregistered endpoint, or a refused
- * TCP connect. Used only by join recovery, where it means the peer hosts nothing
- * (see `pullFrom`); a call's handling of these errors is unchanged.
+ * Whether a send failed because the peer could not be reached: every transport
+ * reports that as the one typed `unknownTarget` rejection (`connectFailure` in
+ * `@thresh/messaging/transport`), whether nothing is listening, the listener
+ * closed during the handshake, or the dial timed out. Used only by join
+ * recovery, where it means the peer hosts nothing (see `pullFrom`); a call's
+ * handling of these errors is unchanged.
  */
 function isNothingListening(err: unknown): boolean {
-  if (err instanceof RejectionError) return err.kind === "unknownTarget";
-  return (err as { code?: unknown } | undefined)?.code === "ECONNREFUSED";
+  return err instanceof RejectionError && err.kind === "unknownTarget";
 }
 
 function directoryOpGrainId(op: DirectoryOp): GrainId {
@@ -2643,67 +2645,78 @@ export class ClusterNode {
       this.correlation.complete(message);
       return;
     }
-    if (message.system === "directory") {
-      void this.handleDirectoryRequest(message);
-      return;
+    this.runInbound(message, this.inboundHandlerFor(message));
+  }
+
+  /** The handler an inbound request or one-way message is dispatched to. */
+  private inboundHandlerFor(message: Message): () => void | Promise<void> {
+    switch (message.system) {
+      case "directory":
+        return () => this.handleDirectoryRequest(message);
+      case "migration":
+        return () => this.handleMigration(message);
+      case "durablejob":
+        return () => this.handleDurableJobForward(message);
+      case "manifest":
+        return () => this.handleManifestRequest(message);
+      case "load":
+        return () => this.handleLoadRequest(message);
+      case "loadstats":
+        return () => this.handleLoadStatsRequest(message);
+      case "stats":
+        return () => this.handleStatsRequest(message);
+      case "detailedstats":
+        return () => this.handleDetailedStatsRequest(message);
+      case "actcount":
+        return () => this.handleActivationCountRequest(message);
+      case "forcecollect":
+        return () => this.handleForceCollectRequest(message);
+      case "siloping":
+        return () => this.handleSiloPingRequest(message);
+      case "provctl":
+        return () => this.handleProviderControlRequest(message);
+      case "rebalance":
+        return () => this.handleRebalanceRequest(message);
+      case "repartition":
+        return () => this.handleRepartitionRequest(message);
+      case "client":
+        return () => this.handleClientGossip(message);
+      default:
+        return () => this.receiveRequest(message);
     }
-    if (message.system === "migration") {
-      void this.handleMigration(message);
-      return;
+  }
+
+  /**
+   * The ONE failure policy for inbound dispatch: a handler that throws or
+   * rejects is never a process fault. The failure is logged and counted and,
+   * when a peer silo is waiting on the request, it is answered with an error
+   * response so its pending call fails now instead of at its deadline. (Orleans
+   * does the same in `SystemTarget` dispatch: a failed request becomes an error
+   * response to the caller, never an unobserved exception.)
+   */
+  private runInbound(message: Message, handler: () => void | Promise<void>): void {
+    const failed = (err: unknown) => {
+      const system = message.system ?? "grain";
+      recordHandlerFailure({ "thresh.message.system": system });
+      this.logger.error(`inbound ${system} message handler failed`, {
+        system,
+        correlationId: String(message.correlationId),
+        error: String(err),
+      });
+      const replyTo = message.sendingSilo;
+      if (message.direction !== "request" || replyTo === undefined) return;
+      try {
+        const { kind, body } = this.serializeError(err);
+        void this.reply(replyTo, responseTo(message, kind, body, this.options.local));
+      } catch {
+        // The error itself could not be encoded; the caller's deadline is the backstop.
+      }
+    };
+    try {
+      void Promise.resolve(handler()).catch(failed);
+    } catch (err) {
+      failed(err);
     }
-    if (message.system === "durablejob") {
-      void this.handleDurableJobForward(message);
-      return;
-    }
-    if (message.system === "manifest") {
-      void this.handleManifestRequest(message);
-      return;
-    }
-    if (message.system === "load") {
-      void this.handleLoadRequest(message);
-      return;
-    }
-    if (message.system === "loadstats") {
-      void this.handleLoadStatsRequest(message);
-      return;
-    }
-    if (message.system === "stats") {
-      void this.handleStatsRequest(message);
-      return;
-    }
-    if (message.system === "detailedstats") {
-      void this.handleDetailedStatsRequest(message);
-      return;
-    }
-    if (message.system === "actcount") {
-      void this.handleActivationCountRequest(message);
-      return;
-    }
-    if (message.system === "forcecollect") {
-      void this.handleForceCollectRequest(message);
-      return;
-    }
-    if (message.system === "siloping") {
-      void this.handleSiloPingRequest(message);
-      return;
-    }
-    if (message.system === "provctl") {
-      void this.handleProviderControlRequest(message);
-      return;
-    }
-    if (message.system === "rebalance") {
-      void this.handleRebalanceRequest(message);
-      return;
-    }
-    if (message.system === "repartition") {
-      void this.handleRepartitionRequest(message);
-      return;
-    }
-    if (message.system === "client") {
-      this.handleClientGossip(message);
-      return;
-    }
-    void this.receiveRequest(message);
   }
 
   private async sendDirectory(owner: SiloAddress, op: DirectoryOp): Promise<unknown> {
