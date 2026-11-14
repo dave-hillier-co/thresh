@@ -67,11 +67,11 @@ describe("a lock holder expires (T4)", () => {
     await agent.resolve(later);
     expect((await storage.load("balance", grainId("a"))).committedState).toEqual({ cents: 10 });
 
-    // The orphan's write was rolled back with its lock: a late prepare votes no,
-    // and carrying on in the transaction finds the lock broken.
-    expect(await state.prepare(orphan.id, { reads: 0, writes: 1 }, orphan.timeStamp, self)).toBe(
-      false,
-    );
+    // The orphan's write was rolled back with its lock: a late commit request
+    // finds the lock broken, and carrying on in the transaction does too.
+    expect(
+      await state.prepareAndCommit(orphan.id, { reads: 0, writes: 1 }, orphan.timeStamp, [self], 1),
+    ).toBe("brokenLock");
     await expect(
       inTransaction(orphan, () => state.performUpdate((s) => (s.cents += 1))),
     ).rejects.toBeInstanceOf(TransactionBrokenLockError);
@@ -107,15 +107,16 @@ describe("a lock holder expires (T4)", () => {
     await expect(waiting).rejects.toThrow(/deadline/);
   });
 
-  it("never breaks a holder that has prepared", async () => {
+  it("never breaks a holder that has prepared: it has left the lock for the commit queue", async () => {
     const { clock, storage, state, agent } = await setUp({ lockTimeoutMs: 200 });
     const tx = agent.startTransaction();
     await inTransaction(tx, () => state.performUpdate((s) => (s.cents += 7)));
-    expect(await state.prepare(tx.id, { reads: 0, writes: 1 }, tx.timeStamp, self)).toBe(true);
+    // Prepared as an ordinary participant of a TM elsewhere.
+    const tm = { grainId: grainId("tm"), stateName: "balance" };
+    await state.prepare(tx.id, { reads: 0, writes: 1 }, tx.timeStamp, tm);
 
     clock.advance(10_000);
-    await state.recordCommit(tx.id, tx.timeStamp, [self]);
-    await state.commit(tx.id);
+    await state.confirm(tx.id, tx.timeStamp);
     expect((await storage.load("balance", grainId("a"))).committedState).toEqual({ cents: 7 });
   });
 });

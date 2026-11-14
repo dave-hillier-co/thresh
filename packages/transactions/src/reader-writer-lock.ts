@@ -310,6 +310,34 @@ export class ReaderWriterLock {
     this.pump();
   }
 
+  /**
+   * Break every current holder that has not prepared (Orleans
+   * `ReaderWriterLock.AbortExecutingTransactions`): a transaction they may
+   * have read from aborted, so none of them may commit. Each is told through
+   * `onBreak`; waiters are then granted.
+   */
+  breakHolders(reason = "lock broken: a transaction it depends on aborted"): void {
+    const broken = [...this.holders.values()].filter((h) => !h.exited);
+    for (const holder of broken) {
+      this.holders.delete(holder.transactionId);
+      this.rejectQueued(holder.transactionId, reason);
+    }
+    if (!this.hasUnexitedHolder()) this.clearHoldTimer();
+    for (const holder of broken) this.options.onBreak?.(holder.transactionId);
+    this.pump();
+  }
+
+  /**
+   * Abort every queued request (Orleans `ReaderWriterLock.AbortQueuedTransactions`),
+   * as the resource restores itself from storage.
+   */
+  abortWaiters(reason = "transactional state restored from storage"): void {
+    for (const waiter of this.waiters.splice(0)) {
+      if (waiter.timer !== undefined) this.time.clearTimer(waiter.timer);
+      waiter.reject(new TransactionAbortedError(waiter.transactionId, reason));
+    }
+  }
+
   private count(holder: Holder, isRead: boolean): void {
     if (isRead) holder.reads += 1;
     else holder.writes += 1;

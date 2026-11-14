@@ -74,9 +74,11 @@ import {
   participantKey,
   type ParticipantId,
   type TransactionInfo,
-  type TransactionOutcome,
 } from "@thresh/core/transaction-info";
-import { TransactionResourceInterface } from "@thresh/core/transaction-resource";
+import {
+  TransactionResourceInterface,
+  type TransactionResourceMethod,
+} from "@thresh/core/transaction-resource";
 import { ConsistentHashRing } from "@thresh/directory/consistent-hash-ring";
 import type { DirectoryPeer } from "@thresh/directory/directory-peer";
 import { DistributedGrainDirectory } from "@thresh/directory/distributed-grain-directory";
@@ -1334,21 +1336,22 @@ export class ClusterNode {
   }
 
   /**
-   * Ask the elected TM whether a transaction committed, routed to its grain over
-   * the dispatcher. Used by a recovering transactional resource to resolve an
-   * in-doubt pending record left by a mid-commit failure.
+   * Send a commit-protocol message to the transactional resource `target`
+   * names, routed to its grain over the dispatcher: how the resources on this
+   * silo reach a TM or, as TM, their participants.
    */
-  async resolveTransactionStatus(
-    manager: ParticipantId,
-    transactionId: string,
-  ): Promise<TransactionOutcome> {
-    return (await this.dispatcher.invoke({
-      target: manager.grainId,
+  invokeTransactionResource(
+    target: ParticipantId,
+    method: TransactionResourceMethod,
+    args: readonly unknown[],
+  ): Promise<unknown> {
+    return this.dispatcher.invoke({
+      target: target.grainId,
       interfaceId: TransactionResourceInterface.id,
-      method: "status",
-      args: [manager.stateName, transactionId],
-      options: TransactionResourceInterface.options["status"] ?? {},
-    })) as TransactionOutcome;
+      method,
+      args: [target.stateName, ...args],
+      options: TransactionResourceInterface.options[method] ?? {},
+    });
   }
 
   /** Number of live grain activations hosted on this silo (for runtime metrics). */

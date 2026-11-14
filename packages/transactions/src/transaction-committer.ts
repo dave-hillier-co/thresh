@@ -1,17 +1,17 @@
 import type { GrainId } from "@thresh/core/grain-id";
 import { TransactionReadOnlyViolatedError } from "@thresh/core/errors";
-import type { ParticipantId, TransactionParticipant } from "@thresh/core/transaction-info";
+import type { AgentCompletedParticipant, ParticipantId } from "@thresh/core/transaction-info";
 import { requireTransaction } from "@thresh/runtime/invocation-context";
 
 /**
  * A commit-time action against a non-grain "service" resource, enlisted
- * directly in a transaction's 2PC commit phase (Orleans
+ * directly in a transaction's commit (Orleans
  * `ITransactionCommitOperation<TService>`). Applied once, from
- * {@link TransactionCommitter.commit}, after every participant (grain-hosted
- * or not) has prepared successfully. Returning `false` or throwing means the
- * commit step itself failed or could not be confirmed — since the transaction
- * manager has already durably recorded the commit by then, that surfaces to
- * the caller as `TransactionInDoubtError` (`@thresh/core/errors`), not an abort.
+ * {@link TransactionCommitter.commit}, after the transaction manager has made
+ * the commit durable. Returning `false` or throwing means the commit step
+ * itself failed or could not be confirmed — since the commit is already
+ * decided by then, that surfaces to the caller as `TransactionInDoubtError`
+ * (`@thresh/core/errors`), not an abort.
  */
 export interface TransactionCommitOperation<TService> {
   commit(transactionId: string, service: TService): boolean | Promise<boolean>;
@@ -20,31 +20,23 @@ export interface TransactionCommitOperation<TService> {
 /**
  * A transactional resource that wraps a plain (non-grain) service object,
  * mirroring Orleans' `TransactionCommitter<TService>`
- * (`src/Orleans.Transactions/TOC/TransactionCommitter.cs`). Where
- * `TransactionalStateImpl` stages and commits a grain's own state,
- * `TransactionCommitter` stages a {@link TransactionCommitOperation} and, at
- * commit time, runs it against `service` — letting an external system (a
- * message queue, a payment gateway, a legacy RPC endpoint) be enlisted as a
- * genuine 2PC participant without being a grain itself.
+ * (`src/Orleans.Transactions/TOC/TransactionCommitter.cs`). It stages a
+ * {@link TransactionCommitOperation} and, at commit time, runs it against
+ * `service` — letting an external system (a message queue, a payment gateway,
+ * a legacy RPC endpoint) take part in a transaction without being a grain.
  *
- * This is deliberately a thin, memory-only port for the parity test suite: it
- * has no durable prepare record of its own (a re-activation after a crash
- * between prepare and commit simply loses the pending operation, unlike
- * `TransactionalStateImpl`'s WAL-backed staging) — acceptable because the
- * upstream test this exists for
- * (`TocFaultTransactionMemoryTests.MultiGrainWriteTransactionWithCommitException`)
- * only exercises the in-process commit-time failure path, not crash recovery.
- *
- * Being memory-only also makes it a resource and nothing more: it implements
- * `TransactionParticipant` (Orleans `ITransactionalResource`) but not
- * {@link TransactionManager}, so `TransactionAgent` never elects it the
- * transaction manager. Upstream's committer registers a real, storage-backed
- * `TransactionManager` in the grain context and can therefore be elected; this
- * one has no durable commit record to write and no `status` to answer a
- * recovering participant with, so the manager is elected from the grain-hosted
- * resources instead.
+ * This is deliberately a thin, memory-only port for the parity test suite, and
+ * it departs from upstream in how it takes part. Upstream's committer has its
+ * own storage-backed commit queue and is elected TM ahead of every other
+ * writer (a priority manager), running the operation as a precondition of its
+ * commit write. This one has no storage and cannot be reached by participant
+ * id, so it stays outside the protocol: it is an
+ * {@link AgentCompletedParticipant}, which the agent commits after the elected
+ * TM has made the commit durable, and aborts otherwise. A re-activation loses
+ * a pending operation. See `docs/deviations.md`.
  */
-export class TransactionCommitter<TService> implements TransactionParticipant {
+export class TransactionCommitter<TService> implements AgentCompletedParticipant {
+  readonly completedByAgent = true as const;
   private readonly pending = new Map<string, TransactionCommitOperation<TService>>();
 
   constructor(
@@ -78,11 +70,6 @@ export class TransactionCommitter<TService> implements TransactionParticipant {
     }
   }
 
-  /** Nothing durable to stage beyond the in-memory pending operation recorded by `onCommit`. */
-  prepare(): boolean {
-    return true;
-  }
-
   /** Run the staged operation against the service; a `false`/throw fails only this commit step. */
   async commit(transactionId: string): Promise<void> {
     const operation = this.pending.get(transactionId);
@@ -94,7 +81,7 @@ export class TransactionCommitter<TService> implements TransactionParticipant {
     }
   }
 
-  abort(transactionId: string): void {
+  async abort(transactionId: string): Promise<void> {
     this.pending.delete(transactionId);
   }
 }

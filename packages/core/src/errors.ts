@@ -499,15 +499,14 @@ export class TransactionCascadingAbortError extends TransactionAbortedError {
 }
 
 /**
- * Raised when a transaction's outcome cannot be determined after the commit
- * decision was already durably recorded (Orleans `OrleansTransactionInDoubtException`).
- * Unlike {@link TransactionAbortedError} and its subtypes, this is **not** an
- * abort: by the time it can happen the elected transaction manager has already
- * recorded the commit (`TransactionAgent.resolve`'s `recordCommit` step), so
- * every participant's write *will* eventually be applied — this error means
- * only that one participant's own commit step failed or threw while applying
- * it, so the caller cannot tell from this call alone whether that participant
- * (or others still in flight) finished applying it yet. Deliberately not a
+ * Raised when the caller cannot tell whether a transaction committed (Orleans
+ * `OrleansTransactionInDoubtException`). Unlike {@link TransactionAbortedError}
+ * and its subtypes, this is **not** an abort: the transaction manager's answer
+ * was lost or was not a definite abort (`TransactionAgent.resolve` maps every
+ * such status here, as Orleans' `ConvertToUserException` does), or the commit
+ * was durable and a resource the agent completes itself failed while applying
+ * it. The transaction manager and the participants still converge on one
+ * outcome; only this call cannot report it. Deliberately not a
  * subtype of `TransactionAbortedError`, mirroring upstream's
  * `OrleansTransactionInDoubtException : OrleansTransactionException` (a
  * sibling of `OrleansTransactionAbortedException`, not a child of it).

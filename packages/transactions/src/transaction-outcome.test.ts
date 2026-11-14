@@ -1,179 +1,160 @@
 import { describe, expect, it } from "vitest";
-import { GrainId } from "@thresh/core/grain-id";
-import type { GrainType } from "@thresh/core/grain-type";
-import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
 import { TransactionAbortedError } from "@thresh/core/errors";
-import type { InvocationRequest } from "@thresh/core/request";
-import type { ParticipantId, TransactionInfo } from "@thresh/core/transaction-info";
-import type { Dispatcher } from "@thresh/runtime/dispatcher";
-import { invocationContext } from "@thresh/runtime/invocation-context";
+import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
 import { TransactionAgent } from "@thresh/runtime/transaction-agent";
 import { MemoryTransactionalStorage } from "@thresh/transactions/memory-transactional-storage";
-import { TransactionalStateImpl } from "@thresh/transactions/transactional-state-impl";
+import type { TransactionsOptions } from "@thresh/transactions/transactions-options";
+import {
+  account,
+  accountId,
+  asRemote,
+  dispatcherOver,
+  inTransaction,
+  openAccount,
+  settle,
+  TransactionNetwork,
+  type Balance,
+} from "@thresh/transactions/test-support/transaction-network";
 
-interface Balance {
-  cents: number;
-}
+const options: Partial<TransactionsOptions> = {
+  prepareTimeoutMs: 20_000,
+  remoteTransactionPingFrequencyMs: 60_000,
+  confirmationRetryDelayMs: 30_000,
+};
 
-const grainId = (key: string) => new GrainId("Account" as GrainType, key);
-const participant = (key: string): ParticipantId => ({
-  grainId: grainId(key),
-  stateName: "balance",
-});
-
-function inTransaction<R>(tx: TransactionInfo, fn: () => Promise<R>): Promise<R> {
-  return invocationContext.run({ senderId: undefined, ownerId: undefined, transaction: tx }, fn);
-}
-
-/** Let every promise chain a fired timer started run to completion. */
-const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
-
-async function committed(storage: MemoryTransactionalStorage, key: string) {
-  const loaded = await storage.load("balance", grainId(key));
-  return {
-    cents: loaded.committedSequenceId === 0 ? 100 : (loaded.committedState as Balance).cents,
-    pending: loaded.pendingStates.length,
-  };
-}
-
-/**
- * A two-account transfer whose participants have both prepared: `a` is the
- * elected TM, `b` an ordinary participant whose in-doubt queries are answered
- * by `a` directly, standing in for the routed `status` call.
- */
-async function preparedTransfer(clock: FakeTimeProvider) {
+/** A transfer `a` (the TM) → `b`, with a third writer `c` when asked; writes done. */
+async function transfer(withC = false) {
+  const clock = new FakeTimeProvider();
+  const network = new TransactionNetwork();
   const storage = new MemoryTransactionalStorage();
-  const a = new TransactionalStateImpl<Balance>(
-    "balance",
-    grainId("a"),
-    () => ({ cents: 100 }),
-    storage,
-    undefined,
-    undefined,
-    clock,
-  );
-  await a.load();
-  const newB = async () => {
-    const b = new TransactionalStateImpl<Balance>(
-      "balance",
-      grainId("b"),
-      () => ({ cents: 100 }),
-      storage,
-      async (_manager, transactionId) => a.status(transactionId),
-      { confirmationIntervalMs: 1_000, confirmationMaxIntervalMs: 4_000 },
-      clock,
-    );
-    await b.load();
-    return b;
-  };
-  const b = await newB();
+  const a = await openAccount(network, storage, "a", clock, options);
+  const b = await openAccount(network, storage, "b", clock, options);
   const agent = new TransactionAgent(clock);
   const tx = agent.startTransaction();
   await inTransaction(tx, () => a.performUpdate((s) => (s.cents -= 30)));
   await inTransaction(tx, () => b.performUpdate((s) => (s.cents += 30)));
-  const manager = participant("a");
-  expect(await a.prepare(tx.id, { reads: 0, writes: 1 }, tx.timeStamp, manager)).toBe(true);
-  expect(await b.prepare(tx.id, { reads: 0, writes: 1 }, tx.timeStamp, manager)).toBe(true);
-  return { storage, a, newB, tx, manager };
+  if (withC) {
+    const c = await openAccount(network, storage, "c", clock, options);
+    await inTransaction(tx, () => c.performUpdate((s) => (s.cents += 1)));
+  }
+  const writers = withC ? [account("a"), account("b"), account("c")] : [account("a"), account("b")];
+  const one = { reads: 0, writes: 1 };
+  return {
+    clock,
+    network,
+    storage,
+    a,
+    b,
+    agent,
+    tx,
+    prepareB: () => b.prepare(tx.id, one, tx.timeStamp, account("a")),
+    prepareAndCommit: () => a.prepareAndCommit(tx.id, one, tx.timeStamp, writers, writers.length),
+    reopen: (key: string) => openAccount(network, storage, key, clock, options),
+  };
 }
 
-describe("the TM's answer to a status query is tri-state (T3)", () => {
-  it("answers undetermined while it holds the transaction, committed once recorded, presumed abort when it has neither", async () => {
-    const clock = new FakeTimeProvider();
-    const { a, tx, manager } = await preparedTransfer(clock);
+async function committed(storage: MemoryTransactionalStorage, key: string) {
+  const loaded = await storage.load("balance", accountId(key));
+  return {
+    cents: loaded.committedSequenceId === 0 ? 100 : (loaded.committedState as Balance).cents,
+    pending: loaded.pendingStates.length,
+    commitRecords: Object.keys(loaded.metadata.commitRecords).length,
+  };
+}
 
-    expect(await a.status(tx.id)).toBe("undetermined");
-    await a.recordCommit(tx.id, tx.timeStamp, [manager, participant("b")]);
-    expect(await a.status(tx.id)).toBe("committed");
-    expect(await a.status("never-heard-of-it")).toBe("presumedAbort");
-  });
+describe("a replaced activation converges on the TM's outcome (T1, T4)", () => {
+  it(
+    "a participant replaced after it voted pings on re-activation, and the TM's resent " +
+      "confirmation commits it",
+    async () => {
+      const { clock, network, storage, b, prepareB, prepareAndCommit, reopen } = await transfer();
+      await prepareB();
+      await settle();
+      expect(network.messages("prepared", account("a")).map((m) => m.args[3])).toEqual(["ok"]);
 
-  it("applies a prepared write whose activation was replaced before the TM recorded the commit", async () => {
-    const clock = new FakeTimeProvider();
-    const { storage, a, newB, tx, manager } = await preparedTransfer(clock);
+      // B's activation goes away after its vote.
+      b.unload();
+      network.takeDown(account("b"));
+      await expect(prepareAndCommit()).resolves.toBe("ok");
+      await settle();
+      // The TM's confirm could not reach it; the commit record stays.
+      expect(await committed(storage, "a")).toEqual({ cents: 70, pending: 0, commitRecords: 1 });
 
-    // B's activation is replaced (migration, drain, rebalance) while the TM is
-    // still deciding: the fresh one finds its prepared record in doubt.
-    const replacement = await newB();
+      // Re-activated, B queues its prepared record again and pings at once.
+      const replacement = await reopen("b");
+      await settle();
+      expect(network.messages("ping", account("a")).length).toBe(1);
+      expect(replacement.blocksDeactivation).toBe(true);
 
-    // The decision then proceeds exactly as `TransactionAgent.resolve` drives it.
-    await a.recordCommit(tx.id, tx.timeStamp, [manager, participant("b")]);
-    await a.commit(tx.id);
-    await replacement.commit(tx.id);
+      // The TM is still confirming, so the ping needs no answer: the resent
+      // confirmation commits B, and the TM then collects its record.
+      clock.advance(30_000);
+      await settle();
+      expect(await committed(storage, "b")).toEqual({ cents: 130, pending: 0, commitRecords: 0 });
+      expect(await committed(storage, "a")).toEqual({ cents: 70, pending: 0, commitRecords: 0 });
+      expect(replacement.blocksDeactivation).toBe(false);
+    },
+  );
 
-    expect(await committed(storage, "a")).toEqual({ cents: 70, pending: 0 });
-    expect(await committed(storage, "b")).toEqual({ cents: 130, pending: 0 });
-  });
-
-  it("keeps an undetermined record and resolves it through the confirmation worker once the TM decides", async () => {
-    const clock = new FakeTimeProvider();
-    const { storage, a, newB, tx, manager } = await preparedTransfer(clock);
-    const replacement = await newB();
-
-    // The coordinator records the commit and then dies before telling B.
-    await a.recordCommit(tx.id, tx.timeStamp, [manager, participant("b")]);
-    await a.commit(tx.id);
-    clock.advance(1_000);
+  it("a participant replaced after it voted learns by pinging that the TM aborted", async () => {
+    const { clock, network, storage, b, prepareB, prepareAndCommit, reopen } = await transfer(true);
+    void prepareB();
+    // `c` never votes: the TM will time out.
+    const answer = prepareAndCommit();
     await settle();
+    b.unload();
+    network.takeDown(account("b"));
+    clock.advance(20_000);
+    await settle();
+    await expect(answer).resolves.toBe("prepareTimeout");
+    // The TM's cancel could not reach B: its prepared record is still in storage.
+    expect(await committed(storage, "b")).toMatchObject({ cents: 100, pending: 1 });
 
-    expect(await committed(storage, "b")).toEqual({ cents: 130, pending: 0 });
-    replacement.unload();
+    await reopen("b");
+    await settle();
+    expect(network.messages("ping", account("a")).length).toBe(1);
+    expect(network.messages("cancel", account("b")).map((m) => m.args[2])).toContain(
+      "presumedAbort",
+    );
+    expect(await committed(storage, "b")).toEqual({ cents: 100, pending: 0, commitRecords: 0 });
   });
 
-  it("drops a prepared record when the TM answers presumed abort", async () => {
-    const clock = new FakeTimeProvider();
-    const { storage, a, newB, tx } = await preparedTransfer(clock);
+  it(
+    "the TM replaced after its commit was durable, before it confirmed, resends the " +
+      "confirmation from its commit record and then collects it",
+    async () => {
+      const { network, storage, a, prepareB, prepareAndCommit, reopen } = await transfer();
+      // Nothing the TM sends reaches anyone from here on: its activation is going.
+      network.dropWhen = (m) => m.method === "confirm";
+      void prepareB();
+      await expect(prepareAndCommit()).resolves.toBe("ok");
+      await settle();
+      a.unload();
+      network.takeDown(account("a"));
+      expect(await committed(storage, "a")).toEqual({ cents: 70, pending: 0, commitRecords: 1 });
+      expect(await committed(storage, "b")).toMatchObject({ cents: 100, pending: 1 });
 
-    // The TM aborts: it holds neither the transaction nor a commit record.
-    await a.abort(tx.id);
-    const replacement = await newB();
+      network.dropWhen = () => false;
+      await reopen("a");
+      await settle();
 
-    expect(await committed(storage, "b")).toEqual({ cents: 100, pending: 0 });
-    replacement.unload();
-  });
+      expect(await committed(storage, "b")).toEqual({ cents: 130, pending: 0, commitRecords: 0 });
+      expect(await committed(storage, "a")).toEqual({ cents: 70, pending: 0, commitRecords: 0 });
+    },
+  );
 
-  it("aborts when the TM was replaced after preparing, since it refuses to record a commit it no longer holds", async () => {
-    const clock = new FakeTimeProvider();
-    const storage = new MemoryTransactionalStorage();
-    const newState = async (key: string) => {
-      const state = new TransactionalStateImpl<Balance>(
-        "balance",
-        grainId(key),
-        () => ({ cents: 100 }),
-        storage,
-        async () => "presumedAbort",
-        undefined,
-        clock,
-      );
-      await state.load();
-      return state;
-    };
-    const tm = await newState("a");
-    const b = await newState("b");
-    // The TM is reached over the wire: its prepare lands on the activation that
-    // did the work, every later call on a fresh one (its first one died).
-    let replacement: TransactionalStateImpl<Balance> | undefined;
-    const agent = new TransactionAgent(clock);
-    agent.setDispatcher({
-      invoke: async (req: InvocationRequest) => {
-        const target = req.method === "prepare" ? tm : (replacement ??= await newState("a"));
-        const [, ...rest] = req.args;
-        const method = (target as unknown as Record<string, (...a: unknown[]) => unknown>)[
-          req.method
-        ]!;
-        return method.apply(target, rest);
-      },
-    } as unknown as Dispatcher);
+  it("aborts when the TM's activation was replaced before the commit request reached it", async () => {
+    const { network, storage, a, agent, tx, reopen } = await transfer();
+    agent.setDispatcher(dispatcherOver(network));
+    asRemote(tx, account("a"));
+    a.unload();
+    await reopen("a");
 
-    const tx = agent.startTransaction();
-    await inTransaction(tx, () => tm.performUpdate((s) => (s.cents -= 30)));
-    await inTransaction(tx, () => b.performUpdate((s) => (s.cents += 30)));
-    const key = [...tx.participants.keys()].find((k) => k.includes("/a/"))!;
-    const entry = tx.participants.get(key)!;
-    tx.participants.set(key, { id: entry.id, access: entry.access });
-
+    // The fresh TM finds no lock for the transaction: brokenLock, a definite
+    // abort, so the agent cancels B.
     await expect(agent.resolve(tx)).rejects.toBeInstanceOf(TransactionAbortedError);
-    expect(await committed(storage, "a")).toEqual({ cents: 100, pending: 0 });
-    expect(await committed(storage, "b")).toEqual({ cents: 100, pending: 0 });
+    await settle();
+    expect(await committed(storage, "a")).toEqual({ cents: 100, pending: 0, commitRecords: 0 });
+    expect(await committed(storage, "b")).toEqual({ cents: 100, pending: 0, commitRecords: 0 });
   });
 });

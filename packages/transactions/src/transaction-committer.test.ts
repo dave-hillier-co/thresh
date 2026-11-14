@@ -129,10 +129,9 @@ describe("TransactionCommitter", () => {
 
     await agent.resolve(tx);
 
-    // The commit record is the grain state's, not the committer's, so the
-    // recovery query a sibling participant would make finds it. (Before the
-    // fix the committer was elected and no record was written at all.)
-    expect(state.status(tx.id)).toBe("committed");
+    // The grain state was elected TM and committed durably; the committer ran
+    // its operation only after that.
+    expect((await storage.load("balance", grainId("g"))).committedState).toEqual({ cents: 5 });
     expect(service.calls).toEqual([{ transactionId: tx.id, data: "pass" }]);
   });
 });

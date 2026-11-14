@@ -273,7 +273,7 @@ export interface SiloConfig {
   /**
    * Transactions tunables (Orleans `TransactionalStateOptions`): `lockTimeoutMs`,
    * `lockAcquireTimeoutMs`, `prepareTimeoutMs`, `remoteTransactionPingFrequencyMs`
-   * and the confirmation worker's backoff. Any field left unset takes Orleans'
+   * and `confirmationRetryDelayMs`. Any field left unset takes Orleans'
    * default (see `defaultTransactionsOptions`).
    */
   transactionsOptions?: Partial<TransactionsOptions>;
@@ -1944,7 +1944,10 @@ export class SiloBuilder {
             instance,
             grainId,
             transactionalStorage,
-            (manager, txId) => node.resolveTransactionStatus(manager, txId),
+            {
+              invoke: (target, method, args) =>
+                node.invokeTransactionResource(target, method, args),
+            },
             time,
             transactionsOptions,
           );
