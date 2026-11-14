@@ -656,12 +656,55 @@ export class SiloBuilder {
    * Register a server-side stream filter (Orleans `ISiloBuilder.AddStreamFilter`)
    * on the named memory stream provider: suppresses delivery of an item to
    * every implicit subscriber before it reaches one, based on the item's
-   * content (see `StreamFilter`). Applies only to a provider registered via
-   * `useMemoryStreams` with a matching name.
+   * content (see `StreamFilter`). Repeatable: every filter registered for a
+   * provider must accept an item. Applies only to a provider registered via
+   * `useMemoryStreams` with a matching name; `build()` throws a
+   * `StreamProviderConfigurationError` for any other name rather than ignore it.
    */
   addStreamFilter(providerName: string, filter: StreamFilter): this {
     this.streamFilters.push({ providerName, filter });
     return this;
+  }
+
+  /**
+   * A stream filter only takes effect on a memory provider, so one registered
+   * for a name nothing answers to, or for a provider that cannot apply it,
+   * would be silently ignored: refuse it instead.
+   */
+  private assertStreamFiltersApply(): void {
+    for (const { providerName } of this.streamFilters) {
+      const registered = this.streamProviders.get(providerName);
+      if (registered === undefined) {
+        throw new StreamProviderConfigurationError(
+          providerName,
+          `a stream filter was added for a provider that is not registered (registered: ${[...this.streamProviders.keys()].join(", ")})`,
+        );
+      }
+      if (!this.memoryStreams.some(({ provider }) => provider === registered)) {
+        throw new StreamProviderConfigurationError(
+          providerName,
+          "a stream filter was added for a provider that cannot apply it: only a provider registered with useMemoryStreams filters its items",
+        );
+      }
+    }
+  }
+
+  /**
+   * The stream provider registered as `name` (`"default"` when omitted). A name
+   * that was never registered is a configuration error naming it and listing
+   * the registered ones, never a quiet fall back to the default provider.
+   */
+  private resolveStreamProvider(name: string | undefined): StreamProvider {
+    const wanted = name ?? "default";
+    const provider = this.streamProviders.get(wanted);
+    if (provider === undefined) {
+      const registered = [...this.streamProviders.keys()].join(", ");
+      throw new StreamProviderConfigurationError(
+        wanted,
+        `no stream provider is registered under this name (registered: ${registered})`,
+      );
+    }
+    return provider;
   }
 
   addStreamProvider(name: string, provider: StreamProvider): this {
@@ -1831,8 +1874,7 @@ export class SiloBuilder {
         : {}),
       ...(this.streamProviders.size > 0
         ? {
-            streamProvider: (name?: string) =>
-              this.streamProviders.get(name ?? "default") ?? this.streamProviders.get("default"),
+            streamProvider: (name?: string) => this.resolveStreamProvider(name),
           }
         : {}),
     });
@@ -1954,28 +1996,36 @@ export class SiloBuilder {
     // pulling agent/queue ownership), but implicit subscribers still need the
     // same dispatcher-routed delivery pulling providers use — see
     // `MemoryStreamProvider`'s class doc.
+    this.assertStreamFiltersApply();
     for (const { provider, options } of this.memoryStreams) {
-      provider.setDeliver((grainId, streamKey, event, token) =>
-        node.deliverStreamEvent(grainId, streamKey, event, token),
-      );
-      provider.setImplicitSubscribers((namespace) => node.implicitGrainTypes(namespace));
-      provider.setConfirmSubscription((grainId, streamKey) =>
-        node.confirmStreamSubscription(grainId, streamKey),
-      );
       provider.setTimeProvider(time ?? systemTimeProvider);
       if (options?.streamInactivityPeriodMs !== undefined) {
         provider.setStreamInactivityPeriod(options.streamInactivityPeriodMs);
       }
-      const filter = this.streamFilters.find((f) => f.providerName === provider.name)?.filter;
-      if (filter !== undefined) provider.setStreamFilter(filter);
-      // Cancel every stream's inactivity timer on shutdown so none leak past
-      // this silo's lifetime (a leaked `setTimeout`/fake-clock timer would
-      // otherwise hang a test worker). Unlike the pulling providers this
-      // stays AFTER deactivation: `stop()` here only cancels timers (there is
-      // no agent to stop — delivery is a direct push on `publish`), and a
-      // publish from an `onDeactivate` hook re-arms one, so stopping earlier
-      // would leak exactly the timer this is here to cancel.
-      this.closers.push(async () => provider.stop());
+      for (const { providerName, filter } of this.streamFilters) {
+        if (providerName === provider.name) provider.addStreamFilter(filter);
+      }
+      // The provider may be shared by several silos (`TestCluster`), so this
+      // silo binds itself on start and removes only its own binding on stop;
+      // the provider cancels its streams' inactivity timers once the last live
+      // silo has unbound, so none leak past the cluster (a leaked
+      // `setTimeout`/fake-clock timer would otherwise hang a test worker).
+      // Unlike the pulling providers this stays AFTER deactivation: unbinding
+      // only cancels timers (no agent to stop — delivery is a direct push on
+      // `publish`), and a publish from an `onDeactivate` hook re-arms one, so
+      // stopping earlier would leak exactly the timer this is here to cancel.
+      let unbind: (() => void) | undefined;
+      this.starters.push(async () => {
+        unbind = provider.bindSilo({
+          deliver: (grainId, streamKey, event, token) =>
+            node.deliverStreamEvent(grainId, streamKey, event, token),
+          implicitTypesFor: (namespace) => node.implicitGrainTypes(namespace),
+          confirm: (grainId, streamKey) => node.confirmStreamSubscription(grainId, streamKey),
+          isLive: () =>
+            activeSilos(membership.current()).some((s) => s.ringKey === this.config.local.ringKey),
+        });
+      });
+      this.closers.push(async () => unbind?.());
     }
 
     // Backs `GrainFactoryAccess.createObjectReference` for startup tasks:

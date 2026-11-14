@@ -202,7 +202,31 @@ class MemoryStream<T> implements AsyncStream<T> {
 }
 
 /**
- * In-memory, single-silo stream provider for development and tests. Explicit
+ * How one silo reaches its own activations on behalf of a shared
+ * `MemoryStreamProvider`. Every silo hosting the provider binds one
+ * (`bindSilo`) and removes it on stop, so an implicit delivery always goes
+ * through a silo that is still up rather than whichever was built last.
+ */
+export interface MemorySiloBinding {
+  /** Route an implicit/admin delivery to a subscriber's activation through this silo. */
+  deliver: StreamDeliver;
+  /** This silo's implicit-subscription table (`namespace -> grain types`). */
+  implicitTypesFor: (namespace: string) => Iterable<GrainType>;
+  /** Confirm an administratively-added subscription with its target grain through this silo. */
+  confirm: (grainId: GrainId, streamKey: string) => Promise<boolean>;
+  /**
+   * Whether this silo can still deliver. A silo that was killed runs no stop
+   * hook, so it stays bound; this is how the provider routes around it.
+   * Defaults to always live.
+   */
+  isLive?: () => boolean;
+}
+
+/**
+ * In-memory stream provider for development and tests. One instance may be
+ * shared by several silos (`TestCluster` does): each binds itself with
+ * `bindSilo`, deliveries go through a live bound silo, and the provider's
+ * streams are disposed only when the last live silo unbinds. Explicit
  * subscribers (`stream.subscribe`) are delivered to directly, in-process — no
  * activation binding needed, since the subscribing grain already holds the
  * handler closure. Implicit subscribers (Orleans `[ImplicitStreamSubscription]`,
@@ -214,8 +238,14 @@ class MemoryStream<T> implements AsyncStream<T> {
  */
 export class MemoryStreamProvider implements StreamProvider {
   private readonly streams = new Map<string, MemoryStream<unknown>>();
-  private deliver: StreamDeliver = async () => undefined;
-  private implicitTypesFor: (namespace: string) => Iterable<GrainType> = () => [];
+  // Silos hosting this provider, in bind order. Empty for a provider used
+  // without a hosting silo, which delivers through `standalone` instead.
+  private readonly bindings = new Set<MemorySiloBinding>();
+  private readonly standalone: MemorySiloBinding = {
+    deliver: async () => undefined,
+    implicitTypesFor: () => [],
+    confirm: async () => true,
+  };
   // Every memory provider exposes administrative subscription management
   // (Orleans gates this behind `StreamSubscriptionManagerAdmin`, a separate
   // DI service every streaming-configured silo registers regardless of a
@@ -237,23 +267,54 @@ export class MemoryStreamProvider implements StreamProvider {
   // provider-wide filter upstream either (the filter is a pulling-agent/queue
   // concern, and implicit subscription is the only path this provider routes
   // through anything resembling one).
-  private streamFilter: StreamFilter | undefined;
+  private readonly streamFilters = new Set<StreamFilter>();
   private readonly producers = new StreamProducerRegistry();
 
   constructor(readonly name: string = "default") {
     if (name.length === 0) {
       throw new StreamProviderConfigurationError(name, "provider name must not be empty");
     }
+    this.subscriptionManager.setConfirm(
+      (grainId, streamKey) =>
+        this.routeThrough()?.confirm(grainId, streamKey) ?? Promise.resolve(true),
+    );
   }
 
-  /** Wire how a published event reaches an implicit subscriber's activation. */
+  /**
+   * Bind a silo that hosts this provider. Returns the unbind function the silo
+   * calls on stop: it removes only this silo's binding, and cancels every
+   * stream's timers only once no live silo remains bound.
+   */
+  bindSilo(binding: MemorySiloBinding): () => void {
+    this.bindings.add(binding);
+    return () => {
+      if (!this.bindings.delete(binding)) return;
+      if (![...this.bindings].some(isLive)) this.stop();
+    };
+  }
+
+  /** Number of silos currently bound (live or not). */
+  get boundSilos(): number {
+    return this.bindings.size;
+  }
+
+  /** The silo an implicit delivery goes through now: the first live one bound. */
+  private routeThrough(): MemorySiloBinding | undefined {
+    if (this.bindings.size === 0) return this.standalone;
+    return [...this.bindings].find(isLive);
+  }
+
+  /**
+   * Wire how a published event reaches an implicit subscriber's activation,
+   * for a provider with no hosting silo (a silo uses `bindSilo`).
+   */
   setDeliver(deliver: StreamDeliver): void {
-    this.deliver = deliver;
+    this.standalone.deliver = deliver;
   }
 
-  /** Wire the implicit-subscription table (`namespace → grain types`). */
+  /** Wire the implicit-subscription table (`namespace → grain types`); see `setDeliver`. */
   setImplicitSubscribers(typesFor: (namespace: string) => Iterable<GrainType>): void {
-    this.implicitTypesFor = typesFor;
+    this.standalone.implicitTypesFor = typesFor;
   }
 
   /**
@@ -263,7 +324,7 @@ export class MemoryStreamProvider implements StreamProvider {
    * hosting silo, as in a unit test that only exercises the registry).
    */
   setConfirmSubscription(confirm: (grainId: GrainId, streamKey: string) => Promise<boolean>): void {
-    this.subscriptionManager.setConfirm(confirm);
+    this.standalone.confirm = confirm;
   }
 
   /**
@@ -286,9 +347,14 @@ export class MemoryStreamProvider implements StreamProvider {
     this.streamInactivityPeriodMs = ms;
   }
 
-  /** Install a server-side filter (Orleans `AddStreamFilter`); see the field doc. */
-  setStreamFilter(filter: StreamFilter): void {
-    this.streamFilter = filter;
+  /**
+   * Add a server-side filter (Orleans `AddStreamFilter`); see the field doc.
+   * Every filter must accept an item for it to be delivered. Adding the same
+   * filter instance again is a no-op, so several silos sharing this provider
+   * can each register the filters they were built with.
+   */
+  addStreamFilter(filter: StreamFilter): void {
+    this.streamFilters.add(filter);
   }
 
   getStream<T>(namespace: string, key: GrainKey): AsyncStream<T> {
@@ -317,7 +383,7 @@ export class MemoryStreamProvider implements StreamProvider {
     return this.producers.register(this.name, namespace, key);
   }
 
-  /** Cancel every stream's inactivity timer (silo shutdown) so none leak past disposal. */
+  /** Cancel every stream's inactivity timer so none leak past disposal. A silo unbinds instead (`bindSilo`). */
   stop(): void {
     for (const stream of this.streams.values()) stream.dispose();
   }
@@ -332,10 +398,13 @@ export class MemoryStreamProvider implements StreamProvider {
    * rejection doesn't stop delivery to the rest.
    */
   private async fanOut(streamId: StreamId, event: unknown, token: number): Promise<void> {
-    if (this.streamFilter !== undefined && !this.streamFilter.shouldDeliver(streamId, event))
-      return;
+    for (const filter of this.streamFilters) {
+      if (!filter.shouldDeliver(streamId, event)) return;
+    }
+    const route = this.routeThrough();
+    if (route === undefined) return;
     const streamKey = `${streamId.namespace}/${streamId.key}`;
-    const implicit = implicitSubscriberIds(streamKey, this.implicitTypesFor);
+    const implicit = implicitSubscriberIds(streamKey, route.implicitTypesFor);
     const admin = this.subscriptionManager.subscribersFor(streamKey);
     const seen = new Set<string>();
     const subscribers = [];
@@ -347,9 +416,13 @@ export class MemoryStreamProvider implements StreamProvider {
     }
     await Promise.allSettled(
       subscribers.map(async (subscriber) => {
-        await this.deliver(subscriber, streamKey, event, token);
+        await route.deliver(subscriber, streamKey, event, token);
         emitStreamingEvent({ kind: "itemDelivered", providerName: this.name, streamId });
       }),
     );
   }
+}
+
+function isLive(binding: MemorySiloBinding): boolean {
+  return binding.isLive?.() ?? true;
 }

@@ -1,6 +1,10 @@
 import type { GrainType } from "@thresh/core/grain-type";
 import type { Logger } from "@thresh/core/logger";
-import { systemTimeProvider, type TimeProvider, type TimerHandle } from "@thresh/core/time-provider";
+import {
+  systemTimeProvider,
+  type TimeProvider,
+  type TimerHandle,
+} from "@thresh/core/time-provider";
 import { recordAgentPoll } from "@thresh/observability/stream-metrics";
 import type { QueueEntry } from "@thresh/streams/redis-stream-queue";
 import type { HashRange } from "@thresh/streams/queue-ownership";

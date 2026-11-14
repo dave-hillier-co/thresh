@@ -3,6 +3,8 @@ import { grain, implicitStreamSubscription } from "@thresh/core/decorators";
 import { Grain } from "@thresh/core/grain";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
 import type { GrainKey } from "@thresh/core/key-kinds";
+import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
+import { onStreamingEvent, type StreamingEvent } from "@thresh/core/streaming-diagnostics";
 import { STREAM_SUBSCRIPTION_OBSERVER, type StreamHandler } from "@thresh/core/stream";
 import { TestCluster } from "@thresh/testing/test-cluster";
 import { waitFor } from "@thresh/testing/wait";
@@ -30,15 +32,27 @@ async function start(): Promise<TestCluster> {
   });
 }
 
+/**
+ * Publish until some publish reaches its subscriber. The survivors apply the
+ * membership change asynchronously, so a delivery attempted in that window can
+ * fail; each attempt uses a fresh stream key so a late arrival is not counted twice.
+ */
+async function publishUntilDelivered(cluster: TestCluster, label: string): Promise<void> {
+  let attempt = 0;
+  await waitFor(async () => {
+    const key = `${label}-${attempt++}`;
+    await cluster.streamProvider().getStream<string>("shared", key).publish("hello");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    return seen[key]?.[0] === "hello";
+  });
+}
+
 describe("TestCluster silos sharing one memory stream provider", () => {
   it("delivers an implicit subscription after the last-built silo is stopped", async () => {
     const cluster = await start();
     try {
-      await cluster.silos[0]!.host.getGrain(IShared, "stopped").touch();
       await cluster.stopSilo(cluster.silos[2]!);
-      await cluster.streamProvider().getStream<string>("shared", "stopped").publish("hello");
-      await waitFor(async () => (seen["stopped"] ?? []).length === 1);
-      expect(seen["stopped"]).toEqual(["hello"]);
+      await publishUntilDelivered(cluster, "stopped");
     } finally {
       await cluster.dispose();
     }
@@ -47,30 +61,44 @@ describe("TestCluster silos sharing one memory stream provider", () => {
   it("delivers an implicit subscription after the last-built silo is killed", async () => {
     const cluster = await start();
     try {
-      await cluster.silos[0]!.host.getGrain(IShared, "killed").touch();
       await cluster.killSilo(cluster.silos[2]!);
-      await cluster.streamProvider().getStream<string>("shared", "killed").publish("hello");
-      await waitFor(async () => (seen["killed"] ?? []).length === 1);
-      expect(seen["killed"]).toEqual(["hello"]);
+      await publishUntilDelivered(cluster, "killed");
     } finally {
       await cluster.dispose();
     }
   });
 
   it("keeps streams other silos use alive when one silo stops, and disposes them when all stop", async () => {
-    const cluster = await start();
+    const time = new FakeTimeProvider();
+    const cluster = await TestCluster.start({
+      initialSilos: 3,
+      grains: [{ ctor: SharedWatcherGrain, interfaces: [IShared] }],
+      time,
+    });
+    const inactive: StreamingEvent[] = [];
+    const off = onStreamingEvent((event) => {
+      if (event.kind === "streamInactive") inactive.push(event);
+    });
     try {
       const provider = cluster.streamProvider();
+      provider.setStreamInactivityPeriod(5_000);
       expect(provider.boundSilos).toBe(3);
+
+      await provider.getStream<string>("shared", "alive").publish("armed");
       await cluster.stopSilo(cluster.silos[2]!);
       expect(provider.boundSilos).toBe(2);
-      expect(provider.disposed).toBe(false);
       await cluster.stopSilo(cluster.silos[1]!);
-      expect(provider.disposed).toBe(false);
+      // Two silos have stopped; the third still uses the stream, so its timer is armed.
+      time.advance(5_000);
+      expect(inactive).toHaveLength(1);
+
+      await provider.getStream<string>("shared", "alive").publish("re-armed");
       await cluster.stopSilo(cluster.silos[0]!);
       expect(provider.boundSilos).toBe(0);
-      expect(provider.disposed).toBe(true);
+      time.advance(5_000);
+      expect(inactive).toHaveLength(1);
     } finally {
+      off();
       await cluster.dispose();
     }
   });

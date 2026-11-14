@@ -114,17 +114,13 @@ describe("QueuePullingAgent poll failures", () => {
     const queue = new FlakyQueue(time);
     const errors: Logged[] = [];
     const delivered: unknown[] = [];
-    const agent = new QueuePullingAgent(
-      queue,
-      async (_key, event) => void delivered.push(event),
-      {
-        pollIntervalMs: 50,
-        maxBackoffMs: 800,
-        time,
-        logger: recordingLogger(errors),
-        random: () => 1,
-      },
-    );
+    const agent = new QueuePullingAgent(queue, async (_key, event) => void delivered.push(event), {
+      pollIntervalMs: 50,
+      maxBackoffMs: 800,
+      time,
+      logger: recordingLogger(errors),
+      random: () => 1,
+    });
     agent.start();
     await advance(time, 0);
     for (let i = 0; i < 300; i += 1) await advance(time, 1);
