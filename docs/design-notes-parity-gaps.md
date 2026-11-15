@@ -181,6 +181,10 @@ Routing is faithful to Orleans rather than shortcutting on this codebase's direc
 
 ## 8. Directory hardening (versioned range locks, ACK'd handoff, crash-broadcast recovery)
 
+**Superseded.** The design that replaces this section, and the account of what the code does
+today, is [design-membership-and-directory.md](design-membership-and-directory.md). What follows is
+kept for the reasoning that led there.
+
 **Problem.** Recovery is best-effort one-shot pull. If the pull fails, entries are silently lost. Handoff snapshots are retained indefinitely if the successor never pulls. There is no versioned coordination across partition transitions, so a register racing with a view change can see incomplete state.
 
 **Orleans.** `RangeChangeNotification` wedges block range access until the prior owner has finished transfer; `GrainDirectoryHandoffManager` orchestrates ACK-and-delete; on crash, all live silos broadcast recovery requests for ranges they newly own.
@@ -288,7 +292,7 @@ Two further rules on fail-fast:
 
 The guarantee rests on one fact: **the only authority that may replace a directory entry pointing at a live-in-membership silo is that silo leaving the membership view.** `LocalDirectoryPartition.register` overwrites an existing entry in exactly two cases, and there is deliberately no "force" register:
 
-1. `!isSiloLive(existing.silo)` — Orleans `RegisterCore`'s dead-silo overwrite. `ClusterNode` wires that predicate to `activeSilos(membership.current())`.
+1. `!isSiloLive(existing.silo)` — Orleans `RegisterCore`'s dead-silo overwrite. `ClusterNode` wires that predicate to `memberSilos(membership.current())`: presence, not readiness, so a silo that is listed but not ready keeps its entries.
 2. The caller passes the exact `previous` address it means to replace (`grainAddressEquals`) — the known-stale-after-a-move case, used by migration.
 
 Case (2) is not available to a suspecting caller: passing the hung peer's address as `previous` would be a **forged CAS**, asserting "I know that activation is gone", which is exactly what a local timeout does not establish. Case (1) is membership-gated by construction — and note it is evaluated on the *range owner's* view, not the suspector's, which is why admitting suspicion as an input would make the CAS outcome depend on which caller arrived first.
