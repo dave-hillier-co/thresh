@@ -83,12 +83,8 @@ stores above. Worth a service dimension eventually for tidiness, not urgently.
       `dispatchDetachingOneWay`.
 - [ ] `LocalDispatcher`'s logger is not wired from `SiloOptions` (there is no logger option there),
       so a `Silo`-hosted (non-`createSilo`) host logs detached one-way failures to `noopLogger`.
-- [ ] `serveRecover()` is unfiltered by requester: it serves the whole `handoffSnapshot` to any
-      puller. With the precise ACK this is merely wasteful for the puller — but it also means a
-      pull can return an entry the source did not own when the pull was issued, which is the one
-      case `awaitRecovered`'s per-source gate cannot wait for (costing a miss that lazy activation
-      rebuilds rather than a wrong answer). Filtering needs `message.sendingSilo` threaded into
-      `applyDirectoryOp`.
+- [x] `serveRecover()` is unfiltered by requester. Gone with the per-grain handoff: a snapshot is
+      served only for the ranges and the pair of views its requester moved between (M6).
 - [ ] Per-silo override of a **decorator-declared** `collectionAgeSeconds` is still impossible
       (only the process-wide grain metadata can change it, which by construction cannot differ
       between two silos in one process). Out of scope for #66, which is closed; needs its own issue
@@ -120,15 +116,13 @@ in [`docs/project-review-2026-09-22.md`](docs/project-review-2026-09-22.md).
       the review doc and on the issue.
 - [x] [#71](https://github.com/dave-hillier-co/thresh/issues/71) **F5** — ownership is re-checked after
       the wait on both the local and remote paths.
-- [ ] [#72](https://github.com/dave-hillier-co/thresh/issues/72) **F6** — **open, needs a design
-      decision.** Documented and pinned, not fixed: a cluster-wide version needs a shared ordered view
-      identity plus a rolling-upgrade story, and "stop injecting self" would defeat the self-probe and
-      break local placement. Coupled to #67. See the issue's decision comment.
-- [x] [#73](https://github.com/dave-hillier-co/thresh/issues/73) **F7** — exhausted recovery is logged,
-      counted (`thresh.directory.recovery.*`), re-armed on a jittered backoff, and gated per source
-      rather than globally. The per-source gate is an approximation: `serveRecover` is still unfiltered
-      by requester, so a source can return an entry it did not own, costing a miss that lazy activation
-      rebuilds (never a wrong answer).
+- [x] [#72](https://github.com/dave-hillier-co/thresh/issues/72) **F6** — decided in
+      [`docs/design-membership-and-directory.md`](docs/design-membership-and-directory.md) and built:
+      a silo follows the watch like any peer, so one version means one ring on every silo. The
+      self-probe is a local system activation and a silo outside the ring creates no activation.
+- [x] [#73](https://github.com/dave-hillier-co/thresh/issues/73) **F7** — superseded by M6: recovery
+      no longer exhausts. A range stays locked until every listed member has answered, and the
+      optional `directoryRecoveryPatience` is the only way it opens early (logged and counted).
 - [ ] [#74](https://github.com/dave-hillier-co/thresh/issues/74) **F8** — **partly fixed.** Placement
       reads a peer's pushed count, and every silo now pushes it on a `DeploymentLoadPublisher`-style
       timer (`loadPublishIntervalMs`, default 1s), so the activation-count inversion is gone.
@@ -285,14 +279,23 @@ Membership and partition ownership:
       unknown previous owner now waits on every source, and the pull names the requester's ring.
 - [ ] **M4** **partly fixed.** A removed silo is cleared from the cache, the pool and the client
       directory, and a peer that cannot be reached fails with the transports' one `ConnectFailure`
-      (the cached route is dropped). Still open: calls to a silo that is dead but still listed
-      keep failing until Kubernetes removes it (option C above).
-- [x] **M5** per-silo view versions break routine routing (the reproduced half of #72). The
-      Kubernetes view version is the highest EndpointSlice `resourceVersion` observed. Residuals:
-      a watch that reports no revision falls back to a per-silo counter; a silo that listed after
-      a slice deletion can differ from one that saw the event until the next slice write; and a
-      not-ready joiner still counts itself in its own ring (the open half of #72).
-- [ ] **M6** the directory handoff fails open and has no range or version unit
+      (the cached route is dropped). Still open: a grain hosted on a pod whose process died stays
+      registered there while the pod is listed, so calls to it are refused until Kubernetes
+      removes the pod or the restarted container becomes ready (slice 4 of the design note).
+- [x] **M5** per-silo view versions break routine routing (#72). The view is a pure function of
+      the EndpointSlices, its version is the highest `resourceVersion` observed, a watch must
+      report a revision, and `MembershipService.refresh(version)` lets a silo catch up on demand.
+      Residual: a refresh adopts the requested version for the list it read, so two silos can
+      briefly hold different contents under one version until the next slice write.
+- [x] **M6** the directory handoff fails open and has no range or version unit. The directory is
+      a port of Orleans' `GrainDirectoryPartition`: range locks across a view change, snapshots
+      keyed by the pair of views, recovery from every member, versioned requests, the recovery
+      version rule and `TestCluster.checkIntegrity()`. Failing closed has a cost while a pod is
+      unreachable but listed (`docs/deviations.md`). Still open (slice 3): a leaving silo stops
+      applying views when its stop begins and hands its ranges over only because a new owner's
+      request makes it catch up, it does not wait for the snapshots to be collected before it
+      deactivates, and static membership never marks a leaver `draining`, so the default
+      `TestCluster` recovers a stopped silo's ranges instead of transferring them.
 - [ ] **M7** **partly fixed.** A graceful release resets a job shard's adoption count, poisoning
       is logged and counted, and job ownership follows the node's applied view. Still open: the
       three services have no shared ownership abstraction and no fencing epoch on their writes.

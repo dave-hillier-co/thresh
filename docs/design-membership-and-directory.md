@@ -165,11 +165,51 @@ place a duplicate can arise, and it is resolved there
 Registration keeps its compare-and-swap, and a lookup keeps hiding an entry whose host is no longer a
 member.
 
+### A dead process that is still listed
+
+A pod whose process has died stays listed, not ready, until Kubernetes removes it or restarts its
+container in place, and a restarted container is the same silo address. The ranges the dead silo
+owned are rebuilt without it, but entries for its activations in ranges that did not change hands
+are still in the directory, and a call that follows one fails for as long as the pod is listed. Two
+repairs close that, and both rest on the host being the authority on what it hosts:
+
+- **A refused dial is an answer on the call path too.** When the dial to an entry's host is refused
+  outright there is no process at the address, so the activation is gone. The caller unregisters
+  that exact entry (address and activation id) at its owner and resolves the grain again, which
+  places it afresh. The request never left, so resending it is safe. A dial that times out, or a
+  connection that closes during the handshake, says nothing about the process behind it and changes
+  nothing.
+- **A silo that does not host what the directory says it hosts removes the entry**, whether or not
+  it may activate (Orleans unregisters with `UnregistrationCause.NonexistentActivation`). A silo in
+  the ring already does this before it claims the grain. A silo outside the ring, which is what a
+  restarted container is until it is ready, looks up the grain it was sent: an entry naming it for
+  an activation that is neither here nor coming up is unregistered, and the call is refused before
+  execution so the caller resolves again.
+
+Neither is a failure detector: nothing is inferred about a silo that does not answer.
+
 ### Leaving
 
-A stopping silo flips readiness, waits to see itself out of the ring, lets its partition release its
-ranges, waits (within the stop budget) for the new owners to collect the snapshots, and only then
-deactivates its activations. Their unregistrations go to the new owners.
+A leaving silo hands its ranges over while it is still serving, so nothing waits for its drain:
+
+1. It flips readiness and waits out the grace period, as before. That is the time Kubernetes' own
+   proxies need to stop routing to the pod, which the silo cannot observe.
+2. It keeps following the watch through the stop. The ownership hooks (reminders, stream queues, job
+   shards) stay halted from the moment the stop begins; only the node and its partition go on
+   applying views. So it sees itself out of the ring, terminating or not ready, in the view its
+   peers act on, and not only when a new owner's request makes it catch up.
+3. Applying that view releases every range it owned into a snapshot for the new owners, as any view
+   change does. When the grace has elapsed it waits, within what is left of the stop budget, until
+   every snapshot has been collected, or its partners have left or started recovery. A silo that
+   never saw itself leave (a held watch, a membership that is not told) holds no snapshot and waits
+   for nothing; its ranges are recovered once it has gone.
+4. Only then does it deactivate its activations. It keeps serving them until that point. Their
+   unregistrations resolve the owner in the view it has applied, so they go to the new owners.
+5. Then the partition stops and the listener closes.
+
+A silo with nobody to hand over to (the last one, or a cluster stopping together) waits for nothing.
+Static membership takes the same path: the view marks the silo `draining` before it stops and removes
+it after, which is what `TestCluster` does for a graceful stop.
 
 ### Integrity
 
@@ -193,6 +233,8 @@ patch for a case the range lock covers.
    recovery version, `checkIntegrity`; the old machinery deleted.
 3. **Leaving.** Release on drain, wait for transfer, then deactivate; `TestCluster`'s static mode
    takes the same path.
+4. **A dead process that is still listed.** The refused dial and the unhosted entry each remove the
+   stale entry.
 
 ## Tests that must exist
 
@@ -202,7 +244,10 @@ settle:
 - a join under load, including grains first called through the joiner while it is not ready;
 - a crash in two steps, with the dead silo refusing connections, and again with it unreachable: the
   range blocks, then unblocks when the pod is removed;
-- a drain, with calls throughout;
+- a drain, with calls throughout: no call fails, the ranges move by snapshot and not by recovery,
+  and a slow deactivation on the leaving silo delays no lookup;
+- a crash whose pod stays listed and not ready: every grain it hosted answers again, from a fresh
+  activation, before the pod is removed, and again when the container restarts in place;
 - a view that adds one silo and removes another;
 - a silo whose watch is held across two changes and released;
 - a readiness flap;
@@ -212,5 +257,7 @@ settle:
 
 ## Out of scope
 
-Local suspicion of a dead peer stays placement-only, as section 9 of the design notes decides. Damping
-readiness flaps, and a failure detector that could fence an unreachable silo, are not attempted.
+Local suspicion of a dead peer stays placement-only, as section 9 of the design notes decides: a
+refused dial removes the one entry that was followed, and nothing else is concluded about the silo.
+Damping readiness flaps, and a failure detector that could fence an unreachable silo, are not
+attempted.
