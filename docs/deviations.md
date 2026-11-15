@@ -54,10 +54,38 @@ summary of the deliberate deviations. [`EPICS.md`](../EPICS.md) tracks what is s
 ## Kubernetes-native hosting
 
 Kubernetes is the **membership authority**, replacing Orleans' membership table, status gossip, and
-probe-graph failure detector. A silo watches the EndpointSlices of a headless `Service`: ready
-endpoints are live silos, removed endpoints are dead. Silos run as a `StatefulSet` (stable ordinals
-keep a restarted silo in the same ring position); liveness/readiness probes drive failure detection
-and the graceful drain. Silo identity is `podName` + `podUid` rather than Orleans' `IP:port:generation`.
+probe-graph failure detector. A silo watches the EndpointSlices of a headless `Service`, and the view
+is a pure function of them, the same rule for every endpoint including the silo's own: `ready` is
+`active`, not ready and `terminating` is `draining`, not ready otherwise is `joining`, and an
+endpoint that is not listed is not a member. Silos run as a `StatefulSet` (stable ordinals keep a
+restarted silo in the same ring position); liveness/readiness probes drive failure detection and the
+graceful drain. Silo identity is `podName` + `podUid` rather than Orleans' `IP:port:generation`.
+
+The status maps onto Orleans' as follows, with `ringSilos` as the one rule for who may own a range
+or host a new activation:
+
+- **The ring is the active members** (Orleans `DirectoryMembershipSnapshot`), and when no member is
+  active it is the joining ones. That fallback has no Orleans counterpart — an Orleans silo becomes
+  active through the membership table, not through a readiness probe that waits on it — and is what
+  lets a cold cluster start: every silo sees the same joining set, so they agree on a ring and
+  startup tasks can call grains; the first silo to become ready takes it over. The same rule feeds
+  placement and migration candidates, the rebalancer and repartitioner, load publishing, the client
+  gateway list, and stream, reminder and durable-job ownership.
+- **A silo outside its ring creates no activation** (Orleans `Catalog.GetOrCreateActivation` creates
+  only while the silo is active). A call that would activate a grain there is refused before it runs
+  and its caller re-resolves; the activations it already hosts keep serving, and their directory
+  entries stay valid because it is still a member. Stateless workers, which the directory never
+  holds, are exempt.
+- **Readiness asks whether the silo is listed**, not whether it owns a range: a joining silo must
+  report ready for Kubernetes to mark it ready, which is what brings it into the ring.
+- **The self-probe is answered locally**: the probe grain is activated through the node's local
+  system-activation path, never placed or registered in the directory, so it measures this silo's
+  own dispatcher on a silo that is not a placement candidate.
+- **A silo that sees itself removed fences itself** (Orleans `MembershipTableManager.KillMyselfLocally`):
+  once a view omits a silo that was listed, it fails liveness, refuses every call, stops its
+  ownership services and abandons its activations without running deactivation hooks or
+  unregistering them, since its peers have already dropped its entries. The kubelet then restarts
+  it. Static membership never reports a removal and so never fences.
 
 | Orleans mechanism | Replaced by |
 | --- | --- |
@@ -75,18 +103,30 @@ highest EndpointSlice `resourceVersion` the silo's watch has observed: each list
 watch event's (a DELETED event carries the deletion's revision). For an etcd-backed resource that is
 the etcd modification revision, one cluster-wide increasing counter, so silos that have seen the
 same writes to the service's slices hold the same version and a silo whose watch lags holds a lower
-one — the cross-silo ordering the directory's `staleView` guard and `awaitView` depend on. Kubernetes
-documents `resourceVersion` as opaque; this relies on its etcd form, and a non-numeric value is
-treated as carrying no revision (the view then falls back to a per-silo counter, which only orders
-views within one silo).
+one — the cross-silo ordering the directory's `staleView` guard and `awaitView` depend on. Because
+the view is a pure function of the slices, two silos at one version hold the same ring. Kubernetes
+documents `resourceVersion` as opaque; this relies on its etcd form. Every watch update must carry a
+revision, and `KubernetesMembership` refuses one that does not: a change the watch cannot date (a
+slice with a non-numeric `resourceVersion`) is not reported on its own, and is carried by the next
+dated change.
 
 The list's own `resourceVersion` is not used as the version: it is the cluster's global revision at
 the moment of the list, which moves with writes to every other object, so a silo that listed later
 would number an identical view higher and its peers would wait on a version they never reach. It is
 used only when a re-list shows a change that no listed slice dates — a slice deleted while the watch
-was down. One gap remains: a silo that listed after such a deletion holds a lower version than a peer
-that saw the DELETED event, until the next write to the slices. Neither the version nor the view
-carries a rolling-upgrade compatibility story; the project has no deployments to upgrade.
+was down — and by `refresh`.
+
+`MembershipService.refresh(version)` catches a silo up on demand (Orleans
+`ClusterMembershipService.Refresh`): when a peer's directory operation carries a version this silo
+has not reached, `ClusterNode.awaitView` asks for it. Under Kubernetes it waits briefly for the
+watch, then re-lists; a list whose own `resourceVersion` is at least the requested version proves
+that the slices it returned reflect every write up to that version, so the silo adopts the
+requested version for the view the list gives. That covers a silo whose watch lags and a silo that
+listed after a slice deletion it never saw, which holds a lower version than a peer that saw the
+DELETED event: neither waits for an unrelated write to the slices. Watch events still in flight
+when such a list runs ahead of them are older than it and are ignored. Static membership has one
+view and resolves at once. Neither the version nor the view carries a rolling-upgrade compatibility
+story; the project has no deployments to upgrade.
 
 `MembershipService.updates()` has latest-value semantics like Orleans' `AsyncEnumerable<T>`, but
 coalesces: an iterator that fell several views behind yields only the latest, where Orleans walks
