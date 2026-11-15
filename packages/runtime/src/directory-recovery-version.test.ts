@@ -273,7 +273,7 @@ function keyMovingFromBToA(): string {
  * before, recovers B's range from the hosts, so its recovery version rises above the stamp of
  * the registration it is waiting for. C's activation is deactivating, so it reports nothing.
  */
-async function migrationOutlivedByRecovery() {
+async function migrationOutlivedByRecovery(instrument: (a: ClusterNode) => void = () => undefined) {
   const network = new InProcessNetwork();
   const membership = new StaticMembershipService(A, [A, B, C, E]);
   const parking = new ParkingTransport(new InProcessTransport(network, CLUSTER), B);
@@ -289,6 +289,7 @@ async function migrationOutlivedByRecovery() {
     return node;
   };
   const a = make(A, parking);
+  instrument(a);
   const b = make(B, new InProcessTransport(network, CLUSTER));
   const c = make(C, new InProcessTransport(network, CLUSTER));
   const e = make(E, new InProcessTransport(network, CLUSTER));
@@ -319,6 +320,35 @@ async function migrationOutlivedByRecovery() {
   return { a, b, c, e, nodes, parking, key, grainId, migrating, stop: () => stopAll(nodes) };
 }
 
+/**
+ * While `state.hiding`, shows `node` the recovery version of the first register's start (`state.before`) until a `register` of
+ * its directory returns, and the real one after: a rise that comes after the directory's last
+ * look at the version. `state.calls` counts the registers.
+ */
+function hideRiseUntilRegisterReturns(
+  node: ClusterNode,
+  state: { hiding: boolean; before: number; returned: boolean; calls: number },
+): void {
+  const real = Object.getOwnPropertyDescriptor(
+    Object.getPrototypeOf(node.partition),
+    "recoveryVersion",
+  )?.get;
+  if (real === undefined) throw new Error("recoveryVersion is no longer a getter");
+  Object.defineProperty(node.partition, "recoveryVersion", {
+    get: () => (state.hiding && !state.returned ? state.before : real.call(node.partition)),
+  });
+  const directory = (
+    node as unknown as { directory: { register(...args: unknown[]): Promise<unknown> } }
+  ).directory;
+  const register = directory.register.bind(directory);
+  directory.register = async (...args: unknown[]) => {
+    if (state.calls++ === 0) state.before = real.call(node.partition);
+    const winner = await register(...args);
+    state.returned = true;
+    return winner;
+  };
+}
+
 describe("the recovery-version rule on a migration target (ActivationData.RegisterAsync)", () => {
   it("confirms a migrated activation's registration again when it completed below the recovery version", async () => {
     const { a, nodes, parking, key, grainId, migrating, stop } =
@@ -331,6 +361,29 @@ describe("the recovery-version rule on a migration target (ActivationData.Regist
       const entry = a.partition.entryFor(grainId);
       expect(entry?.silo.equals(A)).toBe(true);
       expect(entry?.version).toBe(a.appliedViewVersion);
+      expect(await a.getGrain(ICounter, key).increment(1)).toBe(6);
+      for (const node of nodes) expect(await node.checkDirectoryIntegrity()).toEqual([]);
+    } finally {
+      await stop();
+    }
+  });
+
+  it("confirms again on its own when the rise came after the directory's last look, the loop in acceptMigration", async () => {
+    const hidden = { hiding: false, before: -1, returned: false, calls: 0 };
+    const { a, nodes, parking, key, grainId, migrating, stop } = await migrationOutlivedByRecovery(
+      (node) => hideRiseUntilRegisterReturns(node, hidden),
+    );
+    try {
+      // The directory re-sends an operation during which the recovery version rose, which would
+      // close this window before the loop is reached. From here the directory is shown the
+      // version as it was until its register returns, then the real one: the rise comes after
+      // its last look, so only the loop in acceptMigration can notice it.
+      hidden.hiding = true;
+      parking.release();
+      expect(await migrating).toBe(true);
+      // Registered once, and confirmed again by the loop: two calls, the last at the view.
+      expect(hidden.calls).toBe(2);
+      expect(a.partition.entryFor(grainId)?.version).toBe(a.appliedViewVersion);
       expect(await a.getGrain(ICounter, key).increment(1)).toBe(6);
       for (const node of nodes) expect(await node.checkDirectoryIntegrity()).toEqual([]);
     } finally {

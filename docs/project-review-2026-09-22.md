@@ -1,5 +1,10 @@
 # Project review — 2026-09-22
 
+> Superseded: the per-grain handoff, its retention timer and the wait for recovery that this review
+> describes were replaced by the range-locked partition in
+> [`design-membership-and-directory.md`](design-membership-and-directory.md). Names in the text
+> below that no longer exist are described, not quoted.
+
 Second review, following [`project-review-2026-08-04.md`](project-review-2026-08-04.md). That review
 worked from documentation and a stub search, and its test run was interrupted; this one ran the
 suites, the examples and the scorecard, and read the correctness-critical paths directly. The
@@ -73,7 +78,7 @@ observation. Fix direction: distinguish "draining" from "gone" when classifying 
 
 `beginRecovery` runs only on JOIN (`start()` at `cluster-node.ts:1106`; `updateView`'s `!wasActive`
 gate at `:1165`). A silo that gains a range because another silo *left* never pulls, so the previous
-owner's `handoffSnapshot` entries sit unpulled until `recoveryRetentionMs` (60s) expires.
+owner's handoff-snapshot entries sit unpulled until the handoff retention timer (60s) expires.
 
 Reproduced by execution: the range returns to an already-active silo and is not recovered **even when
 that silo holds the entry in its own snapshot**. A call then rebuilds the grain — two live
@@ -108,9 +113,9 @@ still throw a plain `Error` rather than a `RejectionError`, and `ClusterNode.app
 
 Both remote and local paths decide owner/version, `await` something, and only then touch the
 partition: the remote path checks the version at `cluster-node.ts:2649` and then `await`s
-`awaitRecovered` before acting; the local path picks `owner` at `distributed-grain-directory.ts:89`
+the wait for recovery before acting; the local path picks `owner` at `distributed-grain-directory.ts:89`
 and then `await`s `onOwnedAccess` before `onOwned()`. `awaitView` is careful here (it advances and
-re-checks); `awaitRecovered` is not. A view change landing in that yield writes into a partition whose
+re-checks); the wait for recovery is not. A view change landing in that yield writes into a partition whose
 `drain` has already run, and nothing re-drains it until the next view change.
 
 `local-directory-partition.ts:10-18` asserts the barrier makes this impossible; it makes it narrow,
@@ -134,7 +139,7 @@ the version check cannot see.
 
 `cluster-node.ts:1249-1298`: the `catch {}` at `:1289-1291` swallows a fully exhausted recovery with
 no log, metric or retry re-arm, and the budget is 3 attempts × 200ms with no jitter — one shot for
-the process lifetime, ~400ms of tolerance. `awaitRecovered` then awaits the *whole* multi-source
+the process lifetime, ~400ms of tolerance. the wait for recovery then awaits the *whole* multi-source
 promise and gates every lookup/register/unregister for locally-owned grains, each attempt bounded by
 `callTimeoutMs` (30s default), so one slow-but-in-view peer can block this silo's directory traffic
 for up to ~90s. The design notes want a "lookup resolved via lazy activation" counter; there is none.
@@ -360,7 +365,7 @@ named in the burn-down list. The divergences worth correcting, each verified aga
 | `orleans-to-thresh-port.md:380` | the dispatcher passes the whole `GrainId` to "every filter and strategy" | false on the migration path (`cluster-node.ts:1466-1470`) |
 | `EPICS.md:25-27` | "optimistic two-phase commit" | pessimistic: locks are taken at first access and held to commit, and `prepare` does no conflict check (`transactional-state-impl.ts:152-190`) |
 | `EPICS.md:84-85` | `@readOnly` guard "breadth remainder in `todo.md`" | stale; full-facet coverage shipped (`activation.ts:774-786`, `todo.md:10`) |
-| `EPICS.md:11-12` | "versioned lossless range handoff" | the version is the membership view version, and past `recoveryRetentionMs` the entry is dropped |
+| `EPICS.md:11-12` | "versioned lossless range handoff" | the version is the membership view version, and past the handoff retention timer the entry is dropped |
 | `EPICS.md:28-33` | "Durable journaling (`DurableGrain`)" | no `DurableGrain` class exists; journaling is facets/hooks on an ordinary grain |
 | `README.md:144-156` | examples list; each runs "over in-memory providers and the in-process transport" | `broadcast` and `migration` are omitted from the list; `cluster` uses WebSocket and `k8s-silo` a real cluster |
 | `README.md:140` | "`pnpm test` # run the Vitest suites" | it runs the `unit` project only; the parity suite needs `pnpm test:parity` |
