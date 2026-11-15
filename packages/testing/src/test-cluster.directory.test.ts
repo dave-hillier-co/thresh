@@ -42,6 +42,9 @@ async function start(options: Partial<TestClusterOptions> = {}): Promise<TestClu
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** How long a round of load waits for its calls before the next round starts regardless. */
+const ROUND_WAIT_MS = 250;
+
 const partitionOf = (silo: TestSiloHandle): GrainDirectoryPartition =>
   (silo.host as unknown as { parts: { node: { partition: GrainDirectoryPartition } } }).parts.node
     .partition;
@@ -97,9 +100,17 @@ class Load {
     for (let round = 0; this.running; round++) {
       const silos = this.silos();
       if (silos.length > 0) {
-        await Promise.all(
-          this.keys().map((key, i) => call(this.results, silos[(i + round) % silos.length]!, key)),
-        );
+        // A round waits a while for its calls, not for ever: a call issued through a silo that
+        // is then killed never settles, since that silo's clock has stopped. A call still
+        // pending when the next round starts settles, and is recorded, in its own time.
+        await Promise.race([
+          Promise.all(
+            this.keys().map((key, i) =>
+              call(this.results, silos[(i + round) % silos.length]!, key),
+            ),
+          ),
+          sleep(ROUND_WAIT_MS),
+        ]);
       }
       await sleep(1);
     }
@@ -410,8 +421,8 @@ function mulberry32(seed: number): () => number {
 }
 
 describe("directory chaos (after Orleans ElasticChaos)", () => {
-  for (const seed of [11, 23, 42]) {
-    it(`keeps one activation per grain through 25 rounds of start, drain and crash (seed ${seed})`, async () => {
+  for (const seed of [11, 23, 42, 97]) {
+    it(`keeps one activation per grain through 25 rounds of start, drain, crash and restart in place (seed ${seed})`, async () => {
       const random = mulberry32(seed);
       const cluster = await start({ initialSilos: 2 });
       const results = new Results();
@@ -422,28 +433,58 @@ describe("directory chaos (after Orleans ElasticChaos)", () => {
         () => cluster.silos,
       );
       const actions: string[] = [];
+      // Left for a round by the round before: a crashed pod still listed not ready, which
+      // Kubernetes then removes, and a container restarted in place whose readiness then passes.
+      let listedDead: TestSiloHandle | undefined;
+      let heldNotReady: TestSiloHandle | undefined;
       try {
         for (let round = 0; round < 25; round++) {
+          if (listedDead !== undefined) await cluster.kubernetes.removePod(listedDead);
+          if (heldNotReady !== undefined && cluster.silos.includes(heldNotReady)) {
+            await cluster.kubernetes.kubelet(heldNotReady);
+          }
+          listedDead = undefined;
+          heldNotReady = undefined;
           const count = cluster.silos.length;
           const roll = random();
           const victim = (): TestSiloHandle => cluster.silos[Math.floor(random() * count)]!;
-          if (count < 5 && (count <= 1 || roll < 0.4)) {
+          if (count < 5 && (count <= 1 || roll < 0.3)) {
             actions.push("start");
             await cluster.startAdditionalSilo();
-          } else if (roll < 0.7) {
+          } else if (roll < 0.5) {
             const silo = victim();
             actions.push(`drain ${silo.address.podName}`);
             await cluster.stopSilo(silo);
-          } else {
+          } else if (roll < 0.65) {
             const silo = victim();
             actions.push(`crash ${silo.address.podName}`);
             await cluster.killSilo(silo);
             await cluster.kubernetes.depart(silo);
+          } else if (roll < 0.8) {
+            // The process dies and the pod stays listed, not ready, for a round.
+            const silo = victim();
+            actions.push(`crash-listed ${silo.address.podName}`);
+            await cluster.killSilo(silo);
+            await cluster.kubernetes.markNotReady(silo);
+            listedDead = silo;
+          } else {
+            // The container restarts in place, and stays not ready for a round.
+            const silo = victim();
+            actions.push(`restart-in-place ${silo.address.podName}`);
+            heldNotReady = await cluster.restartInPlace(silo, { holdReadiness: true });
           }
+          const step = `round ${round} (${actions.join(", ")})`;
           await cluster.checkIntegrity().catch((error: unknown) => {
-            throw new Error(`round ${round} (${actions.join(", ")}): ${String(error)}`);
+            throw new Error(`${step}: ${String(error)}`);
           });
-          expect(activeTwice(cluster, keys), `round ${round}: ${actions.join(", ")}`).toEqual([]);
+          expect(activeTwice(cluster, keys), step).toEqual([]);
+          // After the round every grain answers.
+          const sweep = new Results();
+          await Promise.all(
+            keys.map((key, i) => call(sweep, cluster.silos[i % cluster.silos.length]!, key)),
+          );
+          expect(sweep.errors.map(String), step).toEqual([]);
+          expect(activeTwice(cluster, keys), step).toEqual([]);
         }
       } finally {
         await load.stop();
