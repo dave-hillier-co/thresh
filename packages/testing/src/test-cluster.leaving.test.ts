@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { grain } from "@thresh/core/decorators";
 import { Grain } from "@thresh/core/grain";
 import { GrainId } from "@thresh/core/grain-id";
@@ -407,6 +409,86 @@ describe("a leaving silo on Kubernetes membership", () => {
     await cluster.checkIntegrity();
     for (const key of leaverKeys) expect(await a.host.getGrain(ILeavingCounter, key).inc()).toBe(1);
     await cluster.checkIntegrity();
+  }, 60_000);
+});
+
+describe("a silo with nobody to hand over to", () => {
+  it("is the last silo of a cluster: it waits for nothing and transfers nothing", async () => {
+    const cluster = await start({ initialSilos: 1, stopBudgetMs: 10_000 });
+    const [only] = cluster.silos as [TestSiloHandle];
+    const results = new Results();
+    for (const key of keysFor("only", 10)) await call(results, only, key);
+    await cluster.checkIntegrity();
+    const startedAt = performance.now();
+    await cluster.stopSilo(only);
+    expect(performance.now() - startedAt).toBeLessThan(1000);
+    expect(partitionOf(only).snapshotCount).toBe(0);
+    expect(partitionOf(only).stats.transfers).toBe(0);
+    expect(results.errors).toEqual([]);
+  }, 60_000);
+
+  for (const membership of ["static", "kubernetes"] as const) {
+    it(`is a cluster stopping together: dispose() marks every silo leaving first (${membership})`, async () => {
+      const cluster = await TestCluster.start({
+        initialSilos: 3,
+        membership,
+        grains: [{ ctor: LeavingCounter, interfaces: [ILeavingCounter] }],
+        reminders: false,
+        stopBudgetMs: 10_000,
+      });
+      const silos = [...cluster.silos];
+      const results = new Results();
+      for (const [i, key] of keysFor("together", 30).entries()) {
+        await call(results, silos[i % 3]!, key);
+      }
+      await cluster.checkIntegrity();
+      const before = statsOf(silos);
+      const startedAt = performance.now();
+      await cluster.dispose();
+      expect(performance.now() - startedAt).toBeLessThan(1000);
+      expect(statsOf(silos).transfers).toBe(before.transfers);
+      for (const silo of silos) expect(partitionOf(silo).snapshotCount).toBe(0);
+      expect(results.errors).toEqual([]);
+    }, 60_000);
+  }
+
+  it("lets a process that starts a cluster and disposes it exit on its own", () => {
+    const fixture = fileURLToPath(new URL("./dispose-exit.fixture.ts", import.meta.url));
+    const viteNode = fileURLToPath(
+      new URL("../../../node_modules/.bin/vite-node", import.meta.url),
+    );
+    const run = spawnSync(viteNode, [fixture], { encoding: "utf8", timeout: 30_000 });
+    expect(run.error).toBeUndefined();
+    expect(run.status).toBe(0);
+    expect(run.stdout).toContain("disposed static and kubernetes clusters");
+  }, 60_000);
+});
+
+describe("a leaving silo on the default (static) membership", () => {
+  it("is marked draining by stopSilo, so its ranges move by snapshot under load", async () => {
+    const cluster = await start({ initialSilos: 3, membership: "static", ...preferLocal });
+    const [a, b, leaver] = cluster.silos as [TestSiloHandle, TestSiloHandle, TestSiloHandle];
+    const results = new Results();
+    const { survivorKeys, leaverKeys } = await seeded(cluster, results, 15);
+    await cluster.checkIntegrity();
+    const before = statsOf([a, b]);
+    slow = { silo: leaver.address.podName, ms: 300 };
+
+    const keys = [...survivorKeys, ...leaverKeys];
+    const load = new DrainLoad(results, [a, b], leaver, survivorKeys, keys);
+    await sleep(20);
+    await cluster.stopSilo(leaver);
+    await load.deactivationStarted;
+    await cluster.checkIntegrity();
+    await sleep(20);
+    await load.stop();
+    await cluster.checkIntegrity();
+
+    expect(results.errors).toEqual([]);
+    expect(results.restarted(survivorKeys)).toEqual([]);
+    expect(activeTwice(cluster, keys)).toEqual([]);
+    expect(statsOf([a, b]).transfers).toBeGreaterThan(before.transfers);
+    expect(statsOf([a, b]).recoveries).toBe(before.recoveries);
   }, 60_000);
 });
 

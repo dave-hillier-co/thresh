@@ -55,6 +55,8 @@ class WatcherGrain extends Grain implements IWatcherGrain {
 
 interface INotifierGrain extends GrainKey<string> {
   touch(): Promise<void>;
+  /** Call the watcher once, so this notifier's silo holds the watcher's route. */
+  warm(): Promise<void>;
 }
 const INotifierGrain = defineGrainInterface<INotifierGrain>("TeardownRaceNotifier");
 
@@ -62,6 +64,10 @@ const INotifierGrain = defineGrainInterface<INotifierGrain>("TeardownRaceNotifie
 class NotifierGrain extends Grain implements INotifierGrain {
   async touch(): Promise<void> {
     // Activate; the interesting behaviour is entirely in onDeactivate below.
+  }
+
+  async warm(): Promise<void> {
+    await this.getGrain(IWatcherGrain, watcherTargetKey).ping();
   }
 
   override async onDeactivate(): Promise<void> {
@@ -294,6 +300,10 @@ describe("TestCluster", () => {
     for (const key of keys) await cluster.getGrain(INotifierGrain, key).touch();
     const crossSiloKeys = keys.filter((key) => earlySilo.host.isActive(notifierId(key)));
     expect(crossSiloKeys.length).toBeGreaterThan(0);
+    // dispose() marks every silo leaving before any stops, so the ring is empty and no directory
+    // owner can be resolved: an onDeactivate call reaches a later silo over a route its own silo
+    // already holds. Each notifier has called the watcher once.
+    for (const key of crossSiloKeys) await cluster.getGrain(INotifierGrain, key).warm();
 
     await cluster.dispose();
 

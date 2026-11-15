@@ -605,6 +605,9 @@ export class TestCluster {
   /** Drain `silo` and take it out of membership, the way its kind of membership does. */
   private async stopGracefully(silo: InternalSilo, options: StopSiloOptions = {}): Promise<void> {
     if (this.k8s === undefined) {
+      // The view marks the silo draining before it stops and removes it after, as a terminating
+      // pod's endpoint does, so its ranges move by snapshot while it still serves.
+      silo.markLeaving();
       await silo.host.stop();
       this.shared?.removeSilo(silo.address);
       return;
@@ -653,8 +656,10 @@ export class TestCluster {
   }
 
   /**
-   * Stop every live silo in a deterministic order — mirroring `stopSilo`'s
-   * stop-then-`removeSilo` sequencing per silo — rather than tearing them all
+   * Stop the cluster together: every live silo is marked leaving first, so the ring is empty
+   * and no silo hands a range to a silo that is about to stop (there is nobody to hand over to,
+   * so no stop waits for a handover). Then stop every live silo in a deterministic order —
+   * mirroring `stopSilo`'s stop-then-remove sequencing per silo — rather than tearing them all
    * down concurrently. A bare `Promise.all` would race: a silo mid-`stop()`
    * runs `onDeactivate` hooks that can make cross-silo calls (the
    * `ActivateDeactivateWatcherGrain` pattern), and if every silo's transport
@@ -677,8 +682,13 @@ export class TestCluster {
     }
     const remaining = this.live;
     this.live = [];
+    for (const silo of remaining) silo.markLeaving();
+    // Let every silo apply the view in which the cluster is leaving before any stops.
+    if (this.k8s !== undefined) await this.k8s.settle();
     for (const silo of remaining) {
-      await this.stopGracefully(silo).catch(() => undefined);
+      await silo.host.stop().catch(() => undefined);
+      if (this.k8s !== undefined) this.k8s.api.removePod(silo.address.podName);
+      else this.shared?.removeSilo(silo.address);
     }
   }
 
@@ -715,7 +725,7 @@ export class TestCluster {
       metadata,
       (builder) => builder.useMembership(membership),
       () => membership.freeze(),
-      () => undefined,
+      () => membership.markDraining(),
     );
   }
 
