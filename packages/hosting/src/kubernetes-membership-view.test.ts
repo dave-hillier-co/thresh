@@ -25,6 +25,10 @@ import { IGrainManagementExtension } from "@thresh/runtime/grain-management-exte
 import { createSilo, type SiloBuilder, type SiloConfig } from "@thresh/hosting/silo-builder";
 import type { SiloHost } from "@thresh/hosting/silo-host";
 import { createClient } from "@thresh/client/client-node";
+import type { GrainAddress } from "@thresh/core/grain-address";
+import type { LocationCache } from "@thresh/directory/location-cache";
+import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
+import { PendingTimerTracker } from "@thresh/core/test-support/pending-timer-tracker";
 
 /**
  * The production membership path, composed end to end: `createSilo(...)
@@ -122,7 +126,11 @@ class Cluster {
   silo(
     pod: Omit<FakePod, "ready">,
     configure?: (builder: SiloBuilder) => void,
-    options: { listed?: boolean; selfProbe?: SiloConfig["selfProbe"] } = {},
+    options: {
+      listed?: boolean;
+      selfProbe?: SiloConfig["selfProbe"];
+      config?: Partial<SiloConfig>;
+    } = {},
   ): K8sSilo {
     const full: FakePod = { ...pod, ready: false };
     if (options.listed !== false) this.api.setPod(full);
@@ -134,6 +142,7 @@ class Cluster {
       selfProbe: options.selfProbe ?? { enabled: false },
       callTimeout: { seconds: 2 },
       gracefulShutdownMs: 0,
+      ...options.config,
     })
       .useKubernetesMembership(new KubernetesEndpointWatch(source), { portName: "silo" })
       .useInProcessTransport(this.network)
@@ -250,15 +259,91 @@ describe("a silo on Kubernetes membership", () => {
     const a = c.silo({ name: "silo-a", uid: uid(), ip: "10.0.0.1" });
     await c.join(a);
     const b = c.silo({ name: "silo-b", uid: uid(), ip: "10.0.0.2" }, undefined, { listed: false });
-    await b.host.start();
-    expect(b.host.health.ready().checks.membershipHealthy).toBe(false);
+    const started = b.host.start();
+    await settle();
+    // Start waits for the pod to be listed: it is neither ready nor fenced meanwhile.
     expect(b.host.health.ready().ok).toBe(false);
-    // Not yet listed is not removed: nothing is fenced.
     expect(b.host.health.live().ok).toBe(true);
 
     c.api.setPod(b.pod);
-    await settle();
+    await started;
     expect(b.host.health.ready().ok).toBe(true);
+  });
+});
+
+describe("a silo whose pod is not listed when it starts", () => {
+  it("waits for the listing, then lets a startup task call a grain on the cold-start ring", async () => {
+    const c = cluster();
+    let result: number | string = "not run";
+    const a = c.silo(
+      { name: "silo-a", uid: uid(), ip: "10.0.0.1" },
+      (builder) =>
+        builder.addStartupTask(async (grains) => {
+          result = await grains
+            .getGrain(Counter, "from-startup")
+            .inc()
+            .catch((e: unknown) => `failed: ${String(e)}`);
+        }),
+      { listed: false },
+    );
+    let started = false;
+    const starting = a.host.start().then(() => (started = true));
+    await settle(20);
+    expect(started).toBe(false);
+    expect(result).toBe("not run");
+
+    // Listed, not ready: the joining members are the ring.
+    c.api.setPod(a.pod);
+    await starting;
+    expect(result).toBe(1);
+  });
+
+  it("fails start after the join timeout, naming what to check, and leaves nothing running", async () => {
+    const c = cluster();
+    const clock = new PendingTimerTracker(new FakeTimeProvider());
+    const fake = (clock as unknown as { inner: FakeTimeProvider }).inner;
+    const a = c.silo({ name: "silo-a", uid: uid(), ip: "10.0.0.1" }, undefined, {
+      listed: false,
+      config: { time: clock },
+    });
+    const outcome = a.host.start().then(
+      () => undefined,
+      (err: unknown) => err as Error,
+    );
+    await settle(20);
+    // The default is Orleans' MaxJoinAttemptTime: five minutes.
+    fake.advance(5 * 60_000 - 1);
+    await settle(20);
+    let settled = false;
+    void outcome.then(() => (settled = true));
+    await settle(5);
+    expect(settled).toBe(false);
+
+    fake.advance(1);
+    const err = await outcome;
+    expect(err).toBeInstanceOf(Error);
+    expect(err!.message).toMatch(/never listed/);
+    expect(err!.message).toMatch(/selector/);
+    expect(err!.message).toMatch(/label/);
+    expect(a.host.health.ready().ok).toBe(false);
+    expect(clock.pendingTimers()).toEqual([]);
+    expect((c.network as unknown as { endpoints: Map<string, unknown> }).endpoints.size).toBe(0);
+  });
+
+  it("honours a configured join timeout", async () => {
+    const c = cluster();
+    const fake = new FakeTimeProvider();
+    const a = c.silo({ name: "silo-a", uid: uid(), ip: "10.0.0.1" }, undefined, {
+      listed: false,
+      config: { time: fake, joinTimeout: { seconds: 10 } },
+    });
+    const outcome = a.host.start().then(
+      () => undefined,
+      (err: unknown) => err as Error,
+    );
+    await settle(20);
+    fake.advance(10_000);
+    expect((await outcome)?.message).toMatch(/never listed/);
   });
 });
 
@@ -317,6 +402,38 @@ describe("a silo joining under load", () => {
     }
   }, 60_000);
 });
+describe("the activation gate of a silo outside its ring", () => {
+  /** A peer's location cache, the introspection point for a pointer the peer holds. */
+  const cacheOf = (host: SiloHost): LocationCache =>
+    (host as unknown as { parts: { node: { cache: LocationCache } } }).parts.node.cache;
+
+  it("refuses a call a peer's stale cache sends to a joiner for a grain it does not host", async () => {
+    const c = cluster();
+    const a = c.silo({ name: "silo-a", uid: uid(), ip: "10.0.0.1" });
+    await c.join(a);
+    // The joiner is listed and not ready: a member, outside the ring, serving nothing yet.
+    const b = c.silo({ name: "silo-b", uid: uid(), ip: "10.0.0.2" });
+    await b.host.start();
+    expect(nodeOf(b.host).ownedHashRanges()).toEqual([]);
+
+    // The peer still points at the joiner for grains it never hosted (an entry left from before
+    // the joiner's view changed): the call arrives at a silo that must not create the activation.
+    const keys = Array.from({ length: 10 }, (_, i) => `stale-${i}`);
+    for (const key of keys) {
+      cacheOf(a.host).put({
+        grainId: grainId(key),
+        silo: b.address,
+        activationId: `stale-${key}`,
+      } as GrainAddress);
+    }
+    const results = await Promise.all(keys.map((key) => a.host.getGrain(Counter, key).inc()));
+
+    expect(results).toEqual(keys.map(() => 1));
+    expect(keys.filter((key) => b.host.isActive(grainId(key)))).toEqual([]);
+    expect(keys.filter((key) => !a.host.isActive(grainId(key)))).toEqual([]);
+  });
+});
+
 describe("a draining silo", () => {
   it("creates no activation, keeps serving its own, and has a new grain placed on an active silo", async () => {
     const c = cluster();
