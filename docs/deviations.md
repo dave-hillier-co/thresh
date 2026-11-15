@@ -554,14 +554,15 @@ that a setting, `SiloConfig.localCallSemantics` (and `TestClusterOptions.localCa
   silo serializer's full round trip. The same result as `"copy"` (minus `immutable`), at the
   price of an encode and a decode.
 
-`TestCluster` defaults to `"wire"`, so a test sees what a cross-silo call would. A production silo
-still defaults to `"reference"`, pending measurement of what `"copy"` costs
-(`scripts/local-call-semantics-bench.ts`). Copying keeps grain code placement-independent, at the
-price of a copy on every local call, a loss of class identity on arguments and results, and a
-refusal of values the wire cannot carry. Not copying keeps local calls cheap and lets a grain pass
-its own objects to a neighbour, at the price of aliasing no cross-silo call has: a callee can mutate
-its caller's argument, a caller can mutate a grain's returned state, and a suite that lands caller
-and callee together passes where a multi-silo deployment fails.
+A production silo defaults to `"copy"`, as Orleans does, and `TestCluster` to `"wire"`, which gives
+the same results through the real serializer. So a call means the same thing wherever the callee
+was placed, in a test and in production: no callee can change its caller's argument, and no caller
+can change a grain's returned state. The price is a copy on every local call. Measured on the
+production consumer's permission-check path, with every call on one silo, `"copy"` ran at about
+five sixths of the by-reference rate and `"wire"` at about half
+(`scripts/local-call-semantics-bench.ts` measures the copy step and a bare call). `immutable`
+removes the copy for a value its author will not mutate, and `"reference"` remains for a silo that
+chooses speed over placement-independence.
 
 ## A process epoch rides the preamble and the correlation, not the silo address
 

@@ -354,9 +354,11 @@ Wire surface and location transparency:
       framework hooks are excluded.
 - [x] **W2** the value codec reserves keys inside user data. Objects owning `$thresh` or a
       dangerous key travel in a `plainObject` envelope and round-trip as themselves.
-- [ ] **W3** **partly fixed.** `TestCluster` round-trips same-silo calls through the codec by
-      default, so tests see wire semantics. A production silo still passes by reference unless
-      `wireSemanticsForLocalCalls` is set; Orleans copies. That default is an open choice.
+- [x] **W3** local calls bypass the codec, so placement decides call semantics. A same-silo call
+      copies its arguments and result by default (`localCallSemantics: "copy"`), as the codec
+      would deliver them but without encoding; `immutable()` shares a value; `TestCluster` uses
+      the full round trip. On BeneDB's all-local check path copying costs about a sixth of
+      throughput.
 - [ ] **W4** no compatibility contract for the wire or stored state
 - [x] **W5** a decode failure is a process fault. An undecodable frame closes that connection
       and is counted; one failure policy wraps every system handler. Residual: a frame that
@@ -366,10 +368,9 @@ Wire surface and location transparency:
       failure; one function builds the request envelope.
 - [x] **W7** the error taxonomy lives in parallel tables that have drifted. One table, a test
       that enumerates every exported error, and `isThreshRuntimeError` classifies as Orleans does.
-- [ ] **W8** `GrainId` has two equalities. **Implemented on `redesign/dr3-identity-r2`, not
-      merged: it needs a decision.** Making ids canonical needs the declared key kind at run
-      time, so `defineGrainInterface` must state a non-string kind as a value (`{ key:
-      "integer" }`), not only as a type argument or marker: 159 sites here and 2 in BeneDB.
+- [x] **W8** `GrainId` has two equalities. One identity, read through the key kind the grain
+      type declares. A non-string kind must be stated as a value on `defineGrainInterface`
+      (`{ key: "integer" }`); the compiler checks it against the marker.
 
 Verification model:
 

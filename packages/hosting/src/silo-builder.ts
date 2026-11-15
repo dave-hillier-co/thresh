@@ -224,10 +224,10 @@ export interface SiloConfig {
   clientDirectoryRefreshMs?: number;
   /**
    * What a call to a grain on THIS silo does to its arguments, result and thrown error:
-   * `"reference"` shares the caller's objects (the default); `"copy"` deep-copies arguments and
-   * results exactly as the codec round trip would deliver them, sharing only values marked
-   * `immutable` (Orleans' behaviour); `"wire"` makes the full serializer round trip a message
-   * would. Under `"copy"` and `"wire"` a same-silo call sees no shared objects and class
+   * `"copy"` (the default, and Orleans' behaviour) deep-copies arguments and results exactly as
+   * the codec round trip would deliver them, sharing only values marked `immutable`;
+   * `"reference"` shares the caller's objects; `"wire"` makes the full serializer round trip a
+   * message would. Under `"copy"` and `"wire"` a same-silo call sees no shared objects and class
    * instances and error classes as the wire delivers them. See `LocalCallSemantics`.
    */
   localCallSemantics?: LocalCallSemantics;

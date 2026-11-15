@@ -178,14 +178,15 @@ enumerable fields, a value the codec cannot carry (a function, a cycle, a sparse
 is refused, and an error arrives as the class the codec rebuilds. A call to a grain on the SAME silo
 does what `localCallSemantics` (a `SiloConfig` field) says:
 
-- `"reference"` (the default in a silo): nothing is copied. The callee receives the caller's own
-  objects and the caller receives the callee's; a class instance keeps its class and an error its
-  class. A callee that mutates its argument changes the caller's object, and a caller that mutates
-  a returned value changes the grain's state, so the same call behaves differently on one silo and
-  across two.
-- `"copy"`: the arguments and the result are deep-copied, exactly as the codec round trip would
-  deliver them but without building the encoded form, and a thrown error takes the codec's path. A
-  same-silo callee then sees what a callee on another silo would. This is Orleans' behaviour.
+- `"copy"` (the default in a silo): the arguments and the result are deep-copied, exactly as the
+  codec round trip would deliver them but without building the encoded form, and a thrown error
+  takes the codec's path. A same-silo callee then sees what a callee on another silo would. This is
+  Orleans' behaviour.
+- `"reference"`: nothing is copied. The callee receives the caller's own objects and the caller
+  receives the callee's; a class instance keeps its class and an error its class. A callee that
+  mutates its argument changes the caller's object, and a caller that mutates a returned value
+  changes the grain's state, so the same call behaves differently on one silo and across two.
+  Choose it only for a silo where the cost of copying matters more than that.
 - `"wire"` (the default in `TestCluster`): the arguments, the result and a thrown error make the
   full serializer round trip a message body would. The same result as `"copy"`, at the full price.
 

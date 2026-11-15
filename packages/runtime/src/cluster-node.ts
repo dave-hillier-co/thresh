@@ -247,7 +247,7 @@ export interface ClusterNodeOptions {
    */
   defaultResponseTimeoutMs?: number;
   /**
-   * See `SiloConfig.localCallSemantics`. `"reference"` by default (`TestCluster` uses `"wire"`).
+   * See `SiloConfig.localCallSemantics`. `"copy"` by default (`TestCluster` uses `"wire"`).
    */
   localCallSemantics?: LocalCallSemantics;
   defaultCollectionAgeSeconds?: number;
@@ -924,7 +924,7 @@ export class ClusterNode {
           }
         : {}),
     });
-    this.factory.setDispatcher(this.localCallDispatcher(options.localCallSemantics ?? "reference"));
+    this.factory.setDispatcher(this.localCallDispatcher(options.localCallSemantics ?? "copy"));
     if (options.repartitioning !== undefined) {
       const repartitioning = options.repartitioning;
       this.repartitioner = new ActivationRepartitioner({

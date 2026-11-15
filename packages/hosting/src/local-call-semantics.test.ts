@@ -32,8 +32,16 @@ async function silo(config: Partial<SiloConfig> = {}) {
 }
 
 describe("SiloConfig.localCallSemantics", () => {
-  it('defaults to "reference": a same-silo callee receives the caller\'s own object', async () => {
+  it('defaults to "copy": a same-silo callee receives its own copy of the argument', async () => {
     const host = await silo();
+    const value = { n: 1 };
+    await host.getGrain(Box, "b").put(value);
+    expect(received[0]).not.toBe(value);
+    expect(received[0]).toEqual(value);
+  });
+
+  it('shares the caller\'s own object under "reference"', async () => {
+    const host = await silo({ localCallSemantics: "reference" });
     const value = { n: 1 };
     await host.getGrain(Box, "b").put(value);
     expect(received[0]).toBe(value);
