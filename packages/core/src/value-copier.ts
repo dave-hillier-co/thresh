@@ -7,9 +7,13 @@ import { Guid } from "./guid";
 import { isImmutable } from "./immutable";
 import { SiloAddress } from "./silo-address";
 import {
+  assertWellFormed,
+  assertWellFormedFields,
+  assertWellFormedKeys,
   CircularReferenceError,
   decodeValue,
   encodeNested,
+  wellFormedText,
   hasSurrogates,
   surrogateFor,
   typedArrayConstructor,
@@ -70,6 +74,8 @@ export const COPIED_TAGS: ReadonlySet<string> = new Set([
   "set",
   "error", // viaCodec
   "plainObject", // copyPlainObject's escaped branch
+  "nonFinite", // copyScalar: a non-finite number stays itself
+  "surrogateFields", // viaCodec: a surrogate whose fields collide with the envelope
 ]);
 
 const T = "$thresh";
@@ -186,7 +192,9 @@ function copyInner(
   }
   // `-0` and a bigint are tagged before any surrogate is asked, and decode to themselves.
   if (typeof value === "bigint") return value;
-  if (typeof value === "number" && Object.is(value, -0)) return value;
+  if (typeof value === "number" && (Object.is(value, -0) || !Number.isFinite(value))) return value;
+  // Refused before any surrogate is asked, as the codec does; see `assertWellFormed`.
+  if (typeof value === "string") assertWellFormed(value, pathOf(parent, kind, key), "a string");
   if (hasSurrogates()) {
     const surrogate = surrogateFor(value);
     if (surrogate !== undefined) return copySurrogate(value, surrogate, walk, parent, kind, key);
@@ -228,8 +236,9 @@ function copyObject(
   }
   if (value instanceof Date) return new Date(value.getTime());
   if (value instanceof Guid) return Guid.parse(value.toString());
-  if (value instanceof GrainId) return copyGrainId(value);
+  if (value instanceof GrainId) return copyGrainId(value, pathOf(parent, kind, key));
   if (value instanceof GrainCancellationToken) {
+    assertWellFormedFields(pathOf(parent, kind, key), "a cancellation token id", value.tokenId);
     return new CancellationTokenPlaceholder(
       value.tokenId,
       value.isCancellationRequested,
@@ -237,16 +246,30 @@ function copyObject(
     );
   }
   if (value instanceof CancellationTokenPlaceholder) {
+    assertWellFormedFields(pathOf(parent, kind, key), "a cancellation token id", value.tokenId);
     return new CancellationTokenPlaceholder(
       value.tokenId,
       value.cancelled,
       value.asSignal === true,
     );
   }
-  if (value instanceof DOMException) return new DOMException(value.message, value.name);
-  if (value instanceof GrainCallAbortedError) return new GrainCallAbortedError(value.message);
-  if (value instanceof GrainTaskCanceledError) return new GrainTaskCanceledError(value.message);
+  if (value instanceof DOMException) {
+    return new DOMException(wellFormedText(value.message), wellFormedText(value.name));
+  }
+  if (value instanceof GrainCallAbortedError) {
+    return new GrainCallAbortedError(wellFormedText(value.message));
+  }
+  if (value instanceof GrainTaskCanceledError) {
+    return new GrainTaskCanceledError(wellFormedText(value.message));
+  }
   if (value instanceof SiloAddress) {
+    assertWellFormedFields(
+      pathOf(parent, kind, key),
+      "a silo address",
+      value.podName,
+      value.podUid,
+      value.endpoint,
+    );
     return new SiloAddress(value.podName, value.podUid, value.endpoint);
   }
   const claimed = copyRefOrSurrogate(value, walk, parent, kind, key);
@@ -285,20 +308,21 @@ function copyRefOrSurrogate(
   key: string | number,
 ): unknown {
   const ref = grainReferenceIdentity(value);
-  if (ref !== undefined) return copyGrainReference(ref, walk.ctx);
+  if (ref !== undefined) return copyGrainReference(ref, walk.ctx, pathOf(parent, kind, key));
   if (!hasSurrogates()) return UNCLAIMED;
   const surrogate = surrogateFor(value);
   if (surrogate !== undefined) return copySurrogate(value, surrogate, walk, parent, kind, key);
   return UNCLAIMED;
 }
 
-function copyGrainId(id: GrainId): GrainId {
+function copyGrainId(id: GrainId, path: string): GrainId {
+  assertWellFormedFields(path, "a grain id", id.type, keyToString(id.key));
   return GrainId.parse(`${id.type}/${keyToString(id.key)}`, id.keyKind);
 }
 
-function copyGrainReference(ref: GrainReferenceIdentity, ctx: CodecContext): unknown {
+function copyGrainReference(ref: GrainReferenceIdentity, ctx: CodecContext, path: string): unknown {
   const identity: GrainReferenceIdentity = {
-    grainId: copyGrainId(ref.grainId),
+    grainId: copyGrainId(ref.grainId, path),
     interfaceId: ref.interfaceId,
   };
   return ctx.resolveGrainReference ? ctx.resolveGrainReference(identity) : identity;
@@ -418,6 +442,7 @@ function copyPlainObject(
     const here: Frame = { parent, kind, key };
     const source = value as Record<string, unknown>;
     const keys = Object.keys(value);
+    assertWellFormedKeys(keys, pathOf(parent, kind, key));
     const out: Record<string, unknown> = {};
     if (keys.some((k) => k === T || DANGEROUS_KEYS.has(k))) {
       // The codec's `plainObject` envelope: entries carried as positional pairs (so an undefined
@@ -455,6 +480,12 @@ function copySurrogate(
     throw error;
   }
   const keys = Object.keys(fields);
+  try {
+    assertWellFormedKeys(keys, pathOf(parent, kind, key));
+  } catch (error) {
+    walk.seen.delete(value);
+    throw error;
+  }
   if (keys.some((k) => k === T || k === V || DANGEROUS_KEYS.has(k))) {
     // A field named like the envelope's own keys, or a dangerous one, reshapes the envelope the
     // codec writes; let the codec say what that comes back as.

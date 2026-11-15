@@ -70,6 +70,8 @@ const builtInTags = new Set([
   "typedArray",
   "negZero",
   "plainObject",
+  "nonFinite",
+  "surrogateFields",
 ]);
 
 /**
@@ -88,28 +90,31 @@ export const BUILT_IN_TAGS: ReadonlySet<string> = builtInTags;
  * silently misread as one of these.
  */
 type TypedArrayCtor = new (values: readonly (number | bigint)[]) => object;
-const TYPED_ARRAY_CTORS: Record<string, TypedArrayCtor> = {
-  Int8Array: Int8Array as unknown as TypedArrayCtor,
-  Uint8Array: Uint8Array as unknown as TypedArrayCtor,
-  Uint8ClampedArray: Uint8ClampedArray as unknown as TypedArrayCtor,
-  Int16Array: Int16Array as unknown as TypedArrayCtor,
-  Uint16Array: Uint16Array as unknown as TypedArrayCtor,
-  Int32Array: Int32Array as unknown as TypedArrayCtor,
-  Uint32Array: Uint32Array as unknown as TypedArrayCtor,
-  Float32Array: Float32Array as unknown as TypedArrayCtor,
-  Float64Array: Float64Array as unknown as TypedArrayCtor,
-  BigInt64Array: BigInt64Array as unknown as TypedArrayCtor,
-  BigUint64Array: BigUint64Array as unknown as TypedArrayCtor,
-};
+// A `Map`, not an object literal: the kind is a string taken from the payload, and indexing a
+// literal with it reaches `Object.prototype` (`constructor`, `toString`, `__proto__`), whose
+// entries are functions that are not typed-array constructors. A `Map` has only its own entries.
+const TYPED_ARRAY_CTORS = new Map<string, TypedArrayCtor>([
+  ["Int8Array", Int8Array as unknown as TypedArrayCtor],
+  ["Uint8Array", Uint8Array as unknown as TypedArrayCtor],
+  ["Uint8ClampedArray", Uint8ClampedArray as unknown as TypedArrayCtor],
+  ["Int16Array", Int16Array as unknown as TypedArrayCtor],
+  ["Uint16Array", Uint16Array as unknown as TypedArrayCtor],
+  ["Int32Array", Int32Array as unknown as TypedArrayCtor],
+  ["Uint32Array", Uint32Array as unknown as TypedArrayCtor],
+  ["Float32Array", Float32Array as unknown as TypedArrayCtor],
+  ["Float64Array", Float64Array as unknown as TypedArrayCtor],
+  ["BigInt64Array", BigInt64Array as unknown as TypedArrayCtor],
+  ["BigUint64Array", BigUint64Array as unknown as TypedArrayCtor],
+]);
 
 /** The constructor a `typedArray` envelope of `kind` decodes with (the same lookup `decodeValue` makes). */
-export function typedArrayConstructor(kind: string): TypedArrayCtor | undefined {
-  return TYPED_ARRAY_CTORS[kind];
+export function typedArrayConstructor(kind: unknown): TypedArrayCtor | undefined {
+  return typeof kind === "string" ? TYPED_ARRAY_CTORS.get(kind) : undefined;
 }
 
 /** The built-in base kind a typed array is tagged with. */
 export function typedArrayKind(view: ArrayBufferView): string {
-  for (const [kind, ctor] of Object.entries(TYPED_ARRAY_CTORS)) {
+  for (const [kind, ctor] of TYPED_ARRAY_CTORS) {
     if (view instanceof (ctor as unknown as abstract new (...args: never[]) => object)) return kind;
   }
   // Unreachable for a same-realm typed array; a foreign-realm one falls back to its own name.
@@ -491,7 +496,20 @@ function grainIdFields(id: GrainId): Record<string, unknown> {
   return { grainType: id.type, keyKind: id.keyKind, key: keyToString(id.key) };
 }
 
+const KEY_KINDS: ReadonlySet<unknown> = new Set<GrainKeyKind>([
+  "string",
+  "integer",
+  "guid",
+  "guid-compound",
+  "integer-compound",
+]);
+
 function grainIdFrom(obj: Record<string, unknown>): GrainId {
+  // The kind is payload data and selects how the key text is read; an unknown one would otherwise
+  // build an id whose key is `undefined`.
+  if (obj.keyKind !== undefined && !KEY_KINDS.has(obj.keyKind)) {
+    throw new Error(`decodeValue: unknown grain key kind "${String(obj.keyKind)}"`);
+  }
   return GrainId.parse(
     `${obj.grainType as string}/${obj.key as string}`,
     // A wire id from before the kind left identity may carry none; the text alone identifies.
@@ -544,6 +562,68 @@ function setOwn(target: object, key: string, value: unknown): void {
  */
 function needsEscape(keys: readonly string[]): boolean {
   return keys.some((k) => k === T || isDangerousKey(k));
+}
+
+/** True for a key that cannot be a surrogate's own flat field: it is the envelope's, or dangerous. */
+function collidesWithEnvelope(key: string): boolean {
+  return key === T || key === V || isDangerousKey(key);
+}
+
+// `\p{Surrogate}` under the `u` flag matches only a LONE UTF-16 surrogate: a well-formed pair is
+// read as one astral code point and does not match.
+const LONE_SURROGATE = /\p{Surrogate}/u;
+const LONE_SURROGATES = /\p{Surrogate}/gu;
+
+/**
+ * A lone UTF-16 surrogate has no UTF-8 form, so no transport can carry it faithfully: JSON keeps
+ * it as an escape, but MessagePack's two string routines disagree by length (one writes the three
+ * bytes of the lone code unit, the other substitutes U+FFFD). This codec's stated policy for a
+ * value it cannot represent is to refuse it (see `UnsupportedValueError`), so the string is
+ * refused here, once, for every length and every transport, rather than preserved on one and
+ * corrupted on the other.
+ */
+export function assertWellFormed(text: string, path: string, what: string): void {
+  if (LONE_SURROGATE.test(text)) {
+    throw new UnsupportedValueError(path, `${what} with a lone UTF-16 surrogate`);
+  }
+}
+
+/**
+ * Refuse, at `path`, a structural envelope's text field (a grain id's type and key, a silo's
+ * names, a token id) that is not well-formed UTF-16: MessagePack would rewrite a long one with
+ * U+FFFD, so the id would decode as a different identity.
+ */
+export function assertWellFormedFields(
+  path: string,
+  what: string,
+  ...texts: readonly string[]
+): void {
+  for (const t of texts) assertWellFormed(t, path, what);
+}
+
+/** Refuse, at the container's `path`, any of `keys` that is not well-formed UTF-16. */
+export function assertWellFormedKeys(keys: readonly string[], path: string): void {
+  for (const k of keys) assertWellFormed(k, path, "an object key");
+}
+
+/**
+ * Diagnostic text (an error's name, message and stack) is made well formed rather than refused:
+ * failing to report a failure because its text was truncated mid-pair would be worse than the
+ * replacement character.
+ */
+export function wellFormedText(text: string): string {
+  return LONE_SURROGATE.test(text) ? text.replace(LONE_SURROGATES, "\uFFFD") : text;
+}
+
+const NON_FINITE_VALUES = new Map<string, number>([
+  ["NaN", Number.NaN],
+  ["Infinity", Infinity],
+  ["-Infinity", -Infinity],
+]);
+
+/** The tagged form of a non-finite number, which JSON would turn into `null`. */
+function nonFinite(value: number): Record<string, unknown> {
+  return tagged("nonFinite", { value: String(value) });
 }
 
 /**
@@ -609,6 +689,8 @@ function encodeInner(
   path: string,
   options: EncodeValueOptions,
 ): unknown {
+  // Checked first but not returned early: a surrogate may still claim a string.
+  if (typeof value === "string") assertWellFormed(value, path, "a string");
   if (value instanceof Uint8Array) {
     // Binary (e.g. a Message body) passes through unless the caller's transport cannot carry it.
     return options.binaryAsBase64 ? tagged("bytes", { value: bytesToBase64(value) }) : value;
@@ -633,11 +715,21 @@ function encodeInner(
   // exactly. Nested occurrences (inside an object, an array, a typed array) hit this same check via
   // the `encodeInner`/`encodeElement` recursion, so they are covered without a branch of their own.
   if (typeof value === "number" && Object.is(value, -0)) return tagged("negZero", {});
-  if (value instanceof Date) return tagged("date", { value: value.getTime() });
+  // NaN and the infinities become `null` on JSON (MessagePack keeps them), so they are tagged for
+  // the same reason negative zero is, wherever a number appears.
+  if (typeof value === "number" && !Number.isFinite(value)) return nonFinite(value);
+  if (value instanceof Date) {
+    const time = value.getTime();
+    return tagged("date", { value: Number.isFinite(time) ? time : nonFinite(time) });
+  }
   if (typeof value === "bigint") return tagged("bigint", { value: value.toString() });
   if (value instanceof Guid) return tagged("guid", { value: value.toString() });
-  if (value instanceof GrainId) return tagged("grainId", grainIdFields(value));
+  if (value instanceof GrainId) {
+    assertWellFormedFields(path, "a grain id", value.type, keyToString(value.key));
+    return tagged("grainId", grainIdFields(value));
+  }
   if (value instanceof GrainCancellationToken) {
+    assertWellFormedFields(path, "a cancellation token id", value.tokenId);
     return tagged("cancellationToken", {
       tokenId: value.tokenId,
       cancelled: value.isCancellationRequested,
@@ -652,6 +744,7 @@ function encodeInner(
   // next hop's `decodeValue` can no longer recognise it as a cancellation
   // token, leaving the eventual callee with a signal-less plain object.
   if (value instanceof CancellationTokenPlaceholder) {
+    assertWellFormedFields(path, "a cancellation token id", value.tokenId);
     return tagged("cancellationToken", {
       tokenId: value.tokenId,
       cancelled: value.cancelled,
@@ -664,7 +757,10 @@ function encodeInner(
   // reach the caller AS a cancellation, not as a generic call failure whose only
   // remaining evidence is the message text.
   if (value instanceof DOMException) {
-    return tagged("domException", { name: value.name, message: value.message });
+    return tagged("domException", {
+      name: wellFormedText(value.name),
+      message: wellFormedText(value.message),
+    });
   }
   // The cancellation family, carried for exactly the reason `DOMException` is: a callee that
   // stopped because its signal fired must reach the caller AS a cancellation. These have no
@@ -672,12 +768,13 @@ function encodeInner(
   // the caller would see a bare `GrainCallError` - making `isCancellationError` false and a
   // deliberate abort indistinguishable from a retriable call failure.
   if (value instanceof GrainCallAbortedError) {
-    return tagged("callAborted", { message: value.message });
+    return tagged("callAborted", { message: wellFormedText(value.message) });
   }
   if (value instanceof GrainTaskCanceledError) {
-    return tagged("taskCanceled", { message: value.message });
+    return tagged("taskCanceled", { message: wellFormedText(value.message) });
   }
   if (value instanceof SiloAddress) {
+    assertWellFormedFields(path, "a silo address", value.podName, value.podUid, value.endpoint);
     return tagged("silo", {
       podName: value.podName,
       podUid: value.podUid,
@@ -686,6 +783,7 @@ function encodeInner(
   }
   const ref = grainReferenceIdentity(value);
   if (ref !== undefined) {
+    assertWellFormedFields(path, "a grain id", ref.grainId.type, keyToString(ref.grainId.key));
     return tagged("grainRef", { interfaceId: ref.interfaceId, ...grainIdFields(ref.grainId) });
   }
 
@@ -695,9 +793,21 @@ function encodeInner(
     seen.add(value);
     try {
       const fields = surrogate.encode(value);
+      const keys = Object.keys(fields);
+      assertWellFormedKeys(keys, path);
+      if (keys.some(collidesWithEnvelope)) {
+        // A field named like the envelope's own keys would overwrite its tag or version, and
+        // `__proto__` would set a prototype instead of adding a key. Such a surrogate's fields
+        // travel as data, like the `plainObject` escape's entries; a surrogate with no such
+        // field keeps the flat shape (and so does every payload already written).
+        const entries = keys.map((k) => [
+          k,
+          encodeElement(fields[k], seen, `${path}.${k}`, options),
+        ]);
+        return tagged("surrogateFields", { surrogate: surrogate.tag, entries });
+      }
       const out: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(fields))
-        out[k] = encodeInner(v, seen, `${path}.${k}`, options);
+      for (const k of keys) out[k] = encodeInner(fields[k], seen, `${path}.${k}`, options);
       return tagged(surrogate.tag, out);
     } finally {
       seen.delete(value);
@@ -756,7 +866,11 @@ function encodeInner(
     }
     seen.add(value);
     try {
-      return value.map((v, i) => encodeElement(v, seen, `${path}[${i}]`, options));
+      // `Array.from`, not `value.map`: `map` follows `Symbol.species`, so a subclass would keep
+      // its class here and be flattened only by a transport.
+      return Array.from(value as unknown[], (v, i) =>
+        encodeElement(v, seen, `${path}[${i}]`, options),
+      );
     } finally {
       seen.delete(value);
     }
@@ -775,6 +889,7 @@ function encodeInner(
     try {
       const properties: Record<string, unknown> = {};
       for (const [k, v] of Object.entries(value)) {
+        assertWellFormed(k, path, "an object key");
         // `name` and `message` travel as dedicated fields; `stack` travels as its own dedicated
         // field below (not as a generic property); `cause` is a spec-defined NON-enumerable own
         // property normally, so this loop never sees it — but a caller can still assign one
@@ -788,8 +903,8 @@ function encodeInner(
         if (k === "errors" && value instanceof AggregateError) continue;
         setOwn(properties, k, encodeInner(v, seen, `${path}.${k}`, options));
       }
-      const name = typeof value.name === "string" ? value.name : "Error";
-      const fields: Record<string, unknown> = { name, message: value.message };
+      const name = typeof value.name === "string" ? wellFormedText(value.name) : "Error";
+      const fields: Record<string, unknown> = { name, message: wellFormedText(value.message) };
       // Only a value that genuinely IS the Thresh class of that name may claim it; see
       // `knownErrorClasses`. An application error that merely shares the name goes unmarked and
       // rebuilds as the fallback, never as a `ThreshRuntimeError`.
@@ -804,9 +919,9 @@ function encodeInner(
       // `CircularReferenceError` a cycle anywhere else in the graph gets.
       if ("cause" in value)
         fields.cause = encodeElement(value.cause, seen, `${path}.cause`, options);
-      if (typeof value.stack === "string") fields.stack = capStack(value.stack);
+      if (typeof value.stack === "string") fields.stack = wellFormedText(capStack(value.stack));
       if (value instanceof AggregateError) {
-        fields.errors = value.errors.map((e, i) =>
+        fields.errors = Array.from(value.errors as unknown[], (e, i) =>
           encodeElement(e, seen, `${path}.errors[${i}]`, options),
         );
       }
@@ -820,6 +935,7 @@ function encodeInner(
     seen.add(value);
     try {
       const keys = Object.keys(value);
+      assertWellFormedKeys(keys, path);
       if (needsEscape(keys)) {
         const source = value as Record<string, unknown>;
         // `encodeElement`: an `undefined` member is a PRESENT key here, and the pair array has no
@@ -844,8 +960,10 @@ function encodeInner(
 
 /** Reverse `encodeValue`, rehydrating value types (and, optionally, grain refs). */
 export function decodeValue(value: unknown, ctx: CodecContext = {}): unknown {
-  if (value instanceof Uint8Array) return value;
-  if (Array.isArray(value)) return value.map((v) => decodeValue(v, ctx));
+  // A fresh, exact-length copy: msgpack hands back a view into the whole message buffer, which
+  // would keep it alive and expose its neighbouring bytes through `.buffer`.
+  if (value instanceof Uint8Array) return new Uint8Array(value);
+  if (Array.isArray(value)) return Array.from(value as unknown[], (v) => decodeValue(v, ctx));
   if (value === null || typeof value !== "object") return value;
 
   const obj = value as Record<string, unknown>;
@@ -864,7 +982,15 @@ export function decodeValue(value: unknown, ctx: CodecContext = {}): unknown {
       case "bigint":
         return BigInt(obj.value as string);
       case "date":
-        return new Date(obj.value as number);
+        // A non-finite time travels as a `nonFinite` envelope; a finite one is the bare number.
+        return new Date(decodeValue(obj.value, ctx) as number);
+      case "nonFinite": {
+        const n = typeof obj.value === "string" ? NON_FINITE_VALUES.get(obj.value) : undefined;
+        if (n === undefined) {
+          throw new Error(`decodeValue: malformed nonFinite envelope (${String(obj.value)})`);
+        }
+        return n;
+      }
       case "bytes":
         return base64ToBytes(obj.value as string);
       case "guid":
@@ -883,15 +1009,15 @@ export function decodeValue(value: unknown, ctx: CodecContext = {}): unknown {
       case "negZero":
         return -0;
       case "typedArray": {
-        const kind = obj.kind as string;
-        const ctor = TYPED_ARRAY_CTORS[kind];
+        const kind = obj.kind;
+        const ctor = typedArrayConstructor(kind);
         if (ctor === undefined) {
-          throw new Error(`decodeValue: unknown typed array kind "${kind}"`);
+          throw new Error(`decodeValue: unknown typed array kind "${String(kind)}"`);
         }
         if (!Array.isArray(obj.values)) {
-          throw new Error(`decodeValue: malformed typed array envelope (kind "${kind}")`);
+          throw new Error(`decodeValue: malformed typed array envelope (kind "${String(kind)}")`);
         }
-        const values = obj.values.map((v) => decodeValue(v, ctx));
+        const values = Array.from(obj.values as unknown[], (v) => decodeValue(v, ctx));
         return new ctor(values as (number | bigint)[]);
       }
       case "domException":
@@ -969,6 +1095,26 @@ export function decodeValue(value: unknown, ctx: CodecContext = {}): unknown {
           interfaceId: obj.interfaceId as number,
         };
         return ctx.resolveGrainReference ? ctx.resolveGrainReference(identity) : identity;
+      }
+      case "surrogateFields": {
+        if (!Array.isArray(obj.entries)) {
+          throw new Error(
+            "decodeValue: malformed surrogateFields envelope (entries is not an array)",
+          );
+        }
+        const fields: Record<string, unknown> = {};
+        for (const entry of obj.entries as unknown[]) {
+          if (!Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== "string") {
+            throw new Error(
+              "decodeValue: malformed surrogateFields envelope (entry is not a pair)",
+            );
+          }
+          setOwn(fields, entry[0], decodeValue(entry[1], ctx));
+        }
+        const surrogate =
+          typeof obj.surrogate === "string" ? surrogates.get(obj.surrogate) : undefined;
+        // An unregistered surrogate degrades to its fields, as an unknown flat tag does.
+        return surrogate === undefined ? fields : surrogate.decode(fields, ctx);
       }
       default: {
         const surrogate = surrogates.get(tag);
