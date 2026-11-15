@@ -160,7 +160,8 @@ export class KubernetesMembership implements MembershipService {
    */
   refresh(version: number): Promise<void> {
     if (this.current().version >= version) return Promise.resolve();
-    if (this.stopped) return Promise.reject(this.refreshFailure(version, "the service has stopped"));
+    if (this.stopped)
+      return Promise.reject(this.refreshFailure(version, "the service has stopped"));
     const inFlight = this.refreshing;
     if (inFlight !== undefined && inFlight.version >= version) return inFlight.done;
     const abort = new AbortController();
