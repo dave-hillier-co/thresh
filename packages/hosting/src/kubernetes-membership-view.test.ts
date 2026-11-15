@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { defineGrain } from "@thresh/core/define-grain";
 import { GrainId } from "@thresh/core/grain-id";
+import { castGrainReference } from "@thresh/core/grain-reference";
 import type { ReminderEntry } from "@thresh/core/reminder";
 import { SiloAddress } from "@thresh/core/silo-address";
 import {
@@ -11,6 +12,7 @@ import {
 import { KubernetesEndpointWatch } from "@thresh/clustering-k8s/kubernetes-endpoint-watch";
 import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
 import { MemoryReminderTable } from "@thresh/reminders/memory-reminder-table";
+import { IGrainManagementExtension } from "@thresh/runtime/grain-management-extension";
 import { createSilo, type SiloBuilder } from "@thresh/hosting/silo-builder";
 import type { SiloHost } from "@thresh/hosting/silo-host";
 
@@ -250,6 +252,52 @@ describe("a silo joining under load", () => {
     }
   }, 60_000);
 });
+describe("a draining silo", () => {
+  it("creates no activation, keeps serving its own, and has a new grain placed on an active silo", async () => {
+    const c = cluster();
+    const a = c.silo({ name: "silo-a", uid: uid(), ip: "10.0.0.1" });
+    const b = c.silo({ name: "silo-b", uid: uid(), ip: "10.0.0.2" });
+    await c.join(a);
+    await c.join(b);
+    const keys = Array.from({ length: 60 }, (_, i) => `d${i}`);
+    for (const k of keys) expect(await a.host.getGrain(Counter, k).inc()).toBe(1);
+    // A second round through A fills its location cache for every key.
+    for (const k of keys) expect(await a.host.getGrain(Counter, k).inc()).toBe(2);
+    const onB = keys.filter((k) => b.host.isActive(grainId(k)));
+    expect(onB.length).toBeGreaterThan(1);
+
+    c.api.setTerminating(b.pod.name);
+    await settle();
+
+    // It keeps serving what it hosts, through either silo.
+    const served = await Promise.all(
+      onB.map((k, i) => (i % 2 === 0 ? a : b).host.getGrain(Counter, k).inc()),
+    );
+    expect(served).toEqual(onB.map(() => 3));
+    expect(onB.filter((k) => !b.host.isActive(grainId(k)))).toEqual([]);
+
+    // A grain first called through it is activated on the active silo.
+    const fresh = Array.from({ length: 20 }, (_, i) => `drain-fresh-${i}`);
+    const freshResults = await Promise.all(fresh.map((k) => b.host.getGrain(Counter, k).inc()));
+    expect(freshResults).toEqual(fresh.map(() => 1));
+    expect(fresh.filter((k) => b.host.isActive(grainId(k)))).toEqual([]);
+    expect(fresh.filter((k) => !a.host.isActive(grainId(k)))).toEqual([]);
+
+    // A grain whose activation on it has gone is not re-created there, though A's cache still
+    // points at it: the call is refused before it runs, and A re-resolves.
+    const gone = onB[0]!;
+    await castGrainReference(
+      b.host.getGrain(Counter, gone),
+      IGrainManagementExtension,
+    ).deactivateOnIdle();
+    await until(() => !b.host.isActive(grainId(gone)), "the grain to deactivate on B");
+    await settle();
+    expect(await a.host.getGrain(Counter, gone).inc()).toBe(1);
+    expect(b.host.isActive(grainId(gone))).toBe(false);
+    expect(a.host.isActive(grainId(gone))).toBe(true);
+  });
+});
+
 describe("the view a silo applies", () => {
   it("reflects every view change published while an ownership hook was blocked", async () => {
     const c = cluster();
@@ -337,6 +385,37 @@ describe("the view a silo applies", () => {
     );
     const expected = keys.map((k) => (onDeparted.includes(k) ? 1 : 3));
     expect(results).toEqual(expected);
+  });
+
+  it("converges on one version with a silo that listed after a slice deletion it never saw", async () => {
+    const c = cluster();
+    const a = c.silo({ name: "silo-a", uid: uid(), ip: "10.0.0.1" });
+    const b = c.silo({ name: "silo-b", uid: uid(), ip: "10.0.0.2" });
+    await c.join(a);
+    await c.join(b);
+    const late = c.silo({ name: "silo-late", uid: uid(), ip: "10.0.0.3" });
+    c.api.setReady(late.pod.name, true);
+    // A slice of the service comes and goes before the late silo lists: A and B see the
+    // deletion's revision, the late silo only the slices that are left.
+    c.api.addEmptySlice("silo-svc-extra");
+    c.api.deleteEmptySlice("silo-svc-extra");
+    await settle();
+    await late.host.start();
+    expect(membershipVersionOf(late.host)).toBeLessThan(membershipVersionOf(a.host));
+
+    // No further slice write: the late silo catches up when its peers' calls show it is behind.
+    const results = await Promise.all(
+      Array.from({ length: 60 }, (_, i) =>
+        (i % 2 === 0 ? a : b).host
+          .getGrain(Counter, `after-deletion-${i}`)
+          .inc()
+          .catch((e: unknown) => `error: ${String(e)}`),
+      ),
+    );
+    expect(results.filter((r) => r !== 1)).toEqual([]);
+    await settle();
+    expect(membershipVersionOf(late.host)).toBe(membershipVersionOf(a.host));
+    expect(nodeOf(late.host).appliedViewVersion).toBe(nodeOf(a.host).appliedViewVersion);
   });
 
   it("carries the same version on silos with identical views, however many events each saw", async () => {

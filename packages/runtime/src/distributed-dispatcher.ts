@@ -33,6 +33,11 @@ import type {
 /** Orleans `SiloMessagingOptions.MaxForwardCount` — see `forwardTo`. */
 const MAX_FORWARD_COUNT = 2;
 
+/** Whether `err` is a target's refusal, before execution, of a call it would not activate. */
+function refusedAsOutOfRing(err: unknown): boolean {
+  return err instanceof RejectionError && err.kind === "staleView" && mayResend(err);
+}
+
 /** Sends a request to a remote silo and awaits its response. */
 export interface RemoteInvoker {
   send(silo: SiloAddress, req: InvocationRequest): Promise<unknown>;
@@ -82,6 +87,14 @@ export interface DistributedDispatcherDeps {
    * `ActivationRepartitioner.recordLocalEdge`.
    */
   recordEdge?: (req: InvocationRequest, targetSilo: SiloAddress) => void;
+  /**
+   * Whether this silo may create an activation now: it is in the ring of the view it has
+   * applied (Orleans `Catalog.GetOrCreateActivation` creates only while the silo's own status
+   * is active). When it answers `false`, a call that would activate a grain here is refused
+   * before execution so its caller re-resolves; an activation already here keeps serving.
+   * Absent, every claim may activate.
+   */
+  mayActivate?: () => boolean;
   /**
    * Where a detached `oneWay` delivery's failure is reported (see
    * `dispatchDetachingOneWay`). Optional so a test can wire a dispatcher
@@ -284,6 +297,15 @@ export class DistributedDispatcher implements Dispatcher {
     req: InvocationRequest,
     opts?: InvokeCallOptions,
   ): Promise<unknown> {
+    if (this.deps.mayActivate?.() === false) {
+      throw refusedBeforeExecution(
+        new RejectionError(
+          `${this.deps.local.toString()} is not in its ring and creates no activation of ` +
+            req.target.toString(),
+          "staleView",
+        ),
+      );
+    }
     const key = req.target.toString();
     const oneWay = req.options.oneWay === true;
     while (oneWay) {
@@ -476,7 +498,17 @@ export class DistributedDispatcher implements Dispatcher {
     return admit(act, req, opts);
   }
 
-  private async placeAndInvoke(req: InvocationRequest, opts?: InvokeCallOptions): Promise<unknown> {
+  /**
+   * Place the grain and send the call to the chosen silo. A target that refuses it before
+   * execution as stale (`staleView`, resendable — a silo that has left the ring in its own view
+   * and creates no activation) is excluded and the placement re-run once, so the caller
+   * re-resolves rather than failing on a view that is a moment behind the target's.
+   */
+  private async placeAndInvoke(
+    req: InvocationRequest,
+    opts?: InvokeCallOptions,
+    exclude: readonly SiloAddress[] = [],
+  ): Promise<unknown> {
     // The whole placement decision — filtering, strategy choice, and (if we
     // land locally) directory registration + activation — runs inside one
     // "place grain" span (Runtime source), matching Orleans' `PlaceGrainAsync`
@@ -498,6 +530,7 @@ export class DistributedDispatcher implements Dispatcher {
       const targetSilo = await selectPlacementTarget({
         grainType: req.target.type,
         candidates: this.deps.activeSilos(),
+        exclude,
         filters: this.deps.filtersFor(req.target.type),
         strategy: this.deps.placementFor(req.target.type),
         context: ctx,
@@ -515,9 +548,14 @@ export class DistributedDispatcher implements Dispatcher {
         );
       }
       this.deps.recordEdge?.(req, targetSilo);
-      return targetSilo.equals(this.deps.local)
-        ? this.deliverLocalWithinPlacementSpan(req, opts)
-        : this.deps.remote.send(targetSilo, req);
+      if (targetSilo.equals(this.deps.local))
+        return this.deliverLocalWithinPlacementSpan(req, opts);
+      try {
+        return await this.deps.remote.send(targetSilo, req);
+      } catch (err) {
+        if (exclude.length > 0 || !refusedAsOutOfRing(err)) throw err;
+        return this.placeAndInvoke(req, opts, [targetSilo]);
+      }
     });
   }
 

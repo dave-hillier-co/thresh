@@ -102,6 +102,32 @@ describe("TestCluster on Kubernetes membership", () => {
     expect(cluster.viewOf(a).appliedVersion).toBe(cluster.viewOf(b).appliedVersion);
   });
 
+  it("catches a silo up through refresh when a peer's call shows it is behind, with no further slice write", async () => {
+    const cluster = await start({ initialSilos: 3 });
+    const [a, b, c] = cluster.silos as [TestSiloHandle, TestSiloHandle, TestSiloHandle];
+    cluster.kubernetes.hold(a);
+    await cluster.kubernetes.markNotReady(c);
+    expect(cluster.viewOf(a).membership.version).toBeLessThan(cluster.viewOf(b).membership.version);
+
+    // B's directory operations reach A carrying B's version; A refreshes to it.
+    const results = await Promise.all(
+      Array.from({ length: 40 }, (_, i) =>
+        b.host
+          .getGrain(Counter, `behind-${i}`)
+          .inc()
+          .catch((e: unknown) => `error: ${String(e)}`),
+      ),
+    );
+    expect(results.filter((r) => r !== 1)).toEqual([]);
+    expect(cluster.viewOf(a).membership.version).toBe(cluster.viewOf(b).membership.version);
+    expect(cluster.viewOf(a).membership.silos).toEqual(cluster.viewOf(b).membership.silos);
+
+    // The events held all along are older than what A now holds, and change nothing.
+    const caughtUp = cluster.viewOf(a).membership;
+    await cluster.kubernetes.release(a);
+    expect(cluster.viewOf(a).membership).toEqual(caughtUp);
+  });
+
   it("catches a lagging silo up on a forced relist, held events and all", async () => {
     const cluster = await start({ initialSilos: 3 });
     const [a, b, c] = cluster.silos as [TestSiloHandle, TestSiloHandle, TestSiloHandle];

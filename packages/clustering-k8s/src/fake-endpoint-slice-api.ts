@@ -48,6 +48,8 @@ export class FakeEndpointSliceApi {
   private revision = 1;
   private sliceRevision = 1;
   private readonly podsByName = new Map<string, FakePod>();
+  /** Further slices of the service that list no endpoint, by name, with their last revision. */
+  private readonly emptySlices = new Map<string, number>();
   private readonly watchers = new Set<Watcher>();
 
   constructor(private readonly port = 11111) {}
@@ -91,6 +93,23 @@ export class FakeEndpointSliceApi {
     return [...this.podsByName.values()];
   }
 
+  /**
+   * Create a further slice of the service that lists no endpoint (the EndpointSlice controller
+   * splits and merges slices as endpoints come and go), publishing an ADDED event.
+   */
+  addEmptySlice(name: string): void {
+    this.revision += 1;
+    this.emptySlices.set(name, this.revision);
+    this.broadcast("ADDED", this.emptySlice(name, this.revision));
+  }
+
+  /** Delete a slice made by `addEmptySlice`, publishing a DELETED event at the deletion's revision. */
+  deleteEmptySlice(name: string): void {
+    if (!this.emptySlices.delete(name)) throw new Error(`no slice ${name}`);
+    this.revision += 1;
+    this.broadcast("DELETED", this.emptySlice(name, this.revision));
+  }
+
   /** A write to some other object in the cluster: the global revision moves, the slice does not. */
   unrelatedWrite(): void {
     this.revision += 1;
@@ -103,7 +122,8 @@ export class FakeEndpointSliceApi {
 
   /** @internal */
   list(): EndpointSliceListResult {
-    return { items: [this.slice()], resourceVersion: String(this.revision) };
+    const empty = [...this.emptySlices].map(([name, revision]) => this.emptySlice(name, revision));
+    return { items: [this.slice(), ...empty], resourceVersion: String(this.revision) };
   }
 
   /** @internal */
@@ -119,12 +139,23 @@ export class FakeEndpointSliceApi {
   private writeSlice(): void {
     this.revision += 1;
     this.sliceRevision = this.revision;
-    const slice = this.slice();
+    this.broadcast("MODIFIED", this.slice());
+  }
+
+  private broadcast(type: WatchEventType, slice: RawEndpointSlice): void {
     for (const watcher of this.watchers) {
-      const deliver = (): void => watcher.onEvent("MODIFIED", slice);
+      const deliver = (): void => watcher.onEvent(type, slice);
       if (watcher.held !== undefined) watcher.held.push(deliver);
       else deliver();
     }
+  }
+
+  private emptySlice(name: string, revision: number): RawEndpointSlice {
+    return {
+      metadata: { name, resourceVersion: String(revision) },
+      ports: [{ name: "silo", port: this.port }],
+      endpoints: [],
+    };
   }
 
   private slice(): RawEndpointSlice {

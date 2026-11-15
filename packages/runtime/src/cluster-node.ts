@@ -897,6 +897,7 @@ export class ClusterNode {
       catalog: this.catalog,
       remote: { send: (silo, req) => this.sendRemote(silo, req) },
       activeSilos: () => ringSilos(this.options.membership.current()),
+      mayActivate: () => this.mayActivate(),
       placementFor: (grainType) => this.placementFor(grainType),
       filtersFor: (grainType) => this.filtersFor(grainType),
       placementContext: () => this.placementContext(),
@@ -1670,6 +1671,17 @@ export class ClusterNode {
     return new ConsistentHashRing(ringSilos(this.options.membership.current()));
   }
 
+  /**
+   * Whether this silo may create an application-grain activation: it is in the ring of the view
+   * it has APPLIED. A joining silo while a peer is active, and a draining one, are members that
+   * keep serving what they host but create nothing new, so a joiner and its peers never each
+   * own a range at once and a draining silo stops placing on itself (Orleans
+   * `Catalog.GetOrCreateActivation`, which creates only while the silo is active).
+   */
+  private mayActivate(): boolean {
+    return this.ring.silos().some((s) => s.equals(this.options.local));
+  }
+
   private ownsNow(grainId: GrainId): boolean {
     return this.ring.ownerOf(grainId).equals(this.options.local);
   }
@@ -1694,12 +1706,28 @@ export class ClusterNode {
     );
   }
 
-  /** Resolve `appliedVersion` reaching `version`; self-advance if our view already shows it. */
+  /**
+   * Resolve `appliedVersion` reaching `version`; self-advance if our view already shows it.
+   * Otherwise a peer has shown that this silo's view is behind: ask the membership service to
+   * catch up (`MembershipService.refresh`, Orleans `ClusterMembershipService.Refresh`) and apply
+   * what it brings, rather than waiting for this silo's own watch to deliver some unrelated
+   * change. Bounded by the call timeout either way.
+   */
   private async awaitView(version: number): Promise<void> {
     if (this.appliedVersion >= version) return;
-    if (this.options.membership.current().version >= version) {
+    const membership = this.options.membership;
+    if (membership.current().version >= version) {
       this.updateView();
       if (this.appliedVersion >= version) return;
+    } else {
+      void membership.refresh(version).then(
+        () => {
+          if (this.appliedVersion < version && membership.current().version >= version) {
+            this.updateView();
+          }
+        },
+        () => undefined,
+      );
     }
     await new Promise<void>((resolve, reject) => {
       const onResolve = (): void => {
@@ -2396,8 +2424,12 @@ export class ClusterNode {
     }
   }
 
-  /** Take over a migrating activation here, rehydrating its state and claiming the directory entry. */
+  /**
+   * Take over a migrating activation here, rehydrating its state and claiming the directory
+   * entry. Declined by a silo outside its ring, which creates no activation (`mayActivate`).
+   */
   private async acceptMigration(payload: MigrationPayload): Promise<boolean> {
+    if (!this.mayActivate()) return false;
     const activation = await this.catalog.activateMigrated(
       payload.grainId,
       newActivationId(),
