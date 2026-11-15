@@ -4,6 +4,7 @@ import type { GrainInterface } from "@thresh/core/grain-interface";
 import type { GrainKeyKind } from "@thresh/core/grain-key";
 import type { KeyTypeOf } from "@thresh/core/key-kinds";
 import { type Logger, defaultLogger, safeLogger } from "@thresh/core/logger";
+import { systemTimeProvider, type TimeProvider } from "@thresh/core/time-provider";
 import {
   localStandingOf,
   type MembershipService,
@@ -24,6 +25,9 @@ import { DEFAULT_STOP_BUDGET_MS, GracefulShutdown } from "@thresh/hosting/gracef
 import type { HealthCheck } from "@thresh/hosting/health-check";
 import type { HealthServer } from "@thresh/hosting/health-server";
 import type { SelfProbeWorker } from "@thresh/hosting/self-probe";
+
+/** Orleans' `ClusterMembershipOptions.MaxJoinAttemptTime` default: five minutes. */
+export const DEFAULT_JOIN_TIMEOUT_MS = 5 * 60_000;
 
 /**
  * Slack past the stop budget before the node's stop is abandoned. The node enforces the budget
@@ -81,6 +85,14 @@ export interface SiloHostParts {
    */
   stopBudgetMs?: number;
   membership: MembershipService;
+  /**
+   * How long start waits for the membership service to list this silo before it fails (Orleans
+   * `ClusterMembershipOptions.MaxJoinAttemptTime`, five minutes). Unset falls back to
+   * `DEFAULT_JOIN_TIMEOUT_MS`.
+   */
+  joinTimeoutMs?: number;
+  /** The clock the join wait runs on (defaults to the system clock). */
+  time?: TimeProvider;
   reminderService?: ReminderService | undefined;
   /** The elected activation-rebalancer worker, started/stopped with the host. */
   rebalancerWorker?: ActivationRebalancerWorker | undefined;
@@ -358,6 +370,20 @@ export class SiloHost {
       },
       stopBudgetMs + NODE_STOP_BACKSTOP_MS,
     );
+    // Orleans' `MembershipAgent` joins the table at `AfterRuntimeGrainServices`, before the
+    // application's startup tasks run. Here the join is the EndpointSlice controller listing this
+    // pod: until it does, the view is empty, there is no ring, and a startup task that calls a
+    // grain would fail. Wait for the listing, then apply the view it brought and settle the join
+    // recovery of the ranges it gave this silo.
+    subscribe({
+      name: "membership listing",
+      stage: ServiceLifecycleStage.AfterRuntimeGrainServices,
+      start: async () => {
+        await this.awaitListed();
+        if (node.appliedViewVersion !== membership.current().version) node.updateView();
+        await node.recoverySettled();
+      },
+    });
     subscribe({
       name: "startupTasks",
       stage: ServiceLifecycleStage.ApplicationServices,
@@ -434,6 +460,40 @@ export class SiloHost {
       stop: async () => shutdown.beginDrain(),
     });
     return subject;
+  }
+
+  /**
+   * Resolve once the membership service lists this silo (`localStandingOf`); a silo that is
+   * already listed (static membership) does not wait at all. Rejects when the join timeout
+   * elapses first, and leaves no timer armed either way.
+   */
+  private async awaitListed(): Promise<void> {
+    const { membership } = this.parts;
+    if (localStandingOf(membership) !== "unlisted") return;
+    const time = this.parts.time ?? systemTimeProvider;
+    const timeoutMs = this.parts.joinTimeoutMs ?? DEFAULT_JOIN_TIMEOUT_MS;
+    const updates = membership.updates()[Symbol.asyncIterator]();
+    let timer: ReturnType<TimeProvider["setTimer"]> | undefined;
+    const expired = new Promise<"expired">((resolve) => {
+      timer = time.setTimer(() => resolve("expired"), timeoutMs);
+    });
+    try {
+      while (localStandingOf(membership) === "unlisted") {
+        const next = await Promise.race([updates.next(), expired]);
+        // A feed that has ended will say nothing more: only the timeout is left to wait for.
+        if (next !== "expired" && next.done === true) await expired;
+        if (next === "expired" || next.done === true) {
+          throw new Error(
+            `silo ${membership.localSilo().toString()} was never listed by the membership ` +
+              `service within the join timeout of ${timeoutMs}ms: its pod is not in the ` +
+              "EndpointSlices the silo watches. Check that the Service selector matches the " +
+              "pod's labels and that the pod's endpoint appears in the Service's EndpointSlices.",
+          );
+        }
+      }
+    } finally {
+      time.clearTimer(timer);
+    }
   }
 
   /**

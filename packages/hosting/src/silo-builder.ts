@@ -344,6 +344,14 @@ export interface SiloConfig {
    */
   gracefulShutdownMs?: number;
   /**
+   * How long start waits for the membership service to list this silo before it fails (Orleans
+   * `ClusterMembershipOptions.MaxJoinAttemptTime`; defaults to five minutes). Under Kubernetes
+   * membership a silo is not in its own view until the EndpointSlice controller lists its pod, and
+   * start-up tasks run only once it is; static membership lists it at once and never waits. On
+   * expiry start fails and rolls back, naming the Service selector and pod labels to check.
+   */
+  joinTimeout?: Duration;
+  /**
    * `GracefulShutdown`'s overall stop budget — `gracefulShutdownMs` plus the
    * node's own deactivation sweep together fit inside this, so a slow
    * `onDeactivate` hook can't push the total stop past the process's own
@@ -2383,6 +2391,10 @@ export class SiloBuilder {
         this.config.gracefulShutdownMs ??
         (this.membership instanceof KubernetesMembership ? DEFAULT_GRACE_MS : 0),
       ...(this.config.stopBudgetMs !== undefined ? { stopBudgetMs: this.config.stopBudgetMs } : {}),
+      ...(this.config.joinTimeout !== undefined
+        ? { joinTimeoutMs: durationToMs(this.config.joinTimeout) }
+        : {}),
+      ...(this.config.time !== undefined ? { time: this.config.time } : {}),
       membership: this.membership,
       reminderService,
       rebalancerWorker,

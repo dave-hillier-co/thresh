@@ -41,7 +41,7 @@ function buildHost(order: string[], lifecycle: SiloLifecycleParticipant[]): Silo
     healthPort: undefined,
     shutdown,
     membership: {
-      current: () => ({ silos: [], version: 0 }),
+      current: () => ({ silos: [{ address: LOCAL, status: "active" }], version: 0 }),
       updates: async function* () {},
       localSilo: () => LOCAL,
     } as never,
@@ -141,7 +141,7 @@ describe("SiloHost hook failures are logged, not only thrown", () => {
       healthPort: undefined,
       shutdown: new GracefulShutdown(health, node, { delay: () => Promise.resolve() }),
       membership: {
-        current: () => ({ silos: [], version: 0 }),
+        current: () => ({ silos: [{ address: LOCAL, status: "active" }], version: 0 }),
         updates: async function* () {},
         localSilo: () => LOCAL,
       } as never,
