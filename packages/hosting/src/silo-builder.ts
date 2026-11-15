@@ -1619,25 +1619,29 @@ export class SiloBuilder {
   useKubernetesMembership(watch: EndpointWatch, options?: KubernetesMembershipOptions): this {
     // The refresh is bounded by the silo's call timeout and runs on its clock, unless the caller
     // chose otherwise: a refresh outliving the call that awaits it holds a pending entry for nothing.
-    this.membership = new KubernetesMembership(this.config.local, watch, {
+    this.singleSiloView = false;
+    this.staticViewWithoutLiveness = false;
+    const lifecycle = watch as Partial<{ start(): Promise<void>; stop(): void }>;
+    const membership = new KubernetesMembership(this.config.local, watch, {
       ...(this.config.callTimeout !== undefined
         ? { refreshTimeoutMs: durationToMs(this.config.callTimeout) }
         : {}),
       ...(this.config.time !== undefined ? { time: this.config.time } : {}),
       ...options,
     });
-    this.singleSiloView = false;
-    this.staticViewWithoutLiveness = false;
-    const lifecycle = watch as Partial<{ start(): Promise<void>; stop(): void }>;
+    this.membership = membership;
     this.endpointWatch = watch;
-    if (typeof lifecycle.start === "function" || typeof lifecycle.stop === "function") {
-      this.lifecycle.push({
-        name: "membership watch",
-        stage: ServiceLifecycleStage.RuntimeInitialize,
-        ...(typeof lifecycle.start === "function" ? { start: () => lifecycle.start!() } : {}),
-        ...(typeof lifecycle.stop === "function" ? { stop: async () => lifecycle.stop!() } : {}),
-      });
-    }
+    // Always registered: stopping the silo settles every refresh still pending on the service,
+    // whether or not the watch has a lifecycle of its own.
+    this.lifecycle.push({
+      name: "membership watch",
+      stage: ServiceLifecycleStage.RuntimeInitialize,
+      ...(typeof lifecycle.start === "function" ? { start: () => lifecycle.start!() } : {}),
+      stop: async () => {
+        membership.stop();
+        lifecycle.stop?.();
+      },
+    });
     return this;
   }
 

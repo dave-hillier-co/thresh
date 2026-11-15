@@ -347,6 +347,38 @@ describe("a silo whose pod is not listed when it starts", () => {
   });
 });
 
+describe("a refresh pending when the silo stops", () => {
+  it("is rejected as a stale view, and no timer or pending refresh outlives the host", async () => {
+    const c = cluster();
+    const clock = new PendingTimerTracker(new FakeTimeProvider());
+    const a = c.silo({ name: "silo-a", uid: uid(), ip: "10.0.0.1" }, undefined, {
+      config: { time: clock },
+    });
+    await a.host.start();
+    const membership = (
+      a.host as unknown as {
+        parts: {
+          membership: {
+            current(): { version: number };
+            refresh(version: number): Promise<unknown>;
+          };
+        };
+      }
+    ).parts.membership;
+    const refresh = membership.refresh(membership.current().version + 1000).then(
+      () => undefined,
+      (err: unknown) => err,
+    );
+    await settle(20);
+    await a.host.stop();
+    const err = await refresh;
+    expect(err).toBeInstanceOf(RejectionError);
+    expect((err as RejectionError).kind).toBe("staleView");
+    await settle(5);
+    expect(clock.pendingTimers()).toEqual([]);
+  });
+});
+
 describe("a silo joining under load", () => {
   it("owns nothing and activates nothing until it is ready, and never activates a grain twice (20 runs)", async () => {
     const existing = Array.from({ length: 30 }, (_, i) => `k${i}`);
