@@ -1,3 +1,4 @@
+import { RejectionError } from "@thresh/core/errors";
 import {
   MembershipFeed,
   type LocalStanding,
@@ -6,6 +7,7 @@ import {
   type SiloMember,
 } from "@thresh/core/membership";
 import type { SiloAddress } from "@thresh/core/silo-address";
+import { systemTimeProvider, type TimeProvider } from "@thresh/core/time-provider";
 import {
   metadataFromSlices,
   siloMembersFromSlices,
@@ -14,6 +16,15 @@ import {
 
 /** How long `refresh` waits for the watch to deliver a version before it re-lists. */
 const DEFAULT_REFRESH_WATCH_GRACE_MS = 100;
+
+/**
+ * How long `refresh` may take in all before it gives up. The default is the runtime's default
+ * call timeout (30s): a refresh is awaited by a call (`ClusterNode.awaitView`) that is itself
+ * bounded by the call timeout, so a refresh outliving it only holds a pending entry for a caller
+ * that has already failed. `SiloBuilder.useKubernetesMembership` passes the silo's configured
+ * call timeout instead when none is set here.
+ */
+const DEFAULT_REFRESH_TIMEOUT_MS = 30_000;
 
 /**
  * Source of EndpointSlice updates. The production implementation wraps the
@@ -55,6 +66,15 @@ export interface KubernetesMembershipOptions {
    * deletion missed while the watch was down).
    */
   refreshWatchGraceMs?: number;
+  /**
+   * The longest a `refresh` may take in all (defaults to 30s, the default call timeout; the
+   * silo builder supplies its configured call timeout). When it elapses without the view
+   * reaching the requested version the refresh rejects with the retriable `staleView` rejection,
+   * and nothing of it is left pending.
+   */
+  refreshTimeoutMs?: number;
+  /** The clock for the refresh grace and bound (defaults to the system clock). */
+  time?: TimeProvider;
 }
 
 /**
@@ -89,6 +109,13 @@ export class KubernetesMembership implements MembershipService {
   private readonly feed = new MembershipFeed({ version: 0, silos: [] });
   private readonly unsubscribe: () => void;
   private readonly refreshWatchGraceMs: number;
+  private readonly refreshTimeoutMs: number;
+  private readonly time: TimeProvider;
+  private stopped = false;
+  /** Waits for a version, woken when a published view reaches it. */
+  private readonly viewWaiters = new Set<{ version: number; wake: () => void }>();
+  /** Every refresh in flight, so `stop` can settle them. */
+  private readonly refreshes = new Set<AbortController>();
   private published = false;
   private standing: LocalStanding = "unlisted";
   /** The refresh in flight, shared by every caller asking for a version it covers. */
@@ -100,6 +127,8 @@ export class KubernetesMembership implements MembershipService {
     private readonly options: KubernetesMembershipOptions = {},
   ) {
     this.refreshWatchGraceMs = options.refreshWatchGraceMs ?? DEFAULT_REFRESH_WATCH_GRACE_MS;
+    this.refreshTimeoutMs = options.refreshTimeoutMs ?? DEFAULT_REFRESH_TIMEOUT_MS;
+    this.time = options.time ?? systemTimeProvider;
     this.unsubscribe = watch.subscribe((slices, revision) => this.onSlices(slices, revision));
   }
 
@@ -131,50 +160,103 @@ export class KubernetesMembership implements MembershipService {
    */
   refresh(version: number): Promise<void> {
     if (this.current().version >= version) return Promise.resolve();
+    if (this.stopped)
+      return Promise.reject(this.refreshFailure(version, "the service has stopped"));
     const inFlight = this.refreshing;
     if (inFlight !== undefined && inFlight.version >= version) return inFlight.done;
-    const done = this.catchUp(version).finally(() => {
+    const abort = new AbortController();
+    this.refreshes.add(abort);
+    const bound = this.time.setTimer(
+      () =>
+        abort.abort(
+          this.refreshFailure(version, `no view reached it within ${this.refreshTimeoutMs}ms`),
+        ),
+      this.refreshTimeoutMs,
+    );
+    const done = this.catchUp(version, abort.signal).finally(() => {
+      this.time.clearTimer(bound);
+      this.refreshes.delete(abort);
       if (this.refreshing?.done === done) this.refreshing = undefined;
     });
     this.refreshing = { version, done };
     return done;
   }
 
+  /**
+   * Stop following the watch and settle every refresh still pending (they reject with the
+   * retriable `staleView` rejection, as a refresh that timed out does); no timer or waiter
+   * of this service outlives it.
+   */
   stop(): void {
+    this.stopped = true;
     this.unsubscribe();
+    for (const abort of [...this.refreshes]) {
+      abort.abort(this.refreshFailure(this.current().version, "the service has stopped"));
+    }
   }
 
-  private async catchUp(version: number): Promise<void> {
-    if (await this.reached(version, this.refreshWatchGraceMs)) return;
+  private refreshFailure(version: number, why: string): RejectionError {
+    return new RejectionError(
+      `membership view could not be refreshed to ${version}: ${why}`,
+      "staleView",
+    );
+  }
+
+  private async catchUp(version: number, signal: AbortSignal): Promise<void> {
+    if (await this.reached(version, this.refreshWatchGraceMs, signal)) return;
     if (this.watch.relist !== undefined) {
-      const listRevision = await this.watch.relist().catch(() => undefined);
+      const listRevision = await settledOrAborted(
+        this.watch.relist().catch(() => undefined),
+        signal,
+      );
       const current = this.current();
       if (current.version >= version) return;
       if (listRevision !== undefined && listRevision >= version) {
-        this.feed.publish({ version, silos: current.silos });
+        this.publish({ version, silos: current.silos });
         return;
       }
     }
-    await this.reached(version, undefined);
+    await this.reached(version, undefined, signal);
   }
 
-  /** Whether the view reaches `version` within `timeoutMs` (forever when `undefined`). */
-  private async reached(version: number, timeoutMs: number | undefined): Promise<boolean> {
-    if (this.current().version >= version) return true;
-    const updates = this.feed.updates();
-    const arrived = (async (): Promise<boolean> => {
-      while (this.current().version < version) await updates.next();
-      return true;
-    })();
-    if (timeoutMs === undefined) return arrived;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const expired = new Promise<boolean>((resolve) => {
-      timer = setTimeout(() => resolve(false), timeoutMs);
+  /**
+   * Whether the view reaches `version` within `timeoutMs` (forever when `undefined`); rejects
+   * with the signal's reason when it aborts. Its timer and waiter are gone when it settles.
+   */
+  private reached(
+    version: number,
+    timeoutMs: number | undefined,
+    signal: AbortSignal,
+  ): Promise<boolean> {
+    if (this.current().version >= version) return Promise.resolve(true);
+    if (signal.aborted) return Promise.reject(signal.reason);
+    return new Promise<boolean>((resolve, reject) => {
+      let timer: ReturnType<TimeProvider["setTimer"]> | undefined;
+      const waiter = { version, wake: () => finish(true) };
+      const onAbort = (): void => {
+        cleanup();
+        reject(signal.reason);
+      };
+      const cleanup = (): void => {
+        if (timer !== undefined) this.time.clearTimer(timer);
+        this.viewWaiters.delete(waiter);
+        signal.removeEventListener("abort", onAbort);
+      };
+      const finish = (value: boolean): void => {
+        cleanup();
+        resolve(value);
+      };
+      this.viewWaiters.add(waiter);
+      signal.addEventListener("abort", onAbort, { once: true });
+      if (timeoutMs !== undefined) timer = this.time.setTimer(() => finish(false), timeoutMs);
     });
-    try {
-      return await Promise.race([arrived, expired]);
-    } finally {
-      clearTimeout(timer);
+  }
+
+  /** Publish a view and wake the refreshes waiting for a version it reaches. */
+  private publish(snapshot: MembershipSnapshot): void {
+    this.feed.publish(snapshot);
+    for (const waiter of [...this.viewWaiters]) {
+      if (snapshot.version >= waiter.version) waiter.wake();
     }
   }
 
@@ -199,7 +281,7 @@ export class KubernetesMembership implements MembershipService {
     if (listed && this.standing === "unlisted") this.standing = "listed";
     else if (!listed && this.standing === "listed") this.standing = "removed";
     this.published = true;
-    this.feed.publish({ version: Math.max(revision, previous.version), silos });
+    this.publish({ version: Math.max(revision, previous.version), silos });
   }
 }
 
@@ -218,4 +300,23 @@ function dedupeMembers(members: readonly SiloMember[]): SiloMember[] {
     seen.set(`${member.address.podName}#${member.address.podUid}`, member);
   }
   return [...seen.values()];
+}
+
+/** `promise`'s value, or a rejection with the signal's reason if it aborts first. */
+function settledOrAborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (err: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(err);
+      },
+    );
+  });
 }

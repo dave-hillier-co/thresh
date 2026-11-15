@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { RejectionError } from "@thresh/core/errors";
+import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
+import { PendingTimerTracker } from "@thresh/core/test-support/pending-timer-tracker";
 import { activeSilos, ringSilos, type SiloMember } from "@thresh/core/membership";
 import { SiloAddress } from "@thresh/core/silo-address";
 import {
@@ -492,6 +495,98 @@ describe("KubernetesMembership", () => {
       watch.emit([self], 21);
       await refreshed;
       expect(membership.current().version).toBe(21);
+    });
+
+    describe("bounded and stopped with the service", () => {
+      const unreachable = () => ({ slices: [self], revision: 9, list: 15 });
+
+      function build(refreshTimeoutMs?: number) {
+        const fake = new FakeTimeProvider();
+        const clock = new PendingTimerTracker(fake);
+        // Advance the clock, then let the promise chains it released run.
+        const advance = async (ms: number): Promise<void> => {
+          fake.advance(ms);
+          await new Promise((resolve) => setImmediate(resolve));
+        };
+        const watch = new RelistableWatch(unreachable);
+        const membership = new KubernetesMembership(local, watch, {
+          portName: "silo",
+          refreshWatchGraceMs: 0,
+          time: clock,
+          ...(refreshTimeoutMs !== undefined ? { refreshTimeoutMs } : {}),
+        });
+        watch.emit([self], 9);
+        return { clock, advance, watch, membership };
+      }
+
+      it("rejects with the retriable stale-view rejection when no list can prove the version", async () => {
+        const { clock, advance, watch, membership } = build(5_000);
+        const outcome = membership.refresh(20).then(
+          () => undefined,
+          (err: unknown) => err,
+        );
+        await advance(0);
+        expect(watch.relists).toBe(1);
+        await advance(4_999);
+        expect(membership.current().version).toBe(9);
+        await advance(1);
+        const err = await outcome;
+        expect(err).toBeInstanceOf(RejectionError);
+        expect((err as RejectionError).kind).toBe("staleView");
+        expect(clock.pendingTimers()).toEqual([]);
+      });
+
+      it("leaves no pending refresh behind once one has timed out", async () => {
+        const { advance, watch, membership } = build(1_000);
+        const first = membership.refresh(20).catch(() => undefined);
+        await advance(1_000);
+        await first;
+        // A second request for the same version starts afresh rather than joining a dead one.
+        const second = membership.refresh(20).then(
+          () => "resolved",
+          () => "rejected",
+        );
+        await advance(0);
+        expect(watch.relists).toBe(2);
+        watch.emit([self], 20);
+        expect(await second).toBe("resolved");
+      });
+
+      it("settles a refresh still pending when the service stops, leaving no timer", async () => {
+        const { clock, advance, membership } = build(60_000);
+        const outcome = membership.refresh(20).then(
+          () => undefined,
+          (err: unknown) => err,
+        );
+        await advance(0);
+        membership.stop();
+        const err = await outcome;
+        expect(err).toBeInstanceOf(RejectionError);
+        expect((err as RejectionError).kind).toBe("staleView");
+        expect(clock.pendingTimers()).toEqual([]);
+      });
+
+      it("refuses a new refresh after stop without arming a timer", async () => {
+        const { clock, membership } = build();
+        membership.stop();
+        await expect(membership.refresh(20)).rejects.toBeInstanceOf(RejectionError);
+        expect(clock.pendingTimers()).toEqual([]);
+      });
+
+      it("defaults the bound to the silo call timeout", async () => {
+        const { advance, membership } = build();
+        const outcome = membership.refresh(20).then(
+          () => "resolved",
+          () => "rejected",
+        );
+        await advance(29_999);
+        let settled = false;
+        void outcome.then(() => (settled = true));
+        await Promise.resolve();
+        expect(settled).toBe(false);
+        await advance(1);
+        expect(await outcome).toBe("rejected");
+      });
     });
 
     it("publishes the adopted version to its updates", async () => {

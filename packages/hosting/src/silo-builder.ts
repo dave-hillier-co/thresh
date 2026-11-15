@@ -344,6 +344,14 @@ export interface SiloConfig {
    */
   gracefulShutdownMs?: number;
   /**
+   * How long start waits for the membership service to list this silo before it fails (Orleans
+   * `ClusterMembershipOptions.MaxJoinAttemptTime`; defaults to five minutes). Under Kubernetes
+   * membership a silo is not in its own view until the EndpointSlice controller lists its pod, and
+   * start-up tasks run only once it is; static membership lists it at once and never waits. On
+   * expiry start fails and rolls back, naming the Service selector and pod labels to check.
+   */
+  joinTimeout?: Duration;
+  /**
    * `GracefulShutdown`'s overall stop budget — `gracefulShutdownMs` plus the
    * node's own deactivation sweep together fit inside this, so a slow
    * `onDeactivate` hook can't push the total stop past the process's own
@@ -1609,19 +1617,31 @@ export class SiloBuilder {
    * `SiloMember.metadata`.
    */
   useKubernetesMembership(watch: EndpointWatch, options?: KubernetesMembershipOptions): this {
-    this.membership = new KubernetesMembership(this.config.local, watch, options);
+    // The refresh is bounded by the silo's call timeout and runs on its clock, unless the caller
+    // chose otherwise: a refresh outliving the call that awaits it holds a pending entry for nothing.
     this.singleSiloView = false;
     this.staticViewWithoutLiveness = false;
     const lifecycle = watch as Partial<{ start(): Promise<void>; stop(): void }>;
+    const membership = new KubernetesMembership(this.config.local, watch, {
+      ...(this.config.callTimeout !== undefined
+        ? { refreshTimeoutMs: durationToMs(this.config.callTimeout) }
+        : {}),
+      ...(this.config.time !== undefined ? { time: this.config.time } : {}),
+      ...options,
+    });
+    this.membership = membership;
     this.endpointWatch = watch;
-    if (typeof lifecycle.start === "function" || typeof lifecycle.stop === "function") {
-      this.lifecycle.push({
-        name: "membership watch",
-        stage: ServiceLifecycleStage.RuntimeInitialize,
-        ...(typeof lifecycle.start === "function" ? { start: () => lifecycle.start!() } : {}),
-        ...(typeof lifecycle.stop === "function" ? { stop: async () => lifecycle.stop!() } : {}),
-      });
-    }
+    // Always registered: stopping the silo settles every refresh still pending on the service,
+    // whether or not the watch has a lifecycle of its own.
+    this.lifecycle.push({
+      name: "membership watch",
+      stage: ServiceLifecycleStage.RuntimeInitialize,
+      ...(typeof lifecycle.start === "function" ? { start: () => lifecycle.start!() } : {}),
+      stop: async () => {
+        membership.stop();
+        lifecycle.stop?.();
+      },
+    });
     return this;
   }
 
@@ -2375,6 +2395,10 @@ export class SiloBuilder {
         this.config.gracefulShutdownMs ??
         (this.membership instanceof KubernetesMembership ? DEFAULT_GRACE_MS : 0),
       ...(this.config.stopBudgetMs !== undefined ? { stopBudgetMs: this.config.stopBudgetMs } : {}),
+      ...(this.config.joinTimeout !== undefined
+        ? { joinTimeoutMs: durationToMs(this.config.joinTimeout) }
+        : {}),
+      ...(this.config.time !== undefined ? { time: this.config.time } : {}),
       membership: this.membership,
       reminderService,
       rebalancerWorker,
