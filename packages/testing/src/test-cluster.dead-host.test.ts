@@ -229,3 +229,93 @@ describe("a dead process that is still listed", () => {
     expect(cluster.kubernetes.listed(victim)).toBe(true);
   }, 60_000);
 });
+
+describe("a container that restarts in place", () => {
+  it("starts a new process at the same silo address, listed throughout, not ready until it passes readiness", async () => {
+    const cluster = await start({ initialSilos: 3 });
+    const old = cluster.silos[1]!;
+    const peer = cluster.silos[0]!;
+    const statusOf = (silo: TestSiloHandle): string | undefined =>
+      cluster.viewOf(peer).membership.silos.find((s) => s.address.equals(silo.address))?.status;
+
+    const restarted = await cluster.restartInPlace(old, { holdReadiness: true });
+
+    expect(restarted).not.toBe(old);
+    expect(restarted.address.equals(old.address)).toBe(true);
+    expect(cluster.silos).toContain(restarted);
+    expect(cluster.silos).not.toContain(old);
+    expect(cluster.kubernetes.listed(restarted)).toBe(true);
+    expect(statusOf(restarted)).toBe("joining");
+    expect(partitionOf(restarted).view.inRing(restarted.address)).toBe(false);
+
+    await cluster.kubernetes.kubelet(restarted);
+    expect(statusOf(restarted)).toBe("active");
+    expect(partitionOf(peer).view.inRing(restarted.address)).toBe(true);
+    await cluster.checkIntegrity();
+  }, 60_000);
+
+  it("restarts a silo already killed whose pod is still listed, and lets the kubelet mark it ready", async () => {
+    const cluster = await start({ initialSilos: 2 });
+    const old = cluster.silos[1]!;
+    await cluster.killSilo(old);
+
+    const restarted = await cluster.restartInPlace(old);
+
+    expect(restarted.address.equals(old.address)).toBe(true);
+    expect(partitionOf(cluster.silos[0]!).view.inRing(restarted.address)).toBe(true);
+    expect(await restarted.host.getGrain(Counter, "after-restart").inc()).toBe(1);
+    await cluster.checkIntegrity();
+  }, 60_000);
+
+  it("answers the grains the old process hosted from fresh activations in the ring, then rejoins", async () => {
+    const cluster = await start({ initialSilos: 4 });
+    const results = new Results();
+    const keys = keysFor("restart", 90);
+    // Every silo calls every key, so every survivor holds a route to each.
+    for (let round = 0; round < 4; round++) await callAll(results, cluster.silos, keys, round);
+    await cluster.checkIntegrity();
+    const old = cluster.silos[2]!;
+    const survivors = cluster.silos.filter((s) => s !== old);
+    const onOld = keys.filter((key) => old.host.isActive(id(key)));
+    expect(onOld.length).toBeGreaterThan(0);
+    const mark = results.mark();
+
+    // Calls in flight while the container dies and restarts may be refused while the dead process
+    // is still in the ring, as calls the caller may resend.
+    results.phase = "restarting";
+    const restarting = cluster.restartInPlace(old, { holdReadiness: true });
+    const during = callAll(results, survivors, keys, 1);
+    const restarted = await restarting;
+    await during;
+    for (const { error } of results.errors) {
+      expect(error).toBeInstanceOf(RejectionError);
+      expect(mayResend(error), String(error)).toBe(true);
+    }
+
+    // The new process is listed and not ready. Survivors still hold routes and entries naming the
+    // pod: it removes each entry and refuses, and the grain answers from the ring.
+    results.phase = "held";
+    for (let round = 0; round < survivors.length; round++) {
+      await callAll(results, survivors, keys, round);
+      await cluster.checkIntegrity();
+    }
+    expect(results.failedIn("held")).toEqual([]);
+    expect(activeTwice(cluster, keys)).toEqual([]);
+    expect(keys.filter((key) => restarted.host.isActive(id(key)))).toEqual([]);
+    for (const key of keys) {
+      expect((await entryOf(cluster, key))?.silo.equals(restarted.address)).not.toBe(true);
+    }
+
+    // Readiness passes: it rejoins the ring, and every grain keeps counting where it was.
+    results.phase = "ready";
+    const ready = cluster.kubernetes.kubelet(restarted);
+    const whileJoining = callAll(results, cluster.silos, keys, 2);
+    await ready;
+    await whileJoining;
+    await callAll(results, cluster.silos, keys, 3);
+    await cluster.checkIntegrity();
+    expect(results.failedIn("ready")).toEqual([]);
+    expect(results.notCountingOn(mark, onOld)).toEqual([]);
+    expect(activeTwice(cluster, keys)).toEqual([]);
+  }, 60_000);
+});
