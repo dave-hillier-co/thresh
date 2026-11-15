@@ -1609,7 +1609,15 @@ export class SiloBuilder {
    * `SiloMember.metadata`.
    */
   useKubernetesMembership(watch: EndpointWatch, options?: KubernetesMembershipOptions): this {
-    this.membership = new KubernetesMembership(this.config.local, watch, options);
+    // The refresh is bounded by the silo's call timeout and runs on its clock, unless the caller
+    // chose otherwise: a refresh outliving the call that awaits it holds a pending entry for nothing.
+    this.membership = new KubernetesMembership(this.config.local, watch, {
+      ...(this.config.callTimeout !== undefined
+        ? { refreshTimeoutMs: durationToMs(this.config.callTimeout) }
+        : {}),
+      ...(this.config.time !== undefined ? { time: this.config.time } : {}),
+      ...options,
+    });
     this.singleSiloView = false;
     this.staticViewWithoutLiveness = false;
     const lifecycle = watch as Partial<{ start(): Promise<void>; stop(): void }>;
