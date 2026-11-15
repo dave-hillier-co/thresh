@@ -120,6 +120,24 @@ afterAll(() => {
   for (const s of surrogatesUnderTest) unregisterSurrogate(s.tag);
 });
 
+interface Link {
+  depth: number;
+  items: unknown[];
+  next?: Link;
+}
+
+/** Nested objects (and an array at each level) `depth` levels deep. */
+function chain(depth: number): Link {
+  const head: Link = { depth: 0, items: [0] };
+  let at = head;
+  for (let i = 1; i < depth; i++) {
+    const next: Link = { depth: i, items: [i] };
+    at.next = next;
+    at = next;
+  }
+  return head;
+}
+
 function grainRef(id: GrainId, interfaceId: number): object {
   return { [GRAIN_REF]: { grainId: id, interfaceId } satisfies GrainReferenceIdentity };
 }
@@ -322,6 +340,9 @@ const corpus: Record<string, Sample> = {
     make: () => Object.assign(new Point(1, 2), { price: new Money(1, "EUR"), at: new Date(1) }),
   },
 
+  // Depth: past the copier's switch from a scanned stack of ancestors to an indexed one.
+  "a chain 60 levels deep": { make: () => chain(60) },
+
   // A mixture, as a call's argument list.
   "an argument list": {
     make: () => [
@@ -354,7 +375,7 @@ const positions: Record<string, (v: unknown) => unknown> = {
  * stack is left out; every other error's stack is the sender's, carried, and is compared.
  */
 function shape(value: unknown, depth = 0): unknown {
-  if (depth > 40) return "<too deep>";
+  if (depth > 400) return "<too deep>";
   if (value === null) return ["null"];
   switch (typeof value) {
     case "number":
@@ -512,6 +533,24 @@ const refused: Record<string, () => unknown> = {
     return ledger;
   },
   "a refused value after a good one": () => [new Date(1), { ok: 1 }, /re/],
+  "a cycle 60 levels deep": () => {
+    const head = chain(60);
+    let tail = head;
+    while (tail.next !== undefined) tail = tail.next;
+    tail.next = { back: [head] } as unknown as Link;
+    return head;
+  },
+  "a cycle closing 60 levels down onto the 50th": () => {
+    const head = chain(60);
+    let tail = head;
+    let fiftieth = head;
+    for (let i = 0; tail.next !== undefined; i++) {
+      if (i === 50) fiftieth = tail;
+      tail = tail.next;
+    }
+    tail.next = fiftieth;
+    return head;
+  },
   "a function in an error's properties": () => Object.assign(new Error("e"), { fn: () => 1 }),
   "a surrogate that fails to decode": () => [new Fragile()],
   "a surrogate that fails to decode, then a function": () => [new Fragile(), () => 1],

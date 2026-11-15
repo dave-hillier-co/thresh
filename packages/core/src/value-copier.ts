@@ -76,11 +76,78 @@ const T = "$thresh";
 const V = "$tsvv";
 const DANGEROUS_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
+/**
+ * The containers currently being copied, innermost last: the codec's `seen` set, which is how it
+ * tells a cycle (a container inside itself) from a value merely reached twice. Entries come and go
+ * strictly last-in first-out, so a stack serves, scanned linearly while it is shallow — cheaper
+ * than hashing every container of a wide, shallow graph — and backed by a set once it is deep.
+ */
+class Ancestors {
+  private readonly stack: unknown[] = [];
+  private indexed: Set<unknown> | undefined;
+
+  has(value: unknown): boolean {
+    if (this.indexed !== undefined) return this.indexed.has(value);
+    for (let i = this.stack.length - 1; i >= 0; i--) if (this.stack[i] === value) return true;
+    return false;
+  }
+
+  add(value: unknown): void {
+    this.stack.push(value);
+    if (this.indexed !== undefined) this.indexed.add(value);
+    else if (this.stack.length > 32) this.indexed = new Set(this.stack);
+  }
+
+  delete(value: unknown): void {
+    this.stack.pop();
+    this.indexed?.delete(value);
+  }
+
+  /** A set of the same entries, for the codec's own walk (which adds and removes its own). */
+  toSet(): Set<unknown> {
+    return new Set(this.stack);
+  }
+}
+
 interface Walk {
-  readonly seen: Set<unknown>;
+  readonly seen: Ancestors;
   readonly ctx: CodecContext;
   /** The first failure the round trip would meet only while decoding; thrown when the walk ends. */
   deferred: { readonly error: unknown } | undefined;
+}
+
+/**
+ * Where a value sits, for the path a refusal names — built only when one is thrown. The codec
+ * formats a path string for every node it visits; here a position is a (parent, kind, key) triple
+ * passed down, and a container allocates one `Frame` for its children to point at.
+ */
+interface Frame {
+  readonly parent: Frame | undefined;
+  readonly kind: Kind;
+  readonly key: string | number;
+}
+
+/** `$`, `[i]`, `[i].key`, `[i].value`, `.k`: the codec's path segments. */
+type Kind = 0 | 1 | 2 | 3 | 4;
+const ROOT: Kind = 0;
+const INDEX: Kind = 1;
+const MAP_KEY: Kind = 2;
+const MAP_VALUE: Kind = 3;
+const PROPERTY: Kind = 4;
+
+function pathOf(parent: Frame | undefined, kind: Kind, key: string | number): string {
+  if (kind === ROOT) return "$";
+  const base = parent === undefined ? "$" : pathOf(parent.parent, parent.kind, parent.key);
+  switch (kind) {
+    case INDEX:
+      return `${base}[${key}]`;
+    case MAP_KEY:
+      return `${base}[${key}].key`;
+    case MAP_VALUE:
+      return `${base}[${key}].value`;
+    default:
+      return `${base}.${key}`;
+  }
 }
 
 /**
@@ -89,53 +156,75 @@ interface Walk {
  * serializer would. Throws what `encodeValue` throws for a value it cannot represent.
  */
 export function copyValue<T>(value: T, ctx: CodecContext = {}): T {
-  const walk: Walk = { seen: new Set(), ctx, deferred: undefined };
+  const walk: Walk = { seen: new Ancestors(), ctx, deferred: undefined };
   // A top-level undefined is tagged by `encodeValue` and decoded back to itself.
-  const out = value === undefined ? undefined : copyInner(value, walk, "$");
+  const out = value === undefined ? undefined : copyInner(value, walk, undefined, ROOT, "$");
   if (walk.deferred !== undefined) throw walk.deferred.error;
   return out as T;
 }
 
 /** A positional slot (`encodeElement`): `undefined` is a value here, kept as itself. */
-function copyElement(value: unknown, walk: Walk, path: string): unknown {
-  return value === undefined ? undefined : copyInner(value, walk, path);
+function copyElement(
+  value: unknown,
+  walk: Walk,
+  parent: Frame | undefined,
+  kind: Kind,
+  key: string | number,
+): unknown {
+  return value === undefined ? undefined : copyInner(value, walk, parent, kind, key);
 }
 
-function copyInner(value: unknown, walk: Walk, path: string): unknown {
-  if (typeof value !== "object" || value === null) return copyScalar(value, walk, path);
-  return copyObject(value, walk, path);
-}
-
-function copyScalar(value: unknown, walk: Walk, path: string): unknown {
+function copyInner(
+  value: unknown,
+  walk: Walk,
+  parent: Frame | undefined,
+  kind: Kind,
+  key: string | number,
+): unknown {
+  if (typeof value === "object" && value !== null) {
+    return copyObject(value, walk, parent, kind, key);
+  }
   // `-0` and a bigint are tagged before any surrogate is asked, and decode to themselves.
   if (typeof value === "bigint") return value;
   if (typeof value === "number" && Object.is(value, -0)) return value;
-  const surrogate = surrogateFor(value);
-  if (surrogate !== undefined) return copySurrogate(value, surrogate, walk, path);
-  if (typeof value === "function") throw new UnsupportedValueError(path, "a function");
-  if (typeof value === "symbol") throw new UnsupportedValueError(path, "a symbol");
+  if (hasSurrogates()) {
+    const surrogate = surrogateFor(value);
+    if (surrogate !== undefined) return copySurrogate(value, surrogate, walk, parent, kind, key);
+  }
+  if (typeof value === "function") {
+    throw new UnsupportedValueError(pathOf(parent, kind, key), "a function");
+  }
+  if (typeof value === "symbol") {
+    throw new UnsupportedValueError(pathOf(parent, kind, key), "a symbol");
+  }
   return value;
 }
 
-function copyObject(value: object, walk: Walk, path: string): unknown {
+function copyObject(
+  value: object,
+  walk: Walk,
+  parent: Frame | undefined,
+  kind: Kind,
+  key: string | number,
+): unknown {
   // The one case the codec does not have: a value its author marked as safe to share.
   if (isImmutable(value)) return value;
   const proto: unknown = Object.getPrototypeOf(value);
   // Fast paths. An object whose prototype is `Object.prototype` (or an array whose prototype is
   // `Array.prototype`) can match none of the `instanceof` branches the codec tries first, so only
   // the two checks that can still claim it — a grain reference, a surrogate — are asked.
-  if (proto === Object.prototype && !ArrayBuffer.isView(value) && !Array.isArray(value)) {
-    const claimed = copyRefOrSurrogate(value, walk, path);
-    return claimed === UNCLAIMED ? copyPlainObject(value, walk, path) : claimed;
-  }
   if (proto === Array.prototype && Array.isArray(value)) {
-    const claimed = copyRefOrSurrogate(value, walk, path);
-    return claimed === UNCLAIMED ? copyArray(value, walk, path) : claimed;
+    const claimed = copyRefOrSurrogate(value, walk, parent, kind, key);
+    return claimed === UNCLAIMED ? copyArray(value, walk, parent, kind, key) : claimed;
+  }
+  if (proto === Object.prototype && !ArrayBuffer.isView(value) && !Array.isArray(value)) {
+    const claimed = copyRefOrSurrogate(value, walk, parent, kind, key);
+    return claimed === UNCLAIMED ? copyPlainObject(value, walk, parent, kind, key) : claimed;
   }
 
   if (value instanceof Uint8Array) return new Uint8Array(value);
   if (ArrayBuffer.isView(value) && !(value instanceof DataView)) {
-    return copyTypedArray(value, walk, path);
+    return copyTypedArray(value, walk, parent, kind, key);
   }
   if (value instanceof Date) return new Date(value.getTime());
   if (value instanceof Guid) return Guid.parse(value.toString());
@@ -160,32 +249,46 @@ function copyObject(value: object, walk: Walk, path: string): unknown {
   if (value instanceof SiloAddress) {
     return new SiloAddress(value.podName, value.podUid, value.endpoint);
   }
-  const claimed = copyRefOrSurrogate(value, walk, path);
+  const claimed = copyRefOrSurrogate(value, walk, parent, kind, key);
   if (claimed !== UNCLAIMED) return claimed;
 
-  if (value instanceof RegExp) throw new UnsupportedValueError(path, "a RegExp");
-  if (value instanceof Promise) throw new UnsupportedValueError(path, "a Promise");
-  if (value instanceof WeakMap) throw new UnsupportedValueError(path, "a WeakMap");
-  if (value instanceof WeakSet) throw new UnsupportedValueError(path, "a WeakSet");
-  if (value instanceof ArrayBuffer) throw new UnsupportedValueError(path, "an ArrayBuffer");
-  if (value instanceof DataView) throw new UnsupportedValueError(path, "a DataView");
+  const refusal = unsupported(value);
+  if (refusal !== undefined) throw new UnsupportedValueError(pathOf(parent, kind, key), refusal);
 
-  if (value instanceof Map) return copyMap(value, walk, path);
-  if (value instanceof Set) return copySet(value, walk, path);
-  if (Array.isArray(value)) return copyArray(value, walk, path);
-  if (value instanceof Error) return viaCodec(value, walk, path);
-  return copyPlainObject(value, walk, path);
+  if (value instanceof Map) return copyMap(value, walk, parent, kind, key);
+  if (value instanceof Set) return copySet(value, walk, parent, kind, key);
+  if (Array.isArray(value)) return copyArray(value, walk, parent, kind, key);
+  if (value instanceof Error) return viaCodec(value, walk, pathOf(parent, kind, key));
+  return copyPlainObject(value, walk, parent, kind, key);
+}
+
+/** The built-ins the codec refuses (after asking the surrogates), in its order, and its words. */
+function unsupported(value: object): string | undefined {
+  if (value instanceof RegExp) return "a RegExp";
+  if (value instanceof Promise) return "a Promise";
+  if (value instanceof WeakMap) return "a WeakMap";
+  if (value instanceof WeakSet) return "a WeakSet";
+  if (value instanceof ArrayBuffer) return "an ArrayBuffer";
+  if (value instanceof DataView) return "a DataView";
+  return undefined;
 }
 
 /** Returned by `copyRefOrSurrogate` when neither claims the value (`undefined` is a real result). */
 const UNCLAIMED: unique symbol = Symbol("unclaimed");
 
 /** The two checks the codec makes ahead of its refusals and its structural branches. */
-function copyRefOrSurrogate(value: object, walk: Walk, path: string): unknown {
+function copyRefOrSurrogate(
+  value: object,
+  walk: Walk,
+  parent: Frame | undefined,
+  kind: Kind,
+  key: string | number,
+): unknown {
   const ref = grainReferenceIdentity(value);
   if (ref !== undefined) return copyGrainReference(ref, walk.ctx);
+  if (!hasSurrogates()) return UNCLAIMED;
   const surrogate = surrogateFor(value);
-  if (surrogate !== undefined) return copySurrogate(value, surrogate, walk, path);
+  if (surrogate !== undefined) return copySurrogate(value, surrogate, walk, parent, kind, key);
   return UNCLAIMED;
 }
 
@@ -201,21 +304,28 @@ function copyGrainReference(ref: GrainReferenceIdentity, ctx: CodecContext): unk
   return ctx.resolveGrainReference ? ctx.resolveGrainReference(identity) : identity;
 }
 
-function copyTypedArray(view: ArrayBufferView, walk: Walk, path: string): unknown {
-  const kind = typedArrayKind(view);
+function copyTypedArray(
+  view: ArrayBufferView,
+  walk: Walk,
+  parent: Frame | undefined,
+  kind: Kind,
+  key: string | number,
+): unknown {
+  const arrayKind = typedArrayKind(view);
   const source = view as unknown as ArrayLike<number | bigint>;
   // With a surrogate registered, each element is offered to it, as `encodeElement` offers it;
   // with none, an element comes back as itself and the view can be copied whole.
   let values: (number | bigint)[] | undefined;
   if (hasSurrogates()) {
+    const here: Frame = { parent, kind, key };
     values = [];
     for (let i = 0; i < source.length; i++) {
-      values.push(copyElement(source[i], walk, `${path}[${i}]`) as number | bigint);
+      values.push(copyElement(source[i], walk, here, INDEX, i) as number | bigint);
     }
   }
-  const ctor = typedArrayConstructor(kind);
+  const ctor = typedArrayConstructor(arrayKind);
   if (ctor === undefined) {
-    defer(walk, new Error(`decodeValue: unknown typed array kind "${kind}"`));
+    defer(walk, new Error(`decodeValue: unknown typed array kind "${arrayKind}"`));
     return undefined;
   }
   return values === undefined
@@ -223,15 +333,22 @@ function copyTypedArray(view: ArrayBufferView, walk: Walk, path: string): unknow
     : new ctor(values);
 }
 
-function copyMap(value: Map<unknown, unknown>, walk: Walk, path: string): Map<unknown, unknown> {
-  if (walk.seen.has(value)) throw new CircularReferenceError(path);
+function copyMap(
+  value: Map<unknown, unknown>,
+  walk: Walk,
+  parent: Frame | undefined,
+  kind: Kind,
+  key: string | number,
+): Map<unknown, unknown> {
+  if (walk.seen.has(value)) throw new CircularReferenceError(pathOf(parent, kind, key));
   walk.seen.add(value);
   try {
+    const here: Frame = { parent, kind, key };
     const out = new Map<unknown, unknown>();
     let i = 0;
     for (const [k, v] of value) {
-      const key = copyElement(k, walk, `${path}[${i}].key`);
-      out.set(key, copyElement(v, walk, `${path}[${i}].value`));
+      const copiedKey = copyElement(k, walk, here, MAP_KEY, i);
+      out.set(copiedKey, copyElement(v, walk, here, MAP_VALUE, i));
       i++;
     }
     return out;
@@ -240,54 +357,79 @@ function copyMap(value: Map<unknown, unknown>, walk: Walk, path: string): Map<un
   }
 }
 
-function copySet(value: Set<unknown>, walk: Walk, path: string): Set<unknown> {
-  if (walk.seen.has(value)) throw new CircularReferenceError(path);
+function copySet(
+  value: Set<unknown>,
+  walk: Walk,
+  parent: Frame | undefined,
+  kind: Kind,
+  key: string | number,
+): Set<unknown> {
+  if (walk.seen.has(value)) throw new CircularReferenceError(pathOf(parent, kind, key));
   walk.seen.add(value);
   try {
+    const here: Frame = { parent, kind, key };
     const out = new Set<unknown>();
     let i = 0;
-    for (const v of value) out.add(copyElement(v, walk, `${path}[${i++}]`));
+    for (const v of value) out.add(copyElement(v, walk, here, INDEX, i++));
     return out;
   } finally {
     walk.seen.delete(value);
   }
 }
 
-function copyArray(value: readonly unknown[], walk: Walk, path: string): unknown[] {
-  if (walk.seen.has(value)) throw new CircularReferenceError(path);
+function copyArray(
+  value: readonly unknown[],
+  walk: Walk,
+  parent: Frame | undefined,
+  kind: Kind,
+  key: string | number,
+): unknown[] {
+  if (walk.seen.has(value)) throw new CircularReferenceError(pathOf(parent, kind, key));
   const length = value.length;
   for (let i = 0; i < length; i++) {
-    if (!(i in value))
-      throw new UnsupportedValueError(path, `a sparse array (index ${i} is a hole)`);
+    if (!(i in value)) {
+      throw new UnsupportedValueError(
+        pathOf(parent, kind, key),
+        `a sparse array (index ${i} is a hole)`,
+      );
+    }
   }
   walk.seen.add(value);
   try {
+    const here: Frame = { parent, kind, key };
     const out: unknown[] = new Array(length);
-    for (let i = 0; i < length; i++) out[i] = copyElement(value[i], walk, `${path}[${i}]`);
+    for (let i = 0; i < length; i++) out[i] = copyElement(value[i], walk, here, INDEX, i);
     return out;
   } finally {
     walk.seen.delete(value);
   }
 }
 
-function copyPlainObject(value: object, walk: Walk, path: string): Record<string, unknown> {
-  if (walk.seen.has(value)) throw new CircularReferenceError(path);
+function copyPlainObject(
+  value: object,
+  walk: Walk,
+  parent: Frame | undefined,
+  kind: Kind,
+  key: string | number,
+): Record<string, unknown> {
+  if (walk.seen.has(value)) throw new CircularReferenceError(pathOf(parent, kind, key));
   walk.seen.add(value);
   try {
+    const here: Frame = { parent, kind, key };
     const source = value as Record<string, unknown>;
     const keys = Object.keys(value);
     const out: Record<string, unknown> = {};
     if (keys.some((k) => k === T || DANGEROUS_KEYS.has(k))) {
       // The codec's `plainObject` envelope: entries carried as positional pairs (so an undefined
       // member is kept) and rebuilt by definition, never by assignment.
-      for (const k of keys) setOwn(out, k, copyElement(source[k], walk, `${path}.${k}`));
+      for (const k of keys) setOwn(out, k, copyElement(source[k], walk, here, PROPERTY, k));
       return out;
     }
     for (const k of keys) {
       const v = source[k];
       // An undefined member travels as an omitted key — unless a surrogate claims `undefined`.
       if (v === undefined && surrogateFor(v) === undefined) continue;
-      out[k] = copyInner(v, walk, `${path}.${k}`);
+      out[k] = copyInner(v, walk, here, PROPERTY, k);
     }
     return out;
   } finally {
@@ -299,9 +441,11 @@ function copySurrogate(
   value: unknown,
   surrogate: SurrogateDescriptor,
   walk: Walk,
-  path: string,
+  parent: Frame | undefined,
+  kind: Kind,
+  key: string | number,
 ): unknown {
-  if (walk.seen.has(value)) throw new CircularReferenceError(path);
+  if (walk.seen.has(value)) throw new CircularReferenceError(pathOf(parent, kind, key));
   walk.seen.add(value);
   let fields: Record<string, unknown>;
   try {
@@ -315,14 +459,15 @@ function copySurrogate(
     // A field named like the envelope's own keys, or a dangerous one, reshapes the envelope the
     // codec writes; let the codec say what that comes back as.
     walk.seen.delete(value);
-    return viaCodec(value, walk, path);
+    return viaCodec(value, walk, pathOf(parent, kind, key));
   }
   try {
+    const here: Frame = { parent, kind, key };
     const decoded: Record<string, unknown> = {};
     for (const k of keys) {
       const v = fields[k];
       if (v === undefined && surrogateFor(v) === undefined) continue;
-      setOwn(decoded, k, copyInner(v, walk, `${path}.${k}`));
+      setOwn(decoded, k, copyInner(v, walk, here, PROPERTY, k));
     }
     try {
       return surrogate.decode(decoded, walk.ctx);
@@ -341,7 +486,7 @@ function copySurrogate(
  * carry it as a transport would, and decode it.
  */
 function viaCodec(value: unknown, walk: Walk, path: string): unknown {
-  const encoded = encodeNested(value, walk.seen, path);
+  const encoded = encodeNested(value, walk.seen.toSet(), path);
   try {
     return decodeValue(asTransported(encoded), walk.ctx);
   } catch (error) {
