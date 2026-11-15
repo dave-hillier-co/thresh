@@ -136,4 +136,24 @@ describe("WatchedEndpoints' observed revision", () => {
     expect(seen).toEqual([60]);
     expect(watch.observedRevision()).toBe(60);
   });
+
+  it("keeps the stored slice set when it ignores a stale watch event", () => {
+    // A new subscriber is handed the stored set, so it shows what a stale event would have
+    // rolled back even though the event emitted nothing.
+    const watch = new WatchedEndpoints();
+    watch.reset(list(["slice-a", at(sliceFor("silo-1", "u1", "10.0.0.2"), "60")]), "70");
+    watch.apply("MODIFIED", "slice-a", at(sliceFor("silo-0", "u0", "10.0.0.1"), "55"));
+    watch.apply("ADDED", "slice-b", at(sliceFor("silo-2", "u2", "10.0.0.3"), "56"));
+    watch.apply("DELETED", "slice-a", at(sliceFor("silo-1", "u1", "10.0.0.2"), "58"));
+    let stored: EndpointSlice[] = [];
+    let revision = 0;
+    watch.subscribe((slices, at) => {
+      stored = slices;
+      revision = at;
+    });
+    expect(stored.map((s) => [s.resourceVersion, s.endpoints![0]!.addresses[0]])).toEqual([
+      ["60", "10.0.0.2"],
+    ]);
+    expect(revision).toBe(60);
+  });
 });
