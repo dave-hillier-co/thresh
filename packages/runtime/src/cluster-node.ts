@@ -1649,6 +1649,11 @@ export class ClusterNode {
       })) as GrainAddress[];
     } catch (err) {
       if (isNothingListening(err)) return [];
+      // A pooled connection whose far end is gone can fail every send without ever reporting
+      // itself closed; drop it, so the member is dialled afresh when it is asked again.
+      if (err instanceof RejectionError && err.kind === "unknownTarget") {
+        void this.connections.drop(member);
+      }
       throw err;
     }
   }

@@ -134,6 +134,12 @@ export interface TestClusterOptions {
    * Defaults to 30s.
    */
   callTimeout?: Duration;
+  /**
+   * How long a silo's directory waits for members that do not answer a range recovery before it
+   * unlocks the range without them, forwarded to every silo (`SiloConfig.directoryRecoveryPatience`).
+   * Unset, a range stays locked for as long as such a member is listed.
+   */
+  directoryRecoveryPatience?: Duration;
   /** Load-shedding config applied to every silo in this cluster (Orleans `Configure<LoadSheddingOptions>`). */
   loadShedding?: Partial<LoadSheddingOptions>;
   /** Injectable RNG forwarded to every silo, for deterministic placement in tests. */
@@ -364,6 +370,32 @@ export class TestCluster {
 
   get silos(): ReadonlyArray<TestSiloHandle> {
     return this.live;
+  }
+
+  /**
+   * The grain directory's integrity check on every live silo (Orleans
+   * `IGrainDirectoryTestHooks.CheckIntegrityAsync`, which the upstream resilience tests run per
+   * silo): no partition holds an entry outside the ranges it owns, and every registered live
+   * activation in the cluster has exactly its own entry at its owner — so no grain is registered
+   * as active in two places. Under Kubernetes membership it first lets every silo apply the view
+   * its own watch holds (`kubernetes.settle`). Throws, listing every violation, if any is found.
+   */
+  async checkIntegrity(): Promise<void> {
+    if (this.k8s !== undefined) await this.k8s.settle();
+    const violations: string[] = [];
+    for (const silo of this.live) {
+      const node = (
+        silo.host as unknown as {
+          parts: { node: { checkDirectoryIntegrity(): Promise<Array<{ detail: string }>> } };
+        }
+      ).parts.node;
+      for (const violation of await node.checkDirectoryIntegrity()) {
+        violations.push(`${silo.address.podName}: ${violation.detail}`);
+      }
+    }
+    if (violations.length > 0) {
+      throw new Error(`grain directory integrity violated:\n  ${violations.join("\n  ")}`);
+    }
   }
 
   /**
@@ -699,6 +731,9 @@ export class TestCluster {
         ? { defaultResponseTimeout: this.options.defaultResponseTimeout }
         : {}),
       ...(this.options.callTimeout !== undefined ? { callTimeout: this.options.callTimeout } : {}),
+      ...(this.options.directoryRecoveryPatience !== undefined
+        ? { directoryRecoveryPatience: this.options.directoryRecoveryPatience }
+        : {}),
       ...(this.options.transactionsOptions !== undefined
         ? { transactionsOptions: this.options.transactionsOptions }
         : {}),

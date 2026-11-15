@@ -132,6 +132,8 @@ export interface IntegrityViolation {
 
 const DEFAULT_RETRY_INITIAL_MS = 100;
 const DEFAULT_RETRY_MAX_MS = 2_000;
+/** How many times the integrity check asks a member before reporting it unanswered. */
+const INTEGRITY_ATTEMPTS = 4;
 
 /**
  * One silo's partition of the distributed grain directory: a port of Orleans
@@ -162,7 +164,13 @@ export class GrainDirectoryPartition {
   private recoveryVersionValue = -1;
   private stopped = false;
   private readonly viewChanges = new Set<Promise<void>>();
-  private readonly counts = { transferred: 0, recovered: 0, patienceExpired: 0 };
+  private readonly counts = {
+    transfers: 0,
+    recoveries: 0,
+    transferred: 0,
+    recovered: 0,
+    patienceExpired: 0,
+  };
 
   constructor(options: GrainDirectoryPartitionOptions) {
     this.options = options;
@@ -203,8 +211,17 @@ export class GrainDirectoryPartition {
     return this.locks.flatMap((l) => l.ranges);
   }
 
-  /** Entries transferred and recovered into this partition, and recoveries abandoned on patience. */
-  get stats(): { transferred: number; recovered: number; patienceExpired: number } {
+  /**
+   * Ranges acquired by snapshot transfer and by recovery, the entries each brought in, and
+   * recoveries abandoned when the patience elapsed (introspection and metrics).
+   */
+  get stats(): {
+    transfers: number;
+    recoveries: number;
+    transferred: number;
+    recovered: number;
+    patienceExpired: number;
+  } {
     return { ...this.counts };
   }
 
@@ -428,6 +445,7 @@ export class GrainDirectoryPartition {
       }
     }
     this.counts.transferred += count;
+    this.counts.transfers++;
     for (const source of sources) {
       void this.peers.acknowledgeSnapshot(source.silo, pair).catch(() => undefined);
     }
@@ -446,6 +464,7 @@ export class GrainDirectoryPartition {
     patience: Patience,
   ): Promise<void> {
     recordDirectoryRecoveryStarted();
+    this.counts.recoveries++;
     const request: ActivationsRequest = { version: next.version, ranges: gained };
     const answers = await Promise.all(
       next.members.map((member) => this.recoverFrom(member, request, patience)),
@@ -726,15 +745,23 @@ export class GrainDirectoryPartition {
       const request: ActivationsRequest = { version: view.version, ranges };
       const answers = await Promise.all(
         view.members.map(async (member) => {
-          try {
-            return { member, activations: await this.peers.registeredActivations(member, request) };
-          } catch (error) {
-            violations.push({
-              silo: this.local,
-              kind: "unanswered",
-              detail: `${member.podName} did not report its activations: ${errorText(error)}`,
-            });
-            return { member, activations: [] as GrainAddress[] };
+          // Asked again, as a recovery asks again, a few times before it counts as unanswered.
+          for (let attempt = 0; ; attempt++) {
+            try {
+              const activations = await this.peers.registeredActivations(member, request);
+              return { member, activations };
+            } catch (error) {
+              if (attempt < INTEGRITY_ATTEMPTS - 1 && this.current.isMember(member)) {
+                await this.delay(this.retryDelay(attempt));
+                continue;
+              }
+              violations.push({
+                silo: this.local,
+                kind: "unanswered",
+                detail: `${member.podName} did not report its activations: ${errorText(error)}`,
+              });
+              return { member, activations: [] as GrainAddress[] };
+            }
           }
         }),
       );

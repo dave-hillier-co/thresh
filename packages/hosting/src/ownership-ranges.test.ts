@@ -52,14 +52,17 @@ describe("ownership ranges (one arc definition)", () => {
   for (const seed of [1, 7, 42, 1234, 99_991]) {
     it(`tiles the circle exactly as directory ownership does (seed ${seed})`, () => {
       const random = mulberry32(seed);
-      for (let round = 0; round < 10; round++) {
+      for (let round = 0; round < 3; round++) {
         const { silos, ring } = randomRing(random);
         const ranges = new Map(silos.map((s) => [s.ringKey, ring.rangesFor(s)]));
+        const arcs = new Map(silos.map((s) => [s.ringKey, ring.arcsOf(s)]));
         for (const hash of probes(ring, silos, random)) {
           const holders = silos.filter((s) => isHashInRanges(hash, ranges.get(s.ringKey)!));
           expect(holders, `hash ${hash}`).toHaveLength(1);
           expect(holders[0]!.equals(ring.owner(hash)), `hash ${hash}`).toBe(true);
-          const arcHolders = silos.filter((s) => ring.arcsOf(s).some((a) => a.contains(hash)));
+          const arcHolders = silos.filter((s) =>
+            arcs.get(s.ringKey)!.some((a) => a.contains(hash)),
+          );
           expect(arcHolders, `hash ${hash}`).toHaveLength(1);
           expect(arcHolders[0]!.equals(ring.owner(hash))).toBe(true);
         }

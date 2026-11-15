@@ -262,6 +262,16 @@ export interface SiloConfig {
    */
   callTimeout?: Duration;
   /**
+   * How long the directory waits, when this silo gains a hash range it must rebuild from every
+   * member's activations, for members that do not answer. Unset (the default) the range stays
+   * locked for as long as such a member is listed in the membership view: lookups for grains
+   * in it wait rather than risk a second activation of a grain that silo may still be running.
+   * Set, the range unlocks once this has elapsed without their answers, the event is logged at
+   * error level and counted (`thresh.directory.recovery.patience_expired`), and a grain those
+   * members were hosting may be activated a second time. See `docs/guide/hosting.md`.
+   */
+  directoryRecoveryPatience?: Duration;
+  /**
    * Load-shedding config (Orleans `Configure<LoadSheddingOptions>`). Defaults
    * to shedding disabled; see `ClusterNodeOptions.loadShedding`.
    */
@@ -2005,6 +2015,9 @@ export class SiloBuilder {
         : {}),
       ...(this.config.callTimeout !== undefined
         ? { callTimeoutMs: durationToMs(this.config.callTimeout) }
+        : {}),
+      ...(this.config.directoryRecoveryPatience !== undefined
+        ? { directoryRecoveryPatienceMs: durationToMs(this.config.directoryRecoveryPatience) }
         : {}),
       ...(this.config.random !== undefined ? { random: this.config.random } : {}),
       // Calling useVersioning() enables versioning with resolved defaults, so the
