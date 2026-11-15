@@ -44,6 +44,10 @@ export interface DistributedDispatcherDeps {
   cache: LocationCache;
   catalog: Catalog;
   remote: RemoteInvoker;
+  /**
+   * The placement candidates for a new activation: the silos that may host one (`ringSilos` of
+   * the view — the active members, or the joining ones while none is active).
+   */
   activeSilos: () => SiloAddress[];
   placementFor: (grainType: GrainType) => PlacementStrategy;
   /** Filters that prune candidate silos by metadata before the strategy chooses. */

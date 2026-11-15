@@ -30,6 +30,8 @@ export interface FakePod {
   readonly uid: string;
   readonly ip: string;
   readonly ready: boolean;
+  /** The pod is being deleted (its endpoint's `terminating` condition). */
+  readonly terminating?: boolean;
   /** The pod's labels, surfaced on its endpoint (see `KubernetesMembershipOptions.metadataLabelPrefix`). */
   readonly labels?: Readonly<Record<string, string>>;
 }
@@ -66,6 +68,16 @@ export class FakeEndpointSliceApi {
     const pod = this.podsByName.get(name);
     if (pod === undefined) throw new Error(`no pod ${name}`);
     this.setPod({ ...pod, ready });
+  }
+
+  /**
+   * Start deleting a pod, as Kubernetes does on a scale-down or rollout: its endpoint turns not
+   * ready and terminating, and stays listed until `removePod`.
+   */
+  setTerminating(name: string): void {
+    const pod = this.podsByName.get(name);
+    if (pod === undefined) throw new Error(`no pod ${name}`);
+    this.setPod({ ...pod, ready: false, terminating: true });
   }
 
   /** Remove a pod's endpoint from the slice. */
@@ -121,7 +133,10 @@ export class FakeEndpointSliceApi {
       ports: [{ name: "silo", port: this.port }],
       endpoints: [...this.podsByName.values()].map((pod) => ({
         addresses: [pod.ip],
-        conditions: { ready: pod.ready },
+        conditions: {
+          ready: pod.ready,
+          ...(pod.terminating !== undefined ? { terminating: pod.terminating } : {}),
+        },
         targetRef: { name: pod.name, uid: pod.uid },
         ...(pod.labels !== undefined ? { metadata: { ...pod.labels } } : {}),
       })),

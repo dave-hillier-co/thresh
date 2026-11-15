@@ -14,7 +14,7 @@ import {
   type Registrable,
 } from "@thresh/core/grain-registration";
 import type { KeyTypeOf } from "@thresh/core/key-kinds";
-import { activeSilos, type MembershipService } from "@thresh/core/membership";
+import { activeSilos, ringSilos, type MembershipService } from "@thresh/core/membership";
 import type { SiloAddress } from "@thresh/core/silo-address";
 import type { CompatibilityKind } from "@thresh/core/version-compatibility";
 import type { VersionSelectorKind } from "@thresh/core/version-selector";
@@ -2294,9 +2294,7 @@ export class SiloBuilder {
             implicitKeyKindFor: (type) => node.grainKeyKind(type),
             confirm: (grainId, streamKey) => node.confirmStreamSubscription(grainId, streamKey),
             isLive: () =>
-              activeSilos(membership.current()).some(
-                (s) => s.ringKey === this.config.local.ringKey,
-              ),
+              ringSilos(membership.current()).some((s) => s.ringKey === this.config.local.ringKey),
           });
         },
         stop: async () => unbind?.(),

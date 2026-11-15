@@ -30,7 +30,7 @@ import {
   type VersionSelectorStrategy,
 } from "@thresh/core/version-selector";
 import type { KeyTypeOf } from "@thresh/core/key-kinds";
-import { activeSilos, memberSilos, type MembershipService } from "@thresh/core/membership";
+import { memberSilos, ringSilos, type MembershipService } from "@thresh/core/membership";
 import type {
   IncomingGrainCallFilter,
   OutgoingGrainCallFilter,
@@ -896,7 +896,7 @@ export class ClusterNode {
       cache: this.cache,
       catalog: this.catalog,
       remote: { send: (silo, req) => this.sendRemote(silo, req) },
-      activeSilos: () => activeSilos(this.options.membership.current()),
+      activeSilos: () => ringSilos(this.options.membership.current()),
       placementFor: (grainType) => this.placementFor(grainType),
       filtersFor: (grainType) => this.filtersFor(grainType),
       placementContext: () => this.placementContext(),
@@ -1559,7 +1559,7 @@ export class ClusterNode {
     const local = this.options.local;
     const oldRing = this.ring;
     const newRing = this.buildRing();
-    const live = new Set(activeSilos(snapshot).map((s) => s.ringKey));
+    const live = new Set(ringSilos(snapshot).map((s) => s.ringKey));
     const present = new Set(memberSilos(snapshot).map((s) => s.ringKey));
     for (const key of this.remoteLoadStats.keys()) {
       if (!present.has(key)) this.remoteLoadStats.delete(key);
@@ -1570,7 +1570,7 @@ export class ClusterNode {
     // from `clientDirectoryRefreshMs`'s next tick (Orleans' `ClientDirectory`
     // republishing its table on every membership change).
     const oldLive = new Set(oldRing.silos().map((s) => s.ringKey));
-    const newlyActive = activeSilos(snapshot).filter(
+    const newlyActive = ringSilos(snapshot).filter(
       (s) => !oldLive.has(s.ringKey) && !s.equals(local),
     );
 
@@ -1667,15 +1667,15 @@ export class ClusterNode {
   }
 
   private buildRing(): ConsistentHashRing {
-    return new ConsistentHashRing(activeSilos(this.options.membership.current()));
+    return new ConsistentHashRing(ringSilos(this.options.membership.current()));
   }
 
   private ownsNow(grainId: GrainId): boolean {
     return this.ring.ownerOf(grainId).equals(this.options.local);
   }
 
-  private otherActiveSilos(): SiloAddress[] {
-    return activeSilos(this.options.membership.current()).filter(
+  private otherRingSilos(): SiloAddress[] {
+    return ringSilos(this.options.membership.current()).filter(
       (s) => !s.equals(this.options.local),
     );
   }
@@ -2218,7 +2218,7 @@ export class ClusterNode {
     return withPlaceGrainSpan(() =>
       selectPlacementTarget({
         grainType,
-        candidates: activeSilos(this.options.membership.current()),
+        candidates: ringSilos(this.options.membership.current()),
         exclude: [this.options.local],
         filters: this.filtersFor(grainType),
         strategy: this.placementFor(grainType),
@@ -2535,7 +2535,7 @@ export class ClusterNode {
 
   /** Fire-and-forget a `system: "client"` gossip message to every other active silo. */
   private broadcastClientGossip(gossip: ClientGossip): void {
-    for (const peer of this.otherActiveSilos()) this.sendClientGossip(peer, gossip);
+    for (const peer of this.otherRingSilos()) this.sendClientGossip(peer, gossip);
   }
 
   /**
@@ -2562,7 +2562,7 @@ export class ClusterNode {
   private scheduleClientDirectoryRefresh(): void {
     this.clientDirectoryRefreshTimer = this.time.setTimer(() => {
       this.scheduleClientDirectoryRefresh();
-      this.republishClientDirectory(this.otherActiveSilos());
+      this.republishClientDirectory(this.otherRingSilos());
     }, this.clientDirectoryRefreshMs);
   }
 
@@ -2737,7 +2737,7 @@ export class ClusterNode {
     if (message.system !== undefined) return false;
     const from = message.sendingSilo;
     if (from === undefined) return false;
-    return !activeSilos(this.options.membership.current()).some((s) => s.equals(from));
+    return !memberSilos(this.options.membership.current()).some((s) => s.equals(from));
   }
 
   private interpretResponse(response: Message): unknown {
@@ -3005,7 +3005,7 @@ export class ClusterNode {
    * Best-effort: an unreachable peer is skipped rather than failing the call.
    */
   async publishLoadStats(): Promise<void> {
-    const peers = activeSilos(this.options.membership.current()).filter(
+    const peers = ringSilos(this.options.membership.current()).filter(
       (s) => !s.equals(this.options.local),
     );
     const stats = this.loadSnapshot();
@@ -3082,7 +3082,7 @@ export class ClusterNode {
     counts: Map<string, number>;
     silos: Map<string, SiloAddress>;
   }> {
-    const active = activeSilos(this.options.membership.current());
+    const active = ringSilos(this.options.membership.current());
     const counts = new Map<string, number>();
     const silos = new Map<string, SiloAddress>();
     await Promise.all(
@@ -3129,7 +3129,7 @@ export class ClusterNode {
    * query (an unreachable peer contributes nothing, same as `gatherClusterLoad`).
    */
   async gatherClusterGrainStats(): Promise<SimpleGrainStatistic[]> {
-    const active = activeSilos(this.options.membership.current());
+    const active = ringSilos(this.options.membership.current());
     const results: SimpleGrainStatistic[] = [];
     await Promise.all(
       active.map(async (silo) => {
@@ -3183,7 +3183,7 @@ export class ClusterNode {
    * count.
    */
   async gatherClusterDetailedGrainStatistics(types?: string[]): Promise<DetailedGrainStatistic[]> {
-    const active = activeSilos(this.options.membership.current());
+    const active = ringSilos(this.options.membership.current());
     const results: DetailedGrainStatistic[] = [];
     await Promise.all(
       active.map(async (silo) => {
@@ -3230,7 +3230,7 @@ export class ClusterNode {
    * silo's local count instead of resolving a single address.
    */
   async gatherGrainActivationCount(id: GrainId): Promise<number> {
-    const active = activeSilos(this.options.membership.current());
+    const active = ringSilos(this.options.membership.current());
     const counts = await Promise.all(
       active.map((silo) =>
         silo.equals(this.options.local)
@@ -3268,7 +3268,7 @@ export class ClusterNode {
    * (Orleans `IManagementGrain.ForceActivationCollection(TimeSpan)`).
    */
   async forceActivationCollectionCluster(ageLimitMs: number): Promise<void> {
-    const active = activeSilos(this.options.membership.current());
+    const active = ringSilos(this.options.membership.current());
     await Promise.all(
       active.map((silo) =>
         silo.equals(this.options.local)
@@ -3377,7 +3377,7 @@ export class ClusterNode {
     command: number,
     arg?: unknown,
   ): Promise<unknown[]> {
-    const active = activeSilos(this.options.membership.current());
+    const active = ringSilos(this.options.membership.current());
     return Promise.all(
       active.map((silo) =>
         silo.equals(this.options.local)

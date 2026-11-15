@@ -1,4 +1,4 @@
-import { activeSilos, type MembershipService } from "@thresh/core/membership";
+import { ringSilos, type MembershipService } from "@thresh/core/membership";
 import { SiloAddress } from "@thresh/core/silo-address";
 
 /**
@@ -19,12 +19,12 @@ export function staticGatewayProvider(gateways: readonly SiloAddress[]): Gateway
 }
 
 /**
- * Gateways tracked from cluster membership: every active silo is a candidate
- * gateway. As silos join and leave, a `refresh` picks up the change — the client
+ * Gateways tracked from cluster membership: every silo of the ring (`ringSilos`: the active
+ * silos, or the joining ones while none is active) is a candidate gateway. As silos join and leave, a `refresh` picks up the change — the client
  * equivalent of Orleans' membership-table gateway list provider.
  */
 export function membershipGatewayProvider(membership: MembershipService): GatewayListProvider {
-  return { getGateways: () => activeSilos(membership.current()) };
+  return { getGateways: () => ringSilos(membership.current()) };
 }
 
 /**

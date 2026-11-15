@@ -12,9 +12,12 @@ import {
 } from "@thresh/clustering-k8s/kubernetes-endpoint-watch";
 import type { WatchEventType } from "@thresh/clustering-k8s/watched-endpoints";
 
+let nextRevision = 100;
+
+/** A slice as the API serves it: every write carries a fresh, increasing resourceVersion. */
 function rawSlice(name: string, uid: string, ip: string, ready = true): RawEndpointSlice {
   return {
-    metadata: { name: `slice-${name}` },
+    metadata: { name: `slice-${name}`, resourceVersion: String(++nextRevision) },
     ports: [{ name: "silo", port: 11111 }],
     endpoints: [{ addresses: [ip], conditions: { ready }, targetRef: { name, uid } }],
   };
@@ -169,9 +172,10 @@ describe("KubernetesEndpointWatch", () => {
     expect(ringKeys(membership)).toEqual(["silo-0"]);
   });
 
-  it("always includes the local silo so a first pod can bootstrap (empty slices)", async () => {
+  it("lists an empty service as an empty view, the local silo included", async () => {
     const source = new FakeSource();
     source.items = [];
+    source.resourceVersion = "7";
     const watch = new KubernetesEndpointWatch(source);
     const membership = new KubernetesMembership(
       new SiloAddress("silo-0", "u0", "10.0.0.1:11111"),
@@ -179,7 +183,29 @@ describe("KubernetesEndpointWatch", () => {
       { portName: "silo" },
     );
     await watch.start();
-    expect(ringKeys(membership)).toEqual(["silo-0"]);
+    expect(membership.current()).toEqual({ version: 7, silos: [] });
+    expect(membership.localStanding()).toBe("unlisted");
+  });
+
+  it("re-lists on demand, delivering the list and reporting its revision", async () => {
+    const source = new FakeSource();
+    source.items = [rawSlice("silo-0", "u0", "10.0.0.1")];
+    source.resourceVersion = "500";
+    const watch = new KubernetesEndpointWatch(source);
+    const membership = new KubernetesMembership(
+      new SiloAddress("silo-0", "u0", "10.0.0.1:11111"),
+      watch,
+      { portName: "silo" },
+    );
+    await watch.start();
+
+    source.items = [rawSlice("silo-0", "u0", "10.0.0.1"), rawSlice("silo-1", "u1", "10.0.0.2")];
+    source.resourceVersion = "600";
+    await expect(watch.relist()).resolves.toBe(600);
+    expect(source.listCount).toBe(2);
+    // The watch itself was not restarted.
+    expect(source.watchCount).toBe(1);
+    expect(ringKeys(membership)).toEqual(["silo-0", "silo-1"]);
   });
 
   it("re-lists and re-watches when the watch connection closes", async () => {

@@ -1,10 +1,14 @@
-import type { SiloMember } from "@thresh/core/membership";
+import type { SiloMember, SiloStatus } from "@thresh/core/membership";
 import { SiloAddress } from "@thresh/core/silo-address";
 
 // The subset of the Kubernetes EndpointSlice shape the membership watch reads.
 export interface EndpointSliceEndpoint {
   addresses: string[];
-  conditions?: { ready?: boolean };
+  /**
+   * The endpoint's conditions: `ready` (the pod's readiness probe passes) and `terminating`
+   * (the pod is being deleted). Together they give the silo's status (see `siloStatusOf`).
+   */
+  conditions?: { ready?: boolean; terminating?: boolean };
   targetRef?: { name?: string; uid?: string };
   /**
    * The endpoint's pod labels, when the watch source resolves them (EndpointSlice
@@ -41,10 +45,23 @@ function pickPort(ports: EndpointSlicePort[] | undefined, portName?: string): nu
 }
 
 /**
+ * A listed endpoint's status, from its conditions: `ready` is `active`; not ready and
+ * `terminating` is `draining` (a pod being deleted, still serving what it hosts); not ready
+ * otherwise is `joining` (a pod still starting, or one whose readiness probe is failing). An
+ * endpoint that is not listed at all is absent from the view. The same rule applies to every
+ * endpoint, the local silo's own included, so silos that observed the same slices hold the same
+ * view.
+ */
+export function siloStatusOf(endpoint: EndpointSliceEndpoint): SiloStatus {
+  if (endpoint.conditions?.ready === true) return "active";
+  return endpoint.conditions?.terminating === true ? "draining" : "joining";
+}
+
+/**
  * Derive the silo view from EndpointSlices: every endpoint becomes a member, with
  * the pod name and UID from `targetRef` (the UID distinguishes a fresh
- * incarnation from a previous one at the same name). A ready endpoint is
- * `active`; one that is present but not ready is `draining`.
+ * incarnation from a previous one at the same name) and its status from its
+ * conditions (`siloStatusOf`).
  *
  * Readiness alone is not a failure detector, and the two are not the same
  * question. Whether a silo is `active` decides who may take new placements and
@@ -71,7 +88,7 @@ export function siloMembersFromSlices(
       if (address === undefined || podName === undefined || podUid === undefined) continue;
       silos.push({
         address: new SiloAddress(podName, podUid, `${address}:${port}`),
-        status: endpoint.conditions?.ready === true ? "active" : "draining",
+        status: siloStatusOf(endpoint),
       });
     }
   }

@@ -32,7 +32,7 @@ import type { SiloHost } from "@thresh/hosting/silo-host";
 import { createClient, type ClientNode } from "@thresh/client/client-node";
 import { membershipGatewayProvider } from "@thresh/client/gateway-provider";
 import {
-  activeSilos,
+  ringSilos,
   type MembershipService,
   type MembershipSnapshot,
 } from "@thresh/core/membership";
@@ -428,7 +428,7 @@ export class TestCluster {
       gateways:
         membership !== undefined
           ? membershipGatewayProvider(membership)
-          : { getGateways: () => activeSilos(this.viewOf(this.primary).membership) },
+          : { getGateways: () => ringSilos(this.viewOf(this.primary).membership) },
     }).registerGrains(this.options.grains ?? []);
     await client.connect();
     return client;

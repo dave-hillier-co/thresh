@@ -196,19 +196,22 @@ describe("a silo on Kubernetes membership", () => {
 });
 
 describe("a silo joining under load", () => {
-  it("never activates a live grain a second time (20 runs)", async () => {
-    const keys = Array.from({ length: 60 }, (_, i) => `k${i}`);
+  it("owns nothing and activates nothing until it is ready, and never activates a grain twice (20 runs)", async () => {
+    const existing = Array.from({ length: 30 }, (_, i) => `k${i}`);
     for (let run = 0; run < 20; run++) {
+      const fresh = Array.from({ length: 30 }, (_, i) => `fresh-${run}-${i}`);
+      const all = [...existing, ...fresh];
       const c = cluster();
       const a = c.silo({ name: `incumbent-${run}-${uid()}`, uid: uid(), ip: "10.0.0.1" });
       await c.join(a);
-      for (const k of keys) expect(await a.host.getGrain(Counter, k).inc()).toBe(1);
+      for (const k of existing) expect(await a.host.getGrain(Counter, k).inc()).toBe(1);
 
       const b = c.silo({ name: `joiner-${run}-${uid()}`, uid: uid(), ip: "10.0.0.2" });
       const starting = b.host.start();
-      await until(() => nodeOf(b.host).ownedHashRanges().length > 0, "the joiner to own ranges");
-      const throughJoiner = await Promise.all(
-        keys.map((k) =>
+      await until(() => nodeOf(b.host).appliedViewVersion > 0, "the joiner to apply a view");
+      // Not ready: grains already live, and grains FIRST called through the joiner now.
+      const notReady = await Promise.all(
+        all.map((k) =>
           b.host
             .getGrain(Counter, k)
             .inc()
@@ -216,39 +219,37 @@ describe("a silo joining under load", () => {
         ),
       );
       await starting;
+      expect(notReady, `run ${run}`).toEqual(all.map((k) => (existing.includes(k) ? 2 : 1)));
+      expect(nodeOf(b.host).ownedHashRanges(), `run ${run}: joiner owns ranges`).toEqual([]);
       expect(
-        throughJoiner.filter((r) => r !== 2),
-        `run ${run}`,
+        all.filter((k) => b.host.isActive(grainId(k))),
+        `run ${run}: activated on the joiner`,
       ).toEqual([]);
-      expect(
-        keys.filter((k) => a.host.isActive(grainId(k)) && b.host.isActive(grainId(k))),
-        `run ${run}: active on both silos`,
-      ).toEqual([]);
+      expect(all.filter((k) => !a.host.isActive(grainId(k)))).toEqual([]);
 
-      // And once the joiner is ready and in every ring, the same grains still answer once.
+      // Ready, with calls issued at once, while the ring moves.
       c.api.setReady(b.pod.name, true);
-      await settle();
       const afterReady = await Promise.all(
-        keys.map((k, i) =>
+        all.map((k, i) =>
           (i % 2 === 0 ? a : b).host
             .getGrain(Counter, k)
             .inc()
             .catch((e: unknown) => `error: ${String(e)}`),
         ),
       );
+      expect(afterReady, `run ${run} after ready`).toEqual(
+        all.map((k) => (existing.includes(k) ? 3 : 2)),
+      );
+      await settle();
+      expect(nodeOf(b.host).ownedHashRanges().length, `run ${run}`).toBeGreaterThan(0);
       expect(
-        afterReady.filter((r) => r !== 3),
-        `run ${run} after ready`,
-      ).toEqual([]);
-      expect(
-        keys.filter((k) => a.host.isActive(grainId(k)) && b.host.isActive(grainId(k))),
-        `run ${run}: active on both silos after ready`,
+        all.filter((k) => a.host.isActive(grainId(k)) && b.host.isActive(grainId(k))),
+        `run ${run}: active on both silos`,
       ).toEqual([]);
       await c.stopAll();
     }
   }, 60_000);
 });
-
 describe("the view a silo applies", () => {
   it("reflects every view change published while an ownership hook was blocked", async () => {
     const c = cluster();

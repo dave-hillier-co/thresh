@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activeSilos, type SiloMember } from "@thresh/core/membership";
+import { activeSilos, ringSilos, type SiloMember } from "@thresh/core/membership";
 import { SiloAddress } from "@thresh/core/silo-address";
 import {
   metadataFromSlices,
@@ -17,6 +17,7 @@ function slice(
     name: string;
     uid: string;
     ready: boolean;
+    terminating?: boolean;
     metadata?: Record<string, string>;
   }>,
   port = 11111,
@@ -25,21 +26,50 @@ function slice(
     ports: [{ name: "silo", port }],
     endpoints: endpoints.map((e) => ({
       addresses: [e.ip],
-      conditions: { ready: e.ready },
+      conditions: {
+        ready: e.ready,
+        ...(e.terminating !== undefined ? { terminating: e.terminating } : {}),
+      },
       targetRef: { name: e.name, uid: e.uid },
       ...(e.metadata !== undefined ? { metadata: e.metadata } : {}),
     })),
   };
 }
 
+/**
+ * A hand-driven watch. Every update carries a revision, as the contract requires: one the test
+ * names, or the next of a counter.
+ */
 class FakeWatch implements EndpointWatch {
-  private cb: ((slices: EndpointSlice[], revision?: number) => void) | undefined;
-  subscribe(onSlices: (slices: EndpointSlice[], revision?: number) => void): () => void {
+  private cb: ((slices: EndpointSlice[], revision: number) => void) | undefined;
+  private next = 0;
+  subscribe(onSlices: (slices: EndpointSlice[], revision: number) => void): () => void {
     this.cb = onSlices;
     return () => (this.cb = undefined);
   }
   emit(slices: EndpointSlice[], revision?: number): void {
-    this.cb?.(slices, revision);
+    this.next = revision ?? this.next + 1;
+    this.cb?.(slices, this.next);
+  }
+  /** An update with no revision, as a watch that breaks the contract would send. */
+  emitUndated(slices: EndpointSlice[]): void {
+    (this.cb as unknown as (slices: EndpointSlice[]) => void)(slices);
+  }
+}
+
+/** A watch that can re-list on demand, reporting the list's own revision. */
+class RelistableWatch extends FakeWatch {
+  relists = 0;
+  constructor(
+    private readonly listed: () => { slices: EndpointSlice[]; revision: number; list: number },
+  ) {
+    super();
+  }
+  async relist(): Promise<number | undefined> {
+    this.relists += 1;
+    const { slices, revision, list } = this.listed();
+    this.emit(slices, revision);
+    return list;
   }
 }
 
@@ -57,14 +87,23 @@ describe("siloMembersFromSlices", () => {
     expect(silos[0]!.address.endpoint).toBe("10.0.0.1:11111");
   });
 
-  it("marks a ready endpoint active and a present-but-not-ready one draining", () => {
+  it("reads each endpoint's status from its ready and terminating conditions", () => {
     const silos = siloMembersFromSlices([
       slice([
         { ip: "10.0.0.1", name: "silo-0", uid: "uid-0", ready: true },
-        { ip: "10.0.0.2", name: "silo-1", uid: "uid-1", ready: false },
+        { ip: "10.0.0.2", name: "silo-1", uid: "uid-1", ready: false, terminating: true },
+        { ip: "10.0.0.3", name: "silo-2", uid: "uid-2", ready: false },
+        { ip: "10.0.0.4", name: "silo-3", uid: "uid-3", ready: false, terminating: false },
+        { ip: "10.0.0.5", name: "silo-4", uid: "uid-4", ready: true, terminating: true },
       ]),
     ]);
-    expect(silos.map((s) => s.status)).toEqual(["active", "draining"]);
+    expect(silos.map((s) => s.status)).toEqual([
+      "active",
+      "draining",
+      "joining",
+      "joining",
+      "active",
+    ]);
   });
 
   it("prefers the named service port when present", () => {
@@ -180,7 +219,7 @@ describe("KubernetesMembership", () => {
 
     const next = await iterator.next();
     expect(next.value.version).toBe(12);
-    expect(next.value.silos.map((m: SiloMember) => m.address.ringKey)).toEqual(["silo-0"]);
+    expect(next.value.silos.map((m: SiloMember) => m.address.ringKey)).toEqual([]);
   });
 
   it("takes the view version from the revision the watch observed", () => {
@@ -200,7 +239,7 @@ describe("KubernetesMembership", () => {
     expect(membership.current()).toBe(held);
   });
 
-  it("takes a not-ready silo out of the ring but keeps it in the view as draining", () => {
+  it("takes a terminating silo out of the ring but keeps it in the view as draining", () => {
     const watch = new FakeWatch();
     const membership = new KubernetesMembership(local, watch, { portName: "silo" });
     watch.emit([
@@ -212,7 +251,7 @@ describe("KubernetesMembership", () => {
     watch.emit([
       slice([
         { ip: "10.0.0.1", name: "silo-0", uid: "uid-0", ready: true },
-        { ip: "10.0.0.2", name: "silo-1", uid: "uid-1", ready: false },
+        { ip: "10.0.0.2", name: "silo-1", uid: "uid-1", ready: false, terminating: true },
       ]),
     ]);
     // Out of the ring: it must take no new placements and own no new ranges.
@@ -251,32 +290,90 @@ describe("KubernetesMembership", () => {
   });
 
   describe("the local silo's own membership", () => {
-    const ringKeys = (membership: KubernetesMembership): string[] =>
-      activeSilos(membership.current())
-        .map((s) => s.ringKey)
+    const statuses = (membership: KubernetesMembership): string[] =>
+      membership
+        .current()
+        .silos.map((m) => `${m.address.ringKey}:${m.status}`)
         .sort();
 
-    it("keeps itself in the view while the watch does not report it at all", () => {
+    it("takes its own entry from the slices like any other, and is absent until listed", () => {
       const watch = new FakeWatch();
       const membership = new KubernetesMembership(local, watch, { portName: "silo" });
+      expect(membership.localStanding()).toBe("unlisted");
 
-      // Joining: the watch shows a peer but not this silo's own endpoint yet. It
-      // must still be a member of its own view, or it would never consider itself
-      // active — and readiness, which gates its endpoint, waits on membership.
+      // The watch shows a peer but not this silo's own endpoint yet: it is not in its view.
       watch.emit([slice([{ ip: "10.0.0.2", name: "silo-1", uid: "uid-1", ready: true }])]);
-      expect(ringKeys(membership)).toEqual(["silo-0", "silo-1"]);
+      expect(statuses(membership)).toEqual(["silo-1:active"]);
+      expect(membership.localStanding()).toBe("unlisted");
 
-      // A transient empty watch must not read as "the whole cluster vanished".
-      watch.emit([]);
-      expect(ringKeys(membership)).toEqual(["silo-0"]);
+      // Listed, not ready: joining, and out of the ring while a peer is active.
+      watch.emit([
+        slice([
+          { ip: "10.0.0.1", name: "silo-0", uid: "uid-0", ready: false },
+          { ip: "10.0.0.2", name: "silo-1", uid: "uid-1", ready: true },
+        ]),
+      ]);
+      expect(statuses(membership)).toEqual(["silo-0:joining", "silo-1:active"]);
+      expect(ringSilos(membership.current()).map((s) => s.ringKey)).toEqual(["silo-1"]);
+      expect(membership.localStanding()).toBe("listed");
 
-      // Nor may it, once back, need the watch to vouch for it before it counts
-      // itself as a member again.
-      watch.emit([slice([{ ip: "10.0.0.2", name: "silo-1", uid: "uid-1", ready: true }])]);
-      expect(ringKeys(membership)).toEqual(["silo-0", "silo-1"]);
+      // Ready: active and in the ring.
+      watch.emit([
+        slice([
+          { ip: "10.0.0.1", name: "silo-0", uid: "uid-0", ready: true },
+          { ip: "10.0.0.2", name: "silo-1", uid: "uid-1", ready: true },
+        ]),
+      ]);
+      expect(statuses(membership)).toEqual(["silo-0:active", "silo-1:active"]);
     });
 
-    it("keeps itself in the view once the watch has dropped it (issue #72)", () => {
+    it("drains itself out of its own ring when its endpoint is terminating", () => {
+      const watch = new FakeWatch();
+      const membership = new KubernetesMembership(local, watch, { portName: "silo" });
+      watch.emit([
+        slice([
+          { ip: "10.0.0.1", name: "silo-0", uid: "uid-0", ready: false, terminating: true },
+          { ip: "10.0.0.2", name: "silo-1", uid: "uid-1", ready: true },
+        ]),
+      ]);
+      expect(statuses(membership)).toEqual(["silo-0:draining", "silo-1:active"]);
+      expect(ringSilos(membership.current()).map((s) => s.ringKey)).toEqual(["silo-1"]);
+    });
+
+    it("holds the same view as a peer that observed the same slices, its own entry included", () => {
+      const peerAddress = new SiloAddress("silo-1", "uid-1", "10.0.0.2:11111");
+      const slices = [
+        slice([
+          { ip: "10.0.0.1", name: "silo-0", uid: "uid-0", ready: false },
+          { ip: "10.0.0.2", name: "silo-1", uid: "uid-1", ready: true },
+        ]),
+      ];
+      const watchA = new FakeWatch();
+      const watchB = new FakeWatch();
+      const a = new KubernetesMembership(local, watchA, { portName: "silo" });
+      const b = new KubernetesMembership(peerAddress, watchB, { portName: "silo" });
+      watchA.emit(slices, 31);
+      watchB.emit(slices, 31);
+      expect(a.current()).toEqual(b.current());
+    });
+
+    it("forms a ring of the joining silos while none is ready (a cold start)", () => {
+      const watch = new FakeWatch();
+      const membership = new KubernetesMembership(local, watch, { portName: "silo" });
+      watch.emit([
+        slice([
+          { ip: "10.0.0.1", name: "silo-0", uid: "uid-0", ready: false },
+          { ip: "10.0.0.2", name: "silo-1", uid: "uid-1", ready: false },
+        ]),
+      ]);
+      expect(
+        ringSilos(membership.current())
+          .map((s) => s.ringKey)
+          .sort(),
+      ).toEqual(["silo-0", "silo-1"]);
+    });
+
+    it("reports itself removed once a view omits it after it was listed", () => {
       const watch = new FakeWatch();
       const membership = new KubernetesMembership(local, watch, { portName: "silo" });
       watch.emit([
@@ -285,17 +382,128 @@ describe("KubernetesMembership", () => {
           { ip: "10.0.0.2", name: "silo-1", uid: "uid-1", ready: true },
         ]),
       ]);
-      expect(ringKeys(membership)).toEqual(["silo-0", "silo-1"]);
-
-      // PINNED GAP, not desired behaviour: this silo drains (readiness off) or is
-      // removed from the service, so every peer drops it — while it goes on
-      // considering itself a member, a ring divergence the directory's
-      // `staleView` guard cannot detect. The unconditional self-injection is
-      // deliberate for now; see caveat 2 in `KubernetesMembership`'s class doc
-      // for what a fix has to settle first (placement candidates and the
-      // self-probe both ride on this view). Change it there, not here.
       watch.emit([slice([{ ip: "10.0.0.2", name: "silo-1", uid: "uid-1", ready: true }])]);
-      expect(ringKeys(membership)).toEqual(["silo-0", "silo-1"]);
+      expect(statuses(membership)).toEqual(["silo-1:active"]);
+      expect(membership.localStanding()).toBe("removed");
+
+      // A removal is final for this incarnation: a later listing does not undo it.
+      watch.emit([
+        slice([
+          { ip: "10.0.0.1", name: "silo-0", uid: "uid-0", ready: true },
+          { ip: "10.0.0.2", name: "silo-1", uid: "uid-1", ready: true },
+        ]),
+      ]);
+      expect(membership.localStanding()).toBe("removed");
+    });
+
+    it("is not removed by a view that omits it before it was ever listed", () => {
+      const watch = new FakeWatch();
+      const membership = new KubernetesMembership(local, watch, { portName: "silo" });
+      watch.emit([]);
+      watch.emit([slice([{ ip: "10.0.0.2", name: "silo-1", uid: "uid-1", ready: true }])]);
+      expect(membership.localStanding()).toBe("unlisted");
+    });
+  });
+
+  describe("the revision", () => {
+    it("refuses an update that carries no revision", () => {
+      const watch = new FakeWatch();
+      const membership = new KubernetesMembership(local, watch, { portName: "silo" });
+      expect(() =>
+        watch.emitUndated([slice([{ ip: "10.0.0.1", name: "silo-0", uid: "uid-0", ready: true }])]),
+      ).toThrow(/revision/);
+      expect(membership.current().silos).toEqual([]);
+      expect(membership.current().version).toBe(0);
+    });
+  });
+
+  describe("refresh", () => {
+    const self = slice([{ ip: "10.0.0.1", name: "silo-0", uid: "uid-0", ready: true }]);
+
+    it("resolves at once for a version it already holds", async () => {
+      const watch = new RelistableWatch(() => ({ slices: [self], revision: 5, list: 5 }));
+      const membership = new KubernetesMembership(local, watch, { portName: "silo" });
+      watch.emit([self], 9);
+      await membership.refresh(9);
+      await membership.refresh(3);
+      expect(watch.relists).toBe(0);
+    });
+
+    it("resolves once the watch delivers the version, without re-listing", async () => {
+      const watch = new RelistableWatch(() => ({ slices: [self], revision: 5, list: 5 }));
+      const membership = new KubernetesMembership(local, watch, {
+        portName: "silo",
+        refreshWatchGraceMs: 1_000,
+      });
+      watch.emit([self], 9);
+      const refreshed = membership.refresh(12);
+      watch.emit([self], 12);
+      await refreshed;
+      expect(membership.current().version).toBe(12);
+      expect(watch.relists).toBe(0);
+    });
+
+    it("re-lists when the watch does not deliver, and adopts a version the list proves", async () => {
+      // The peer is at 20: a slice deletion at 20 this silo's watch never saw. The list
+      // (global revision 25) shows the slices it already holds, at slice revision 9.
+      const watch = new RelistableWatch(() => ({ slices: [self], revision: 9, list: 25 }));
+      const membership = new KubernetesMembership(local, watch, {
+        portName: "silo",
+        refreshWatchGraceMs: 0,
+      });
+      watch.emit([self], 9);
+      await membership.refresh(20);
+      expect(watch.relists).toBe(1);
+      expect(membership.current().version).toBe(20);
+      expect(membership.current().silos.map((m) => m.address.ringKey)).toEqual(["silo-0"]);
+    });
+
+    it("takes the listed contents when the list brings a change", async () => {
+      const both = slice([
+        { ip: "10.0.0.1", name: "silo-0", uid: "uid-0", ready: true },
+        { ip: "10.0.0.2", name: "silo-1", uid: "uid-1", ready: true },
+      ]);
+      const watch = new RelistableWatch(() => ({ slices: [both], revision: 14, list: 30 }));
+      const membership = new KubernetesMembership(local, watch, {
+        portName: "silo",
+        refreshWatchGraceMs: 0,
+      });
+      watch.emit([self], 9);
+      await membership.refresh(14);
+      expect(membership.current().version).toBe(14);
+      expect(membership.current().silos.map((m) => m.address.ringKey)).toEqual([
+        "silo-0",
+        "silo-1",
+      ]);
+    });
+
+    it("does not adopt a version the list cannot prove, and waits for the watch", async () => {
+      const watch = new RelistableWatch(() => ({ slices: [self], revision: 9, list: 15 }));
+      const membership = new KubernetesMembership(local, watch, {
+        portName: "silo",
+        refreshWatchGraceMs: 0,
+      });
+      watch.emit([self], 9);
+      let done = false;
+      const refreshed = membership.refresh(20).then(() => (done = true));
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      expect(done).toBe(false);
+      expect(membership.current().version).toBe(9);
+      watch.emit([self], 21);
+      await refreshed;
+      expect(membership.current().version).toBe(21);
+    });
+
+    it("publishes the adopted version to its updates", async () => {
+      const watch = new RelistableWatch(() => ({ slices: [self], revision: 9, list: 25 }));
+      const membership = new KubernetesMembership(local, watch, {
+        portName: "silo",
+        refreshWatchGraceMs: 0,
+      });
+      watch.emit([self], 9);
+      const next = membership.updates()[Symbol.asyncIterator]().next();
+      await membership.refresh(20);
+      expect((await next).value.version).toBe(20);
     });
   });
 

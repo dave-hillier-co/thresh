@@ -39,7 +39,7 @@
  */
 import type { GrainId } from "@thresh/core/grain-id";
 import type { MembershipService } from "@thresh/core/membership";
-import { activeSilos } from "@thresh/core/membership";
+import { ringSilos } from "@thresh/core/membership";
 import type { SiloAddress } from "@thresh/core/silo-address";
 import type { HeapElement } from "@thresh/runtime/placement/repartitioning/max-heap";
 import { MaxHeap } from "@thresh/runtime/placement/repartitioning/max-heap";
@@ -68,7 +68,7 @@ export function rebalancerCompatibleTolerance(
 ): ImbalanceToleranceRule {
   return {
     isSatisfiedBy(imbalance: number): boolean {
-      const activeCount = activeSilos(membership.current()).length;
+      const activeCount = ringSilos(membership.current()).length;
       const percentageOfBaseline = Math.max(100 / (1 + Math.exp(0.07 * activeCount - 4.8)), 10);
       const pairwiseImbalance = Math.round(10.1 * percentageOfBaseline);
       return imbalance <= pairwiseImbalance;
@@ -222,7 +222,7 @@ export class ActivationRepartitioner {
   // ── protocol ─────────────────────────────────────────────────────────
 
   async triggerExchangeRequest(): Promise<void> {
-    const silos = activeSilos(this.deps.membership.current()).filter(
+    const silos = ringSilos(this.deps.membership.current()).filter(
       (s) => !s.equals(this.deps.local),
     );
     if (silos.length === 0) return;
