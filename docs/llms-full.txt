@@ -284,6 +284,41 @@ Use `RequestContext` for small cross-cutting string headers, incoming/outgoing c
 logging or policy, and `GrainCancellationToken` for cancellation across a grain boundary. Class
 grains and decorators remain supported for Orleans ports; prefer functional grains for new code.
 
+## What a call does to its arguments
+
+A call to a grain on another silo serializes its arguments and its result, so the callee works on
+its own copies: a class instance with no registered surrogate arrives as a plain object of its own
+enumerable fields, a value the codec cannot carry (a function, a cycle, a sparse array, a `RegExp`)
+is refused, and an error arrives as the class the codec rebuilds. A call to a grain on the SAME silo
+does what `localCallSemantics` (a `SiloConfig` field) says:
+
+- `"reference"` (the default in a silo): nothing is copied. The callee receives the caller's own
+  objects and the caller receives the callee's; a class instance keeps its class and an error its
+  class. A callee that mutates its argument changes the caller's object, and a caller that mutates
+  a returned value changes the grain's state, so the same call behaves differently on one silo and
+  across two.
+- `"copy"`: the arguments and the result are deep-copied, exactly as the codec round trip would
+  deliver them but without building the encoded form, and a thrown error takes the codec's path. A
+  same-silo callee then sees what a callee on another silo would. This is Orleans' behaviour.
+- `"wire"` (the default in `TestCluster`): the arguments, the result and a thrown error make the
+  full serializer round trip a message body would. The same result as `"copy"`, at the full price.
+
+Under `"copy"`, `immutable(value)` (from `@thresh/core/immutable`, Orleans' `Immutable<T>`) marks a
+value as safe to share: the copier hands it over as itself, at any depth of an argument or a result,
+instead of copying it. It is a promise you make, not one anything enforces. Neither side may mutate
+the value, or anything it reaches, after the call, because both hold the same object. The mark is
+kept by identity, so it changes nothing about the value's shape, and the codec ignores it: a call to
+another silo, or a silo set to `"wire"`, still serializes the value, flattening a class instance as
+usual. A primitive needs no mark; a function cannot be marked; a marked value inside an `Error`
+carried as a value is copied with the error.
+
+```ts
+import { immutable } from "@thresh/core/immutable";
+
+const rows = immutable(await loadReferenceRows()); // never mutated after this
+await grain.index(rows); // shared on the same silo under "copy", serialized across silos
+```
+
 
 ---
 Source: docs/guide/state.md
@@ -513,8 +548,9 @@ closer:
   views change one at a time and can differ. Pass `membership: "kubernetes"` to run that path.
 - **Serialization.** A call between silos round-trips the value codec. In `TestCluster` so does a
   call to a grain on the same silo, so a test never sees shared objects or a preserved error class
-  that a cross-silo call would lose. Pass `wireSemanticsForLocalCalls: false` to opt out. A silo
-  outside the harness does not copy local calls unless the option is set.
+  that a cross-silo call would lose (`localCallSemantics: "wire"`). Pass
+  `localCallSemantics: "reference"` to opt out. A silo outside the harness does not copy local
+  calls unless it is set to `"copy"` or `"wire"`.
 - **Failure.** Nothing fails unless the test makes it fail: use `killSilo`, `cluster.faults` and the
   fault-injecting storage decorators below.
 
@@ -606,13 +642,15 @@ store's `backingKey`. Install them from `configureSilo`, for example
 
 ## Remote semantics for local calls
 
-`wireSemanticsForLocalCalls` (also a `SiloConfig` field) passes the arguments, the result and
-a thrown error of every grain call through the codec round trip a message makes. A same-silo
-callee then gets copies, not the caller's objects. A class instance with no registered surrogate
-is flattened or refused, as on the wire. An error class the codec cannot rebuild arrives as
-`UnavailableExceptionFallbackException`, as a remote caller would see it. The option is on by
-default in `TestCluster` and off by default in a silo; a test that pins local-only behaviour, such as
-a cyclic argument, passes `false`.
+`localCallSemantics` (also a `SiloConfig` field) says what a same-silo call does to its arguments,
+its result and a thrown error. `TestCluster` defaults to `"wire"`: each passes through the
+serializer's round trip a message makes. A same-silo callee then gets copies, not the caller's
+objects. A class instance with no registered surrogate is flattened or refused, as on the wire. An
+error class the codec cannot rebuild arrives as `UnavailableExceptionFallbackException`, as a
+remote caller would see it. `"copy"` gives the same result through the deep copier, faster, and
+shares values marked `immutable` (see [Grains and calls](grains.md)); pass it to test grain code
+that relies on that mark. A silo outside the harness defaults to `"reference"`, which copies
+nothing; a test that pins local-only behaviour, such as a cyclic argument, passes `"reference"`.
 
 
 ---
@@ -914,7 +952,7 @@ Two bounds on that walk. It does **not** descend into class instances (or grain 
 rebuilding one would hand a same-silo callee a plain object where its signature declares the class —
 so a signal held by a class-typed record still does not cross a silo boundary. And a value graph
 containing a cycle is left alone at the point it closes, since a cyclic argument is legal on a
-same-silo call, which does not serialize unless `wireSemanticsForLocalCalls` is on.
+same-silo call whose `localCallSemantics` is `"reference"`.
 
 ## A cancellation crosses a silo boundary AS a cancellation
 
@@ -1216,24 +1254,35 @@ things differ:
 ## A same-silo call shares its arguments unless asked not to
 
 Orleans deep-copies a call's arguments and its response even when caller and callee share a silo
-(unless a type is `[Immutable]`), so placement never changes what a callee can see or mutate.
-Thresh hands a same-silo callee the caller's own objects, and an error keeps its class, while the
-same call to another silo round-trips the value codec. `SiloConfig.wireSemanticsForLocalCalls`
-(and `TestClusterOptions.wireSemanticsForLocalCalls`) restores placement-independence by passing
-the arguments, the result and a thrown error of every call through that codec round trip. The codec
-is the copier here, so the option also flattens or refuses class instances and rebuilds error
-classes exactly as the wire does. It is off by default in a silo and on by default in
-`TestCluster`, so a test sees what a cross-silo call would.
+(`InsideRuntimeClient` runs its `DeepCopier`), unless a value is wrapped in `Immutable<T>` or its
+type is `[Immutable]`, so placement never changes what a callee can see or mutate. Thresh makes
+that a setting, `SiloConfig.localCallSemantics` (and `TestClusterOptions.localCallSemantics`):
 
-This is an open choice, not a settled one. Copying in production would match Orleans and make
-placement invisible to grain code, at the price of an encode and a decode on every local call,
-a loss of class identity on arguments and results (a class instance with no surrogate arrives
-flattened, an unregistered error class arrives as `UnavailableExceptionFallbackException`), and
-a refusal for values the wire cannot carry, such as a cyclic argument or a function. Not copying
-keeps local calls cheap and lets a grain pass its own objects to a neighbour, at the price of
-aliasing no cross-silo call has: a callee can mutate its caller's argument, a caller can mutate
-a grain's returned state, and a suite that lands caller and callee together passes where a
-multi-silo deployment fails. The production default stays off.
+- `"reference"` hands a same-silo callee the caller's own objects, and the caller the callee's;
+  a class instance keeps its class and an error its class, while the same call to another silo
+  round-trips the value codec.
+- `"copy"` is Orleans' behaviour. Arguments and results are deep-copied by `copyValue`
+  (`@thresh/core/value-copier`), whose result is defined as the codec round trip's: a class
+  instance with no surrogate is flattened, a value the wire cannot carry (a cycle, a function) is
+  refused with the codec's own error, and everything else comes back as a callee on another silo
+  would receive it, without building the encoded form. A test holds the copier to the codec over
+  both serializers. A thrown error takes the codec's path, so an unregistered error class arrives as
+  `UnavailableExceptionFallbackException`. `immutable(value)` (`@thresh/core/immutable`) is the
+  analogue of `Immutable<T>`: a marked value is shared rather than copied. The mark is kept by
+  identity, not as a wrapper type, because a TypeScript call passes the value itself; the codec
+  ignores it.
+- `"wire"` passes the arguments, the result and a thrown error of every call through the
+  silo serializer's full round trip. The same result as `"copy"` (minus `immutable`), at the
+  price of an encode and a decode.
+
+`TestCluster` defaults to `"wire"`, so a test sees what a cross-silo call would. A production silo
+still defaults to `"reference"`, pending measurement of what `"copy"` costs
+(`scripts/local-call-semantics-bench.ts`). Copying keeps grain code placement-independent, at the
+price of a copy on every local call, a loss of class identity on arguments and results, and a
+refusal of values the wire cannot carry. Not copying keeps local calls cheap and lets a grain pass
+its own objects to a neighbour, at the price of aliasing no cross-silo call has: a callee can mutate
+its caller's argument, a caller can mutate a grain's returned state, and a suite that lands caller
+and callee together passes where a multi-silo deployment fails.
 
 ## A process epoch rides the preamble and the correlation, not the silo address
 

@@ -169,3 +169,38 @@ commands to be idempotent where retry is possible. Never rely on a specific acti
 Use `RequestContext` for small cross-cutting string headers, incoming/outgoing call filters for
 logging or policy, and `GrainCancellationToken` for cancellation across a grain boundary. Class
 grains and decorators remain supported for Orleans ports; prefer functional grains for new code.
+
+## What a call does to its arguments
+
+A call to a grain on another silo serializes its arguments and its result, so the callee works on
+its own copies: a class instance with no registered surrogate arrives as a plain object of its own
+enumerable fields, a value the codec cannot carry (a function, a cycle, a sparse array, a `RegExp`)
+is refused, and an error arrives as the class the codec rebuilds. A call to a grain on the SAME silo
+does what `localCallSemantics` (a `SiloConfig` field) says:
+
+- `"reference"` (the default in a silo): nothing is copied. The callee receives the caller's own
+  objects and the caller receives the callee's; a class instance keeps its class and an error its
+  class. A callee that mutates its argument changes the caller's object, and a caller that mutates
+  a returned value changes the grain's state, so the same call behaves differently on one silo and
+  across two.
+- `"copy"`: the arguments and the result are deep-copied, exactly as the codec round trip would
+  deliver them but without building the encoded form, and a thrown error takes the codec's path. A
+  same-silo callee then sees what a callee on another silo would. This is Orleans' behaviour.
+- `"wire"` (the default in `TestCluster`): the arguments, the result and a thrown error make the
+  full serializer round trip a message body would. The same result as `"copy"`, at the full price.
+
+Under `"copy"`, `immutable(value)` (from `@thresh/core/immutable`, Orleans' `Immutable<T>`) marks a
+value as safe to share: the copier hands it over as itself, at any depth of an argument or a result,
+instead of copying it. It is a promise you make, not one anything enforces. Neither side may mutate
+the value, or anything it reaches, after the call, because both hold the same object. The mark is
+kept by identity, so it changes nothing about the value's shape, and the codec ignores it: a call to
+another silo, or a silo set to `"wire"`, still serializes the value, flattening a class instance as
+usual. A primitive needs no mark; a function cannot be marked; a marked value inside an `Error`
+carried as a value is copied with the error.
+
+```ts
+import { immutable } from "@thresh/core/immutable";
+
+const rows = immutable(await loadReferenceRows()); // never mutated after this
+await grain.index(rows); // shared on the same silo under "copy", serialized across silos
+```
