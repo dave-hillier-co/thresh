@@ -10,6 +10,7 @@ import { SiloAddress } from "@thresh/core/silo-address";
 import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
 import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
 import { createSilo } from "@thresh/hosting/silo-builder";
+import { waitFor } from "@thresh/testing/wait";
 
 const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
 type Client = ReturnType<typeof createClient>;
@@ -84,7 +85,9 @@ describe.skipIf(admin === undefined)("Redis reminders end-to-end", () => {
     try {
       await silo.getGrain(IBilling, "acct").scheduleSelfCheck();
       time.advance(180_000); // three 60s periods
-      await new Promise((r) => setTimeout(r, 0));
+      // Each tick checks its registration in the store before it delivers, so wait for the
+      // three round trips rather than for one turn of the event loop.
+      await waitFor(async () => (await silo.getGrain(IBilling, "acct").checkCount()) === 3);
       expect(await silo.getGrain(IBilling, "acct").checkCount()).toBe(3);
     } finally {
       await silo.stop();
