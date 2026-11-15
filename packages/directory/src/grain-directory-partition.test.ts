@@ -124,6 +124,7 @@ class HarnessNode {
   /** A held watch: refreshing brings nothing until the harness publishes to this node. */
   held = false;
   snapshotGate: Gate | undefined;
+  recoveryGate: Gate | undefined;
   snapshotAnswer: ((request: SnapshotRequest) => unknown) | undefined;
   readonly recoveryRequests: Array<ActivationsRequest & { from: SiloAddress }> = [];
 
@@ -149,12 +150,13 @@ class HarnessNode {
         const target = harness.node(member);
         if (target.unreachable) throw new Error(`${member.podName} unreachable`);
         target.recoveryRequests.push({ ...request, from: address });
-        return target.partition.serveRecovery(address, request);
+        if (target.recoveryGate !== undefined) await target.recoveryGate.promise;
+        return target.partition.answerRecovery(address, request);
       },
       registeredActivations: async (member, request) => {
         const target = harness.node(member);
         if (target.unreachable) throw new Error(`${member.podName} unreachable`);
-        return target.partition.serveRegistered(request);
+        return target.partition.answerRegistered(request);
       },
     };
     this.partition = new GrainDirectoryPartition({
@@ -280,6 +282,18 @@ describe("GrainDirectoryPartition: requests", () => {
     h.publish(view(2, [[S0, "active"]]), [S0]);
     expect(ok(await p0.lookup(2, g))).toBeUndefined();
     expect(p0.entryFor(g)).toBeUndefined();
+  });
+  it("lets a registration replace an entry whose host is not a member (Orleans RegisterCore)", async () => {
+    const h = new Harness();
+    const p0 = h.add(S0).partition;
+    const v1 = view(1, [[S0, "active"]]);
+    h.publish(v1);
+    await p0.settled();
+    const g = grainOwnedBy(v1, S0);
+    // Registered for a silo this partition has never seen as a member.
+    ok(await p0.register(1, addr(g, silo(9), "on-a-stranger")));
+    const winner = ok(await p0.register(1, addr(g, S0, "here")));
+    expect(winner.activationId).toBe("here");
   });
 });
 
@@ -437,6 +451,37 @@ describe("GrainDirectoryPartition: view changes", () => {
     await n1.partition.settled();
     // Retried as a recovery, which found the activation on its host.
     expect(ok(await lookup)?.silo.equals(S0)).toBe(true);
+  });
+});
+
+describe("GrainDirectoryPartition: a request that outlives its range", () => {
+  it("answers refresh rather than writing into a range the view moved away during its wait", async () => {
+    const h = new Harness();
+    const n0 = h.add(S0);
+    const n1 = h.add(S1);
+    const v1 = view(1, [
+      [S0, "active"],
+      [S1, "joining"],
+    ]);
+    // S0's first view: it recovers its ranges, and S1 is slow to answer.
+    n1.recoveryGate = gate();
+    h.publish(v1, [S0]);
+    const v2 = view(2, [
+      [S0, "active"],
+      [S1, "active"],
+    ]);
+    const g = grainMoving([
+      { view: v1, owner: S0 },
+      { view: v2, owner: S1 },
+    ]);
+    const registering = n0.partition.register(1, addr(g, S0));
+    expect(await stateOf(registering)).toBe("pending");
+    // The range moves to S1 while the registration waits on the lock.
+    h.publish(v2, [S0]);
+    n1.recoveryGate.open();
+    expect(await registering).toEqual({ kind: "refresh", version: 2 });
+    await n0.partition.settled();
+    expect(n0.partition.entryFor(g)).toBeUndefined();
   });
 });
 

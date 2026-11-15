@@ -192,3 +192,16 @@ export function subtractRanges(a: readonly RingRange[], b: readonly RingRange[])
     subtractSegments(a.flatMap(RingRange.segmentsOf), b.flatMap(RingRange.segmentsOf)),
   );
 }
+
+/** A range as plain data for the wire: `[start, end]`, or `[0, 0, 1]` for the whole circle. */
+export type WireRange = readonly [start: number, end: number, full?: 1];
+
+export function encodeRanges(ranges: readonly RingRange[]): WireRange[] {
+  return ranges
+    .filter((r) => !r.isEmpty)
+    .map((r): WireRange => (r.isFull ? [0, 0, 1] : [r.start, r.end]));
+}
+
+export function decodeRanges(wire: readonly WireRange[]): RingRange[] {
+  return wire.map(([start, end, full]) => (full === 1 ? RingRange.full : RingRange.of(start, end)));
+}

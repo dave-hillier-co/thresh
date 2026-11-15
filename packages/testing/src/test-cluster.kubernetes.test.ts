@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { defineGrain } from "@thresh/core/define-grain";
 import { GrainId } from "@thresh/core/grain-id";
 import { activeSilos, ringSilos } from "@thresh/core/membership";
-import type { LocalDirectoryPartition } from "@thresh/directory/local-directory-partition";
+import type { GrainDirectoryPartition } from "@thresh/directory/grain-directory-partition";
 import { PreferLocalPlacement } from "@thresh/runtime/placement/prefer-local-placement";
 import {
   TestCluster,
@@ -49,8 +49,8 @@ const ringNames = (cluster: TestCluster, silo: TestSiloHandle): string[] =>
     .sort();
 
 /** The silo's directory partition (introspection only). */
-const partitionOf = (silo: TestSiloHandle): LocalDirectoryPartition =>
-  (silo.host as unknown as { parts: { node: { partition: LocalDirectoryPartition } } }).parts.node
+const partitionOf = (silo: TestSiloHandle): GrainDirectoryPartition =>
+  (silo.host as unknown as { parts: { node: { partition: GrainDirectoryPartition } } }).parts.node
     .partition;
 
 describe("TestCluster on Kubernetes membership", () => {
@@ -122,7 +122,7 @@ describe("TestCluster on Kubernetes membership", () => {
         key,
       ).toHaveLength(1);
       expect(
-        silos.filter((s) => partitionOf(s).lookup(id(key)) !== undefined),
+        silos.filter((s) => partitionOf(s).entryFor(id(key)) !== undefined),
         key,
       ).toHaveLength(1);
     }

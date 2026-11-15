@@ -327,13 +327,6 @@ export class GrainDirectoryPartition {
           partners,
         });
       }
-      this.logger.debug("directory partition released ranges", {
-        silo: this.local.toString(),
-        previousVersion: previous.version,
-        version: next.version,
-        entries: moved.length,
-        partners: partners.map((p) => p.toString()),
-      });
     } catch (error) {
       if (!this.stopped) {
         this.logger.error("directory partition failed to release ranges", {
@@ -422,13 +415,8 @@ export class GrainDirectoryPartition {
         }
       }),
     );
-    if (snapshots.some((s) => s === undefined)) {
-      this.logger.debug("directory snapshot unavailable; recovering the range instead", {
-        silo: this.local.toString(),
-        ...pair,
-      });
-      return false;
-    }
+    // A previous owner that holds no snapshot for this pair moved between other views.
+    if (snapshots.some((s) => s === undefined)) return false;
     await this.waitForRanges(gained, previous.version);
     let count = 0;
     for (const snapshot of snapshots) {
@@ -458,11 +446,6 @@ export class GrainDirectoryPartition {
     patience: Patience,
   ): Promise<void> {
     recordDirectoryRecoveryStarted();
-    this.logger.debug("directory partition recovering ranges", {
-      silo: this.local.toString(),
-      version: next.version,
-      ranges: gained.map(String),
-    });
     const request: ActivationsRequest = { version: next.version, ranges: gained };
     const answers = await Promise.all(
       next.members.map((member) => this.recoverFrom(member, request, patience)),
@@ -661,14 +644,8 @@ export class GrainDirectoryPartition {
     const snapshot = this.snapshots.find(
       (s) => s.previousVersion === request.previousVersion && s.version === request.version,
     );
-    if (snapshot === undefined) {
-      this.logger.debug("directory snapshot requested for a view change this silo did not make", {
-        silo: this.local.toString(),
-        previousVersion: request.previousVersion,
-        version: request.version,
-      });
-      return undefined;
-    }
+    // This silo did not move between that pair of views (it skipped or coalesced one).
+    if (snapshot === undefined) return undefined;
     return snapshot.entries.filter((e) =>
       rangesContain(request.ranges, e.grainId.getUniformHashCode()),
     );
@@ -692,7 +669,7 @@ export class GrainDirectoryPartition {
    * the ranges are released; this silo's recovery version rises to the request's; and the
    * answer is its registered activations in the ranges.
    */
-  serveRecovery(requester: SiloAddress, request: ActivationsRequest): GrainAddress[] {
+  answerRecovery(requester: SiloAddress, request: ActivationsRequest): GrainAddress[] {
     void this.waitForRanges(request.ranges, request.version)
       .catch(() => undefined)
       .then(() =>
@@ -706,7 +683,7 @@ export class GrainDirectoryPartition {
   }
 
   /** The same answer for an integrity check: no snapshot dropped, no recovery version raised. */
-  serveRegistered(request: ActivationsRequest): GrainAddress[] {
+  answerRegistered(request: ActivationsRequest): GrainAddress[] {
     return this.activations.registeredIn(request.ranges);
   }
 
