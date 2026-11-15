@@ -465,6 +465,24 @@ export class Catalog {
   }
 
   /**
+   * The `[StatelessWorker]` path on a silo that creates no activation (one outside its ring, see
+   * `DistributedDispatcherDeps.mayActivate`): one of `id`'s existing local workers that can serve
+   * a call — a non-busy one first, else the least loaded — or `undefined` when it hosts none.
+   * Never creates a worker. Synchronous, for the reason `pickOrScaleWorker` gives.
+   */
+  pickExistingWorker(id: GrainId): ActivationData | undefined {
+    const list = this.workerActivations.get(this.canonicalId(id).toString());
+    if (list === undefined) return undefined;
+    let best: ActivationData | undefined;
+    for (const a of list) {
+      if (a.state === "invalid" || a.state === "deactivating" || a.state === "failed") continue;
+      if (!a.scheduler.busy) return a;
+      if (best === undefined || a.scheduler.load < best.scheduler.load) best = a;
+    }
+    return best;
+  }
+
+  /**
    * The `[StatelessWorker]` path: choose which of `id`'s (possibly several)
    * local activations serves the next call, scaling up to `maxLocalWorkers`
    * on demand. Placement (`StatelessWorkerPlacement`) already confined the

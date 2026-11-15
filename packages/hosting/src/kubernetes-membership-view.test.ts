@@ -24,6 +24,7 @@ import { MemoryReminderTable } from "@thresh/reminders/memory-reminder-table";
 import { IGrainManagementExtension } from "@thresh/runtime/grain-management-extension";
 import { createSilo, type SiloBuilder, type SiloConfig } from "@thresh/hosting/silo-builder";
 import type { SiloHost } from "@thresh/hosting/silo-host";
+import { createClient } from "@thresh/client/client-node";
 
 /**
  * The production membership path, composed end to end: `createSilo(...)
@@ -51,6 +52,21 @@ const Hooked = defineGrain(HOOKED_TYPE, (ctx) => {
   return { inc: async (): Promise<number> => ++n };
 });
 const hookedId = (key: string): GrainId => new GrainId(HOOKED_TYPE, key);
+
+/**
+ * A stateless worker that answers with the name of the silo serving it; `workerActivations`
+ * counts the activations each silo created, by silo name.
+ */
+const workerActivations = new Map<string, number>();
+const Worker = defineGrain(
+  "K8sViewWorker",
+  (ctx) => {
+    const silo = ctx.runtime.localSiloAddress().podName;
+    workerActivations.set(silo, (workerActivations.get(silo) ?? 0) + 1);
+    return { where: async (): Promise<string> => silo };
+  },
+  { stateless: true, maxLocalWorkers: 4 },
+);
 
 /** The node internals these tests read (introspection only). */
 interface NodeFacet {
@@ -344,6 +360,90 @@ describe("a draining silo", () => {
     expect(await a.host.getGrain(Counter, gone).inc()).toBe(1);
     expect(b.host.isActive(grainId(gone))).toBe(false);
     expect(a.host.isActive(grainId(gone))).toBe(true);
+  });
+});
+
+describe("a stateless worker on a silo outside its ring", () => {
+  it("is called on a ring silo from a joining silo, which creates no worker", async () => {
+    workerActivations.clear();
+    const c = cluster();
+    const a = c.silo({ name: "silo-a", uid: uid(), ip: "10.0.0.1" }, (builder) =>
+      builder.registerGrain(Worker),
+    );
+    await c.join(a);
+    const b = c.silo({ name: "silo-b", uid: uid(), ip: "10.0.0.2" }, (builder) =>
+      builder.registerGrain(Worker),
+    );
+    await b.host.start();
+    expect(nodeOf(b.host).ownedHashRanges()).toEqual([]);
+
+    const answers = await Promise.all(
+      Array.from({ length: 10 }, (_, i) => b.host.getGrain(Worker, `w${i % 3}`).where()),
+    );
+    expect(answers).toEqual(answers.map(() => "silo-a"));
+    expect(workerActivations.get("silo-b") ?? 0).toBe(0);
+  });
+
+  it("is served by the workers a draining silo already hosts, and placed on an active silo otherwise", async () => {
+    workerActivations.clear();
+    const c = cluster();
+    const a = c.silo({ name: "silo-a", uid: uid(), ip: "10.0.0.1" }, (builder) =>
+      builder.registerGrain(Worker),
+    );
+    const b = c.silo({ name: "silo-b", uid: uid(), ip: "10.0.0.2" }, (builder) =>
+      builder.registerGrain(Worker),
+    );
+    await c.join(a);
+    await c.join(b);
+    // Active: a call through B runs on B's own pool.
+    expect(await b.host.getGrain(Worker, "held").where()).toBe("silo-b");
+    const onB = workerActivations.get("silo-b") ?? 0;
+    expect(onB).toBe(1);
+
+    c.api.setTerminating(b.pod.name);
+    await settle();
+
+    // Its existing worker keeps serving, however many calls arrive at once: nothing scales.
+    const held = await Promise.all(
+      Array.from({ length: 8 }, () => b.host.getGrain(Worker, "held").where()),
+    );
+    expect(held).toEqual(held.map(() => "silo-b"));
+    // A worker it does not host is called on the active silo.
+    const fresh = await Promise.all(
+      Array.from({ length: 8 }, (_, i) => b.host.getGrain(Worker, `fresh-${i}`).where()),
+    );
+    expect(fresh).toEqual(fresh.map(() => "silo-a"));
+    expect(workerActivations.get("silo-b")).toBe(onB);
+  });
+
+  it("is forwarded to an active silo when a client calls it through a draining gateway", async () => {
+    workerActivations.clear();
+    const c = cluster();
+    const a = c.silo({ name: "silo-a", uid: uid(), ip: "10.0.0.1" }, (builder) =>
+      builder.registerGrain(Worker),
+    );
+    const b = c.silo({ name: "silo-b", uid: uid(), ip: "10.0.0.2" }, (builder) =>
+      builder.registerGrain(Worker),
+    );
+    await c.join(a);
+    await c.join(b);
+    const client = createClient({
+      clusterId: "k8s-view",
+      transport: new InProcessTransport(c.network, "k8s-view"),
+      gateway: b.address,
+    }).registerGrain(Worker);
+    await client.connect();
+    try {
+      c.api.setTerminating(b.pod.name);
+      await settle();
+      const answers = await Promise.all(
+        Array.from({ length: 6 }, (_, i) => client.getGrain(Worker, `via-client-${i}`).where()),
+      );
+      expect(answers).toEqual(answers.map(() => "silo-a"));
+      expect(workerActivations.get("silo-b") ?? 0).toBe(0);
+    } finally {
+      await client.close();
+    }
   });
 });
 

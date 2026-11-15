@@ -74,8 +74,12 @@ or host a new activation:
 - **A silo outside its ring creates no activation** (Orleans `Catalog.GetOrCreateActivation` creates
   only while the silo is active). A call that would activate a grain there is refused before it runs
   and its caller re-resolves; the activations it already hosts keep serving, and their directory
-  entries stay valid because it is still a member. Stateless workers, which the directory never
-  holds, are exempt.
+  entries stay valid because it is still a member. Stateless workers are gated too: such a silo
+  serves a stateless-worker call with a worker it already hosts, without growing its pool, and
+  otherwise sends the call to a silo in its ring (forwarded, when it arrived from a client), as
+  Orleans' `StatelessWorkerDirector` places elsewhere when the local silo is not a compatible one.
+  A joining silo's startup task that calls a stateless worker is therefore served by an incumbent,
+  or locally in a cold start, where the joining silos are the ring.
 - **Readiness asks whether the silo is listed**, not whether it owns a range: a joining silo must
   report ready for Kubernetes to mark it ready, which is what brings it into the ring.
 - **The self-probe is answered locally**: the probe grain is activated through the node's local

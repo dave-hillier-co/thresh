@@ -43,7 +43,9 @@ ready yet, forms its ring from the joining pods so that startup tasks can run; t
 become ready takes the ring over and the others hand it their ranges.
 
 A **draining** pod (being deleted) keeps serving the grains it already hosts until it stops, but
-activates nothing new: a call to a new grain made through it is placed on an active silo.
+activates nothing new: a call to a new grain made through it is placed on an active silo. The same
+holds for stateless workers on a joining or draining pod: the workers it already has keep serving,
+its pool does not grow, and a call it cannot serve from them runs on an active silo.
 
 A pod that Kubernetes **takes out of the Service while it is still running** (its endpoint removed
 from the slices after it had been listed) fences itself: its peers have already dropped its
