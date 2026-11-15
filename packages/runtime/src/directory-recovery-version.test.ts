@@ -3,6 +3,11 @@ import { grain } from "@thresh/core/decorators";
 import { Grain } from "@thresh/core/grain";
 import { GrainId } from "@thresh/core/grain-id";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
+import type {
+  DehydrationContext,
+  IGrainMigrationParticipant,
+  RehydrationContext,
+} from "@thresh/core/grain-migration-participant";
 import type { GrainKey } from "@thresh/core/key-kinds";
 import type { MembershipService } from "@thresh/core/membership";
 import { SiloAddress } from "@thresh/core/silo-address";
@@ -28,11 +33,17 @@ interface ICounter extends GrainKey<string> {
 const ICounter = defineGrainInterface<ICounter>("ICounter.recoveryVersion");
 
 @grain()
-class CounterGrain extends Grain implements ICounter {
+class CounterGrain extends Grain implements ICounter, IGrainMigrationParticipant {
   private count = 0;
   async increment(by: number): Promise<number> {
     this.count += by;
     return this.count;
+  }
+  onDehydrate(ctx: DehydrationContext): void {
+    ctx.set("count", this.count);
+  }
+  onRehydrate(ctx: RehydrationContext): void {
+    this.count = ctx.get<number>("count") ?? this.count;
   }
 }
 
@@ -234,6 +245,116 @@ describe("the recovery-version rule (DistributedGrainDirectory._recoveryMembersh
       expect(a.isActive(grainId)).toBe(false);
       expect(c.isActive(grainId)).toBe(true);
       for (const node of [a, b, c]) expect(await node.checkDirectoryIntegrity()).toEqual([]);
+    } finally {
+      await stop();
+    }
+  });
+});
+
+const E = silo(4);
+
+/** The first key owned by B with all four silos active, and by A once B has left the ring. */
+function keyMovingFromBToA(): string {
+  for (let i = 0; ; i++) {
+    const grainId = new GrainId("Counter", `m-${i}`);
+    if (
+      new ConsistentHashRing([A, B, C, E]).ownerOf(grainId).equals(B) &&
+      new ConsistentHashRing([A, C, E]).ownerOf(grainId).equals(A)
+    ) {
+      return `m-${i}`;
+    }
+  }
+}
+
+/**
+ * A migration whose registration is outlived by a recovery: `g`, hosted on C with count 5, is
+ * migrated to A. A registers the migrated activation at the owner, B, which takes it, and B's
+ * reply is held. B leaves the ring and a joiner is listed; A, which has applied neither view
+ * before, recovers B's range from the hosts, so its recovery version rises above the stamp of
+ * the registration it is waiting for. C's activation is deactivating, so it reports nothing.
+ */
+async function migrationOutlivedByRecovery() {
+  const network = new InProcessNetwork();
+  const membership = new StaticMembershipService(A, [A, B, C, E]);
+  const parking = new ParkingTransport(new InProcessTransport(network, CLUSTER), B);
+  const make = (local: SiloAddress, transport: Transport) => {
+    const node = new ClusterNode({
+      local,
+      clusterId: CLUSTER,
+      membership: new MembershipView(membership, local),
+      transport,
+      defaultPlacementStrategy: new PreferLocalPlacement(),
+    });
+    node.registerGrain(CounterGrain, { interfaces: [ICounter] });
+    return node;
+  };
+  const a = make(A, parking);
+  const b = make(B, new InProcessTransport(network, CLUSTER));
+  const c = make(C, new InProcessTransport(network, CLUSTER));
+  const e = make(E, new InProcessTransport(network, CLUSTER));
+  const nodes = [a, b, c, e];
+  for (const node of nodes) await node.start();
+  for (const node of nodes) await node.recoverySettled();
+
+  const key = keyMovingFromBToA();
+  const grainId = new GrainId("Counter", key);
+  expect(await c.getGrain(ICounter, key).increment(5)).toBe(5);
+  expect(c.isActive(grainId)).toBe(true);
+  expect(b.partition.entryFor(grainId)?.silo.equals(C)).toBe(true);
+
+  parking.arm();
+  const migrating = c.migrateGrain(grainId, A);
+  await until(() => parking.parked);
+  expect(b.partition.entryFor(grainId)?.silo.equals(A)).toBe(true);
+
+  membership.setStatus(B, "draining");
+  for (const node of [b, c, e]) node.updateView();
+  membership.addSilo(D, "joining");
+  for (const node of [b, c, e]) node.updateView();
+  a.updateView();
+  await a.recoverySettled();
+  expect(a.partition.recoveryVersion).toBe(a.appliedViewVersion);
+  expect(a.partition.entryFor(grainId)).toBeUndefined();
+
+  return { a, b, c, e, nodes, parking, key, grainId, migrating, stop: () => stopAll(nodes) };
+}
+
+describe("the recovery-version rule on a migration target (ActivationData.RegisterAsync)", () => {
+  it("confirms a migrated activation's registration again when it completed below the recovery version", async () => {
+    const { a, nodes, parking, key, grainId, migrating, stop } =
+      await migrationOutlivedByRecovery();
+    try {
+      parking.release();
+      expect(await migrating).toBe(true);
+      // The entry was stamped by B at the old view; it is confirmed again at the owner that
+      // recovered the range, at its view.
+      const entry = a.partition.entryFor(grainId);
+      expect(entry?.silo.equals(A)).toBe(true);
+      expect(entry?.version).toBe(a.appliedViewVersion);
+      expect(await a.getGrain(ICounter, key).increment(1)).toBe(6);
+      for (const node of nodes) expect(await node.checkDirectoryIntegrity()).toEqual([]);
+    } finally {
+      await stop();
+    }
+  });
+
+  it("deactivates the migrated activation as a duplicate when another activation holds the entry by then", async () => {
+    const { a, c, e, nodes, parking, key, grainId, migrating, stop } =
+      await migrationOutlivedByRecovery();
+    try {
+      // E activates the grain at its owner, which no longer holds A's registration.
+      expect(await e.getGrain(ICounter, key).increment(10)).toBe(10);
+      expect(a.partition.entryFor(grainId)?.silo.equals(E)).toBe(true);
+
+      // A's held registration arrives, is confirmed again and loses to E's entry: the migration
+      // is declined, and the state it carried is dropped with it, as Orleans drops it.
+      parking.release();
+      expect(await migrating).toBe(false);
+      expect(a.isActive(grainId)).toBe(false);
+      expect(c.isActive(grainId)).toBe(false);
+      expect(e.isActive(grainId)).toBe(true);
+      expect(await a.getGrain(ICounter, key).increment(1)).toBe(11);
+      for (const node of nodes) expect(await node.checkDirectoryIntegrity()).toEqual([]);
     } finally {
       await stop();
     }
