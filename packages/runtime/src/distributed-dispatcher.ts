@@ -6,6 +6,11 @@ import type { GrainType } from "@thresh/core/grain-type";
 import { type Logger, defaultLogger } from "@thresh/core/logger";
 import type { InvocationRequest } from "@thresh/core/request";
 import type { SiloAddress } from "@thresh/core/silo-address";
+import {
+  systemTimeProvider,
+  type TimeProvider,
+  type TimerHandle,
+} from "@thresh/core/time-provider";
 import type { GrainDirectory } from "@thresh/directory/grain-directory";
 import type { LocationCache } from "@thresh/directory/location-cache";
 import {
@@ -42,6 +47,12 @@ const MAX_FORWARD_COUNT = 2;
  * chain of dead hosts.
  */
 const MAX_DEAD_ENTRY_REPAIRS = 2;
+
+/**
+ * How long a silo outside its ring waits for the directory's answer about a grain it was sent
+ * and does not host before it refuses the call without it (see `misdirectedOutsideRing`).
+ */
+const MISDIRECTED_LOOKUP_MS = 1_000;
 
 /**
  * Whether `err` is the refusal, outright, of the dial this silo made to `addr`'s host to deliver
@@ -143,6 +154,11 @@ export interface DistributedDispatcherDeps {
    * self-probe is the one such type (see `ClusterNode`).
    */
   isLocalSystemType?: (type: GrainType) => boolean;
+  /**
+   * The clock that bounds the directory lookup a silo outside its ring makes for a call it was
+   * sent and does not host. Defaults to the system clock.
+   */
+  time?: TimeProvider;
   /**
    * Where a detached `oneWay` delivery's failure is reported (see
    * `dispatchDetachingOneWay`). Optional so a test can wire a dispatcher
@@ -455,15 +471,7 @@ export class DistributedDispatcher implements Dispatcher {
     req: InvocationRequest,
     opts?: InvokeCallOptions,
   ): Promise<unknown> {
-    if (this.deps.mayActivate?.() === false) {
-      throw refusedBeforeExecution(
-        new RejectionError(
-          `${this.deps.local.toString()} is not in its ring and creates no activation of ` +
-            req.target.toString(),
-          "staleView",
-        ),
-      );
-    }
+    if (this.deps.mayActivate?.() === false) return this.misdirectedOutsideRing(req, opts);
     const key = req.target.toString();
     const oneWay = req.options.oneWay === true;
     while (oneWay) {
@@ -498,6 +506,76 @@ export class DistributedDispatcher implements Dispatcher {
       return await this.claimLocalActivation(req, activationId, admitted, opts);
     } finally {
       admitted();
+    }
+  }
+
+  /**
+   * A call for a grain this silo does not host, while it is outside its ring and creates no
+   * activation. A silo that does not host what the directory says it hosts removes the entry
+   * (docs/design-membership-and-directory.md, "A dead process that is still listed"; Orleans
+   * `Catalog.UnableToCreateActivation` unregisters it with
+   * `UnregistrationCause.NonexistentActivation`), so the grain is looked up first:
+   *
+   * - an entry naming this silo for an activation that is neither here nor coming up (what a
+   *   container restarted in place finds: its address, the activation of the process before it)
+   *   is unregistered — that exact entry — and the call refused before execution, so its caller
+   *   resolves again and the grain is placed in the ring;
+   * - an entry naming this silo for an activation that is here or coming up gets the call, as on
+   *   the claim path;
+   * - an entry naming another silo gets the call forwarded, under the forward cap, as a claim
+   *   whose CAS another silo won does (Orleans forwards a message it cannot deliver, re-addressed);
+   * - no entry, or no answer within `MISDIRECTED_LOOKUP_MS` (a restarted silo may not have applied
+   *   a view yet, or the owner's range may be locked for recovery), and the call is refused as
+   *   before, removing nothing.
+   */
+  private async misdirectedOutsideRing(
+    req: InvocationRequest,
+    opts?: InvokeCallOptions,
+  ): Promise<unknown> {
+    const refused = (): RejectionError =>
+      refusedBeforeExecution(
+        new RejectionError(
+          `${this.deps.local.toString()} is not in its ring and creates no activation of ` +
+            req.target.toString(),
+          "staleView",
+        ),
+      );
+    const entry = await this.lookupWithin(req.target, MISDIRECTED_LOOKUP_MS);
+    if (entry === undefined) throw refused();
+    if (!entry.silo.equals(this.deps.local)) return this.forwardTo(entry.silo, req, opts);
+    const act = this.deps.catalog.get(req.target);
+    if (act !== undefined && act.state !== "invalid" && act.activationId === entry.activationId) {
+      return admit(act, req, opts);
+    }
+    const comingUp = this.comingUpLocally.get(entry.activationId);
+    if (comingUp !== undefined) {
+      await comingUp;
+      const live = await this.deps.catalog.resolveLive(req.target);
+      if (live !== undefined) return admit(live, req, opts);
+      throw refused();
+    }
+    await this.removeDeadEntry(entry);
+    throw refused();
+  }
+
+  /**
+   * The directory's entry for `grainId`, or `undefined` when it has none, or when it did not
+   * answer within `ms` or failed: a lookup that may wait on a recovering range must not hold a
+   * call that is about to be refused anyway.
+   */
+  private async lookupWithin(grainId: GrainId, ms: number): Promise<GrainAddress | undefined> {
+    const time = this.deps.time ?? systemTimeProvider;
+    let timer: TimerHandle | undefined;
+    const expired = new Promise<undefined>((resolve) => {
+      timer = time.setTimer(() => resolve(undefined), ms);
+    });
+    try {
+      return await Promise.race([
+        this.deps.directory.lookup(grainId).catch(() => undefined),
+        expired,
+      ]);
+    } finally {
+      if (timer !== undefined) time.clearTimer(timer);
     }
   }
 
