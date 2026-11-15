@@ -456,3 +456,28 @@ describe("directory chaos (after Orleans ElasticChaos)", () => {
     }, 300_000);
   }
 });
+
+describe("the directory integrity check on the default (static) membership", () => {
+  it("checks every silo, through a join, a graceful stop and a crash", async () => {
+    const cluster = await TestCluster.start({
+      initialSilos: 2,
+      grains: [Counter],
+      reminders: false,
+    });
+    clusters.push(cluster);
+    const results = new Results();
+    const keys = keysFor("static", 30);
+    for (const [i, key] of keys.entries()) await call(results, cluster.silos[i % 2]!, key);
+    await cluster.checkIntegrity();
+    await cluster.startAdditionalSilo();
+    await cluster.checkIntegrity();
+    await cluster.stopSilo(cluster.silos[0]!);
+    await cluster.checkIntegrity();
+    await cluster.killSilo(cluster.silos[0]!);
+    await cluster.checkIntegrity();
+    for (const key of keys) await call(results, cluster.silos[0]!, key);
+    await cluster.checkIntegrity();
+    expect(results.errors).toEqual([]);
+    expect(activeTwice(cluster, keys)).toEqual([]);
+  }, 60_000);
+});

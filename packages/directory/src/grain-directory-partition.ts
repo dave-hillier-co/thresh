@@ -751,7 +751,9 @@ export class GrainDirectoryPartition {
               const activations = await this.peers.registeredActivations(member, request);
               return { member, activations };
             } catch (error) {
-              if (attempt < INTEGRITY_ATTEMPTS - 1 && this.current.isMember(member)) {
+              // A member that has left the view hosts nothing that needs an entry.
+              if (!this.current.isMember(member)) return { member, activations: [] };
+              if (attempt < INTEGRITY_ATTEMPTS - 1) {
                 await this.delay(this.retryDelay(attempt));
                 continue;
               }
