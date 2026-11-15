@@ -8,8 +8,9 @@
  * (a) the copy step alone — what the setting does to ONE value on its way across a call:
  *     "reference" hands it over as is, "copy" runs `copyValue`, "wire" round-trips the default
  *     MessagePack serializer (as `ClusterNode` does under that setting);
- * (b) end to end — sequential same-silo grain calls per second on a one-silo `TestCluster`, for a
- *     method that takes the value and returns it, so the value is carried both ways.
+ * (b) end to end — sequential same-silo grain calls per second on a one-silo `TestCluster` (a
+ *     fresh one per figure), for a method that takes the value and returns it, so the value is
+ *     carried both ways.
  *
  * Each figure is the median of several timed samples, after a warm-up; each sample's iteration
  * count is calibrated so the sample runs for about `SAMPLE_MS` and is printed beside the figure.
@@ -197,24 +198,27 @@ async function main(): Promise<void> {
   }
   table("(a) the copy step alone, one value (operations per second)", steps);
 
-  const calls: Array<readonly [string, Measured[]]> = VALUES.map(([label]) => [label, []]);
-  for (const setting of SETTINGS) {
-    const cluster = await TestCluster.start({
-      initialSilos: 1,
-      grains: [Echo],
-      reminders: false,
-      localCallSemantics: setting,
-    });
-    try {
-      const grain = cluster.primary.host.getGrain(Echo, "bench");
-      await grain.echo(0);
-      for (const [i, [, make]] of VALUES.entries()) {
+  // A fresh cluster for every figure, so no figure inherits what earlier calls left behind.
+  const calls: Array<readonly [string, Measured[]]> = [];
+  for (const [label, make] of VALUES) {
+    const row: Measured[] = [];
+    for (const setting of SETTINGS) {
+      const cluster = await TestCluster.start({
+        initialSilos: 1,
+        grains: [Echo],
+        reminders: false,
+        localCallSemantics: setting,
+      });
+      try {
+        const grain = cluster.primary.host.getGrain(Echo, "bench");
+        await grain.echo(0);
         const value = make();
-        calls[i]![1].push(await measureAsync(() => grain.echo(value)));
+        row.push(await measureAsync(() => grain.echo(value)));
+      } finally {
+        await cluster.dispose();
       }
-    } finally {
-      await cluster.dispose();
     }
+    calls.push([label, row]);
   }
   table(
     "(b) end to end: sequential same-silo calls of echo(value) on a one-silo TestCluster (calls per second)",
