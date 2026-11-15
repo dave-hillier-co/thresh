@@ -47,6 +47,7 @@ interface IImplicitSubscriptionCounterGrain extends GrainKey<Guid> {
 const IImplicitSubscriptionCounterGrain = defineGrainInterface<IImplicitSubscriptionCounterGrain>(
   "IImplicitSubscriptionCounterGrain",
   {
+    key: "guid",
     options: {
       getEventCounter: { readOnly: true },
       getErrorCounter: { readOnly: true },

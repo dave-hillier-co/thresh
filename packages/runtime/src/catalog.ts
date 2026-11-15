@@ -8,6 +8,7 @@ import type { BroadcastChannelProvider } from "@thresh/core/broadcast-channel";
 import type { GrainAddress } from "@thresh/core/grain-address";
 import type { DependencyToken } from "@thresh/core/grain-dependency";
 import type { GrainId } from "@thresh/core/grain-id";
+import type { GrainKeyKind } from "@thresh/core/grain-key";
 import type { GrainMetadata } from "@thresh/core/grain-metadata";
 import type { GrainType } from "@thresh/core/grain-type";
 import type { DeactivationReason } from "@thresh/core/reasons";
@@ -34,6 +35,8 @@ import type { TimeProvider } from "@thresh/runtime/time-provider";
 export interface RegisteredGrain {
   ctor: GrainClass;
   metadata: GrainMetadata;
+  /** The key kind the grain type declares, when it declares one as a value. */
+  keyKind?: GrainKeyKind;
 }
 
 /**
@@ -297,6 +300,7 @@ export class Catalog {
     rehydrationBag?: Record<string, unknown>,
     sourceAddr?: GrainAddress,
   ): Promise<ActivationData> {
+    id = this.canonicalId(id);
     const key = id.toString();
     const existing = this.activations.get(key);
     if (existing !== undefined && existing.state !== "invalid") return Promise.resolve(existing);
@@ -364,21 +368,22 @@ export class Catalog {
    * and reroutes it once it has gone.
    */
   resolveLive(id: GrainId): Promise<ActivationData | undefined> {
-    const existing = this.activations.get(id.toString());
+    const key = this.canonicalId(id).toString();
+    const existing = this.activations.get(key);
     if (existing === undefined || existing.state === "invalid") return Promise.resolve(undefined);
     return Promise.resolve(existing);
   }
 
   /** A live activation for `id` — for a stateless-worker id, an arbitrary one of possibly several. */
   get(id: GrainId): ActivationData | undefined {
-    const key = id.toString();
+    const key = this.canonicalId(id).toString();
     const single = this.activations.get(key);
     if (single !== undefined) return single;
     return this.workerActivations.get(key)?.find((a) => a.state !== "invalid");
   }
 
   isActive(id: GrainId): boolean {
-    const key = id.toString();
+    const key = this.canonicalId(id).toString();
     if (this.activations.get(key)?.state === "valid") return true;
     return this.workerActivations.get(key)?.some((a) => a.state === "valid") ?? false;
   }
@@ -390,7 +395,7 @@ export class Catalog {
    * management grain amalgamates this across silos itself).
    */
   countFor(id: GrainId): number {
-    const key = id.toString();
+    const key = this.canonicalId(id).toString();
     const single = this.activations.get(key);
     if (single !== undefined) return single.state === "invalid" ? 0 : 1;
     const list = this.workerActivations.get(key);
@@ -398,6 +403,23 @@ export class Catalog {
     let n = 0;
     for (const a of list) if (a.state !== "invalid") n++;
     return n;
+  }
+
+  /**
+   * The id in the one canonical text its grain type reads: a key arriving as text is re-read as
+   * the kind the type declares, so `'005'`, `'+5'` and `5n` are one identity for an integer grain
+   * and an upper-case guid string is the Guid it spells. Every lookup, the directory and the ring
+   * go through this, so equality, hash and catalog key agree. Text the declared kind cannot read
+   * is left as it is: it names no activation, and creating one reports the error.
+   */
+  canonicalId(id: GrainId): GrainId {
+    const kind = this.options.grainTypes.get(id.type)?.keyKind;
+    if (kind === undefined) return id;
+    try {
+      return id.asKind(kind);
+    } catch {
+      return id;
+    }
   }
 
   /** Whether `type` was registered with `stateless: true` ([StatelessWorker]-equivalent). */
@@ -468,6 +490,7 @@ export class Catalog {
     if (maxLocalWorkers === undefined) {
       throw new GrainCallError(`${id.type} is not a [StatelessWorker] grain type`);
     }
+    id = this.canonicalId(id);
     const key = id.toString();
     let list = this.workerActivations.get(key);
     if (list === undefined) {
@@ -523,6 +546,9 @@ export class Catalog {
     }
     const reg = this.options.grainTypes.get(id.type);
     if (reg === undefined) throw new GrainCallError(`no grain type registered: ${id.type}`);
+    // Identity is type and key text; the activation reads that text as the kind the grain type
+    // declares, whichever typed or string-built id arrived first.
+    if (reg.keyKind !== undefined) id = id.asKind(reg.keyKind);
     // Orleans' order, from `GrainTypeSharedContext.GetCollectionAgeLimit`: the grain class's own
     // declaration first (the `IdleDeactivationPeriod` property written by `[CollectionAgeLimit]`,
     // which `@grain({ collectionAgeSeconds })` stands in for), THEN the per-silo class-specific

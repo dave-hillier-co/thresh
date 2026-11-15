@@ -11,4 +11,5 @@ export interface ISimpleDiGrain extends GrainKey<bigint> {
 
 export const ISimpleDiGrain = defineGrainInterface<ISimpleDiGrain>(
   "UnitTests.GrainInterfaces.ISimpleDIGrain",
+  { key: "integer" },
 );

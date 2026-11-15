@@ -85,6 +85,7 @@ export interface ILongRunningTaskGrain extends GrainKey<Guid> {
 export const ILongRunningTaskGrain = defineGrainInterface<ILongRunningTaskGrain>(
   "UnitTests.GrainInterfaces.ILongRunningTaskGrain",
   {
+    key: "guid",
     options: {
       longWaitGrainCancellationInterleaving: { alwaysInterleave: true },
       longWaitInterleaving: { alwaysInterleave: true },

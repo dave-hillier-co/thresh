@@ -17,4 +17,5 @@ export interface IMayInterleaveGrain extends GrainKey<bigint> {
 
 export const IMayInterleaveGrain = defineGrainInterface<IMayInterleaveGrain>(
   "UnitTests.GrainInterfaces.IStatelessWorkerWithMayInterleaveGrain",
+  { key: "integer" },
 );

@@ -21,4 +21,5 @@ export interface IJsonNodeTestGrain extends GrainKey<bigint> {
 
 export const IJsonNodeTestGrain = defineGrainInterface<IJsonNodeTestGrain>(
   "DefaultCluster.Tests.IJsonNodeTestGrain",
+  { key: "integer" },
 );

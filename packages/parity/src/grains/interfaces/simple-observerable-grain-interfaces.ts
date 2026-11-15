@@ -27,4 +27,5 @@ export interface ISimpleObserverableGrain extends ISimpleGrain {
 
 export const ISimpleObserverableGrain = defineGrainInterface<ISimpleObserverableGrain>(
   "UnitTests.GrainInterfaces.ISimpleObserverableGrain",
+  { key: "integer" },
 );

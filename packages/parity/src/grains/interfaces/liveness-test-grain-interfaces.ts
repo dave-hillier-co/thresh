@@ -17,4 +17,5 @@ export interface ILivenessTestGrain extends GrainKey<bigint> {
 
 export const ILivenessTestGrain = defineGrainInterface<ILivenessTestGrain>(
   "UnitTests.GrainInterfaces.ILivenessTestGrain",
+  { key: "integer" },
 );

@@ -53,6 +53,7 @@ interface IImplicitSubscriptionCounterGrain extends GrainKey<Guid> {
 const IImplicitSubscriptionCounterGrain = defineGrainInterface<IImplicitSubscriptionCounterGrain>(
   "IImplicitSubscriptionCounterGrain",
   {
+    key: "guid",
     options: {
       getEventCounter: { readOnly: true },
       getErrorCounter: { readOnly: true },
@@ -126,11 +127,11 @@ interface IFastSlowCounterGrain extends GrainKey<Guid> {
 }
 const IFastImplicitSubscriptionCounterGrain = defineGrainInterface<IFastSlowCounterGrain>(
   "IFastImplicitSubscriptionCounterGrain",
-  { options: { getEventCounter: { readOnly: true } } },
+  { key: "guid", options: { getEventCounter: { readOnly: true } } },
 );
 const ISlowImplicitSubscriptionCounterGrain = defineGrainInterface<IFastSlowCounterGrain>(
   "ISlowImplicitSubscriptionCounterGrain",
-  { options: { getEventCounter: { readOnly: true } } },
+  { key: "guid", options: { getEventCounter: { readOnly: true } } },
 );
 
 abstract class FastSlowCounterGrainBase extends Grain implements IFastSlowCounterGrain {

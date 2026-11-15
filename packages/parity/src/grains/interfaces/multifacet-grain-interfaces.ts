@@ -10,6 +10,7 @@ export interface IMultifacetWriter extends GrainKey<bigint> {
 
 export const IMultifacetWriter = defineGrainInterface<IMultifacetWriter>(
   "UnitTests.GrainInterfaces.IMultifacetWriter",
+  { key: "integer" },
 );
 
 export interface IMultifacetReader extends GrainKey<bigint> {
@@ -18,12 +19,14 @@ export interface IMultifacetReader extends GrainKey<bigint> {
 
 export const IMultifacetReader = defineGrainInterface<IMultifacetReader>(
   "UnitTests.GrainInterfaces.IMultifacetReader",
+  { key: "integer" },
 );
 
 export interface IMultifacetTestGrain extends IMultifacetReader, IMultifacetWriter {}
 
 export const IMultifacetTestGrain = defineGrainInterface<IMultifacetTestGrain>(
   "UnitTests.GrainInterfaces.IMultifacetTestGrain",
+  { key: "integer" },
 );
 
 export interface IMultifacetFactoryTestGrain extends GrainKey<bigint> {
@@ -37,4 +40,5 @@ export interface IMultifacetFactoryTestGrain extends GrainKey<bigint> {
 
 export const IMultifacetFactoryTestGrain = defineGrainInterface<IMultifacetFactoryTestGrain>(
   "UnitTests.GrainInterfaces.IMultifacetFactoryTestGrain",
+  { key: "integer" },
 );

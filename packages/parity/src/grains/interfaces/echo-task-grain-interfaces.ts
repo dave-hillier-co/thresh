@@ -11,7 +11,9 @@ export interface IEchoGrain extends GrainKey<Guid> {
   echoNullable(value: Date | null): Promise<Date | null>;
 }
 
-export const IEchoGrain = defineGrainInterface<IEchoGrain>("UnitTests.GrainInterfaces.IEchoGrain");
+export const IEchoGrain = defineGrainInterface<IEchoGrain>("UnitTests.GrainInterfaces.IEchoGrain", {
+  key: "guid",
+});
 
 export interface IEchoTaskGrain extends GrainKey<Guid> {
   getMyIdAsync(): Promise<number>;
@@ -36,7 +38,7 @@ export interface IEchoTaskGrain extends GrainKey<Guid> {
 
 export const IEchoTaskGrain = defineGrainInterface<IEchoTaskGrain>(
   "UnitTests.GrainInterfaces.IEchoTaskGrain",
-  { options: { blockingCallTimeoutAsync: { responseTimeout: { seconds: 5 } } } },
+  { key: "guid", options: { blockingCallTimeoutAsync: { responseTimeout: { seconds: 5 } } } },
 );
 
 export interface IBlockingEchoTaskGrain extends GrainKey<bigint> {
@@ -49,6 +51,7 @@ export interface IBlockingEchoTaskGrain extends GrainKey<bigint> {
 
 export const IBlockingEchoTaskGrain = defineGrainInterface<IBlockingEchoTaskGrain>(
   "UnitTests.GrainInterfaces.IBlockingEchoTaskGrain",
+  { key: "integer" },
 );
 
 export interface IReentrantBlockingEchoTaskGrain extends GrainKey<bigint> {
@@ -62,4 +65,5 @@ export interface IReentrantBlockingEchoTaskGrain extends GrainKey<bigint> {
 export const IReentrantBlockingEchoTaskGrain =
   defineGrainInterface<IReentrantBlockingEchoTaskGrain>(
     "UnitTests.GrainInterfaces.IReentrantBlockingEchoTaskGrain",
+    { key: "integer" },
   );

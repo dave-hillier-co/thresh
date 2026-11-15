@@ -19,7 +19,9 @@ interface IMarkedCounter extends GrainWithGuidKey {
 const IDeclaredCounter = defineGrainInterface<ICounter, "guid">("client.IDeclaredCounter", {
   key: "guid",
 });
-const IMarkedCounterDef = defineGrainInterface<IMarkedCounter>("client.IMarkedCounter");
+const IMarkedCounterDef = defineGrainInterface<IMarkedCounter>("client.IMarkedCounter", {
+  key: "guid",
+});
 const IStringCounter = defineGrainInterface<ICounter>("client.IStringCounter");
 
 function keyKindsAreEnforced(client: ClientNode, guid: Guid): void {

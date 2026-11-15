@@ -2254,7 +2254,10 @@ export class SiloBuilder {
       provider.setDeliver((grainId, streamKey, event, token) =>
         node.deliverStreamEvent(grainId, streamKey, event, token),
       );
-      provider.setImplicitSubscribers((namespace) => node.implicitGrainTypes(namespace));
+      provider.setImplicitSubscribers(
+        (namespace) => node.implicitGrainTypes(namespace),
+        (type) => node.grainKeyKind(type),
+      );
       onOwnershipChange.push(async (ranges) => provider.refreshOwnership(ranges));
     }
     // The memory provider delivers synchronously in-process on `publish` (no
@@ -2288,6 +2291,7 @@ export class SiloBuilder {
             deliver: (grainId, streamKey, event, token) =>
               node.deliverStreamEvent(grainId, streamKey, event, token),
             implicitTypesFor: (namespace) => node.implicitGrainTypes(namespace),
+            implicitKeyKindFor: (type) => node.grainKeyKind(type),
             confirm: (grainId, streamKey) => node.confirmStreamSubscription(grainId, streamKey),
             isLive: () =>
               activeSilos(membership.current()).some(

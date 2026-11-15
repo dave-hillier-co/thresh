@@ -23,4 +23,5 @@ export interface ISimplePersistentGrain extends ISimpleGrain {
 
 export const ISimplePersistentGrain = defineGrainInterface<ISimplePersistentGrain>(
   "UnitTests.GrainInterfaces.ISimplePersistentGrain",
+  { key: "integer" },
 );

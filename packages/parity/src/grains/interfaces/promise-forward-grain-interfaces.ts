@@ -6,4 +6,5 @@ export type IPromiseForwardGrain = ISimpleGrain;
 
 export const IPromiseForwardGrain = defineGrainInterface<IPromiseForwardGrain>(
   "UnitTests.GrainInterfaces.IPromiseForwardGrain",
+  { key: "integer" },
 );

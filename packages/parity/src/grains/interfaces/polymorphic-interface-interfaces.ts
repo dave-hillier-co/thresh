@@ -19,7 +19,7 @@ export interface IA extends GrainKey<bigint> {
   a3Method(): Promise<string>;
 }
 
-export const IA = defineGrainInterface<IA>("UnitTests.GrainInterfaces.IA");
+export const IA = defineGrainInterface<IA>("UnitTests.GrainInterfaces.IA", { key: "integer" });
 
 export interface IB extends GrainKey<bigint> {
   b1Method(): Promise<string>;
@@ -27,7 +27,7 @@ export interface IB extends GrainKey<bigint> {
   b3Method(): Promise<string>;
 }
 
-export const IB = defineGrainInterface<IB>("UnitTests.GrainInterfaces.IB");
+export const IB = defineGrainInterface<IB>("UnitTests.GrainInterfaces.IB", { key: "integer" });
 
 export interface IC extends IA, IB {
   c1Method(): Promise<string>;
@@ -35,7 +35,7 @@ export interface IC extends IA, IB {
   c3Method(): Promise<string>;
 }
 
-export const IC = defineGrainInterface<IC>("UnitTests.GrainInterfaces.IC");
+export const IC = defineGrainInterface<IC>("UnitTests.GrainInterfaces.IC", { key: "integer" });
 
 export interface ID extends IC {
   d1Method(): Promise<string>;
@@ -43,7 +43,7 @@ export interface ID extends IC {
   d3Method(): Promise<string>;
 }
 
-export const ID = defineGrainInterface<ID>("UnitTests.GrainInterfaces.ID");
+export const ID = defineGrainInterface<ID>("UnitTests.GrainInterfaces.ID", { key: "integer" });
 
 export interface IE extends GrainKey<bigint> {
   e1Method(): Promise<string>;
@@ -51,7 +51,7 @@ export interface IE extends GrainKey<bigint> {
   e3Method(): Promise<string>;
 }
 
-export const IE = defineGrainInterface<IE>("UnitTests.GrainInterfaces.IE");
+export const IE = defineGrainInterface<IE>("UnitTests.GrainInterfaces.IE", { key: "integer" });
 
 export interface IF extends ID, IE {
   f1Method(): Promise<string>;
@@ -59,7 +59,7 @@ export interface IF extends ID, IE {
   f3Method(): Promise<string>;
 }
 
-export const IF = defineGrainInterface<IF>("UnitTests.GrainInterfaces.IF");
+export const IF = defineGrainInterface<IF>("UnitTests.GrainInterfaces.IF", { key: "integer" });
 
 export interface IH extends GrainKey<bigint> {
   h1Method(): Promise<string>;
@@ -67,7 +67,7 @@ export interface IH extends GrainKey<bigint> {
   h3Method(): Promise<string>;
 }
 
-export const IH = defineGrainInterface<IH>("UnitTests.GrainInterfaces.IH");
+export const IH = defineGrainInterface<IH>("UnitTests.GrainInterfaces.IH", { key: "integer" });
 
 export interface IServiceType extends IF {
   serviceTypeMethod1(): Promise<string>;
@@ -77,6 +77,7 @@ export interface IServiceType extends IF {
 
 export const IServiceType = defineGrainInterface<IServiceType>(
   "UnitTests.GrainInterfaces.IServiceType",
+  { key: "integer" },
 );
 
 export interface IDerivedServiceType extends IServiceType, IH {
@@ -85,6 +86,7 @@ export interface IDerivedServiceType extends IServiceType, IH {
 
 export const IDerivedServiceType = defineGrainInterface<IDerivedServiceType>(
   "UnitTests.GrainInterfaces.IDerivedServiceType",
+  { key: "integer" },
 );
 
 /** Upstream `IPolymorphicTestGrain : IF` — a plain re-export, no added members. */
@@ -92,4 +94,5 @@ export type IPolymorphicTestGrain = IF;
 
 export const IPolymorphicTestGrain = defineGrainInterface<IPolymorphicTestGrain>(
   "UnitTests.GrainInterfaces.IPolymorphicTestGrain",
+  { key: "integer" },
 );

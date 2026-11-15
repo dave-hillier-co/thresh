@@ -18,4 +18,5 @@ export interface IRebalancingTestGrain extends GrainKey<Guid> {
 
 export const IRebalancingTestGrain = defineGrainInterface<IRebalancingTestGrain>(
   "UnitTests.ActivationRebalancingTests.IRebalancingTestGrain",
+  { key: "guid" },
 );

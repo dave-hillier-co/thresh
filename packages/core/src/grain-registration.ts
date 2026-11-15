@@ -1,6 +1,6 @@
 import type { GrainDefinition } from "./define-grain";
 import type { GrainClass } from "./grain-class";
-import type { AnyGrainInterface } from "./grain-interface";
+import { getGrainInterface, type AnyGrainInterface } from "./grain-interface";
 import type { GrainKeyKind } from "./grain-key";
 
 /**
@@ -21,6 +21,32 @@ export interface GrainRegistration {
  * `never` would not allow.
  */
 export type Registrable = GrainDefinition<unknown, GrainKeyKind>;
+
+/**
+ * The key kind a grain type declares through the interfaces it answers to, or
+ * `undefined` when none of them declares one as a value (a phantom marker alone
+ * does not survive erasure). Orleans decides how a key's text is read from the
+ * grain type, never from the id; this is that decision. Two interfaces declaring
+ * different kinds is a contradiction, so it throws.
+ */
+export function declaredKeyKind(
+  grainName: string,
+  interfaces: readonly AnyGrainInterface[],
+): GrainKeyKind | undefined {
+  let declared: { kind: GrainKeyKind; from: string } | undefined;
+  for (const iface of interfaces) {
+    const kind = iface.key ?? getGrainInterface(iface.id)?.key;
+    if (kind === undefined) continue;
+    if (declared !== undefined && declared.kind !== kind) {
+      throw new Error(
+        `${grainName} is registered under interfaces that declare different key kinds: ` +
+          `${declared.from} declares "${declared.kind}", ${iface.name} declares "${kind}"`,
+      );
+    }
+    declared ??= { kind, from: iface.name };
+  }
+  return declared?.kind;
+}
 
 /**
  * Resolve the two `registerGrain` shapes to one `{ ctor, interfaces }` pair, so

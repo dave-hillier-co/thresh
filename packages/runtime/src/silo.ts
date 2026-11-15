@@ -5,6 +5,7 @@ import type { GrainKeyKind } from "@thresh/core/grain-key";
 import { getGrainMetadata } from "@thresh/core/grain-metadata";
 import {
   type GrainRegistration,
+  declaredKeyKind,
   normalizeRegistration,
   type Registrable,
 } from "@thresh/core/grain-registration";
@@ -78,7 +79,12 @@ export class Silo {
     const { ctor, interfaces } = normalizeRegistration(definition, registration);
     const metadata = getGrainMetadata(ctor);
     if (metadata === undefined) throw new Error(`${ctor.name} is not decorated with @grain()`);
-    this.grainTypes.set(metadata.grainType, { ctor, metadata });
+    const keyKind = declaredKeyKind(ctor.name, interfaces);
+    this.grainTypes.set(metadata.grainType, {
+      ctor,
+      metadata,
+      ...(keyKind !== undefined ? { keyKind } : {}),
+    });
     for (const iface of interfaces) {
       this.interfaceToGrainType.set(iface.id, metadata.grainType);
     }

@@ -40,6 +40,7 @@ export interface IMigrationTestGrain extends GrainKey<bigint> {
 
 export const IMigrationTestGrain = defineGrainInterface<IMigrationTestGrain>(
   "DefaultCluster.Tests.General.IMigrationTestGrain",
+  { key: "integer" },
 );
 
 /** Upstream's `Grain<TGrainState>`-backed variant: a single persistent-state facet. */
@@ -51,6 +52,7 @@ export interface IMigrationTestGrainGrainOfT extends GrainKey<bigint> {
 
 export const IMigrationTestGrainGrainOfT = defineGrainInterface<IMigrationTestGrainGrainOfT>(
   "DefaultCluster.Tests.General.IMigrationTestGrain_GrainOfT",
+  { key: "integer" },
 );
 
 export interface IMigrationTestGrainIPersistentStateOfT extends GrainKey<bigint> {
@@ -62,4 +64,5 @@ export interface IMigrationTestGrainIPersistentStateOfT extends GrainKey<bigint>
 export const IMigrationTestGrainIPersistentStateOfT =
   defineGrainInterface<IMigrationTestGrainIPersistentStateOfT>(
     "DefaultCluster.Tests.General.IMigrationTestGrain_IPersistentStateOfT",
+    { key: "integer" },
   );
