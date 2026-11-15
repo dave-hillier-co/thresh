@@ -73,6 +73,12 @@ const builtInTags = new Set([
 ]);
 
 /**
+ * The built-in tags, read-only: what `value-copier.ts` must mirror case for case, and what its
+ * equivalence test derives its coverage from.
+ */
+export const BUILT_IN_TAGS: ReadonlySet<string> = builtInTags;
+
+/**
  * Every `ArrayBuffer`-backed view this build round-trips through the
  * `typedArray` envelope, keyed by `constructor.name`. `Uint8Array` is
  * deliberately absent — it is carried untagged (see the note on
@@ -96,7 +102,13 @@ const TYPED_ARRAY_CTORS: Record<string, TypedArrayCtor> = {
   BigUint64Array: BigUint64Array as unknown as TypedArrayCtor,
 };
 
-function typedArrayKind(view: ArrayBufferView): string {
+/** The constructor a `typedArray` envelope of `kind` decodes with (the same lookup `decodeValue` makes). */
+export function typedArrayConstructor(kind: string): TypedArrayCtor | undefined {
+  return TYPED_ARRAY_CTORS[kind];
+}
+
+/** The built-in base kind a typed array is tagged with. */
+export function typedArrayKind(view: ArrayBufferView): string {
   for (const [kind, ctor] of Object.entries(TYPED_ARRAY_CTORS)) {
     if (view instanceof (ctor as unknown as abstract new (...args: never[]) => object)) return kind;
   }
@@ -465,6 +477,16 @@ function findSurrogate(value: unknown): SurrogateDescriptor | undefined {
   return surrogateOrder.find((d) => d.test(value));
 }
 
+/** Whether any surrogate is registered. */
+export function hasSurrogates(): boolean {
+  return surrogateOrder.length > 0;
+}
+
+/** The surrogate `encodeValue` would choose for `value`, if any (the copier asks the same question). */
+export function surrogateFor(value: unknown): SurrogateDescriptor | undefined {
+  return surrogateOrder.length === 0 ? undefined : findSurrogate(value);
+}
+
 function grainIdFields(id: GrainId): Record<string, unknown> {
   return { grainType: id.type, keyKind: id.keyKind, key: keyToString(id.key) };
 }
@@ -570,6 +592,15 @@ function encodeElement(
   options: EncodeValueOptions,
 ): unknown {
   return value === undefined ? tagged("undefined", {}) : encodeInner(value, seen, path, options);
+}
+
+/**
+ * Encode `value` as a nested member at `path`, sharing the caller's cycle-detection set. For
+ * `value-copier.ts`, which hands the rare cases (an `Error` above all) to the codec mid-walk and
+ * must refuse a cycle, and name its path, exactly as one whole `encodeValue` would.
+ */
+export function encodeNested(value: unknown, seen: Set<unknown>, path: string): unknown {
+  return encodeInner(value, seen, path, {});
 }
 
 function encodeInner(
