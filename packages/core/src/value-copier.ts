@@ -4,6 +4,7 @@ import { GrainId } from "./grain-id";
 import { keyToString } from "./grain-key";
 import { grainReferenceIdentity, type GrainReferenceIdentity } from "./grain-reference";
 import { Guid } from "./guid";
+import { isImmutable } from "./immutable";
 import { SiloAddress } from "./silo-address";
 import {
   CircularReferenceError,
@@ -41,6 +42,9 @@ import {
  * A failure the codec would only meet while DECODING (a surrogate's `decode` throwing, a typed
  * array of a kind this build cannot build) is held until the walk ends and thrown then, so a
  * refusal the encode would have met later still wins, as it does in the round trip.
+ *
+ * One deliberate departure, and only one: a value marked with `immutable` is returned as itself,
+ * uncopied, wherever it sits (Orleans' `Immutable<T>`); the codec ignores the mark.
  */
 
 /**
@@ -114,6 +118,8 @@ function copyScalar(value: unknown, walk: Walk, path: string): unknown {
 }
 
 function copyObject(value: object, walk: Walk, path: string): unknown {
+  // The one case the codec does not have: a value its author marked as safe to share.
+  if (isImmutable(value)) return value;
   const proto: unknown = Object.getPrototypeOf(value);
   // Fast paths. An object whose prototype is `Object.prototype` (or an array whose prototype is
   // `Array.prototype`) can match none of the `instanceof` branches the codec tries first, so only
