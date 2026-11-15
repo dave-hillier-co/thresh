@@ -493,6 +493,10 @@ const refused: Record<string, () => unknown> = {
   "a string with a lone high surrogate": () => "a\uD800b",
   "a string with a lone low surrogate": () => "a\uDC00b",
   "a long string with a lone surrogate": () => "x".repeat(300) + "\uD800",
+  "a grain id with a lone surrogate in its key": () =>
+    GrainId.parse("T/" + "k".repeat(300) + "\uD800"),
+  "a grain id with a lone surrogate in its type": () => GrainId.parse("T\uD800/k"),
+  "a silo address with a lone surrogate": () => new SiloAddress("p\uDC00", "uid", "ep"),
   "an object key with a lone surrogate": () => ({ ["k\uD800"]: 1 }),
   "an escaped object key with a lone surrogate": () => ({ $thresh: "x", ["k\uDC00"]: 1 }),
   "a lone surrogate in a Map key": () => new Map([["\uD800", 1]]),

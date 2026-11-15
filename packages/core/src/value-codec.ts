@@ -588,6 +588,19 @@ export function assertWellFormed(text: string, path: string, what: string): void
   }
 }
 
+/**
+ * Refuse, at `path`, a structural envelope's text field (a grain id's type and key, a silo's
+ * names, a token id) that is not well-formed UTF-16: MessagePack would rewrite a long one with
+ * U+FFFD, so the id would decode as a different identity.
+ */
+export function assertWellFormedFields(
+  path: string,
+  what: string,
+  ...texts: readonly string[]
+): void {
+  for (const t of texts) assertWellFormed(t, path, what);
+}
+
 /** Refuse, at the container's `path`, any of `keys` that is not well-formed UTF-16. */
 export function assertWellFormedKeys(keys: readonly string[], path: string): void {
   for (const k of keys) assertWellFormed(k, path, "an object key");
@@ -711,8 +724,12 @@ function encodeInner(
   }
   if (typeof value === "bigint") return tagged("bigint", { value: value.toString() });
   if (value instanceof Guid) return tagged("guid", { value: value.toString() });
-  if (value instanceof GrainId) return tagged("grainId", grainIdFields(value));
+  if (value instanceof GrainId) {
+    assertWellFormedFields(path, "a grain id", value.type, keyToString(value.key));
+    return tagged("grainId", grainIdFields(value));
+  }
   if (value instanceof GrainCancellationToken) {
+    assertWellFormedFields(path, "a cancellation token id", value.tokenId);
     return tagged("cancellationToken", {
       tokenId: value.tokenId,
       cancelled: value.isCancellationRequested,
@@ -727,6 +744,7 @@ function encodeInner(
   // next hop's `decodeValue` can no longer recognise it as a cancellation
   // token, leaving the eventual callee with a signal-less plain object.
   if (value instanceof CancellationTokenPlaceholder) {
+    assertWellFormedFields(path, "a cancellation token id", value.tokenId);
     return tagged("cancellationToken", {
       tokenId: value.tokenId,
       cancelled: value.cancelled,
@@ -756,6 +774,7 @@ function encodeInner(
     return tagged("taskCanceled", { message: wellFormedText(value.message) });
   }
   if (value instanceof SiloAddress) {
+    assertWellFormedFields(path, "a silo address", value.podName, value.podUid, value.endpoint);
     return tagged("silo", {
       podName: value.podName,
       podUid: value.podUid,
@@ -764,6 +783,7 @@ function encodeInner(
   }
   const ref = grainReferenceIdentity(value);
   if (ref !== undefined) {
+    assertWellFormedFields(path, "a grain id", ref.grainId.type, keyToString(ref.grainId.key));
     return tagged("grainRef", { interfaceId: ref.interfaceId, ...grainIdFields(ref.grainId) });
   }
 

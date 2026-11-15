@@ -8,6 +8,7 @@ import { isImmutable } from "./immutable";
 import { SiloAddress } from "./silo-address";
 import {
   assertWellFormed,
+  assertWellFormedFields,
   assertWellFormedKeys,
   CircularReferenceError,
   decodeValue,
@@ -235,8 +236,9 @@ function copyObject(
   }
   if (value instanceof Date) return new Date(value.getTime());
   if (value instanceof Guid) return Guid.parse(value.toString());
-  if (value instanceof GrainId) return copyGrainId(value);
+  if (value instanceof GrainId) return copyGrainId(value, pathOf(parent, kind, key));
   if (value instanceof GrainCancellationToken) {
+    assertWellFormedFields(pathOf(parent, kind, key), "a cancellation token id", value.tokenId);
     return new CancellationTokenPlaceholder(
       value.tokenId,
       value.isCancellationRequested,
@@ -244,6 +246,7 @@ function copyObject(
     );
   }
   if (value instanceof CancellationTokenPlaceholder) {
+    assertWellFormedFields(pathOf(parent, kind, key), "a cancellation token id", value.tokenId);
     return new CancellationTokenPlaceholder(
       value.tokenId,
       value.cancelled,
@@ -260,6 +263,13 @@ function copyObject(
     return new GrainTaskCanceledError(wellFormedText(value.message));
   }
   if (value instanceof SiloAddress) {
+    assertWellFormedFields(
+      pathOf(parent, kind, key),
+      "a silo address",
+      value.podName,
+      value.podUid,
+      value.endpoint,
+    );
     return new SiloAddress(value.podName, value.podUid, value.endpoint);
   }
   const claimed = copyRefOrSurrogate(value, walk, parent, kind, key);
@@ -298,20 +308,21 @@ function copyRefOrSurrogate(
   key: string | number,
 ): unknown {
   const ref = grainReferenceIdentity(value);
-  if (ref !== undefined) return copyGrainReference(ref, walk.ctx);
+  if (ref !== undefined) return copyGrainReference(ref, walk.ctx, pathOf(parent, kind, key));
   if (!hasSurrogates()) return UNCLAIMED;
   const surrogate = surrogateFor(value);
   if (surrogate !== undefined) return copySurrogate(value, surrogate, walk, parent, kind, key);
   return UNCLAIMED;
 }
 
-function copyGrainId(id: GrainId): GrainId {
+function copyGrainId(id: GrainId, path: string): GrainId {
+  assertWellFormedFields(path, "a grain id", id.type, keyToString(id.key));
   return GrainId.parse(`${id.type}/${keyToString(id.key)}`, id.keyKind);
 }
 
-function copyGrainReference(ref: GrainReferenceIdentity, ctx: CodecContext): unknown {
+function copyGrainReference(ref: GrainReferenceIdentity, ctx: CodecContext, path: string): unknown {
   const identity: GrainReferenceIdentity = {
-    grainId: copyGrainId(ref.grainId),
+    grainId: copyGrainId(ref.grainId, path),
     interfaceId: ref.interfaceId,
   };
   return ctx.resolveGrainReference ? ctx.resolveGrainReference(identity) : identity;

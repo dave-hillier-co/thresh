@@ -6,6 +6,8 @@ import {
   unregisterSurrogate,
   UnsupportedValueError,
 } from "@thresh/core/value-codec";
+import { GrainId } from "@thresh/core/grain-id";
+import { SiloAddress } from "@thresh/core/silo-address";
 import { JsonSerializer } from "@thresh/messaging/json-serializer";
 import { MessagePackSerializer } from "@thresh/messaging/msgpack-serializer";
 import type { Serializer } from "@thresh/messaging/serializer";
@@ -90,6 +92,20 @@ describe.each(transports)("%s hardening", (_name, make) => {
     const paired = "x".repeat(n - 2) + "😀";
     expect(roundTrip(s, paired)).toBe(paired);
   });
+
+  it.each([10, 300, 5000])(
+    "refuses a lone surrogate in a grain id or silo of %i the same way",
+    (n) => {
+      const s = make();
+      const bad = "k".repeat(n - 1) + "\uD800";
+      expect(() => s.serialize(GrainId.parse(`T/${bad}`))).toThrow(UnsupportedValueError);
+      expect(() => s.serialize({ id: GrainId.parse(`${bad}/k`) })).toThrow(UnsupportedValueError);
+      expect(() => s.serialize(new SiloAddress(bad, "uid", "ep"))).toThrow(UnsupportedValueError);
+      expect(() => s.serialize(new SiloAddress("p", "uid", bad))).toThrow(UnsupportedValueError);
+      const good = GrainId.parse(`T/${"k".repeat(n)}`);
+      expect(roundTrip(s, good)).toEqual(good);
+    },
+  );
 
   it("returns an exact fresh buffer for a decoded Uint8Array", () => {
     const s = make();
