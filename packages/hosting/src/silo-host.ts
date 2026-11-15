@@ -299,7 +299,10 @@ export class SiloHost {
    *   Below the node, so they come up before it listens and are torn down after it has
    *   deactivated every activation.
    * - `RuntimeServices`: the transport and node. Start applies the membership view, then settles
-   *   join recovery. Stop waits out the grace period and deactivates under the stop budget.
+   *   join recovery. Stop waits out the grace period, waits for the directory ranges the silo
+   *   gave up to be collected, and deactivates, all under the stop budget (`ClusterNode.stop`).
+   *   The membership reconcile goes on applying views to the node, without running any
+   *   ownership hook, until this stop has finished.
    * - `RuntimeStorageServices`, `RuntimeGrainServices`: stream providers, grain services.
    * - `ApplicationServices`: startup tasks.
    * - `BecomeActive`: the health listener opens; pulling agents and the job manager stop here,
@@ -307,7 +310,8 @@ export class SiloHost {
    * - `Active`: the rebalancer, the self-probe and reminders.
    * - `MEMBERSHIP_RECONCILE_STAGE` (just above `Active`): the membership reconcile, which runs the
    *   ownership hooks. It starts after every service it feeds and stops before any of them,
-   *   waiting for a reconcile already in flight, so no hook reaches a stopping service.
+   *   waiting for a reconcile already in flight, so no hook reaches a stopping service. Its
+   *   stop ends the hooks only: the view itself is followed through the node's stop.
    * - `Last`: readiness. It is published last on the way up and flipped first on the way down.
    */
   private buildLifecycle(): LifecycleSubject {
@@ -365,8 +369,16 @@ export class SiloHost {
           await node.recoverySettled();
         },
         // A silo that was serving waits out the grace period; one rolling back a failed start has
-        // nothing to wait for.
-        stop: async () => (this.serving ? shutdown.drain() : shutdown.stopWithoutGrace()),
+        // nothing to wait for. The node goes on applying views until it has deactivated, so a
+        // leaving silo sees itself out of the ring and hands its ranges over (or fences, if it
+        // sees itself removed); only then does it stop following the watch.
+        stop: async () => {
+          try {
+            await (this.serving ? shutdown.drain() : shutdown.stopWithoutGrace());
+          } finally {
+            await this.stopFollowingViews();
+          }
+        },
       },
       stopBudgetMs + NODE_STOP_BACKSTOP_MS,
     );
@@ -424,12 +436,11 @@ export class SiloHost {
         await this.reconciling;
         if (this.updates !== undefined) this.watchMembership(this.updates, watch);
       },
-      // Bounded by the stop budget, like every participant's stop.
+      // Bounded by the stop budget, like every participant's stop. The ownership hooks end here
+      // (`stopLifecycle` already halted them); the views themselves are followed until the node
+      // has stopped (see the node's stop).
       stop: async () => {
         this.hooksHalted = true;
-        this.membershipWatch?.abort();
-        this.stopViewListener?.();
-        this.stopViewListener = undefined;
         await this.reconciling;
       },
     });
@@ -460,6 +471,14 @@ export class SiloHost {
       stop: async () => shutdown.beginDrain(),
     });
     return subject;
+  }
+
+  /** End the membership reconcile: no further view is applied to the node. */
+  private async stopFollowingViews(): Promise<void> {
+    this.membershipWatch?.abort();
+    this.stopViewListener?.();
+    this.stopViewListener = undefined;
+    await this.reconciling;
   }
 
   /**
@@ -570,6 +589,7 @@ export class SiloHost {
 
   private async stopLifecycle(): Promise<void> {
     // From the moment stop begins, before readiness flips: no view reaches the ownership hooks.
+    // Views still reach the node until it has stopped (`stopFollowingViews`).
     this.hooksHalted = true;
     if (this.lifecycle === undefined) {
       this.parts.shutdown.beginDrain();
@@ -614,6 +634,10 @@ export class SiloHost {
    * has applied if they have not run for it yet, and go round again until neither
    * is behind. Intermediate views may be coalesced; the latest is always applied.
    *
+   * Once a stop has begun the hooks are halted but the views are still applied, and a view
+   * that has removed this silo still fences it, until the node has stopped
+   * (`stopFollowingViews`): a leaving silo follows the watch through its drain.
+   *
    * Single-flight: a request while a reconcile runs (a view published mid-hook, or
    * the node applying a view on another path — the directory's stale-view refresh,
    * `awaitView` catching up to a peer — which `onViewApplied` reports) marks it to
@@ -638,7 +662,7 @@ export class SiloHost {
     const logger = safeLogger(this.parts.logger ?? defaultLogger);
     for (;;) {
       this.reconcileAgain = false;
-      if (this.hooksHalted || this.membershipWatch?.signal.aborted === true) return;
+      if (this.fenced || this.membershipWatch?.signal.aborted === true) return;
       if (localStandingOf(membership) === "removed") {
         await this.fence();
         return;
@@ -647,18 +671,17 @@ export class SiloHost {
       try {
         if (node.appliedViewVersion !== membership.current().version) node.updateView();
         const version = node.appliedViewVersion;
-        if (version !== this.hookedVersion) {
+        if (!this.hooksHalted && version !== this.hookedVersion) {
           // Recorded before the hooks run: a hook that fails is retried on the next
           // view change, not in a tight loop against a store that is down.
           this.hookedVersion = version;
           const ranges = node.ownedHashRanges();
           // Checked before each hook: a stop that began while one ran reaches no further one.
           for (const hook of onOwnershipChange ?? []) {
-            if (this.hooksHalted) return;
+            if (this.hooksHalted) break;
             await hook(ranges);
           }
-          if (this.hooksHalted) return;
-          await reminderService?.refreshOwnership(ranges);
+          if (!this.hooksHalted) await reminderService?.refreshOwnership(ranges);
         }
       } catch (error) {
         // Never let a failed view change END reconciliation (issue #70): a silo
@@ -681,7 +704,7 @@ export class SiloHost {
       health.update({ membershipHealthy: this.membershipHealthy() });
       const behind =
         node.appliedViewVersion !== membership.current().version ||
-        node.appliedViewVersion !== this.hookedVersion;
+        (!this.hooksHalted && node.appliedViewVersion !== this.hookedVersion);
       if (!this.reconcileAgain && (!behind || failed)) return;
     }
   }
