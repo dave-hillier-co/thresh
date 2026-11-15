@@ -79,7 +79,7 @@ async function start(time: FakeTimeProvider, path: Path): Promise<TestCluster> {
     defaultPlacementStrategy: new PreferLocalPlacement(),
     // Without the codec round trip a same-silo nested call's error reaches its caller as the
     // very object the activation refused it with.
-    wireSemanticsForLocalCalls: path !== "same-silo, shared objects",
+    localCallSemantics: path === "same-silo, shared objects" ? "reference" : "wire",
   });
   clusters.push(cluster);
   return cluster;

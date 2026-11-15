@@ -24,6 +24,7 @@ import { MemoryReminderTable } from "@thresh/reminders/memory-reminder-table";
 import { MemoryStreamProvider } from "@thresh/streams/memory-stream-provider";
 import { StaticMembershipService } from "@thresh/runtime/static-membership";
 import type { LoadSheddingOptions } from "@thresh/runtime/load-shedding";
+import type { LocalCallSemantics } from "@thresh/runtime/local-call-semantics-dispatcher";
 import type { PlacementStrategy } from "@thresh/runtime/placement/placement-strategy";
 import { MemoryTransactionalStorage } from "@thresh/transactions/memory-transactional-storage";
 import type { TransactionsOptions } from "@thresh/transactions/transactions-options";
@@ -219,13 +220,14 @@ export interface TestClusterOptions {
    */
   membership?: "static" | "kubernetes";
   /**
-   * Make every silo give a call to a grain on the same silo the semantics of a cross-silo call
-   * (`SiloConfig.wireSemanticsForLocalCalls`): its arguments, result and thrown error make the
-   * codec round trip, so a suite that happens to land caller and callee together still sees no
-   * aliasing, class instances as the wire delivers them and error classes as the wire rebuilds
-   * them. On by default; pass `false` for a test that pins local-only behaviour.
+   * What every silo does to a same-silo call's arguments, result and thrown error
+   * (`SiloConfig.localCallSemantics`). `"wire"` by default: they make the serializer round trip,
+   * so a suite that happens to land caller and callee together still sees no aliasing, class
+   * instances as the wire delivers them and error classes as the wire rebuilds them. `"copy"`
+   * gives the same through the deep copier (sharing values marked `immutable`); pass
+   * `"reference"` for a test that pins local-only behaviour.
    */
-  wireSemanticsForLocalCalls?: boolean;
+  localCallSemantics?: LocalCallSemantics;
 }
 
 /** One silo's membership as it stands: the view its membership holds, and the one its node applied. */
@@ -667,8 +669,8 @@ export class TestCluster {
         : {}),
       testHooks: true,
       ...(this.options.random !== undefined ? { random: this.options.random } : {}),
-      // On unless a test opts out: a same-silo call shows what a cross-silo call would.
-      wireSemanticsForLocalCalls: this.options.wireSemanticsForLocalCalls !== false,
+      // "wire" unless a test chooses: a same-silo call shows what a cross-silo call would.
+      localCallSemantics: this.options.localCallSemantics ?? "wire",
       ...(this.options.collectionAgeSeconds !== undefined
         ? { collectionAgeSeconds: this.options.collectionAgeSeconds }
         : {}),

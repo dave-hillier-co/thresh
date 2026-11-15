@@ -113,7 +113,12 @@ import { Catalog, type GrainActivator, type RegisteredGrain } from "@thresh/runt
 import { withPlaceGrainSpan } from "@thresh/observability/activation-tracing";
 import { ClientDirectory } from "@thresh/runtime/client-directory";
 import type { ActivationData, ActivationOptions } from "@thresh/runtime/activation";
-import { WireSemanticsDispatcher } from "@thresh/runtime/wire-semantics-dispatcher";
+import { copyValue } from "@thresh/core/value-copier";
+import {
+  LocalCallSemanticsDispatcher,
+  type LocalCallSemantics,
+} from "@thresh/runtime/local-call-semantics-dispatcher";
+import type { Dispatcher } from "@thresh/runtime/dispatcher";
 import { DistributedDispatcher } from "@thresh/runtime/distributed-dispatcher";
 import { logOneWayFailure } from "@thresh/runtime/one-way-dispatch";
 import { BroadcastChannelProviderImpl } from "@thresh/runtime/broadcast-channel-provider";
@@ -241,8 +246,10 @@ export interface ClusterNodeOptions {
    * `[ResponseTimeout]`). Defaults to `callTimeoutMs`, so no call goes without a deadline.
    */
   defaultResponseTimeoutMs?: number;
-  /** See `SiloConfig.wireSemanticsForLocalCalls`. Off by default (`TestCluster` turns it on). */
-  wireSemanticsForLocalCalls?: boolean;
+  /**
+   * See `SiloConfig.localCallSemantics`. `"reference"` by default (`TestCluster` uses `"wire"`).
+   */
+  localCallSemantics?: LocalCallSemantics;
   defaultCollectionAgeSeconds?: number;
   /**
    * Per-silo idle-deactivation ages keyed by grain type (Orleans'
@@ -917,22 +924,7 @@ export class ClusterNode {
           }
         : {}),
     });
-    this.factory.setDispatcher(
-      options.wireSemanticsForLocalCalls === true
-        ? new WireSemanticsDispatcher(this.dispatcher, {
-            value: (value) => this.serializer.deserialize(this.serializer.serialize(value)),
-            // The callee's reply envelope, read back the way the caller reads a remote reply.
-            error: (error) => {
-              const { kind, body } = this.serializeError(error);
-              try {
-                return this.interpretResponse({ responseKind: kind, body } as Message);
-              } catch (rebuilt) {
-                return rebuilt;
-              }
-            },
-          })
-        : this.dispatcher,
-    );
+    this.factory.setDispatcher(this.localCallDispatcher(options.localCallSemantics ?? "reference"));
     if (options.repartitioning !== undefined) {
       const repartitioning = options.repartitioning;
       this.repartitioner = new ActivationRepartitioner({
@@ -2165,6 +2157,31 @@ export class ClusterNode {
     // would produce, but for an observer reference it preserves the reserved
     // `$client` type + `+scope` key, which re-resolution would discard.
     return this.factory.getReference(iface, id.grainId);
+  }
+
+  /** The dispatcher grain references call through, for `ClusterNodeOptions.localCallSemantics`. */
+  private localCallDispatcher(semantics: LocalCallSemantics): Dispatcher {
+    if (semantics === "reference") return this.dispatcher;
+    // The callee's reply envelope, read back the way the caller reads a remote reply.
+    const error = (thrown: unknown): unknown => {
+      const { kind, body } = this.serializeError(thrown);
+      try {
+        return this.interpretResponse({ responseKind: kind, body } as Message);
+      } catch (rebuilt) {
+        return rebuilt;
+      }
+    };
+    if (semantics === "copy") {
+      const ctx = { resolveGrainReference: (id: GrainReferenceIdentity) => this.rehydrate(id) };
+      return new LocalCallSemanticsDispatcher(this.dispatcher, {
+        value: (value) => copyValue(value, ctx),
+        error,
+      });
+    }
+    return new LocalCallSemanticsDispatcher(this.dispatcher, {
+      value: (value) => this.serializer.deserialize(this.serializer.serialize(value)),
+      error,
+    });
   }
 
   private onDeactivated(activation: ActivationData): void {

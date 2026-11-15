@@ -44,6 +44,7 @@ import {
   GrainFacetRegistry,
   type GrainFacetFactory,
 } from "@thresh/persistence/grain-facet-registry";
+import type { LocalCallSemantics } from "@thresh/runtime/local-call-semantics-dispatcher";
 import { PlacementFilterRegistry } from "@thresh/runtime/placement/placement-filter-registry";
 import { PlacementStrategyRegistry } from "@thresh/runtime/placement/placement-strategy-registry";
 import type { PlacementStrategy } from "@thresh/runtime/placement/placement-strategy";
@@ -222,12 +223,14 @@ export interface SiloConfig {
    */
   clientDirectoryRefreshMs?: number;
   /**
-   * Give a call to a grain on THIS silo the semantics of a call to another silo: its arguments,
-   * result and thrown error make the codec round trip a message would (no shared objects, class
-   * instances and error classes as the wire delivers them). Off by default; for tests, so a
-   * single-silo suite sees what a second silo would break. See `WireSemanticsDispatcher`.
+   * What a call to a grain on THIS silo does to its arguments, result and thrown error:
+   * `"reference"` shares the caller's objects (the default); `"copy"` deep-copies arguments and
+   * results exactly as the codec round trip would deliver them, sharing only values marked
+   * `immutable` (Orleans' behaviour); `"wire"` makes the full serializer round trip a message
+   * would. Under `"copy"` and `"wire"` a same-silo call sees no shared objects and class
+   * instances and error classes as the wire delivers them. See `LocalCallSemantics`.
    */
-  wireSemanticsForLocalCalls?: boolean;
+  localCallSemantics?: LocalCallSemantics;
   /** Injectable RNG for deterministic placement in examples/tests. */
   random?: () => number;
   /** How often each silo re-reads its reminder ranges from the table (defaults to 60s). */
@@ -1970,8 +1973,8 @@ export class SiloBuilder {
       membership: this.membership,
       transport: this.transport,
       ...(time !== undefined ? { time } : {}),
-      ...(this.config.wireSemanticsForLocalCalls === true
-        ? { wireSemanticsForLocalCalls: true }
+      ...(this.config.localCallSemantics !== undefined
+        ? { localCallSemantics: this.config.localCallSemantics }
         : {}),
       ...(this.config.collectionAgeSeconds !== undefined
         ? { defaultCollectionAgeSeconds: this.config.collectionAgeSeconds }
