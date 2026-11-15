@@ -50,12 +50,33 @@ await cluster.kubernetes.release(a); // a catches up
 ```
 
 Each silo runs `useKubernetesMembership` over its own watch of one fake EndpointSlice API server
-(`cluster.kubernetes.api`). Silos join the way pods do: the pod is published not ready, the silo
-starts, then the pod is marked ready. The controls are `setReady`, `markNotReady`, `removePod`,
-`depart` (not ready, then removed), `hold` and `release` (one silo's watch lags, then catches up),
-and `relist` (the API server ends that silo's watch, which then re-lists). Each control resolves
-once every silo has applied the view it holds. `viewOf(silo)` returns that silo's membership view
-and the view version its node has applied. `siloMetadata` travels as pod labels.
+(`cluster.kubernetes.api`). Silos join the way pods do: the pod is listed not ready before the
+silo starts (so the silo finds itself listed and start does not wait), the silo starts, and the
+kubelet then marks the pod ready once the silo's own readiness passes. `siloMetadata` travels as
+pod labels. Each control resolves once every live silo has applied the view its own membership
+holds; `viewOf(silo)` returns that silo's membership view and the view version its node applied.
+
+The controls on `cluster.kubernetes`:
+
+- `setReady(silo, ready)` flips a pod's readiness condition. `markNotReady`, `removePod` and
+  `depart` (not ready, then removed) take a pod away in the two steps Kubernetes does.
+- `kubelet(silo)` is the readiness probe: it waits until the silo's own readiness passes (it
+  throws after `timeoutMs`, default 10s), then marks the pod ready. `startAdditionalSilo` and
+  `startAdditionalSilos` call it for you.
+- `terminate(silo)` is a pod being deleted: its endpoint turns not ready and terminating, so every
+  silo sees it `draining`. It stays listed until `removePod`.
+- `hold(silo)` queues that silo's watch events so its view falls behind, and `release(silo)`
+  delivers them in order and resumes live delivery. `relist(silo)` ends the watch as the API
+  server does on a timeout; the silo re-lists and watches again.
+- `settle()` lets watch reconnects, view reconciliation and directory traffic run.
+
+`startAdditionalSilo({ holdReadiness: true })` starts a silo and leaves its pod not ready: it
+stays a joining member, outside the ring while any peer is active, until the test flips it with
+`setReady` or `kubelet`. `startAdditionalSilos(count, options)` starts several silos at once, as a
+Deployment rolls out pods together: every pod is listed not ready before any silo starts, the
+silos start concurrently, and the kubelet marks each ready as its own readiness passes. On a
+cluster with no ready silo that is a cold start, and the ring is the joining silos until the first
+is ready.
 
 `stopSilo` marks the pod not ready, drains the silo, then removes the pod. `killSilo` leaves the
 pod listed and ready, as after a real crash, until the test calls `kubernetes.depart` (or
