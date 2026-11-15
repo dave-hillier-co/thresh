@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { defineGrain } from "@thresh/core/define-grain";
-import { activeSilos } from "@thresh/core/membership";
+import { GrainId } from "@thresh/core/grain-id";
+import { activeSilos, ringSilos } from "@thresh/core/membership";
+import type { LocalDirectoryPartition } from "@thresh/directory/local-directory-partition";
 import { PreferLocalPlacement } from "@thresh/runtime/placement/prefer-local-placement";
 import {
   TestCluster,
@@ -41,6 +43,16 @@ const names = (cluster: TestCluster, silo: TestSiloHandle): string[] =>
     .map((s) => s.podName)
     .sort();
 
+const ringNames = (cluster: TestCluster, silo: TestSiloHandle): string[] =>
+  ringSilos(cluster.viewOf(silo).membership)
+    .map((s) => s.podName)
+    .sort();
+
+/** The silo's directory partition (introspection only). */
+const partitionOf = (silo: TestSiloHandle): LocalDirectoryPartition =>
+  (silo.host as unknown as { parts: { node: { partition: LocalDirectoryPartition } } }).parts.node
+    .partition;
+
 describe("TestCluster on Kubernetes membership", () => {
   it("joins a silo the Kubernetes way, and every silo converges on one view", async () => {
     const cluster = await start({ initialSilos: 1 });
@@ -50,12 +62,75 @@ describe("TestCluster on Kubernetes membership", () => {
     expect(names(cluster, a)).toEqual(["test-silo-0", "test-silo-1"]);
     expect(names(cluster, b)).toEqual(["test-silo-0", "test-silo-1"]);
     expect(cluster.viewOf(a).appliedVersion).toBe(cluster.viewOf(b).appliedVersion);
+    // One view, its own entries included: neither silo has a say over its own status.
+    expect(cluster.viewOf(a).membership).toEqual(cluster.viewOf(b).membership);
     const results = await Promise.all(
       Array.from({ length: 40 }, (_, i) =>
         (i % 2 === 0 ? a : b).host.getGrain(Counter, `k${i}`).inc(),
       ),
     );
     expect(results.filter((r) => r !== 1)).toEqual([]);
+  });
+
+  it("shows a joiner the same view as its peers: itself joining, and outside the ring", async () => {
+    const cluster = await start({ initialSilos: 2 });
+    const joiner = await cluster.startAdditionalSilo({ holdReadiness: true });
+    await cluster.kubernetes.settle();
+
+    const own = cluster
+      .viewOf(joiner)
+      .membership.silos.find((m) => m.address.equals(joiner.address));
+    expect(own?.status).toBe("joining");
+    expect(ringNames(cluster, joiner)).toEqual(["test-silo-0", "test-silo-1"]);
+    for (const peer of cluster.silos) {
+      expect(cluster.viewOf(peer).membership).toEqual(cluster.viewOf(joiner).membership);
+    }
+    // Listed, so ready; the kubelet is held, so its pod is not.
+    expect(joiner.host.health.ready().ok).toBe(true);
+
+    await cluster.kubernetes.kubelet(joiner);
+    expect(ringNames(cluster, joiner)).toEqual(["test-silo-0", "test-silo-1", "test-silo-2"]);
+  });
+
+  it("starts a cold cluster: each startup grain activates once, and the ring ends as the ready set", async () => {
+    const fromStartup: Record<number, number | string> = {};
+    const cluster = await start({
+      initialSilos: 0,
+      callTimeout: { seconds: 5 },
+      configureSilo: (builder, { index }) => {
+        builder.addStartupTask(async (grains) => {
+          fromStartup[index] = await grains
+            .getGrain(Counter, `cold-${index}`)
+            .inc()
+            .catch((e: unknown) => `error: ${String(e)}`);
+        });
+      },
+    });
+    // Three pods listed together, none ready, started at once.
+    const silos = await cluster.startAdditionalSilos(3);
+    expect(fromStartup).toEqual({ 0: 1, 1: 1, 2: 1 });
+    await cluster.kubernetes.settle();
+
+    const keys = ["cold-0", "cold-1", "cold-2"];
+    const id = (key: string): GrainId => new GrainId("K8sHarnessCounter", key);
+    for (const silo of silos) {
+      expect(ringNames(cluster, silo)).toEqual(["test-silo-0", "test-silo-1", "test-silo-2"]);
+    }
+    for (const key of keys) {
+      expect(
+        silos.filter((s) => s.host.isActive(id(key))),
+        key,
+      ).toHaveLength(1);
+      expect(
+        silos.filter((s) => partitionOf(s).lookup(id(key)) !== undefined),
+        key,
+      ).toHaveLength(1);
+    }
+    // The one activation answers from every silo.
+    const again = await Promise.all(
+      keys.map((key, i) => silos[i]!.host.getGrain(Counter, key).inc()),
+    );
+    expect(again).toEqual([2, 2, 2]);
   });
 
   it("clears a crashed silo out once its pod goes not-ready and then away", async () => {
@@ -100,6 +175,32 @@ describe("TestCluster on Kubernetes membership", () => {
     await cluster.kubernetes.release(a);
     expect(names(cluster, a)).toEqual(["test-silo-0", "test-silo-1"]);
     expect(cluster.viewOf(a).appliedVersion).toBe(cluster.viewOf(b).appliedVersion);
+  });
+
+  it("catches a silo up through refresh when a peer's call shows it is behind, with no further slice write", async () => {
+    const cluster = await start({ initialSilos: 3 });
+    const [a, b, c] = cluster.silos as [TestSiloHandle, TestSiloHandle, TestSiloHandle];
+    cluster.kubernetes.hold(a);
+    await cluster.kubernetes.markNotReady(c);
+    expect(cluster.viewOf(a).membership.version).toBeLessThan(cluster.viewOf(b).membership.version);
+
+    // B's directory operations reach A carrying B's version; A refreshes to it.
+    const results = await Promise.all(
+      Array.from({ length: 40 }, (_, i) =>
+        b.host
+          .getGrain(Counter, `behind-${i}`)
+          .inc()
+          .catch((e: unknown) => `error: ${String(e)}`),
+      ),
+    );
+    expect(results.filter((r) => r !== 1)).toEqual([]);
+    expect(cluster.viewOf(a).membership.version).toBe(cluster.viewOf(b).membership.version);
+    expect(cluster.viewOf(a).membership.silos).toEqual(cluster.viewOf(b).membership.silos);
+
+    // The events held all along are older than what A now holds, and change nothing.
+    const caughtUp = cluster.viewOf(a).membership;
+    await cluster.kubernetes.release(a);
+    expect(cluster.viewOf(a).membership).toEqual(caughtUp);
   });
 
   it("catches a lagging silo up on a forced relist, held events and all", async () => {

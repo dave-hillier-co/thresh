@@ -46,6 +46,14 @@ export class StaticMembershipService implements MembershipService {
     return this.feed.updates();
   }
 
+  /**
+   * One shared view, so there is nothing to catch up on: resolves at once. A static view counts
+   * as listed and synced from the start.
+   */
+  refresh(_version: number): Promise<void> {
+    return Promise.resolve();
+  }
+
   /** Replace the whole view (all `active`), bumping the version. */
   setSilos(addresses: readonly SiloAddress[]): void {
     this.publish(addresses.map((address) => this.member(address, "active")));

@@ -24,6 +24,7 @@ function membershipOf(local: SiloAddress, silos: readonly SiloAddress[]): Member
   return {
     current: () => snapshot,
     localSilo: () => local,
+    refresh: async () => {},
     async *updates() {
       // no changes in these tests
     },

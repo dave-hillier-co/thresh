@@ -30,7 +30,7 @@ import {
   type VersionSelectorStrategy,
 } from "@thresh/core/version-selector";
 import type { KeyTypeOf } from "@thresh/core/key-kinds";
-import { activeSilos, memberSilos, type MembershipService } from "@thresh/core/membership";
+import { memberSilos, ringSilos, type MembershipService } from "@thresh/core/membership";
 import type {
   IncomingGrainCallFilter,
   OutgoingGrainCallFilter,
@@ -683,6 +683,8 @@ export class ClusterNode {
    * construction — a Kubernetes watch has not listed yet then.
    */
   private appliedVersion = -1;
+  /** Set by `fence`: this silo was removed from the view and serves nothing again. */
+  private fenced = false;
   /**
    * Every silo in the last applied view, whatever its status. Departure cleanup is
    * the diff of this against the next view, not of the previous RING: a silo that
@@ -903,7 +905,10 @@ export class ClusterNode {
       cache: this.cache,
       catalog: this.catalog,
       remote: { send: (silo, req) => this.sendRemote(silo, req) },
-      activeSilos: () => activeSilos(this.options.membership.current()),
+      activeSilos: () => ringSilos(this.options.membership.current()),
+      mayActivate: () => this.mayActivate(),
+      refusal: () => (this.fenced ? this.fencedRefusal() : undefined),
+      isLocalSystemType: (type) => this.isLocalSystemType(type),
       placementFor: (grainType) => this.placementFor(grainType),
       filtersFor: (grainType) => this.filtersFor(grainType),
       placementContext: () => this.placementContext(),
@@ -979,10 +984,11 @@ export class ClusterNode {
     // A): a no-op self-probe every silo registers on itself so
     // `SelfProbeWorker` (`@thresh/hosting`) can call `getGrain(ISiloProbe,
     // local.ringKey).ping()` and time a real round trip through this silo's
-    // OWN dispatcher. `preferLocal` placement (set on the class itself, see
-    // `createSiloProbeGrainType`) is what makes "on itself" true — without
-    // it, placement could land the activation on any candidate silo and the
-    // probe would say nothing about whether THIS silo's dispatcher is stuck.
+    // OWN dispatcher. Whatever type serves `ISiloProbe` is activated through
+    // the local system-activation path (`isLocalSystemType`): never placed,
+    // never in the directory, always answered by the silo that asked — so it
+    // measures only this silo's dispatcher and scheduler, and works on a silo
+    // that is not a placement candidate (a joining or draining one).
     this.registerGrain(createSiloProbeGrainType(), { interfaces: [ISiloProbe] });
   }
 
@@ -1499,6 +1505,48 @@ export class ClusterNode {
    * own termination grace period instead of risking a SIGKILL mid-stop
    * (issue #108).
    */
+  /**
+   * Fence this silo: a view omitted it after it had been listed, so its peers have already
+   * dropped its directory entries and reassigned its ranges (Orleans
+   * `MembershipTableManager.KillMyselfLocally`). From here every call — inbound over the wire or
+   * made on this silo — is refused before it runs, as one its caller may resend elsewhere, and
+   * every activation is abandoned without running its deactivation hooks or unregistering it
+   * (`Catalog.abandonAll`). Its periodic work stops. The host fails liveness alongside, and
+   * Kubernetes restarts the pod. Idempotent; never undone.
+   */
+  fence(): void {
+    if (this.fenced) return;
+    this.fenced = true;
+    if (this.loadPublishTimer !== undefined) this.time.clearTimer(this.loadPublishTimer);
+    this.loadPublishTimer = undefined;
+    if (this.clientMaintenanceTimer !== undefined)
+      this.time.clearTimer(this.clientMaintenanceTimer);
+    this.clientMaintenanceTimer = undefined;
+    if (this.clientDirectoryRefreshTimer !== undefined)
+      this.time.clearTimer(this.clientDirectoryRefreshTimer);
+    this.clientDirectoryRefreshTimer = undefined;
+    for (const reArm of this.recoveryReArms.values()) {
+      if (reArm.timer !== undefined) this.time.clearTimer(reArm.timer);
+    }
+    this.recoveryReArms.clear();
+    this.collector.stop();
+    this.catalog.abandonAll();
+  }
+
+  /** Whether `fence` has run. */
+  get isFenced(): boolean {
+    return this.fenced;
+  }
+
+  private fencedRefusal(): RejectionError {
+    return refusedBeforeExecution(
+      new RejectionError(
+        `${this.options.local.toString()} was removed from the membership view and is fenced`,
+        "staleView",
+      ),
+    );
+  }
+
   async stop(deadlineMs?: number): Promise<void> {
     if (this.loadPublishTimer !== undefined) this.time.clearTimer(this.loadPublishTimer);
     this.loadPublishTimer = undefined;
@@ -1551,7 +1599,7 @@ export class ClusterNode {
     const local = this.options.local;
     const oldRing = this.ring;
     const newRing = this.buildRing();
-    const live = new Set(activeSilos(snapshot).map((s) => s.ringKey));
+    const live = new Set(ringSilos(snapshot).map((s) => s.ringKey));
     const present = new Set(memberSilos(snapshot).map((s) => s.ringKey));
     for (const key of this.remoteLoadStats.keys()) {
       if (!present.has(key)) this.remoteLoadStats.delete(key);
@@ -1562,7 +1610,7 @@ export class ClusterNode {
     // from `clientDirectoryRefreshMs`'s next tick (Orleans' `ClientDirectory`
     // republishing its table on every membership change).
     const oldLive = new Set(oldRing.silos().map((s) => s.ringKey));
-    const newlyActive = activeSilos(snapshot).filter(
+    const newlyActive = ringSilos(snapshot).filter(
       (s) => !oldLive.has(s.ringKey) && !s.equals(local),
     );
 
@@ -1659,15 +1707,27 @@ export class ClusterNode {
   }
 
   private buildRing(): ConsistentHashRing {
-    return new ConsistentHashRing(activeSilos(this.options.membership.current()));
+    return new ConsistentHashRing(ringSilos(this.options.membership.current()));
+  }
+
+  /**
+   * Whether this silo may create an application-grain activation: it is in the ring of the view
+   * it has APPLIED. A joining silo while a peer is active, and a draining one, are members that
+   * keep serving what they host but create nothing new, so a joiner and its peers never each
+   * own a range at once and a draining silo stops placing on itself (Orleans
+   * `Catalog.GetOrCreateActivation`, which creates only while the silo is active).
+   */
+  private mayActivate(): boolean {
+    if (this.fenced) return false;
+    return this.ring.silos().some((s) => s.equals(this.options.local));
   }
 
   private ownsNow(grainId: GrainId): boolean {
     return this.ring.ownerOf(grainId).equals(this.options.local);
   }
 
-  private otherActiveSilos(): SiloAddress[] {
-    return activeSilos(this.options.membership.current()).filter(
+  private otherRingSilos(): SiloAddress[] {
+    return ringSilos(this.options.membership.current()).filter(
       (s) => !s.equals(this.options.local),
     );
   }
@@ -1686,12 +1746,28 @@ export class ClusterNode {
     );
   }
 
-  /** Resolve `appliedVersion` reaching `version`; self-advance if our view already shows it. */
+  /**
+   * Resolve `appliedVersion` reaching `version`; self-advance if our view already shows it.
+   * Otherwise a peer has shown that this silo's view is behind: ask the membership service to
+   * catch up (`MembershipService.refresh`, Orleans `ClusterMembershipService.Refresh`) and apply
+   * what it brings, rather than waiting for this silo's own watch to deliver some unrelated
+   * change. Bounded by the call timeout either way.
+   */
   private async awaitView(version: number): Promise<void> {
     if (this.appliedVersion >= version) return;
-    if (this.options.membership.current().version >= version) {
+    const membership = this.options.membership;
+    if (membership.current().version >= version) {
       this.updateView();
       if (this.appliedVersion >= version) return;
+    } else {
+      void membership.refresh(version).then(
+        () => {
+          if (this.appliedVersion < version && membership.current().version >= version) {
+            this.updateView();
+          }
+        },
+        () => undefined,
+      );
     }
     await new Promise<void>((resolve, reject) => {
       const onResolve = (): void => {
@@ -2184,7 +2260,18 @@ export class ClusterNode {
     });
   }
 
+  /**
+   * Whether `type` is served by the local system-activation path (see
+   * `DistributedDispatcherDeps.isLocalSystemType`): the type currently registered for
+   * `ISiloProbe`, so an override registered after the built-in one is served the same way.
+   */
+  private isLocalSystemType(type: GrainType): boolean {
+    return this.interfaceToGrainType.get(ISiloProbe.id) === type;
+  }
+
   private onDeactivated(activation: ActivationData): void {
+    // A local system activation was never registered: there is nothing to unregister.
+    if (this.isLocalSystemType(activation.id.type)) return;
     void this.directory
       .unregister({
         grainId: activation.id,
@@ -2235,7 +2322,7 @@ export class ClusterNode {
     return withPlaceGrainSpan(() =>
       selectPlacementTarget({
         grainType,
-        candidates: activeSilos(this.options.membership.current()),
+        candidates: ringSilos(this.options.membership.current()),
         exclude: [this.options.local],
         filters: this.filtersFor(grainType),
         strategy: this.placementFor(grainType),
@@ -2413,8 +2500,12 @@ export class ClusterNode {
     }
   }
 
-  /** Take over a migrating activation here, rehydrating its state and claiming the directory entry. */
+  /**
+   * Take over a migrating activation here, rehydrating its state and claiming the directory
+   * entry. Declined by a silo outside its ring, which creates no activation (`mayActivate`).
+   */
   private async acceptMigration(payload: MigrationPayload): Promise<boolean> {
+    if (!this.mayActivate()) return false;
     const activation = await this.catalog.activateMigrated(
       payload.grainId,
       newActivationId(),
@@ -2552,7 +2643,7 @@ export class ClusterNode {
 
   /** Fire-and-forget a `system: "client"` gossip message to every other active silo. */
   private broadcastClientGossip(gossip: ClientGossip): void {
-    for (const peer of this.otherActiveSilos()) this.sendClientGossip(peer, gossip);
+    for (const peer of this.otherRingSilos()) this.sendClientGossip(peer, gossip);
   }
 
   /**
@@ -2579,7 +2670,7 @@ export class ClusterNode {
   private scheduleClientDirectoryRefresh(): void {
     this.clientDirectoryRefreshTimer = this.time.setTimer(() => {
       this.scheduleClientDirectoryRefresh();
-      this.republishClientDirectory(this.otherActiveSilos());
+      this.republishClientDirectory(this.otherRingSilos());
     }, this.clientDirectoryRefreshMs);
   }
 
@@ -2754,7 +2845,7 @@ export class ClusterNode {
     if (message.system !== undefined) return false;
     const from = message.sendingSilo;
     if (from === undefined) return false;
-    return !activeSilos(this.options.membership.current()).some((s) => s.equals(from));
+    return !memberSilos(this.options.membership.current()).some((s) => s.equals(from));
   }
 
   private interpretResponse(response: Message): unknown {
@@ -2804,6 +2895,14 @@ export class ClusterNode {
       return;
     }
     if (connection !== undefined) this.arrivedOn.set(message, connection);
+    if (this.fenced) {
+      // Every request, grain call or system message alike, is refused before it runs.
+      if (message.direction === "request") {
+        const { kind, body } = this.serializeError(this.fencedRefusal());
+        void this.reply(message, responseTo(message, kind, body, this.options.local));
+      }
+      return;
+    }
     this.runInbound(message, this.inboundHandlerFor(message));
   }
 
@@ -3022,7 +3121,7 @@ export class ClusterNode {
    * Best-effort: an unreachable peer is skipped rather than failing the call.
    */
   async publishLoadStats(): Promise<void> {
-    const peers = activeSilos(this.options.membership.current()).filter(
+    const peers = ringSilos(this.options.membership.current()).filter(
       (s) => !s.equals(this.options.local),
     );
     const stats = this.loadSnapshot();
@@ -3099,7 +3198,7 @@ export class ClusterNode {
     counts: Map<string, number>;
     silos: Map<string, SiloAddress>;
   }> {
-    const active = activeSilos(this.options.membership.current());
+    const active = ringSilos(this.options.membership.current());
     const counts = new Map<string, number>();
     const silos = new Map<string, SiloAddress>();
     await Promise.all(
@@ -3146,7 +3245,7 @@ export class ClusterNode {
    * query (an unreachable peer contributes nothing, same as `gatherClusterLoad`).
    */
   async gatherClusterGrainStats(): Promise<SimpleGrainStatistic[]> {
-    const active = activeSilos(this.options.membership.current());
+    const active = ringSilos(this.options.membership.current());
     const results: SimpleGrainStatistic[] = [];
     await Promise.all(
       active.map(async (silo) => {
@@ -3200,7 +3299,7 @@ export class ClusterNode {
    * count.
    */
   async gatherClusterDetailedGrainStatistics(types?: string[]): Promise<DetailedGrainStatistic[]> {
-    const active = activeSilos(this.options.membership.current());
+    const active = ringSilos(this.options.membership.current());
     const results: DetailedGrainStatistic[] = [];
     await Promise.all(
       active.map(async (silo) => {
@@ -3247,7 +3346,7 @@ export class ClusterNode {
    * silo's local count instead of resolving a single address.
    */
   async gatherGrainActivationCount(id: GrainId): Promise<number> {
-    const active = activeSilos(this.options.membership.current());
+    const active = ringSilos(this.options.membership.current());
     const counts = await Promise.all(
       active.map((silo) =>
         silo.equals(this.options.local)
@@ -3285,7 +3384,7 @@ export class ClusterNode {
    * (Orleans `IManagementGrain.ForceActivationCollection(TimeSpan)`).
    */
   async forceActivationCollectionCluster(ageLimitMs: number): Promise<void> {
-    const active = activeSilos(this.options.membership.current());
+    const active = ringSilos(this.options.membership.current());
     await Promise.all(
       active.map((silo) =>
         silo.equals(this.options.local)
@@ -3394,7 +3493,7 @@ export class ClusterNode {
     command: number,
     arg?: unknown,
   ): Promise<unknown[]> {
-    const active = activeSilos(this.options.membership.current());
+    const active = ringSilos(this.options.membership.current());
     return Promise.all(
       active.map((silo) =>
         silo.equals(this.options.local)

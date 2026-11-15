@@ -25,13 +25,19 @@ import type { PlacementFilter } from "@thresh/runtime/placement/placement-filter
 import { dispatchDetachingOneWay } from "@thresh/runtime/one-way-dispatch";
 import { resolvePlacementHint } from "@thresh/runtime/placement/placement-hint";
 import { selectPlacementTarget } from "@thresh/runtime/placement/select-placement-target";
-import type {
-  PlacementContext,
-  PlacementStrategy,
+import {
+  pickRandom,
+  type PlacementContext,
+  type PlacementStrategy,
 } from "@thresh/runtime/placement/placement-strategy";
 
 /** Orleans `SiloMessagingOptions.MaxForwardCount` — see `forwardTo`. */
 const MAX_FORWARD_COUNT = 2;
+
+/** Whether `err` is a target's refusal, before execution, of a call it would not activate. */
+function refusedAsOutOfRing(err: unknown): boolean {
+  return err instanceof RejectionError && err.kind === "staleView" && mayResend(err);
+}
 
 /** Sends a request to a remote silo and awaits its response. */
 export interface RemoteInvoker {
@@ -44,6 +50,10 @@ export interface DistributedDispatcherDeps {
   cache: LocationCache;
   catalog: Catalog;
   remote: RemoteInvoker;
+  /**
+   * The placement candidates for a new activation: the silos that may host one (`ringSilos` of
+   * the view — the active members, or the joining ones while none is active).
+   */
   activeSilos: () => SiloAddress[];
   placementFor: (grainType: GrainType) => PlacementStrategy;
   /** Filters that prune candidate silos by metadata before the strategy chooses. */
@@ -78,6 +88,28 @@ export interface DistributedDispatcherDeps {
    * `ActivationRepartitioner.recordLocalEdge`.
    */
   recordEdge?: (req: InvocationRequest, targetSilo: SiloAddress) => void;
+  /**
+   * Whether this silo may create an activation now: it is in the ring of the view it has
+   * applied (Orleans `Catalog.GetOrCreateActivation` creates only while the silo's own status
+   * is active). When it answers `false`, a call that would activate a grain here is refused
+   * before execution so its caller re-resolves; an activation already here keeps serving.
+   * Absent, every claim may activate.
+   */
+  mayActivate?: () => boolean;
+  /**
+   * A refusal of every call, when this silo serves none (it has fenced itself — see
+   * `ClusterNode.fence`): returned before anything is resolved, already marked as refused
+   * before execution. `undefined` lets the call through.
+   */
+  refusal?: () => RejectionError | undefined;
+  /**
+   * Grain types served by the local system-activation path: a call to one is always answered by
+   * an activation on this silo, created on demand through the catalog — never placed, never
+   * looked up in or registered with the directory, and open on a silo outside its ring. Its
+   * turns still run through the activation's scheduler, as any call's do. The built-in
+   * self-probe is the one such type (see `ClusterNode`).
+   */
+  isLocalSystemType?: (type: GrainType) => boolean;
   /**
    * Where a detached `oneWay` delivery's failure is reported (see
    * `dispatchDetachingOneWay`). Optional so a test can wire a dispatcher
@@ -157,6 +189,8 @@ export class DistributedDispatcher implements Dispatcher {
   }
 
   private async deliver(req: InvocationRequest, opts?: InvokeCallOptions): Promise<unknown> {
+    const refusal = this.deps.refusal?.();
+    if (refusal !== undefined) throw refusal;
     req = this.canonical(req);
     // Resolved once, up front, so a fresh `opts.deadlineMs` is embedded into
     // `req.deadline` before any placement/forwarding decision below — it must
@@ -173,13 +207,17 @@ export class DistributedDispatcher implements Dispatcher {
     // they may have several interchangeable local activations per id, which
     // the single-winner directory CAS below has no way to represent. Route
     // straight to the catalog's pick-or-scale instead of the cache/directory
-    // funnel; this also means a stateless-worker call always resolves on
-    // whichever silo makes it, exactly like Orleans. `deliverLocal` — the path
+    // funnel; this also means a stateless-worker call resolves on whichever
+    // silo makes it while that silo is in its ring, exactly like Orleans (one
+    // outside its ring creates no worker: see `deliverToWorker`). `deliverLocal` — the path
     // every request that arrived over a connection takes, including a client's
     // — makes the same diversion, so a wire-arrived call joins the receiving
     // silo's own pool rather than being pinned to it by a directory entry.
     if (this.deps.catalog.isStatelessWorkerType(withDeadline.target.type)) {
-      return admit(this.deps.catalog.pickOrScaleWorker(withDeadline.target), withDeadline, opts);
+      return this.deliverToWorker(withDeadline, opts, "send");
+    }
+    if (this.deps.isLocalSystemType?.(withDeadline.target.type) === true) {
+      return this.invokeLocalSystem(withDeadline, opts);
     }
 
     const cached = this.deps.cache.get(withDeadline.target);
@@ -231,6 +269,8 @@ export class DistributedDispatcher implements Dispatcher {
 
   /** A request that arrived here: ensure a local activation, or forward to the CAS winner. */
   async deliverLocal(req: InvocationRequest, opts?: InvokeCallOptions): Promise<unknown> {
+    const refusal = this.deps.refusal?.();
+    if (refusal !== undefined) throw refusal;
     req = this.canonical(req);
     // [StatelessWorker] grains bypass the directory funnel here too (see
     // `deliver`): a call that arrived over a connection is already confined to
@@ -239,7 +279,10 @@ export class DistributedDispatcher implements Dispatcher {
     // — which would pin the grain here and serve every later call, from every
     // silo, from that one activation.
     if (this.deps.catalog.isStatelessWorkerType(req.target.type)) {
-      return admit(this.deps.catalog.pickOrScaleWorker(req.target), req, opts);
+      return this.deliverToWorker(req, opts, "forward");
+    }
+    if (this.deps.isLocalSystemType?.(req.target.type) === true) {
+      return this.invokeLocalSystem(req, opts);
     }
 
     const existing = await this.deps.catalog.resolveLive(req.target);
@@ -252,6 +295,74 @@ export class DistributedDispatcher implements Dispatcher {
     // (Lifecycle source) wraps registration through activation, so
     // "register directory entry" (Runtime source) is a child span of it.
     return withPlaceGrainSpan(() => this.claimAndActivateLocally(req, opts));
+  }
+
+  /**
+   * A `[StatelessWorker]` call. A silo in its ring serves it from its own pool, scaling it on
+   * demand (`StatelessWorkerPlacement` places locally). A silo outside its ring creates no
+   * activation (`mayActivate`), stateless workers included: it serves the call with a worker it
+   * already hosts, and otherwise sends it to a silo in its ring, as Orleans'
+   * `StatelessWorkerDirector` places elsewhere when the local silo is not a compatible one. A
+   * call made here is sent, and placed once more without a target that refuses it as out of its
+   * ring; a call that arrived over a connection (a client's, at a draining gateway) is forwarded,
+   * under the forward cap. With no silo in the ring the call is refused before execution.
+   *
+   * The pool pick and the turn's admission stay in one synchronous slice (see
+   * `Catalog.pickOrScaleWorker`).
+   */
+  private deliverToWorker(
+    req: InvocationRequest,
+    opts: InvokeCallOptions | undefined,
+    how: "send" | "forward",
+  ): Promise<unknown> {
+    const catalog = this.deps.catalog;
+    if (this.deps.mayActivate?.() !== false) {
+      return admit(catalog.pickOrScaleWorker(req.target), req, opts);
+    }
+    const existing = catalog.pickExistingWorker(req.target);
+    if (existing !== undefined) return admit(existing, req, opts);
+    return this.sendWorkerCallToRing(req, opts, how);
+  }
+
+  private async sendWorkerCallToRing(
+    req: InvocationRequest,
+    opts: InvokeCallOptions | undefined,
+    how: "send" | "forward",
+    exclude: readonly SiloAddress[] = [],
+  ): Promise<unknown> {
+    let candidates: readonly SiloAddress[] = this.deps
+      .activeSilos()
+      .filter((s) => !s.equals(this.deps.local) && !exclude.some((x) => x.equals(s)));
+    if (this.deps.versionFilter !== undefined && candidates.length > 0) {
+      candidates = await this.deps.versionFilter(req, candidates);
+    }
+    if (candidates.length === 0) {
+      throw refusedBeforeExecution(
+        new RejectionError(
+          `${this.deps.local.toString()} is not in its ring and creates no activation of ` +
+            `${req.target.toString()}, and no silo in its ring can host one`,
+          "staleView",
+        ),
+      );
+    }
+    const target = pickRandom(candidates, this.deps.placementContext().random ?? Math.random);
+    this.deps.recordEdge?.(req, target);
+    if (how === "forward") return this.forwardTo(target, req, opts);
+    try {
+      return await this.deps.remote.send(target, req);
+    } catch (err) {
+      if (exclude.length > 0 || !refusedAsOutOfRing(err)) throw err;
+      return this.sendWorkerCallToRing(req, opts, how, [target]);
+    }
+  }
+
+  /** The local system-activation path (see `DistributedDispatcherDeps.isLocalSystemType`). */
+  private async invokeLocalSystem(
+    req: InvocationRequest,
+    opts?: InvokeCallOptions,
+  ): Promise<unknown> {
+    const activation = await this.deps.catalog.getOrCreate(req.target);
+    return admit(activation, req, opts);
   }
 
   /**
@@ -280,6 +391,15 @@ export class DistributedDispatcher implements Dispatcher {
     req: InvocationRequest,
     opts?: InvokeCallOptions,
   ): Promise<unknown> {
+    if (this.deps.mayActivate?.() === false) {
+      throw refusedBeforeExecution(
+        new RejectionError(
+          `${this.deps.local.toString()} is not in its ring and creates no activation of ` +
+            req.target.toString(),
+          "staleView",
+        ),
+      );
+    }
     const key = req.target.toString();
     const oneWay = req.options.oneWay === true;
     while (oneWay) {
@@ -472,7 +592,17 @@ export class DistributedDispatcher implements Dispatcher {
     return admit(act, req, opts);
   }
 
-  private async placeAndInvoke(req: InvocationRequest, opts?: InvokeCallOptions): Promise<unknown> {
+  /**
+   * Place the grain and send the call to the chosen silo. A target that refuses it before
+   * execution as stale (`staleView`, resendable — a silo that has left the ring in its own view
+   * and creates no activation) is excluded and the placement re-run once, so the caller
+   * re-resolves rather than failing on a view that is a moment behind the target's.
+   */
+  private async placeAndInvoke(
+    req: InvocationRequest,
+    opts?: InvokeCallOptions,
+    exclude: readonly SiloAddress[] = [],
+  ): Promise<unknown> {
     // The whole placement decision — filtering, strategy choice, and (if we
     // land locally) directory registration + activation — runs inside one
     // "place grain" span (Runtime source), matching Orleans' `PlaceGrainAsync`
@@ -494,6 +624,7 @@ export class DistributedDispatcher implements Dispatcher {
       const targetSilo = await selectPlacementTarget({
         grainType: req.target.type,
         candidates: this.deps.activeSilos(),
+        exclude,
         filters: this.deps.filtersFor(req.target.type),
         strategy: this.deps.placementFor(req.target.type),
         context: ctx,
@@ -511,9 +642,14 @@ export class DistributedDispatcher implements Dispatcher {
         );
       }
       this.deps.recordEdge?.(req, targetSilo);
-      return targetSilo.equals(this.deps.local)
-        ? this.deliverLocalWithinPlacementSpan(req, opts)
-        : this.deps.remote.send(targetSilo, req);
+      if (targetSilo.equals(this.deps.local))
+        return this.deliverLocalWithinPlacementSpan(req, opts);
+      try {
+        return await this.deps.remote.send(targetSilo, req);
+      } catch (err) {
+        if (exclude.length > 0 || !refusedAsOutOfRing(err)) throw err;
+        return this.placeAndInvoke(req, opts, [targetSilo]);
+      }
     });
   }
 

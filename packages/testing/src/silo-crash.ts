@@ -202,6 +202,10 @@ export class SharedMembershipView implements MembershipService {
     return this.local;
   }
 
+  refresh(version: number): Promise<void> {
+    return this.frozenAt !== undefined ? Promise.resolve() : this.shared.refresh(version);
+  }
+
   /** Stop following the shared view: hold the current snapshot and end every update stream. */
   freeze(): void {
     if (this.frozenAt !== undefined) return;

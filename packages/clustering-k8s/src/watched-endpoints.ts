@@ -31,14 +31,13 @@ export type WatchEventType = "ADDED" | "MODIFIED" | "DELETED";
  */
 export class WatchedEndpoints implements EndpointWatch {
   private readonly slices = new Map<string, EndpointSlice>();
-  private readonly subscribers = new Set<
-    (slices: EndpointSlice[], revision: number | undefined) => void
-  >();
+  private readonly subscribers = new Set<(slices: EndpointSlice[], revision: number) => void>();
   private revision: number | undefined;
 
-  subscribe(onSlices: (slices: EndpointSlice[], revision: number | undefined) => void): () => void {
+  subscribe(onSlices: (slices: EndpointSlice[], revision: number) => void): () => void {
     this.subscribers.add(onSlices);
-    if (this.slices.size > 0) onSlices(this.snapshot(), this.revision);
+    if (this.slices.size > 0 && this.revision !== undefined)
+      onSlices(this.snapshot(), this.revision);
     return () => {
       this.subscribers.delete(onSlices);
     };
@@ -52,12 +51,18 @@ export class WatchedEndpoints implements EndpointWatch {
   /**
    * Apply one watch event, keyed by the slice's resource name. For a DELETED
    * event `slice`, when given, only contributes its `resourceVersion`.
+   *
+   * An event at or below the revision already observed is ignored: one ordered watch never
+   * delivers such an event, so it can only be a write the set already reflects — an event still
+   * in flight on the watch when a re-list (`KubernetesEndpointWatch.relist`) ran ahead of it —
+   * and applying it would roll the view back.
    */
   apply(type: WatchEventType, name: string, slice?: EndpointSlice): void {
+    const revision = parseRevision(slice?.resourceVersion);
+    if (revision !== undefined && this.revision !== undefined && revision <= this.revision) return;
     if (type === "DELETED") this.slices.delete(name);
     else if (slice !== undefined) this.slices.set(name, slice);
-    const advanced = this.observe(parseRevision(slice?.resourceVersion));
-    this.emit(advanced ? this.revision : undefined);
+    if (this.observe(revision)) this.emit();
   }
 
   /**
@@ -85,7 +90,9 @@ export class WatchedEndpoints implements EndpointWatch {
     }
     this.slices.clear();
     for (const [name, slice] of slices) this.slices.set(name, slice);
-    this.emit(this.revision !== before || !changed ? this.revision : undefined);
+    // An unchanged set is re-reported at the revision it already had (the consumer publishes
+    // nothing for it); a changed one only once the revision has moved to date it.
+    if (this.revision !== before || !changed) this.emit();
   }
 
   /** Fold `revision` in; whether it moved the observed revision forward. */
@@ -101,12 +108,15 @@ export class WatchedEndpoints implements EndpointWatch {
   }
 
   /**
-   * Notify subscribers. `revision` is `undefined` for a change the watch could not
-   * date — one that did not move the observed revision forward, which only a source
-   * reporting no (or stale) resourceVersions produces — so the consumer does not
-   * mistake a changed view for the one it already holds at that revision.
+   * Notify subscribers of the current set at the observed revision. Every update carries a
+   * revision (the `EndpointWatch` contract), so a change the watch cannot date — one that did not
+   * move the observed revision forward, which only a source reporting no resourceVersions
+   * produces — is not reported on its own: it is carried by the next dated change. Reporting it
+   * at the revision already held would number two different views the same.
    */
-  private emit(revision: number | undefined): void {
+  private emit(): void {
+    const revision = this.revision;
+    if (revision === undefined) return;
     const snapshot = this.snapshot();
     for (const subscriber of this.subscribers) subscriber(snapshot, revision);
   }
@@ -117,7 +127,7 @@ export class WatchedEndpoints implements EndpointWatch {
  * for etcd-backed resources it is the decimal etcd revision. Anything else is treated
  * as carrying no revision.
  */
-function parseRevision(resourceVersion: string | undefined): number | undefined {
+export function parseRevision(resourceVersion: string | undefined): number | undefined {
   if (resourceVersion === undefined || !/^\d+$/.test(resourceVersion)) return undefined;
   const revision = Number(resourceVersion);
   return Number.isSafeInteger(revision) ? revision : undefined;

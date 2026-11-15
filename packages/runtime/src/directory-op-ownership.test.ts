@@ -47,6 +47,9 @@ class MembershipView implements MembershipService {
   updates() {
     return this.shared.updates();
   }
+  refresh(version: number) {
+    return this.shared.refresh(version);
+  }
   localSilo() {
     return this.local;
   }
@@ -122,10 +125,9 @@ function counterKeyMovingThrough(
  * change, and a successor that inherits the range finds no entry, so a call
  * misses and builds a second activation of a grain that never stopped running.
  *
- * This file drives the REMOTE path: silo-2 claims a cold activation, so its
- * registration is routed to silo-1 (the range's owner at the time), and silo-1's
- * view moves the range on while that registration waits on silo-1's in-flight
- * recovery.
+ * This file drives the REMOTE path: a call to a cold grain routes its directory
+ * operation to silo-1 (the range's owner at the time), and silo-1's view moves the
+ * range on while that operation waits on silo-1's in-flight recovery.
  */
 describe("a remote directory op that outlives its range (check-then-write)", () => {
   beforeEach(() => undefined);
@@ -164,12 +166,17 @@ describe("a remote directory op that outlives its range (check-then-write)", () 
     const node1 = makeNode(silo(1));
     await node1.start(); // its recovery pull is now parked at silo-0
 
-    // silo-2's node is built while the view still holds two silos, so its ring
-    // resolves the grain to silo-1 — and it is then added to the view (and so
-    // becomes a placement candidate) without applying that change.
+    // silo-2's node is built while the view still holds two silos, then added to
+    // the view (becoming a placement candidate) and applies that three-silo view:
+    // a silo creates activations only once it is in the ring of the view it has
+    // applied. Its ring still resolves the grain to silo-1 (see the key below).
     const node2 = makeNode(silo(2));
     await node2.start();
     membership.addSilo(silo(2));
+    node2.updateView();
+    // Its join pulls carry that view to silo-0 and silo-1; let them apply it before the
+    // view moves on.
+    await settle();
 
     // silo-3 joins the view but its node is started later: its own join recovery
     // would pull from the others, and a pull carries the joiner's view version, so
@@ -180,14 +187,15 @@ describe("a remote directory op that outlives its range (check-then-write)", () 
     // silo-1 owns the entry at two silos; silo-3 owns the range at four.
     const key = counterKeyMovingThrough([
       { ring: new ConsistentHashRing([silo(0), silo(1)]), owner: silo(1) },
+      { ring: new ConsistentHashRing([silo(0), silo(1), silo(2)]), owner: silo(1) },
       { ring: new ConsistentHashRing([silo(0), silo(1), silo(2), silo(3)]), owner: silo(3) },
     ]);
     const grainId = new GrainId("Counter", key);
     let node3: ClusterNode | undefined;
 
     try {
-      // The call is placed on silo-2, which claims the activation and registers
-      // it with silo-1 — where the registration waits on the parked recovery.
+      // The call's directory operation goes to silo-1, the owner in the three-silo
+      // view every node has applied — where it waits on the parked recovery.
       let completed = false;
       const call = node0.getGrain(ICounter, key).increment(5);
       void call.finally(() => (completed = true));
@@ -205,8 +213,8 @@ describe("a remote directory op that outlives its range (check-then-write)", () 
       gate.release();
       await settle();
 
-      // The call still resolves — silo-2's claim is repaired onto the true owner —
-      // but silo-1 must not have registered anything for a range it has lost.
+      // The call still resolves — re-resolved onto the true owner and claimed on
+      // silo-2 — but silo-1 must not have registered anything for a range it has lost.
       expect(await call).toBe(5);
       expect(node1.partition.lookup(grainId)).toBeUndefined();
       expect(node3.partition.lookup(grainId)?.silo.equals(silo(2))).toBe(true);

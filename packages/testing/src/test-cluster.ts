@@ -33,7 +33,7 @@ import type { SiloHost } from "@thresh/hosting/silo-host";
 import { createClient, type ClientNode } from "@thresh/client/client-node";
 import { membershipGatewayProvider } from "@thresh/client/gateway-provider";
 import {
-  activeSilos,
+  ringSilos,
   type MembershipService,
   type MembershipSnapshot,
 } from "@thresh/core/membership";
@@ -214,9 +214,11 @@ export interface TestClusterOptions {
    * OWN watch of one fake EndpointSlice API server, which the test drives through
    * `TestCluster.kubernetes` — readiness, two-step departure, a lagging watch, a forced relist.
    * Views then change silo by silo and can differ; `viewOf` shows each silo's. A silo joins as
-   * a pod does (published not ready, started, then marked ready), a graceful stop marks its pod
-   * not ready before draining and removes it after, and a kill leaves its pod listed, ready,
-   * until the test takes it away (`kubernetes.depart`), as after a real crash.
+   * a pod does: listed not ready (joining, outside the ring while any peer is active) as it
+   * starts, then marked ready by the kubelet once its own readiness passes — or held not ready
+   * (`startAdditionalSilo({ holdReadiness: true })`). A graceful stop marks its pod terminating
+   * (draining) before the silo drains and removes it after, and a kill leaves its pod listed,
+   * ready, until the test takes it away (`kubernetes.depart`), as after a real crash.
    */
   membership?: "static" | "kubernetes";
   /**
@@ -228,6 +230,16 @@ export interface TestClusterOptions {
    * `"reference"` for a test that pins local-only behaviour.
    */
   localCallSemantics?: LocalCallSemantics;
+}
+
+/** How `TestCluster.startAdditionalSilo` brings a silo up. */
+export interface StartSiloOptions {
+  /**
+   * Under Kubernetes membership, leave the silo's pod not ready after it starts instead of letting
+   * the kubelet mark it ready: it stays a joining member, outside the ring while any peer is
+   * active, until the test flips it.
+   */
+  readonly holdReadiness?: boolean;
 }
 
 /** One silo's membership as it stands: the view its membership holds, and the one its node applied. */
@@ -430,7 +442,7 @@ export class TestCluster {
       gateways:
         membership !== undefined
           ? membershipGatewayProvider(membership)
-          : { getGateways: () => activeSilos(this.viewOf(this.primary).membership) },
+          : { getGateways: () => ringSilos(this.viewOf(this.primary).membership) },
     }).registerGrains(this.options.grains ?? []);
     await client.connect();
     return client;
@@ -480,13 +492,38 @@ export class TestCluster {
     });
   }
 
-  async startAdditionalSilo(): Promise<TestSiloHandle> {
+  /**
+   * Start one more silo. Under Kubernetes membership its pod is listed not ready as it starts
+   * (a joining member, outside the ring while any peer is active), and the kubelet marks it ready
+   * once the silo's own readiness passes — unless `holdReadiness`, which leaves the pod not ready
+   * until the test flips it (`kubernetes.setReady`, or `kubernetes.kubelet`). Ignored under the
+   * default static membership, where a silo is active from the start.
+   */
+  async startAdditionalSilo(options: StartSiloOptions = {}): Promise<TestSiloHandle> {
     const silo = this.buildSilo();
     await silo.host.start();
-    // A pod's readiness probe passes once the silo has started; only then is it in its peers'
-    // views.
-    await this.k8s?.setReady(silo, true);
+    if (this.k8s !== undefined && options.holdReadiness !== true) await this.k8s.kubelet(silo);
     return silo;
+  }
+
+  /**
+   * Start `count` more silos at once, as a Deployment rolls out several pods together: every pod
+   * is listed not ready before any silo starts, the silos start concurrently, and the kubelet
+   * marks each ready as its own readiness passes (unless `holdReadiness`). On a cluster with no
+   * ready silo this is a cold start: the ring is the joining silos until the first is ready.
+   */
+  async startAdditionalSilos(
+    count: number,
+    options: StartSiloOptions = {},
+  ): Promise<TestSiloHandle[]> {
+    const silos = Array.from({ length: count }, () => this.buildSilo());
+    await Promise.all(
+      silos.map(async (silo) => {
+        await silo.host.start();
+        if (this.k8s !== undefined && options.holdReadiness !== true) await this.k8s.kubelet(silo);
+      }),
+    );
+    return silos;
   }
 
   /**
@@ -513,8 +550,9 @@ export class TestCluster {
       this.shared?.removeSilo(silo.address);
       return;
     }
-    // A terminating pod fails its readiness probe first, drains, and its endpoint goes after.
-    await this.k8s.markNotReady(silo);
+    // A terminating pod's endpoint turns not ready and terminating first, the silo drains, and
+    // its endpoint goes after.
+    await this.k8s.terminate(silo);
     await silo.host.stop();
     await this.k8s.removePod(silo);
   }

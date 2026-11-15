@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { LogFields, Logger } from "@thresh/core/logger";
+import { SiloAddress } from "@thresh/core/silo-address";
 import { ServiceLifecycleStage } from "@thresh/runtime/lifecycle-subject";
 import { GracefulShutdown } from "@thresh/hosting/graceful-shutdown";
 import { HealthCheck } from "@thresh/hosting/health-check";
@@ -9,6 +10,8 @@ import {
   type SiloLifecycleParticipant,
 } from "@thresh/hosting/silo-host";
 import type { ClusterNode } from "@thresh/runtime/cluster-node";
+
+const LOCAL = new SiloAddress("silo-0", "uid-0", "silo-0:11111");
 
 function fakeNode(order: string[] = []): ClusterNode {
   return {
@@ -40,6 +43,7 @@ function buildHost(order: string[], lifecycle: SiloLifecycleParticipant[]): Silo
     membership: {
       current: () => ({ silos: [], version: 0 }),
       updates: async function* () {},
+      localSilo: () => LOCAL,
     } as never,
     lifecycle: [
       ...lifecycle,
@@ -139,6 +143,7 @@ describe("SiloHost hook failures are logged, not only thrown", () => {
       membership: {
         current: () => ({ silos: [], version: 0 }),
         updates: async function* () {},
+        localSilo: () => LOCAL,
       } as never,
       logger,
       ...hooks,

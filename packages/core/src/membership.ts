@@ -39,9 +39,32 @@ export interface MembershipSnapshot {
   silos: ReadonlyArray<SiloMember>;
 }
 
+/**
+ * Where the local silo stands in its own view.
+ *
+ * - `unlisted`: no view has listed it yet (a pod whose endpoint the watch has not reported). It
+ *   is not a member, owns nothing and is not ready, but it is not fenced either.
+ * - `listed`: the latest view lists it, whatever its status.
+ * - `removed`: a view omitted it after it had been listed. Its peers have dropped its directory
+ *   entries, so it must fence itself (Orleans `MembershipTableManager.KillMyselfLocally`).
+ */
+export type LocalStanding = "unlisted" | "listed" | "removed";
+
 /** The live silo set, derived from Kubernetes in production (see docs/05). */
 export interface MembershipService {
   current(): MembershipSnapshot;
+  /**
+   * Resolve once this service holds a view at or above `version` (Orleans
+   * `ClusterMembershipService.Refresh`): how a silo that learns a peer is ahead catches up
+   * without waiting for its own watch to deliver an unrelated change. A provider with a single
+   * view (static) resolves at once.
+   */
+  refresh(version: number): Promise<void>;
+  /**
+   * Where the local silo stands (see `LocalStanding`). Optional: a provider without it is read
+   * through `localStandingOf`, which takes `listed` from the view and never reports `removed`.
+   */
+  localStanding?(): LocalStanding;
   /**
    * The views published from now on, with latest-value semantics: an iterator that
    * is behind `current()` yields it on its next step, whether or not it was waiting
@@ -103,9 +126,45 @@ export class MembershipFeed {
   }
 }
 
-/** The silos that may host or own grains: those currently `active`. */
+/**
+ * The members whose status is `active`. A status count, not the set that may own or host:
+ * that is `ringSilos`, which falls back to the joining members when none is active.
+ */
 export function activeSilos(snapshot: MembershipSnapshot): SiloAddress[] {
   return snapshot.silos.filter((m) => m.status === "active").map((m) => m.address);
+}
+
+/**
+ * The silos that may own a hash range or host a new activation: the `active` members, or, when
+ * no member is active, the `joining` ones.
+ *
+ * Every consumer that asks "who may own or host" uses this one rule — the hash ring, placement
+ * candidates for new activations and migrations, the rebalancer and repartitioner, load
+ * publishing, the client gateway list, and stream, reminder and durable-job ownership — so two
+ * silos holding the same view agree on all of them. A joining or draining silo owns nothing
+ * while any peer is active (Orleans `DirectoryMembershipSnapshot`: the ring is the active silos).
+ * The fallback is what lets a cold cluster start: before any pod is ready, every silo sees the
+ * same joining set and they agree on a ring made of it.
+ */
+export function ringSilos(snapshot: MembershipSnapshot): SiloAddress[] {
+  const active = activeSilos(snapshot);
+  if (active.length > 0) return active;
+  return snapshot.silos.filter((m) => m.status === "joining").map((m) => m.address);
+}
+
+/** Whether `silo` is a member of `snapshot` (see `memberSilos`). */
+export function isMember(snapshot: MembershipSnapshot, silo: SiloAddress): boolean {
+  return snapshot.silos.some((m) => m.status !== "dead" && m.address.equals(silo));
+}
+
+/**
+ * The local silo's standing in `service` (see `LocalStanding`): the provider's own answer when it
+ * has one, otherwise `listed` while the view holds the local silo and `unlisted` while it does not
+ * — a provider that cannot tell a removal from not yet being listed never fences.
+ */
+export function localStandingOf(service: MembershipService): LocalStanding {
+  if (service.localStanding !== undefined) return service.localStanding();
+  return isMember(service.current(), service.localSilo()) ? "listed" : "unlisted";
 }
 
 /**
@@ -113,7 +172,7 @@ export function activeSilos(snapshot: MembershipSnapshot): SiloAddress[] {
  * not-yet-`active` joiner) included, `dead` and an endpoint removed outright
  * excluded.
  *
- * This is deliberately weaker than `activeSilos`, and is the liveness a
+ * This is deliberately weaker than `ringSilos`, and is the liveness a
  * directory entry is judged by. A silo that has stopped taking new placements
  * is still running the activations already on it: graceful shutdown flips
  * readiness and only then waits out its grace period (see

@@ -62,6 +62,9 @@ class MembershipView implements MembershipService {
   updates() {
     return this.shared.updates();
   }
+  refresh(version: number) {
+    return this.shared.refresh(version);
+  }
   localSilo() {
     return this.local;
   }
