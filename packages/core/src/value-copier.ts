@@ -7,9 +7,12 @@ import { Guid } from "./guid";
 import { isImmutable } from "./immutable";
 import { SiloAddress } from "./silo-address";
 import {
+  assertWellFormed,
+  assertWellFormedKeys,
   CircularReferenceError,
   decodeValue,
   encodeNested,
+  wellFormedText,
   hasSurrogates,
   surrogateFor,
   typedArrayConstructor,
@@ -70,6 +73,8 @@ export const COPIED_TAGS: ReadonlySet<string> = new Set([
   "set",
   "error", // viaCodec
   "plainObject", // copyPlainObject's escaped branch
+  "nonFinite", // copyScalar: a non-finite number stays itself
+  "surrogateFields", // viaCodec: a surrogate whose fields collide with the envelope
 ]);
 
 const T = "$thresh";
@@ -186,7 +191,9 @@ function copyInner(
   }
   // `-0` and a bigint are tagged before any surrogate is asked, and decode to themselves.
   if (typeof value === "bigint") return value;
-  if (typeof value === "number" && Object.is(value, -0)) return value;
+  if (typeof value === "number" && (Object.is(value, -0) || !Number.isFinite(value))) return value;
+  // Refused before any surrogate is asked, as the codec does; see `assertWellFormed`.
+  if (typeof value === "string") assertWellFormed(value, pathOf(parent, kind, key), "a string");
   if (hasSurrogates()) {
     const surrogate = surrogateFor(value);
     if (surrogate !== undefined) return copySurrogate(value, surrogate, walk, parent, kind, key);
@@ -243,9 +250,15 @@ function copyObject(
       value.asSignal === true,
     );
   }
-  if (value instanceof DOMException) return new DOMException(value.message, value.name);
-  if (value instanceof GrainCallAbortedError) return new GrainCallAbortedError(value.message);
-  if (value instanceof GrainTaskCanceledError) return new GrainTaskCanceledError(value.message);
+  if (value instanceof DOMException) {
+    return new DOMException(wellFormedText(value.message), wellFormedText(value.name));
+  }
+  if (value instanceof GrainCallAbortedError) {
+    return new GrainCallAbortedError(wellFormedText(value.message));
+  }
+  if (value instanceof GrainTaskCanceledError) {
+    return new GrainTaskCanceledError(wellFormedText(value.message));
+  }
   if (value instanceof SiloAddress) {
     return new SiloAddress(value.podName, value.podUid, value.endpoint);
   }
@@ -418,6 +431,7 @@ function copyPlainObject(
     const here: Frame = { parent, kind, key };
     const source = value as Record<string, unknown>;
     const keys = Object.keys(value);
+    assertWellFormedKeys(keys, pathOf(parent, kind, key));
     const out: Record<string, unknown> = {};
     if (keys.some((k) => k === T || DANGEROUS_KEYS.has(k))) {
       // The codec's `plainObject` envelope: entries carried as positional pairs (so an undefined
@@ -455,6 +469,12 @@ function copySurrogate(
     throw error;
   }
   const keys = Object.keys(fields);
+  try {
+    assertWellFormedKeys(keys, pathOf(parent, kind, key));
+  } catch (error) {
+    walk.seen.delete(value);
+    throw error;
+  }
   if (keys.some((k) => k === T || k === V || DANGEROUS_KEYS.has(k))) {
     // A field named like the envelope's own keys, or a dangerous one, reshapes the envelope the
     // codec writes; let the codec say what that comes back as.

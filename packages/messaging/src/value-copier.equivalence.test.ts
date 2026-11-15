@@ -107,11 +107,28 @@ class Clash {
 const clashSurrogate = {
   tag: "test.copier.clash",
   test: (v: unknown) => v instanceof Clash,
-  encode: (c: Clash) => ({ $tsvv: 1, v: c.v, constructor: "c" }),
+  encode: (c: Clash) => ({ $thresh: "x", $tsvv: 1, v: c.v, constructor: "c", prototype: [1] }),
   decode: (f: Record<string, unknown>) => ({ rebuilt: Object.keys(f) }),
 };
 
-const surrogatesUnderTest = [moneySurrogate, ledgerSurrogate, fragileSurrogate, clashSurrogate];
+/** A surrogate whose field NAME is chosen by the value. */
+class Dynamic {
+  constructor(readonly field: string) {}
+}
+const dynamicSurrogate = {
+  tag: "test.copier.dynamic",
+  test: (v: unknown) => v instanceof Dynamic,
+  encode: (d: Dynamic) => ({ [d.field]: 1 }),
+  decode: (f: Record<string, unknown>) => ({ rebuilt: Object.keys(f) }),
+};
+
+const surrogatesUnderTest = [
+  moneySurrogate,
+  ledgerSurrogate,
+  fragileSurrogate,
+  clashSurrogate,
+  dynamicSurrogate,
+];
 
 beforeAll(() => {
   for (const s of surrogatesUnderTest) registerSurrogate(s as SurrogateDescriptor);
@@ -157,34 +174,24 @@ function withProperties(): Error {
   return error;
 }
 
-/**
- * `jsonLossy` marks a value the JSON transport itself cannot carry (a non-finite number becomes
- * `null`), and `msgpackLossy` one MessagePack cannot (a lone surrogate in a long string becomes
- * U+FFFD). Neither is the codec's doing, and the copier keeps such a value exactly; those
- * comparisons are skipped for that transport only.
- */
 interface Sample {
   readonly make: () => unknown;
-  readonly jsonLossy?: boolean;
-  readonly msgpackLossy?: boolean;
 }
 
 const corpus: Record<string, Sample> = {
   // Primitives.
   "a string": { make: () => "hello" },
   "an empty string": { make: () => "" },
-  "a short string with a lone surrogate": { make: () => "a\uD800b" },
-  "a long string with a lone surrogate": {
-    make: () => "x".repeat(300) + "\uD800",
-    msgpackLossy: true,
-  },
+  "a string with a surrogate pair": { make: () => "a\uD83D\uDE00b" },
+  "a long string with a surrogate pair": { make: () => "x".repeat(300) + "\uD83D\uDE00" },
   "an integer": { make: () => 42 },
   "a float": { make: () => 1.5 },
   "a large integer": { make: () => 2 ** 60 },
   zero: { make: () => 0 },
   "negative zero": { make: () => -0 },
-  NaN: { make: () => Number.NaN, jsonLossy: true },
-  Infinity: { make: () => Infinity, jsonLossy: true },
+  NaN: { make: () => Number.NaN },
+  Infinity: { make: () => Infinity },
+  "negative Infinity": { make: () => -Infinity },
   true: { make: () => true },
   false: { make: () => false },
   null: { make: () => null },
@@ -264,7 +271,7 @@ const corpus: Record<string, Sample> = {
 
   // Date.
   "a Date": { make: () => new Date("2026-07-24T12:00:00.000Z") },
-  "an invalid Date": { make: () => new Date(Number.NaN), jsonLossy: true },
+  "an invalid Date": { make: () => new Date(Number.NaN) },
   "a Date subclass": { make: () => new (class Stamp extends Date {})(5) },
 
   // Binary and typed arrays.
@@ -283,8 +290,10 @@ const corpus: Record<string, Sample> = {
   Float32Array: { make: () => new Float32Array([1.5, -1.5, 0, -0]) },
   Float64Array: { make: () => new Float64Array([1.5, -1.5, -0]) },
   "a Float64Array with NaN and Infinity": {
-    make: () => new Float64Array([Number.NaN, Infinity]),
-    jsonLossy: true,
+    make: () => new Float64Array([Number.NaN, Infinity, -Infinity]),
+  },
+  "a Float32Array with NaN and Infinity": {
+    make: () => new Float32Array([Number.NaN, -Infinity]),
   },
   BigInt64Array: { make: () => new BigInt64Array([-1n, 0n, 1n]) },
   BigUint64Array: { make: () => new BigUint64Array([0n, 18446744073709551615n]) },
@@ -454,26 +463,23 @@ const resolving: CodecContext = {
   }),
 };
 
-const transports: Array<[string, (ctx: CodecContext) => Serializer, keyof Sample]> = [
-  ["MessagePack", (ctx) => new MessagePackSerializer(ctx), "msgpackLossy"],
-  ["JSON", (ctx) => new JsonSerializer(ctx), "jsonLossy"],
+const transports: Array<[string, (ctx: CodecContext) => Serializer]> = [
+  ["MessagePack", (ctx) => new MessagePackSerializer(ctx)],
+  ["JSON", (ctx) => new JsonSerializer(ctx)],
 ];
 
-describe.each(transports)("copyValue matches the %s round trip", (_name, make, lossy) => {
+describe.each(transports)("copyValue matches the %s round trip", (_name, make) => {
   describe.each(Object.entries(positions))("%s", (_position, place) => {
-    it.each(Object.entries(corpus).filter(([, sample]) => sample[lossy] !== true))(
-      "%s",
-      (_label, sample) => {
-        for (const ctx of [resolving, {}]) {
-          const serializer = make(ctx);
-          const viaWire = outcome(() =>
-            serializer.deserialize(serializer.serialize(place(sample.make()))),
-          );
-          const viaCopy = outcome(() => copyValue(place(sample.make()), ctx));
-          expect(viaCopy).toEqual(viaWire);
-        }
-      },
-    );
+    it.each(Object.entries(corpus))("%s", (_label, sample) => {
+      for (const ctx of [resolving, {}]) {
+        const serializer = make(ctx);
+        const viaWire = outcome(() =>
+          serializer.deserialize(serializer.serialize(place(sample.make()))),
+        );
+        const viaCopy = outcome(() => copyValue(place(sample.make()), ctx));
+        expect(viaCopy).toEqual(viaWire);
+      }
+    });
   });
 });
 
@@ -484,6 +490,16 @@ function cyclic(): Record<string, unknown> {
 }
 
 const refused: Record<string, () => unknown> = {
+  "a string with a lone high surrogate": () => "a\uD800b",
+  "a string with a lone low surrogate": () => "a\uDC00b",
+  "a long string with a lone surrogate": () => "x".repeat(300) + "\uD800",
+  "an object key with a lone surrogate": () => ({ ["k\uD800"]: 1 }),
+  "an escaped object key with a lone surrogate": () => ({ $thresh: "x", ["k\uDC00"]: 1 }),
+  "a lone surrogate in a Map key": () => new Map([["\uD800", 1]]),
+  "a lone surrogate in a surrogate's field": () => new Money(1, "\uD800"),
+  "a lone surrogate in a surrogate's field name": () => new Dynamic("f\uD800"),
+  "a lone surrogate in an error's properties": () =>
+    Object.assign(new Error("e"), { text: "\uD800" }),
   "a RegExp": () => /x/g,
   "a Promise": () => Promise.resolve(1),
   "a WeakMap": () => new WeakMap(),
