@@ -676,6 +676,8 @@ export class ClusterNode {
    * construction — a Kubernetes watch has not listed yet then.
    */
   private appliedVersion = -1;
+  /** Set by `fence`: this silo was removed from the view and serves nothing again. */
+  private fenced = false;
   /**
    * Every silo in the last applied view, whatever its status. Departure cleanup is
    * the diff of this against the next view, not of the previous RING: a silo that
@@ -898,6 +900,8 @@ export class ClusterNode {
       remote: { send: (silo, req) => this.sendRemote(silo, req) },
       activeSilos: () => ringSilos(this.options.membership.current()),
       mayActivate: () => this.mayActivate(),
+      refusal: () => (this.fenced ? this.fencedRefusal() : undefined),
+      isLocalSystemType: (type) => this.isLocalSystemType(type),
       placementFor: (grainType) => this.placementFor(grainType),
       filtersFor: (grainType) => this.filtersFor(grainType),
       placementContext: () => this.placementContext(),
@@ -988,10 +992,11 @@ export class ClusterNode {
     // A): a no-op self-probe every silo registers on itself so
     // `SelfProbeWorker` (`@thresh/hosting`) can call `getGrain(ISiloProbe,
     // local.ringKey).ping()` and time a real round trip through this silo's
-    // OWN dispatcher. `preferLocal` placement (set on the class itself, see
-    // `createSiloProbeGrainType`) is what makes "on itself" true — without
-    // it, placement could land the activation on any candidate silo and the
-    // probe would say nothing about whether THIS silo's dispatcher is stuck.
+    // OWN dispatcher. Whatever type serves `ISiloProbe` is activated through
+    // the local system-activation path (`isLocalSystemType`): never placed,
+    // never in the directory, always answered by the silo that asked — so it
+    // measures only this silo's dispatcher and scheduler, and works on a silo
+    // that is not a placement candidate (a joining or draining one).
     this.registerGrain(createSiloProbeGrainType(), { interfaces: [ISiloProbe] });
   }
 
@@ -1508,6 +1513,48 @@ export class ClusterNode {
    * own termination grace period instead of risking a SIGKILL mid-stop
    * (issue #108).
    */
+  /**
+   * Fence this silo: a view omitted it after it had been listed, so its peers have already
+   * dropped its directory entries and reassigned its ranges (Orleans
+   * `MembershipTableManager.KillMyselfLocally`). From here every call — inbound over the wire or
+   * made on this silo — is refused before it runs, as one its caller may resend elsewhere, and
+   * every activation is abandoned without running its deactivation hooks or unregistering it
+   * (`Catalog.abandonAll`). Its periodic work stops. The host fails liveness alongside, and
+   * Kubernetes restarts the pod. Idempotent; never undone.
+   */
+  fence(): void {
+    if (this.fenced) return;
+    this.fenced = true;
+    if (this.loadPublishTimer !== undefined) this.time.clearTimer(this.loadPublishTimer);
+    this.loadPublishTimer = undefined;
+    if (this.clientMaintenanceTimer !== undefined)
+      this.time.clearTimer(this.clientMaintenanceTimer);
+    this.clientMaintenanceTimer = undefined;
+    if (this.clientDirectoryRefreshTimer !== undefined)
+      this.time.clearTimer(this.clientDirectoryRefreshTimer);
+    this.clientDirectoryRefreshTimer = undefined;
+    for (const reArm of this.recoveryReArms.values()) {
+      if (reArm.timer !== undefined) this.time.clearTimer(reArm.timer);
+    }
+    this.recoveryReArms.clear();
+    this.collector.stop();
+    this.catalog.abandonAll();
+  }
+
+  /** Whether `fence` has run. */
+  get isFenced(): boolean {
+    return this.fenced;
+  }
+
+  private fencedRefusal(): RejectionError {
+    return refusedBeforeExecution(
+      new RejectionError(
+        `${this.options.local.toString()} was removed from the membership view and is fenced`,
+        "staleView",
+      ),
+    );
+  }
+
   async stop(deadlineMs?: number): Promise<void> {
     if (this.loadPublishTimer !== undefined) this.time.clearTimer(this.loadPublishTimer);
     this.loadPublishTimer = undefined;
@@ -1679,6 +1726,7 @@ export class ClusterNode {
    * `Catalog.GetOrCreateActivation`, which creates only while the silo is active).
    */
   private mayActivate(): boolean {
+    if (this.fenced) return false;
     return this.ring.silos().some((s) => s.equals(this.options.local));
   }
 
@@ -2195,7 +2243,18 @@ export class ClusterNode {
     return this.factory.getReference(iface, id.grainId);
   }
 
+  /**
+   * Whether `type` is served by the local system-activation path (see
+   * `DistributedDispatcherDeps.isLocalSystemType`): the type currently registered for
+   * `ISiloProbe`, so an override registered after the built-in one is served the same way.
+   */
+  private isLocalSystemType(type: GrainType): boolean {
+    return this.interfaceToGrainType.get(ISiloProbe.id) === type;
+  }
+
   private onDeactivated(activation: ActivationData): void {
+    // A local system activation was never registered: there is nothing to unregister.
+    if (this.isLocalSystemType(activation.id.type)) return;
     void this.directory
       .unregister({
         grainId: activation.id,
@@ -2819,6 +2878,14 @@ export class ClusterNode {
       return;
     }
     if (connection !== undefined) this.arrivedOn.set(message, connection);
+    if (this.fenced) {
+      // Every request, grain call or system message alike, is refused before it runs.
+      if (message.direction === "request") {
+        const { kind, body } = this.serializeError(this.fencedRefusal());
+        void this.reply(message, responseTo(message, kind, body, this.options.local));
+      }
+      return;
+    }
     this.runInbound(message, this.inboundHandlerFor(message));
   }
 

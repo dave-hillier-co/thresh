@@ -587,6 +587,19 @@ export class ActivationData implements GrainContext {
   }
 
   /**
+   * Give this activation up because its silo has fenced itself (Orleans
+   * `MembershipTableManager.KillMyselfLocally`): its timers stop, and a valid activation turns
+   * invalid, so nothing queued on it or due on a timer runs grain code again. No hook runs and no
+   * pipeline step runs — not the unregister (the silo's peers have already dropped its directory
+   * entries), not the removal (the catalog drops it wholesale), not the disposal.
+   */
+  abandonFenced(): void {
+    this.disposeTimers();
+    this.clearStuckDeactivationTimer();
+    if (this._state === "valid") this.transition("invalid");
+  }
+
+  /**
    * Orleans `ProcessRequestsToInvalidActivation`'s Deactivating branch: a call
    * is being held on this deactivating activation (see `rerouteOrReject`), so
    * once the deactivation has run past `maxRequestProcessingTimeMs` it is

@@ -8,8 +8,12 @@
  * turned inward — no gossip, no cluster-wide agreement, K8s stays the sole
  * membership authority (see the "Constraint" note in the design doc).
  *
- * On a timer, it calls a no-op system grain (`ISiloProbe`, `preferLocal`
- * placement) on THIS silo and tracks consecutive misses. Reaching
+ * On a timer, it calls a no-op system grain (`ISiloProbe`) on THIS silo and
+ * tracks consecutive misses. The node serves that grain through its local
+ * system-activation path — never placed, never in the directory, always
+ * answered by the silo that asked, on a joining or draining silo as on an
+ * active one — while the call still goes through the dispatcher and the
+ * activation's scheduler, which is what a wedged dispatcher stalls. Reaching
  * `missedThreshold` flips `HealthCheck.dispatcherResponsive` false, which
  * pulls the endpoint from service exactly the way `draining` does; a
  * subsequent success flips it back. The cadence defaults

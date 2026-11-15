@@ -727,4 +727,18 @@ export class Catalog {
     this.activations.clear();
     this.workerActivations.clear();
   }
+
+  /**
+   * Drop every activation without deactivating it, for a silo that has fenced itself
+   * (`ClusterNode.fence`, Orleans `KillMyselfLocally`): each is abandoned
+   * (`ActivationData.abandonFenced`) — no hook, no unregistration, no disposal — and none is
+   * created from here on, as during `deactivateAll`.
+   */
+  abandonAll(): void {
+    this.stopping = true;
+    const all = [...this.activations.values(), ...[...this.workerActivations.values()].flat()];
+    this.activations.clear();
+    this.workerActivations.clear();
+    for (const activation of all) activation.abandonFenced();
+  }
 }

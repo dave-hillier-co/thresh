@@ -96,6 +96,20 @@ export interface DistributedDispatcherDeps {
    */
   mayActivate?: () => boolean;
   /**
+   * A refusal of every call, when this silo serves none (it has fenced itself — see
+   * `ClusterNode.fence`): returned before anything is resolved, already marked as refused
+   * before execution. `undefined` lets the call through.
+   */
+  refusal?: () => RejectionError | undefined;
+  /**
+   * Grain types served by the local system-activation path: a call to one is always answered by
+   * an activation on this silo, created on demand through the catalog — never placed, never
+   * looked up in or registered with the directory, and open on a silo outside its ring. Its
+   * turns still run through the activation's scheduler, as any call's do. The built-in
+   * self-probe is the one such type (see `ClusterNode`).
+   */
+  isLocalSystemType?: (type: GrainType) => boolean;
+  /**
    * Where a detached `oneWay` delivery's failure is reported (see
    * `dispatchDetachingOneWay`). Optional so a test can wire a dispatcher
    * without one; defaults to `defaultLogger`.
@@ -174,6 +188,8 @@ export class DistributedDispatcher implements Dispatcher {
   }
 
   private async deliver(req: InvocationRequest, opts?: InvokeCallOptions): Promise<unknown> {
+    const refusal = this.deps.refusal?.();
+    if (refusal !== undefined) throw refusal;
     req = this.canonical(req);
     // Resolved once, up front, so a fresh `opts.deadlineMs` is embedded into
     // `req.deadline` before any placement/forwarding decision below — it must
@@ -197,6 +213,9 @@ export class DistributedDispatcher implements Dispatcher {
     // silo's own pool rather than being pinned to it by a directory entry.
     if (this.deps.catalog.isStatelessWorkerType(withDeadline.target.type)) {
       return admit(this.deps.catalog.pickOrScaleWorker(withDeadline.target), withDeadline, opts);
+    }
+    if (this.deps.isLocalSystemType?.(withDeadline.target.type) === true) {
+      return this.invokeLocalSystem(withDeadline, opts);
     }
 
     const cached = this.deps.cache.get(withDeadline.target);
@@ -248,6 +267,8 @@ export class DistributedDispatcher implements Dispatcher {
 
   /** A request that arrived here: ensure a local activation, or forward to the CAS winner. */
   async deliverLocal(req: InvocationRequest, opts?: InvokeCallOptions): Promise<unknown> {
+    const refusal = this.deps.refusal?.();
+    if (refusal !== undefined) throw refusal;
     req = this.canonical(req);
     // [StatelessWorker] grains bypass the directory funnel here too (see
     // `deliver`): a call that arrived over a connection is already confined to
@@ -257,6 +278,9 @@ export class DistributedDispatcher implements Dispatcher {
     // silo, from that one activation.
     if (this.deps.catalog.isStatelessWorkerType(req.target.type)) {
       return admit(this.deps.catalog.pickOrScaleWorker(req.target), req, opts);
+    }
+    if (this.deps.isLocalSystemType?.(req.target.type) === true) {
+      return this.invokeLocalSystem(req, opts);
     }
 
     const existing = await this.deps.catalog.resolveLive(req.target);
@@ -269,6 +293,15 @@ export class DistributedDispatcher implements Dispatcher {
     // (Lifecycle source) wraps registration through activation, so
     // "register directory entry" (Runtime source) is a child span of it.
     return withPlaceGrainSpan(() => this.claimAndActivateLocally(req, opts));
+  }
+
+  /** The local system-activation path (see `DistributedDispatcherDeps.isLocalSystemType`). */
+  private async invokeLocalSystem(
+    req: InvocationRequest,
+    opts?: InvokeCallOptions,
+  ): Promise<unknown> {
+    const activation = await this.deps.catalog.getOrCreate(req.target);
+    return admit(activation, req, opts);
   }
 
   /**

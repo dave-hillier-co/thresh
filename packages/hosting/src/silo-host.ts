@@ -4,7 +4,11 @@ import type { GrainInterface } from "@thresh/core/grain-interface";
 import type { GrainKeyKind } from "@thresh/core/grain-key";
 import type { KeyTypeOf } from "@thresh/core/key-kinds";
 import { type Logger, defaultLogger, safeLogger } from "@thresh/core/logger";
-import type { MembershipService, MembershipSnapshot } from "@thresh/core/membership";
+import {
+  localStandingOf,
+  type MembershipService,
+  type MembershipSnapshot,
+} from "@thresh/core/membership";
 import type { StreamProvider } from "@thresh/core/stream";
 import type { GrainDirectory } from "@thresh/directory/grain-directory";
 import type { ClusterNode } from "@thresh/runtime/cluster-node";
@@ -104,6 +108,12 @@ export interface SiloHostParts {
     (ranges: ReadonlyArray<readonly [number, number]>) => Promise<void>
   >;
   /**
+   * Stops for the ownership services the builder owns (the durable-job manager, pulling-stream
+   * agents), run when the silo fences itself (see `SiloHost`'s fencing), alongside the host's own
+   * reminders, rebalancer and self-probe. Each must tolerate the lifecycle's own stop later.
+   */
+  onFence?: ReadonlyArray<() => Promise<void>>;
+  /**
    * Run after the node starts but before the silo is marked ready — e.g. call
    * grains from application startup code (Orleans `IStartupTask`).
    */
@@ -141,6 +151,8 @@ export class SiloHost {
    * after it has stopped.
    */
   private hooksHalted = false;
+  /** Set once this silo has fenced itself; never cleared for this incarnation. */
+  private fenced = false;
 
   constructor(private readonly parts: SiloHostParts) {}
 
@@ -416,12 +428,56 @@ export class SiloHost {
       name: "readiness",
       stage: ServiceLifecycleStage.Last,
       start: async () => {
-        health.update({ membershipHealthy: node.hasAppliedView(), started: true });
+        health.update({ membershipHealthy: this.membershipHealthy(), started: true });
         this.serving = true;
       },
       stop: async () => shutdown.beginDrain(),
     });
     return subject;
+  }
+
+  /**
+   * Readiness's membership condition: the membership source has completed a list and this silo
+   * is listed in the view (`localStandingOf` — a static view counts as listed and synced from the
+   * start). It does not ask for a ring: a joining silo is listed, owns nothing while a peer is
+   * active, and must still report ready, because its readiness is what makes Kubernetes mark it
+   * ready and so bring it into the ring.
+   */
+  private membershipHealthy(): boolean {
+    return !this.fenced && localStandingOf(this.parts.membership) === "listed";
+  }
+
+  /**
+   * Fence this silo (Orleans `MembershipTableManager.KillMyselfLocally`): a view omitted it
+   * after it had been listed, so its peers have already dropped its directory entries and
+   * reassigned its ranges, and anything it went on doing would race the silos that now own them.
+   * It fails liveness (and readiness), so the kubelet restarts the pod; the node refuses every
+   * call before it runs and abandons its activations without deactivation hooks or
+   * unregistration; and its ownership services stop — no further ownership hook, reminders, the
+   * rebalancer, the self-probe, and the builder's (`onFence`: durable jobs, pulling agents). A
+   * silo that has never been listed is not fenced: it is simply not yet a member.
+   */
+  private async fence(): Promise<void> {
+    if (this.fenced) return;
+    this.fenced = true;
+    this.hooksHalted = true;
+    const { node, health, membership, reminderService, rebalancerWorker, selfProbeWorker } =
+      this.parts;
+    const logger = safeLogger(this.parts.logger ?? defaultLogger);
+    logger.error("this silo was removed from the membership view; fencing it until it restarts", {
+      silo: membership.localSilo().toString(),
+      version: membership.current().version,
+    });
+    health.update({ fenced: true, membershipHealthy: false });
+    node.fence();
+    rebalancerWorker?.stop();
+    selfProbeWorker?.stop();
+    reminderService?.stop();
+    for (const stop of this.parts.onFence ?? []) {
+      await stop().catch((error: unknown) => {
+        logger.error("an ownership service failed to stop while fencing", { error });
+      });
+    }
   }
 
   /**
@@ -523,6 +579,10 @@ export class SiloHost {
     for (;;) {
       this.reconcileAgain = false;
       if (this.hooksHalted || this.membershipWatch?.signal.aborted === true) return;
+      if (localStandingOf(membership) === "removed") {
+        await this.fence();
+        return;
+      }
       let failed = false;
       try {
         if (node.appliedViewVersion !== membership.current().version) node.updateView();
@@ -548,8 +608,8 @@ export class SiloHost {
         // view's adoption work, which the next view change retries — and the hooks
         // do real I/O against Postgres/Redis/Kafka (durable-job shard claims,
         // pulling-stream queue ownership), so a store blip is the expected trigger.
-        // `membershipHealthy` below follows the applied view, not the hooks: a
-        // transient store error must not pull a serving silo out of the service.
+        // `membershipHealthy` below follows the view, not the hooks: a transient
+        // store error must not pull a serving silo out of the service.
         // (`LocalReminderService.refreshOwnership` already swallows its own store
         // errors and logs them.)
         failed = true;
@@ -558,7 +618,7 @@ export class SiloHost {
           error,
         });
       }
-      health.update({ membershipHealthy: node.hasAppliedView() });
+      health.update({ membershipHealthy: this.membershipHealthy() });
       const behind =
         node.appliedViewVersion !== membership.current().version ||
         node.appliedViewVersion !== this.hookedVersion;

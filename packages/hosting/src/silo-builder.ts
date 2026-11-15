@@ -502,6 +502,8 @@ export class SiloBuilder {
   private readonly lifecycle: SiloLifecycleParticipant[] = [];
   private readonly startupTasks: Array<(grains: GrainFactoryAccess) => Promise<void>> = [];
   private readonly pullingStreams: PullingStreamProviderHost[] = [];
+  /** Ownership services the host stops if this silo fences itself (`SiloHostParts.onFence`). */
+  private readonly fenceStops: Array<() => Promise<void>> = [];
   private readonly memoryStreams: Array<{
     provider: MemoryStreamProvider;
     options: { streamInactivityPeriodMs?: number } | undefined;
@@ -563,6 +565,7 @@ export class SiloBuilder {
    * its activations (Orleans stops them at `Active`, `PersistentStreamProviderOptions.cs:58`).
    */
   private stopPullingAgents(name: string, provider: { stop(): Promise<void> }): void {
+    this.fenceStops.push(() => provider.stop());
     this.lifecycle.push({
       name: `stream agents ${name}`,
       stage: ServiceLifecycleStage.BecomeActive,
@@ -2173,11 +2176,12 @@ export class SiloBuilder {
 
     // Self-probe liveness (docs/design-notes-parity-gaps.md item 9, option
     // A): defaults to enabled, so this only skips construction when the
-    // caller opted out via `{ enabled: false }`. `node.getGrain(ISiloProbe,
-    // local.ringKey)` is what makes this a SELF-probe rather than an
-    // ordinary placed call — `local.ringKey` is this silo's own identity, so
-    // even though placement is `preferLocal` (which would land here anyway),
-    // the key itself pins the call to this silo's own activation.
+    // caller opted out via `{ enabled: false }`. The node serves `ISiloProbe`
+    // through its local system-activation path, which is what makes this a
+    // SELF-probe rather than an ordinary placed call: the activation is always
+    // this silo's own, created without placement or the directory, so it is
+    // available on a silo outside the ring, while the call still runs through
+    // the dispatcher and the activation's scheduler.
     let selfProbeWorker: SelfProbeWorker | undefined;
     if (this.config.selfProbe?.enabled !== false) {
       selfProbeWorker = new SelfProbeWorker({
@@ -2249,6 +2253,7 @@ export class SiloBuilder {
         stage: ServiceLifecycleStage.BecomeActive,
         stop: async () => manager.stop(),
       });
+      this.fenceStops.push(() => manager.stop());
     }
     for (const provider of this.pullingStreams) {
       provider.setDeliver((grainId, streamKey, event, token) =>
@@ -2373,6 +2378,7 @@ export class SiloBuilder {
       selfProbeWorker,
       lifecycle: this.lifecycle,
       onOwnershipChange,
+      onFence: this.fenceStops,
       logger,
       startupTasks: this.startupTasks.map((fn) => async () => {
         await ensureEmbeddedClient(); // no-op without an in-process network

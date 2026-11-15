@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { defineGrain } from "@thresh/core/define-grain";
+import { defineGrain, useOnDeactivate } from "@thresh/core/define-grain";
+import { RejectionError } from "@thresh/core/errors";
+import { mayResend } from "@thresh/messaging/resend-policy";
 import { GrainId } from "@thresh/core/grain-id";
 import { castGrainReference } from "@thresh/core/grain-reference";
 import type { ReminderEntry } from "@thresh/core/reminder";
@@ -10,10 +12,17 @@ import {
   type FakePod,
 } from "@thresh/clustering-k8s/fake-endpoint-slice-api";
 import { KubernetesEndpointWatch } from "@thresh/clustering-k8s/kubernetes-endpoint-watch";
-import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
+import { InProcessNetwork, InProcessTransport } from "@thresh/messaging/in-process-transport";
+import type {
+  Connection,
+  ConnectionPreamble,
+  MessageHandler,
+  Transport,
+} from "@thresh/messaging/transport";
+import { SILO_PROBE_GRAIN_TYPE } from "@thresh/runtime/silo-probe-grain";
 import { MemoryReminderTable } from "@thresh/reminders/memory-reminder-table";
 import { IGrainManagementExtension } from "@thresh/runtime/grain-management-extension";
-import { createSilo, type SiloBuilder } from "@thresh/hosting/silo-builder";
+import { createSilo, type SiloBuilder, type SiloConfig } from "@thresh/hosting/silo-builder";
 import type { SiloHost } from "@thresh/hosting/silo-host";
 
 /**
@@ -30,6 +39,18 @@ const Counter = defineGrain(GRAIN_TYPE, () => {
   return { inc: async (): Promise<number> => ++n };
 });
 const grainId = (key: string): GrainId => new GrainId(GRAIN_TYPE, key);
+
+/** Every deactivation hook run by a `Hooked` activation, by grain key. */
+const hookRuns: string[] = [];
+const HOOKED_TYPE = "K8sViewHooked";
+const Hooked = defineGrain(HOOKED_TYPE, (ctx) => {
+  let n = 0;
+  useOnDeactivate(() => {
+    hookRuns.push(ctx.id.toString());
+  });
+  return { inc: async (): Promise<number> => ++n };
+});
+const hookedId = (key: string): GrainId => new GrainId(HOOKED_TYPE, key);
 
 /** The node internals these tests read (introspection only). */
 interface NodeFacet {
@@ -78,23 +99,31 @@ class Cluster {
   readonly network = new InProcessNetwork();
   private readonly silos: K8sSilo[] = [];
 
-  /** A pod whose endpoint is published not-ready, then a silo for it (not yet started). */
-  silo(pod: Omit<FakePod, "ready">, configure?: (builder: SiloBuilder) => void): K8sSilo {
+  /**
+   * A pod whose endpoint is published not-ready (unless `listed: false`, which leaves the
+   * endpoint for the test to publish), then a silo for it (not yet started).
+   */
+  silo(
+    pod: Omit<FakePod, "ready">,
+    configure?: (builder: SiloBuilder) => void,
+    options: { listed?: boolean; selfProbe?: SiloConfig["selfProbe"] } = {},
+  ): K8sSilo {
     const full: FakePod = { ...pod, ready: false };
-    this.api.setPod(full);
+    if (options.listed !== false) this.api.setPod(full);
     const source = this.api.source();
     const address = new SiloAddress(pod.name, pod.uid, this.api.endpointOf(pod));
     const builder = createSilo({
       clusterId: "k8s-view",
       local: address,
-      selfProbe: { enabled: false },
+      selfProbe: options.selfProbe ?? { enabled: false },
       callTimeout: { seconds: 2 },
       gracefulShutdownMs: 0,
     })
       .useKubernetesMembership(new KubernetesEndpointWatch(source), { portName: "silo" })
       .useInProcessTransport(this.network)
       .disableTransactions()
-      .registerGrain(Counter);
+      .registerGrain(Counter)
+      .registerGrain(Hooked);
     configure?.(builder);
     const silo = { pod: full, address, host: builder.build(), source };
     this.silos.push(silo);
@@ -121,8 +150,8 @@ async function settle(rounds = 5): Promise<void> {
 }
 
 /** Resolve the instant `predicate` holds, yielding a microtask at a time (timers as a fallback). */
-async function until(predicate: () => boolean, label: string): Promise<void> {
-  const deadline = Date.now() + 2_000;
+async function until(predicate: () => boolean, label: string, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
   for (let i = 0; !predicate(); i++) {
     if (Date.now() > deadline) throw new Error(`timed out waiting for ${label}`);
     if (i < 10_000) await Promise.resolve();
@@ -187,13 +216,33 @@ describe("a silo on Kubernetes membership", () => {
     expect(result).toBe(1);
   });
 
-  it("reports not-ready membership until the node has applied a non-empty view", async () => {
+  it("reports ready once its watch has listed it, before it is in any ring", async () => {
     const c = cluster();
     const a = c.silo({ name: "silo-a", uid: uid(), ip: "10.0.0.1" });
-    expect(a.host.health.ready().checks.membershipHealthy).toBe(false);
-    await a.host.start();
-    expect(a.host.health.ready().checks.membershipHealthy).toBe(true);
+    await c.join(a);
+    const b = c.silo({ name: "silo-b", uid: uid(), ip: "10.0.0.2" });
+    expect(b.host.health.ready().checks.membershipHealthy).toBe(false);
+    await b.host.start();
+    // Joining: listed, not ready in the slices, outside every ring — and ready to serve.
+    expect(b.host.health.ready().ok).toBe(true);
+    expect(nodeOf(b.host).ownedHashRanges()).toEqual([]);
     expect(nodeOf(a.host).ownedHashRanges().length).toBeGreaterThan(0);
+  });
+
+  it("is not ready while its watch does not list it, and is once it does", async () => {
+    const c = cluster();
+    const a = c.silo({ name: "silo-a", uid: uid(), ip: "10.0.0.1" });
+    await c.join(a);
+    const b = c.silo({ name: "silo-b", uid: uid(), ip: "10.0.0.2" }, undefined, { listed: false });
+    await b.host.start();
+    expect(b.host.health.ready().checks.membershipHealthy).toBe(false);
+    expect(b.host.health.ready().ok).toBe(false);
+    // Not yet listed is not removed: nothing is fenced.
+    expect(b.host.health.live().ok).toBe(true);
+
+    c.api.setPod(b.pod);
+    await settle();
+    expect(b.host.health.ready().ok).toBe(true);
   });
 });
 
@@ -296,6 +345,136 @@ describe("a draining silo", () => {
     expect(b.host.isActive(grainId(gone))).toBe(false);
     expect(a.host.isActive(grainId(gone))).toBe(true);
   });
+});
+
+describe("a silo removed from the slices while it runs", () => {
+  it("fences itself: fails liveness, refuses calls so callers re-resolve, and runs no deactivation hook", async () => {
+    const c = cluster();
+    const a = c.silo({ name: "silo-a", uid: uid(), ip: "10.0.0.1" });
+    const b = c.silo({ name: "silo-b", uid: uid(), ip: "10.0.0.2" });
+    await c.join(a);
+    await c.join(b);
+    const keys = Array.from({ length: 40 }, (_, i) => `fenced-${i}`);
+    for (const k of keys) expect(await a.host.getGrain(Hooked, k).inc()).toBe(1);
+    for (const k of keys) expect(await a.host.getGrain(Hooked, k).inc()).toBe(2);
+    const onB = keys.filter((k) => b.host.isActive(hookedId(k)));
+    expect(onB.length).toBeGreaterThan(0);
+    expect(b.host.health.live().ok).toBe(true);
+    hookRuns.length = 0;
+
+    // Kubernetes takes the pod out of the Service while its process keeps running.
+    c.api.removePod(b.pod.name);
+    await settle();
+
+    expect(b.host.health.live().ok).toBe(false);
+    expect(b.host.health.ready().ok).toBe(false);
+    // Its activations are abandoned: none is left, and no hook ran.
+    expect(onB.filter((k) => b.host.isActive(hookedId(k)))).toEqual([]);
+    expect(hookRuns).toEqual([]);
+
+    // A call made on it is refused before it runs, as one its caller may resend elsewhere.
+    const refused = await b.host
+      .getGrain(Hooked, onB[0]!)
+      .inc()
+      .then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+    expect(refused).toBeInstanceOf(RejectionError);
+    expect(mayResend(refused)).toBe(true);
+
+    // Its peers re-resolve the grains it held: each comes back once, on a member.
+    const results = await Promise.all(onB.map((k) => a.host.getGrain(Hooked, k).inc()));
+    expect(results).toEqual(onB.map(() => 1));
+    expect(onB.filter((k) => !a.host.isActive(hookedId(k)))).toEqual([]);
+
+    // Stopping it afterwards runs no hook either: there is nothing left to deactivate.
+    await b.host.stop();
+    expect(hookRuns.filter((id) => onB.some((k) => id.endsWith(k)))).toEqual([]);
+  });
+});
+
+/** A transport that records every directory request this silo sends, by the grain it names. */
+class DirectoryRecordingTransport implements Transport {
+  readonly directoryRequests: string[] = [];
+  constructor(private readonly inner: Transport) {}
+  listen(...args: Parameters<Transport["listen"]>): ReturnType<Transport["listen"]> {
+    return this.inner.listen(...args);
+  }
+  async connect(
+    to: SiloAddress,
+    preamble: ConnectionPreamble,
+    onMessage?: MessageHandler,
+  ): Promise<Connection> {
+    const connection = await this.inner.connect(to, preamble, onMessage);
+    const recorded: Connection = {
+      send: (message) => {
+        if (message.system === "directory" && message.direction === "request") {
+          this.directoryRequests.push(message.targetGrain.toString());
+        }
+        connection.send(message);
+      },
+      close: (reason) => connection.close(reason),
+    };
+    if (connection.onClose !== undefined) {
+      recorded.onClose = (callback) => connection.onClose!(callback);
+    }
+    return recorded;
+  }
+}
+
+describe("the self-probe", () => {
+  const probing = { intervalMs: 10, timeoutMs: 50, missedThreshold: 2 };
+
+  it("is answered by the silo that asks, even one that is not a placement candidate, with no directory call", async () => {
+    const c = cluster();
+    const a = c.silo({ name: "silo-a", uid: uid(), ip: "10.0.0.1" });
+    await c.join(a);
+    let recorder: DirectoryRecordingTransport | undefined;
+    const b = c.silo(
+      { name: "silo-b", uid: uid(), ip: "10.0.0.2" },
+      (builder) => {
+        recorder = new DirectoryRecordingTransport(new InProcessTransport(c.network, "k8s-view"));
+        builder.useTransport(recorder);
+      },
+      { selfProbe: probing },
+    );
+    await b.host.start();
+    // Joining: no placement candidate while A is active.
+    expect(nodeOf(b.host).ownedHashRanges()).toEqual([]);
+    const probeId = new GrainId(SILO_PROBE_GRAIN_TYPE, b.address.ringKey);
+    await until(() => b.host.isActive(probeId), "the probe to activate on B");
+    await new Promise((resolve) => setTimeout(resolve, 100)); // several probe rounds
+    expect(b.host.health.ready().checks.dispatcherResponsive).toBe(true);
+    expect(b.host.isActive(probeId)).toBe(true);
+    expect(a.host.isActive(probeId)).toBe(false);
+    expect(recorder!.directoryRequests.filter((g) => g.includes(SILO_PROBE_GRAIN_TYPE))).toEqual(
+      [],
+    );
+  });
+
+  it("still turns readiness false when the dispatcher is wedged on a silo outside the ring", async () => {
+    const c = cluster();
+    const a = c.silo({ name: "silo-a", uid: uid(), ip: "10.0.0.1" });
+    await c.join(a);
+    const b = c.silo(
+      { name: "silo-b", uid: uid(), ip: "10.0.0.2" },
+      (builder) =>
+        builder.addIncomingCallFilter(async (ctx) => {
+          if (ctx.interfaceName === "Thresh.Runtime.ISiloProbe") throw new Error("wedged");
+          await ctx.invoke();
+        }),
+      { selfProbe: probing },
+    );
+    await b.host.start();
+    expect(nodeOf(b.host).ownedHashRanges()).toEqual([]);
+    await until(
+      () => !b.host.health.ready().checks.dispatcherResponsive,
+      "readiness to turn false",
+      5_000,
+    );
+    expect(b.host.health.ready().ok).toBe(false);
+  }, 15_000);
 });
 
 describe("the view a silo applies", () => {

@@ -14,12 +14,21 @@ export interface PodOwner {
   readonly address: SiloAddress;
 }
 
+/** A silo the kubelet watches: its address, and the host whose readiness it probes. */
+export interface ProbedPod extends PodOwner {
+  readonly host: { readonly health: { ready(): { readonly ok: boolean } } };
+}
+
 /**
  * The Kubernetes side of a `TestCluster` built with `membership: "kubernetes"`: one fake
  * EndpointSlice API server that every silo watches through its own source, as every pod watches
- * the real one. The test drives it the way Kubernetes would — readiness flips, a pod removed,
- * one silo's watch lagging, a watch that ends and re-lists — and each control resolves once the
- * silos have had the chance to apply the change.
+ * the real one. The test drives it the way Kubernetes would — readiness flips, a pod terminating
+ * or removed, one silo's watch lagging, a watch that ends and re-lists — and each control resolves
+ * once the silos have had the chance to apply the change.
+ *
+ * It also plays the kubelet: a pod is listed not ready when its silo starts, and is marked ready
+ * once the silo's own readiness passes (`kubelet`), unless the test holds it
+ * (`TestCluster.startAdditionalSilo({ holdReadiness: true })`) and flips it itself.
  */
 export class KubernetesControls {
   /** The fake API server itself, for anything the controls below do not cover. */
@@ -32,6 +41,30 @@ export class KubernetesControls {
   /** Flip a pod's readiness condition. */
   async setReady(silo: PodOwner, ready: boolean): Promise<void> {
     this.api.setReady(silo.address.podName, ready);
+    await this.settle();
+  }
+
+  /**
+   * The kubelet's readiness probe: wait for `silo`'s readiness to pass, then mark its endpoint
+   * ready. Throws if it does not pass within `timeoutMs`.
+   */
+  async kubelet(silo: ProbedPod, timeoutMs = 10_000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (!silo.host.health.ready().ok) {
+      if (Date.now() > deadline) {
+        throw new Error(`${silo.address.podName} did not report ready within ${timeoutMs}ms`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+    await this.setReady(silo, true);
+  }
+
+  /**
+   * A pod being deleted (a scale-down, a rollout, a graceful stop): its endpoint turns not ready
+   * and terminating, so every silo sees it draining. It stays listed until `removePod`.
+   */
+  async terminate(silo: PodOwner): Promise<void> {
+    this.api.setTerminating(silo.address.podName);
     await this.settle();
   }
 
