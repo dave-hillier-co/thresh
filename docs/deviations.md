@@ -174,6 +174,32 @@ re-resolves and retries after a pause, a bounded number of times. It differs fro
   with cause `refused`) has no process at its address, so it hosts nothing: it has answered with
   nothing. A dial that times out, or a connection that closes during the handshake, says nothing
   about the process behind it and is asked again.
+- **A refused dial is an answer on the call path too.** A pod whose process has died stays listed,
+  not ready, until Kubernetes removes it or restarts its container in place, and entries for its
+  activations in ranges that did not change hands stay valid, since it is still a member. When the
+  dial a caller makes to deliver a call to the host an entry or cached route names is refused
+  outright, the caller unregisters exactly that entry (host and activation id) at its owner, drops
+  the route and resolves the grain again: it finds a newer entry, or none and places the grain
+  afresh. The request never left, so this is safe for every kind of call, one-way included. The
+  owner removes the entry only while it is the one held, so an entry that replaced it meanwhile
+  survives; a call removes at most two such entries before it fails as it would have. A dial that
+  times out or a handshake that fails removes nothing. Orleans has no counterpart on the call path:
+  its membership declares a crashed silo dead, which removes every entry it hosted at once.
+- **An unhosted entry is removed by the silo it names**, as Orleans' `Catalog` unregisters an
+  activation that does not exist (`UnregistrationCause.NonexistentActivation`). A silo in its ring
+  does this before it claims the grain. A silo outside its ring (a container restarted in place
+  is one until it is ready) that is sent a call for a grain it does not host looks the grain up
+  first, waiting at most a second: an entry naming it for an activation that is neither here nor
+  coming up is unregistered, that exact entry, and the call is refused before it runs so the
+  caller resolves again; an entry naming another silo gets the call forwarded, under the forward
+  cap, as Orleans re-addresses and forwards a message it cannot deliver. Orleans unregisters by
+  silo and grain only, after a lazy-deregistration delay that keeps it from removing a newer
+  registration; the exact activation id does that here, with no delay.
+- **Both rest on one assumption**, the one recovery already makes: a refused dial means no process
+  is serving at the address. A network that answers a dial with a refusal while the process behind
+  it is alive (a firewall `REJECT` rule, say) would let a grain that process still runs be
+  activated a second time, exactly as it would let a recovery treat that process as hosting
+  nothing.
 - **An optional patience.** `SiloConfig.directoryRecoveryPatience`, unset by default, bounds how
   long a recovery waits: once it elapses the range unlocks with the answers received, the event is
   logged at error level and counted (`thresh.directory.recovery.patience_expired`). It trades the
