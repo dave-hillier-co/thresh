@@ -13,7 +13,8 @@ import {
   withPlaceGrainSpan,
   withRegisterDirectoryEntrySpan,
 } from "@thresh/observability/activation-tracing";
-import { mayResend, refusedBeforeExecution } from "@thresh/messaging/resend-policy";
+import { didNotExecute, mayResend, refusedBeforeExecution } from "@thresh/messaging/resend-policy";
+import { ConnectFailure } from "@thresh/messaging/transport";
 import { admit } from "@thresh/runtime/admission";
 import type { Catalog } from "@thresh/runtime/catalog";
 import {
@@ -33,6 +34,29 @@ import {
 
 /** Orleans `SiloMessagingOptions.MaxForwardCount` — see `forwardTo`. */
 const MAX_FORWARD_COUNT = 2;
+
+/**
+ * How many directory entries one call may remove because the dial to the host each named was
+ * refused (see `removeDeadEntry`). Each removal takes away the entry that was followed, so the
+ * next resolution finds a different one or none; the bound only keeps a call from chasing a
+ * chain of dead hosts.
+ */
+const MAX_DEAD_ENTRY_REPAIRS = 2;
+
+/**
+ * Whether `err` is the refusal, outright, of the dial this silo made to `addr`'s host to deliver
+ * a call: no process is serving at that address (`ConnectFailure` cause `refused`), so the
+ * activation the entry names is gone, and the request never left. A dial that timed out, or a
+ * connection closed during the handshake, says nothing about the process behind the address.
+ */
+function dialRefused(addr: GrainAddress, local: SiloAddress, err: unknown): boolean {
+  return (
+    !addr.silo.equals(local) &&
+    err instanceof ConnectFailure &&
+    err.cause === "refused" &&
+    didNotExecute(err)
+  );
+}
 
 /** Whether `err` is a target's refusal, before execution, of a call it would not activate. */
 function refusedAsOutOfRing(err: unknown): boolean {
@@ -238,10 +262,34 @@ export class DistributedDispatcher implements Dispatcher {
         // own turn threw, even a stale-kind rejection, has run and is not sent again.
         if (!mayResend(err)) throw err;
         this.deps.cache.invalidate(withDeadline.target); // stale entry: re-resolve below
+        if (dialRefused(cached, this.deps.local, err)) {
+          const removed = await this.removeDeadEntry(cached);
+          return this.lookupAndInvoke(withDeadline, opts, false, MAX_DEAD_ENTRY_REPAIRS - removed);
+        }
       }
     }
 
     return this.lookupAndInvoke(withDeadline, opts);
+  }
+
+  /**
+   * A refused dial is an answer (docs/design-membership-and-directory.md, "A dead process that is
+   * still listed"): nothing serves at the address `entry` names, so the activation is gone.
+   * Unregister exactly that entry at its owner — the owner removes it only while it is the entry
+   * held, host and activation id alike, so an entry that replaced it meanwhile survives — and
+   * drop its cached route, as Orleans unregisters an activation known not to exist
+   * (`UnregistrationCause.NonexistentActivation`). Resolves to 1 when the unregistration reached
+   * the owner and 0 when it did not (the owner unreachable too, or still moving), in which case
+   * the caller resolves again exactly as it would have without the repair.
+   */
+  private async removeDeadEntry(entry: GrainAddress): Promise<number> {
+    this.deps.cache.invalidate(entry.grainId, entry.silo);
+    try {
+      await this.deps.directory.unregister(entry);
+      return 1;
+    } catch {
+      return 0;
+    }
   }
 
   /**
@@ -259,6 +307,7 @@ export class DistributedDispatcher implements Dispatcher {
     req: InvocationRequest,
     opts?: InvokeCallOptions,
     retrying = false,
+    repairs = MAX_DEAD_ENTRY_REPAIRS,
   ): Promise<unknown> {
     const found = await this.routing(() => this.deps.directory.lookup(req.target));
     if (found === undefined) return this.placeAndInvoke(req, opts);
@@ -271,8 +320,14 @@ export class DistributedDispatcher implements Dispatcher {
       // that could not be reached (a failed dial reports `unknownTarget`) must
       // not stay the cached destination for the next call.
       this.deps.cache.invalidate(req.target);
+      // No process at the entry's host: remove the entry and resolve again, which finds a newer
+      // entry or none and places the grain afresh. That does not spend the one retry below.
+      if (repairs > 0 && dialRefused(found, this.deps.local, err)) {
+        const removed = await this.removeDeadEntry(found);
+        if (removed > 0) return this.lookupAndInvoke(req, opts, retrying, repairs - removed);
+      }
       if (retrying) throw err;
-      return this.lookupAndInvoke(req, opts, true);
+      return this.lookupAndInvoke(req, opts, true, repairs);
     }
   }
 
