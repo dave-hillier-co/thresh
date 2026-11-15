@@ -61,7 +61,11 @@ describe("a call whose route points at a peer that is not listening", () => {
       let key = "k-0";
       for (let i = 0; !ring.ownerOf(new GrainId("Counter", key)).equals(local); i++) key = `k-${i}`;
       const grainId = new GrainId("Counter", key);
-      node.partition.register({ grainId, silo: dead, activationId: "act-dead" });
+      await node.partition.register(node.appliedViewVersion, {
+        grainId,
+        silo: dead,
+        activationId: "act-dead",
+      });
 
       const err = await node
         .getGrain(ICounter, key)

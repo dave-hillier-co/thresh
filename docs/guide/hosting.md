@@ -54,6 +54,42 @@ deactivation hooks, stops its reminders, stream agents and durable jobs, and fai
 probe, so the kubelet restarts it. Before its endpoint is first listed a pod is simply not yet a
 member and is not fenced.
 
+## When a pod is lost
+
+Every silo owns a share of the grain directory: the record of which pod runs each grain. When
+membership changes, the silos whose share grows lock the new part until they hold its records, so a
+grain is never started a second time while its first activation may still be running. They take the
+records from the silo that held them, or, when that silo is gone, rebuild them by asking every
+listed pod which grains it runs.
+
+- **A pod that stops gracefully** hands its records on as it turns not ready; nothing waits.
+- **A pod that crashes** refuses connections once its process is gone, which counts as "I run
+  nothing". As soon as its endpoint turns not ready, its share is rebuilt from the survivors, and its
+  grains are started afresh on the next call.
+- **A pod that is unreachable but still listed** — its node is partitioned or wedged, so dials to it
+  time out — cannot answer, and the share being rebuilt stays locked until Kubernetes removes its
+  endpoint. Calls to grains in that share that are not already in a caller's location cache wait, or
+  time out with a rejection the caller may retry. On a node failure that is the node controller's
+  eviction delay (the pod's `node.kubernetes.io/unreachable` toleration, five minutes by default):
+  shorten it on silo pods to shorten the wait. A pod that cannot reach a listed peer when it starts
+  does not become ready until it can, or until the peer is removed.
+
+If availability matters more than the guarantee, `directoryRecoveryPatience` (unset by default)
+bounds the wait: once it elapses the share unlocks with what the reachable pods reported, and a
+grain the unreachable pod was running may be started a second time. Each such unlock is logged at
+error level ("directory recovery patience elapsed") and counted.
+
+```ts
+createSilo({ clusterId, local, directoryRecoveryPatience: { seconds: 30 } });
+```
+
+The directory reports through the metrics seam: `thresh.directory.range_lock.wait` (how long
+requests waited on a locked share), `thresh.directory.snapshot.transfers`,
+`thresh.directory.recoveries.started` and `.completed`, `thresh.directory.recovery.retries` (a pod
+asked again because it did not answer), and `thresh.directory.recovery.patience_expired`. A rising
+retry count with recoveries that do not complete names a pod that is listed but unreachable; each
+retry is also logged as a warning naming the pod.
+
 `useStaticMembership` lists every silo as active for good, with no liveness: a silo that exits stays
 in the view and calls routed to it hang. A view of the silo alone is exact, and is what single-silo
 development uses; a static view of several silos is refused at build unless

@@ -439,6 +439,14 @@ export class ActivationData implements GrainContext {
   migrationRequestContext: Record<string, string> | undefined;
   /** State captured on the source silo to restore on the target; set by the catalog. */
   rehydrationBag: Record<string, unknown> | undefined;
+  /**
+   * The directory entry this activation's registration returned, stamped with the view version
+   * of the owner that took it (Orleans `ActivationData.Address` once registered). `undefined`
+   * until it has registered, and for an activation that never does (a stateless worker, a local
+   * system activation, a single-silo catalog). A directory recovery reports only activations
+   * that hold one.
+   */
+  registration: GrainAddress | undefined;
 
   private lastActiveMs: number;
   private keepAliveUntilMs = 0;

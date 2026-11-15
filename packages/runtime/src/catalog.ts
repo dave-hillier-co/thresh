@@ -257,10 +257,17 @@ export class Catalog {
 
   /**
    * Multi-silo path: activate with the activation id the dispatcher won via
-   * directory CAS. Returns an existing live activation if one is already here.
+   * directory CAS, holding the entry its registration returned (`registration`).
+   * Returns an existing live activation if one is already here. The new activation
+   * is stored before this returns, so a directory recovery answered from here on
+   * reports it.
    */
-  activateLocal(id: GrainId, activationId: string): Promise<ActivationData> {
-    return this.getOrActivate(id, activationId);
+  activateLocal(
+    id: GrainId,
+    activationId: string,
+    registration?: GrainAddress,
+  ): Promise<ActivationData> {
+    return this.getOrActivate(id, activationId, undefined, undefined, registration);
   }
 
   /**
@@ -299,12 +306,13 @@ export class Catalog {
     activationId?: string,
     rehydrationBag?: Record<string, unknown>,
     sourceAddr?: GrainAddress,
+    registration?: GrainAddress,
   ): Promise<ActivationData> {
     id = this.canonicalId(id);
     const key = id.toString();
     const existing = this.activations.get(key);
     if (existing !== undefined && existing.state !== "invalid") return Promise.resolve(existing);
-    return this.createAndStore(key, id, activationId, rehydrationBag, sourceAddr);
+    return this.createAndStore(key, id, activationId, rehydrationBag, sourceAddr, registration);
   }
 
   /**
@@ -318,6 +326,7 @@ export class Catalog {
     activationId?: string,
     rehydrationBag?: Record<string, unknown>,
     sourceAddr?: GrainAddress,
+    registration?: GrainAddress,
   ): Promise<ActivationData> {
     if (this.stopping) {
       return Promise.reject(
@@ -325,6 +334,7 @@ export class Catalog {
       );
     }
     const created = this.create(id, activationId, rehydrationBag, sourceAddr);
+    created.registration = registration;
     this.activations.set(key, created);
     return Promise.resolve(created);
   }
@@ -446,6 +456,21 @@ export class Catalog {
     for (const a of this.activations.values()) tally(a);
     for (const list of this.workerActivations.values()) for (const a of list) tally(a);
     return counts;
+  }
+
+  /**
+   * The activations that stand for a directory entry: registered (holding the address their
+   * registration returned) and not deactivating or finished — creating, activating or valid
+   * (Orleans `GetRegisteredActivations` skips unregistered, deactivating and invalid ones).
+   * Stateless workers are never registered.
+   */
+  registeredActivations(): ActivationData[] {
+    const out: ActivationData[] = [];
+    for (const a of this.activations.values()) {
+      if (a.registration === undefined) continue;
+      if (a.state === "creating" || a.state === "activating" || a.state === "valid") out.push(a);
+    }
+    return out;
   }
 
   /** Valid (servable) activations — migration candidates for the rebalancer. */

@@ -97,6 +97,15 @@ export interface DistributedDispatcherDeps {
    */
   mayActivate?: () => boolean;
   /**
+   * This silo's directory recovery version (`GrainDirectoryPartition.recoveryVersion`): the
+   * newest view at which a member recovering a directory range asked this silo for its
+   * activations. A registration the owner stamped below it may have been lost with an owner that
+   * crashed before the recovering member asked, so it is confirmed again before the activation
+   * is created (Orleans `ActivationData.RegisterAsync`). Absent, registrations are never
+   * re-confirmed.
+   */
+  recoveryVersion?: () => number;
+  /**
    * A refusal of every call, when this silo serves none (it has fenced itself — see
    * `ClusterNode.fence`): returned before anything is resolved, already marked as refused
    * before execution. `undefined` lets the call through.
@@ -444,20 +453,32 @@ export class DistributedDispatcher implements Dispatcher {
     opts?: InvokeCallOptions,
   ): Promise<unknown> {
     return withActivateGrainSpan({ grainType: req.target.type }, async () => {
-      const winner = await withRegisterDirectoryEntrySpan({ grainId: req.target.toString() }, () =>
-        this.routing(() =>
-          this.deps.directory.register({
-            grainId: req.target,
-            silo: this.deps.local,
-            activationId,
-          }),
-        ),
-      );
+      const claim: GrainAddress = { grainId: req.target, silo: this.deps.local, activationId };
+      const register = (previous?: GrainAddress): Promise<GrainAddress> =>
+        withRegisterDirectoryEntrySpan({ grainId: req.target.toString() }, () =>
+          this.routing(() => this.deps.directory.register(claim, previous)),
+        );
+      let winner = await register();
+      // The recovery-version rule (Orleans `ActivationData.RegisterAsync`): a member recovering a
+      // directory range may have asked this silo for its activations after the owner took this
+      // registration and before the activation exists to be reported — and if that owner then
+      // crashed, the recovered range has no entry for it. So a win stamped below this silo's
+      // recovery version is confirmed again, naming itself as the entry it replaces; whoever holds
+      // the entry now wins. Checked once more after every confirmation, and then, with no await in
+      // between, the activation is created: any recovery answered from then on reports it.
+      let verified = -1;
+      for (;;) {
+        if (!winner.silo.equals(this.deps.local) || winner.activationId !== activationId) break;
+        const recoveryVersion = this.deps.recoveryVersion?.() ?? -1;
+        if (recoveryVersion <= verified || recoveryVersion <= (winner.version ?? -1)) break;
+        verified = recoveryVersion;
+        winner = await register(winner);
+      }
       this.deps.cache.put(winner);
 
       // We won the CAS: activate here.
       if (winner.silo.equals(this.deps.local) && winner.activationId === activationId) {
-        return this.activateLocalAndInvoke(req, activationId, admitted, opts);
+        return this.activateLocalAndInvoke(req, winner, admitted, opts);
       }
 
       // The directory points back at this silo but at a different activation id.
@@ -549,13 +570,14 @@ export class DistributedDispatcher implements Dispatcher {
    */
   private async activateLocalAndInvoke(
     req: InvocationRequest,
-    activationId: string,
+    registration: GrainAddress,
     admitted: () => void,
     opts?: InvokeCallOptions,
   ): Promise<unknown> {
+    const activationId = registration.activationId;
     let act: Awaited<ReturnType<Catalog["activateLocal"]>> | undefined;
     try {
-      act = await this.deps.catalog.activateLocal(req.target, activationId);
+      act = await this.deps.catalog.activateLocal(req.target, activationId, registration);
       const turn = admit(act, req, opts);
       admitted();
       return await turn;

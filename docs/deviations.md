@@ -107,7 +107,7 @@ highest EndpointSlice `resourceVersion` the silo's watch has observed: each list
 watch event's (a DELETED event carries the deletion's revision). For an etcd-backed resource that is
 the etcd modification revision, one cluster-wide increasing counter, so silos that have seen the
 same writes to the service's slices hold the same version and a silo whose watch lags holds a lower
-one — the cross-silo ordering the directory's `staleView` guard and `awaitView` depend on. Because
+one — the cross-silo ordering the directory's versioned requests and `awaitView` depend on. Because
 the view is a pure function of the slices, two silos at one version hold the same ring. Kubernetes
 documents `resourceVersion` as opaque; this relies on its etcd form. Every watch update must carry a
 revision, and `KubernetesMembership` refuses one that does not: a change the watch cannot date (a
@@ -136,6 +136,60 @@ story; the project has no deployments to upgrade.
 coalesces: an iterator that fell several views behind yields only the latest, where Orleans walks
 every intermediate one. Every consumer re-reads `current()` to apply a view, and the host's
 reconciliation loops until the node's applied version equals it, so no view is ever left unapplied.
+
+## The grain directory fails closed across a view change
+
+The distributed directory is a port of Orleans' `DistributedGrainDirectory` and
+`GrainDirectoryPartition` (`@thresh/directory/grain-directory-partition`): each silo's partition
+holds the entries for the hash ranges it owns in the view it has applied, every entry stamped with
+that view's version. A range is `(start, end]` on the hash circle, as Orleans' `RingRange`; a
+virtual node owns the arc from its predecessor to itself, and the same arcs decide reminder, stream
+queue and durable-job ownership, so a silo fires and pulls exactly what it owns in the directory.
+On a view change a partition locks the ranges it gains and loses before anything else can run; a
+lost range's entries go into a snapshot for the new owners, and a gained range stays locked until
+its entries have been transferred from every previous owner's snapshot or rebuilt from the
+activations every member hosts. Requests carry the caller's view version; the owner catches up when
+it is behind, waits out a lock on the grain's hash, checks ownership every time, and answers
+"refresh required" with its own version when it does not own the hash. The caller refreshes,
+re-resolves and retries after a pause, a bounded number of times. It differs from Orleans here:
+
+- **The exact pair of versions, not "plus one".** Orleans takes a previous owner's snapshot only
+  when the view advanced by exactly one, and recovers otherwise. EndpointSlice revisions do not
+  advance by one, and a silo may coalesce views, so a snapshot is keyed by the pair of views its
+  silo moved between, and a new owner asks for exactly its own pair. A silo that skipped or
+  coalesced a view, a silo applying its first view, and a range whose previous owner is no longer a
+  member all recover. So does a range that no silo owned in the previous view (an empty ring), where
+  Orleans finds no previous owner to ask and unlocks the range empty.
+- **Recovery waits for every listed member.** The new owner asks every member — active, joining and
+  draining, itself included — for the registered activations it hosts in the range, and asks a
+  member that does not answer again, with backoff, for as long as Kubernetes lists it. That is the
+  cost of failing closed: with no failure detector of its own, a silo cannot tell an unreachable
+  peer from a slow one, so when a pod is unreachable but still listed, lookups that miss the
+  location cache for the ranges being recovered wait until Kubernetes removes the endpoint (or the
+  call times out and the caller may resend it). The alternative — unlocking the range — risks a
+  second activation of a grain the unreachable pod may still be running. A silo that cannot reach a
+  listed member when it starts does not finish recovering its first view's ranges, and so does not
+  report ready.
+- **A refused connection is an answer.** A member whose dial is refused outright (`ConnectFailure`
+  with cause `refused`) has no process at its address, so it hosts nothing: it has answered with
+  nothing. A dial that times out, or a connection that closes during the handshake, says nothing
+  about the process behind it and is asked again.
+- **An optional patience.** `SiloConfig.directoryRecoveryPatience`, unset by default, bounds how
+  long a recovery waits: once it elapses the range unlocks with the answers received, the event is
+  logged at error level and counted (`thresh.directory.recovery.patience_expired`). It trades the
+  guarantee for availability, and is the operator's choice.
+- **One partition per silo**, where Orleans runs thirty per silo; the ring keeps its hundred
+  virtual nodes per silo, so ranges move in the same fine slices.
+- **A recovered range is rebuilt from the answers alone**: entries a failed transfer had already
+  applied are replaced, not merged, since the hosts' answers are the truth.
+- **A registration is confirmed again inside the dispatcher.** The recovery version rule (Orleans
+  `_recoveryMembershipVersion`) is kept: a member answering a recovery raises its recovery version
+  to the request's, sends directory operations at a view at least that new, re-sends an operation
+  during which it rose, and confirms again a registration the owner stamped below it. Orleans does
+  that while its activation exists but is not yet valid; here an activation is created only once its
+  registration is confirmed, in the same synchronous step that makes it visible to a recovery, so a
+  registration that loses forwards its call to the winner and no duplicate activation exists to
+  deactivate. A migrated activation, which exists before it registers, is deactivated when it loses.
 
 ## Functional / reducer authoring
 

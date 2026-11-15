@@ -72,12 +72,15 @@ async function placeOn(home: TestSiloHandle, prefix: string): Promise<string> {
 
 describe("replies between silos", () => {
   it("answer down the request's connection, so a call succeeds when the reverse direction cannot be dialled", async () => {
-    // Set before the cluster starts: silo 1 can never open a connection to silo 0.
     const faults = new NetworkFaults();
-    faults.failConnects({ from: "test-silo-1", to: "test-silo-0" });
     const cluster = await start({ faults });
     const [a, b] = cluster.silos as [TestSiloHandle, TestSiloHandle];
     const key = await placeOn(b, "on-b");
+    // From here silo 1 can never open a connection to silo 0, and holds none. Armed once the
+    // cluster is up: a silo that cannot reach a listed member cannot finish recovering its
+    // first view's ranges, so it would never start.
+    faults.failConnects({ from: "test-silo-1", to: "test-silo-0" });
+    await faults.sever({ from: b.address, to: a.address });
 
     await expect(a.host.getGrain(Echo, key).echo("across")).resolves.toBe("across");
   });

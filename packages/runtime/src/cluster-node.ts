@@ -81,11 +81,24 @@ import {
   TransactionResourceInterface,
   type TransactionResourceMethod,
 } from "@thresh/core/transaction-resource";
-import { ConsistentHashRing } from "@thresh/directory/consistent-hash-ring";
 import type { DirectoryPeer } from "@thresh/directory/directory-peer";
+import { DirectoryView } from "@thresh/directory/directory-view";
 import { DistributedGrainDirectory } from "@thresh/directory/distributed-grain-directory";
 import type { GrainDirectory } from "@thresh/directory/grain-directory";
-import { LocalDirectoryPartition } from "@thresh/directory/local-directory-partition";
+import {
+  GrainDirectoryPartition,
+  type ActivationsRequest,
+  type DirectoryResult,
+  type IntegrityViolation,
+  type PartitionPeers,
+} from "@thresh/directory/grain-directory-partition";
+import {
+  decodeRanges,
+  encodeRanges,
+  rangesContain,
+  type RingRange,
+  type WireRange,
+} from "@thresh/directory/ring-range";
 import { LocationCache } from "@thresh/directory/location-cache";
 import { ConnectionManager } from "@thresh/messaging/connection-manager";
 import { CorrelationTable } from "@thresh/messaging/correlation-table";
@@ -175,26 +188,7 @@ import {
   type SiloLoadSheddingTestHooks,
 } from "@thresh/runtime/load-shedding";
 import { GatewayTooBusyException } from "@thresh/core/errors";
-import { executeWithRetries, fixedBackoff } from "@thresh/core/async-executor-with-retries";
 
-/**
- * Recovery-pull tuning (Orleans' directory partition recovery has no direct
- * equivalent knob; these are this port's own bounds). `maxAttempts` bounds
- * `executeWithRetries` per source silo; `retentionMs` bounds how long a
- * handed-off entry is retained for a successor that never pulls it (its
- * host silo crashed mid-handoff, or the puller crashed after pulling but
- * before ACKing) — past that it is dropped so the source's memory does not
- * grow unbounded and a very late, stale pull is not served.
- */
-const DEFAULT_RECOVERY_MAX_ATTEMPTS = 3;
-const DEFAULT_RECOVERY_BACKOFF_MS = 200;
-const DEFAULT_RECOVERY_RETENTION_MS = 60_000;
-/**
- * First delay before re-arming a source whose pull exhausted its budget (it
- * doubles per attempt, capped at the retention window — see
- * `scheduleRecoveryReArm`).
- */
-const DEFAULT_RECOVERY_RETRY_MS = 2_000;
 /**
  * Default period between `DeploymentLoadPublisher`-style load pushes (Orleans
  * `DeploymentLoadPublisherOptions.DEFAULT_DEPLOYMENT_LOAD_PUBLISHER_REFRESH_TIME`,
@@ -221,8 +215,6 @@ export interface ClusterNodeOptions {
   clusterId: string;
   membership: MembershipService;
   transport: Transport;
-  /** Reaches peer directory partitions; defaults to routing over the transport. */
-  directoryPeer?: DirectoryPeer;
   serializer?: Serializer;
   time?: TimeProvider;
   /**
@@ -232,14 +224,12 @@ export interface ClusterNodeOptions {
    * has stopped waiting (issue #90).
    */
   callTimeoutMs?: number;
-  /** Tuning for join/handoff directory-range recovery pulls; see the module-level defaults. */
-  recovery?: {
-    maxAttempts?: number;
-    backoffMs?: number;
-    retentionMs?: number;
-    /** First delay before re-arming a source whose pull exhausted its budget (doubles per attempt). */
-    retryMs?: number;
-  };
+  /**
+   * How long a directory range recovery waits for members that do not answer before it unlocks
+   * the range without them (`SiloConfig.directoryRecoveryPatience`). Unset, the default, the
+   * range stays locked for as long as such a member is listed: the directory fails closed.
+   */
+  directoryRecoveryPatienceMs?: number;
   /**
    * Silo-wide default per-method response timeout (ms), applied to any call
    * whose interface doesn't set its own `options.responseTimeout` (Orleans
@@ -430,42 +420,21 @@ interface RejectionPayload {
 }
 
 /**
- * A directory partition operation routed to the owning silo over the transport.
- * Every op carries the sender's applied membership view `version` so the owner
- * can linearise it against its own view (catch up if behind, redirect a stale
- * caller). `recover` pulls a previous owner's handed-off entries whenever this
- * silo acquires one of its ranges (on a join, and on a view change that hands it
- * a range a peer gave up).
+ * A directory partition operation carried to another silo over the transport. Every op carries
+ * the sender's applied view `version`. `lookup`, `register` and `unregister` reach the owner's
+ * partition, which answers with a `DirectoryResult` (the value, or "refresh required");
+ * `snapshot` and `snapshotAck` are a new owner taking a previous owner's snapshot for one view
+ * change; `recover` and `registered` ask a member for the activations it hosts in some ranges,
+ * for a recovery or for an integrity check.
  */
 type DirectoryOp =
   | { kind: "lookup"; grainId: GrainId; version: number }
   | { kind: "register"; addr: GrainAddress; previous?: GrainAddress | undefined; version: number }
   | { kind: "unregister"; addr: GrainAddress; version: number }
-  /**
-   * A successor's recovery pull. `requester` lets the source also report its own live activations
-   * in the requester's ranges: a crashed owner hands nothing off, so those reports are the only
-   * record of where its ranges' grains are running.
-   */
-  | {
-      kind: "recover";
-      version: number;
-      requester: SiloAddress;
-      /**
-       * The requester's ring members: the ranges it is recovering are its own under ITS
-       * view, which the source's ring may not share (a joiner counts itself while its
-       * peers do not yet). Orleans names the range in the request the same way
-       * (`RecoverRegisteredActivations(version, range, ...)`). Absent from an older
-       * requester, in which case the source falls back to its own ring.
-       */
-      ring?: SiloAddress[];
-    }
-  /**
-   * Puller's ACK that it applied a recovery batch: the source deletes exactly
-   * those served entries. Carries the full `GrainAddress` of each, not just the
-   * grain id — the source deletes by identity, so a late ACK cannot destroy an
-   * entry registered under the same id since (see `ackServedRecovery`).
-   */
-  | { kind: "recoverAck"; addrs: GrainAddress[]; version: number };
+  | { kind: "snapshot"; previousVersion: number; version: number; ranges: WireRange[] }
+  | { kind: "snapshotAck"; previousVersion: number; version: number }
+  | { kind: "recover"; version: number; ranges: WireRange[] }
+  | { kind: "registered"; version: number; ranges: WireRange[] };
 
 /** Stand-in target grain for batch ops with no single grain (fills the envelope only). */
 /**
@@ -483,44 +452,6 @@ interface LoadSnapshot {
 
 const DIRECTORY_OP_TARGET = new GrainId("$directory", "op");
 
-/** Where a grain's directory entry lived before a recovery pass: the source that can serve it. */
-type PreviousOwnerLookup = (grainId: GrainId) => SiloAddress | undefined;
-
-/**
- * One in-flight range recovery: a pull per source, plus where each grain's entry
- * lived before it, so an operation waits only for the pull that could bring ITS
- * entry (`awaitRecovered`) rather than for whichever source is slowest.
- */
-interface RecoveryPass {
-  /** This silo's applied view when the pass was issued (carried on each pull). */
-  version: number;
-  /** Settled-or-pending pulls, keyed by the source's ring key. */
-  pulls: Map<string, Promise<void>>;
-  /** Pulls not yet settled; the pass clears once this reaches zero. */
-  outstanding: number;
-  previousOwner: PreviousOwnerLookup;
-}
-
-/**
- * A source whose pull exhausted its budget, waiting to be re-armed. `since` dates
- * the first exhaustion, so the re-arms stop once the source can no longer be
- * holding anything (`recoveryRetentionMs`); `attempts` drives the backoff.
- */
-interface RecoveryReArm {
-  source: SiloAddress;
-  previousOwner: PreviousOwnerLookup;
-  attempts: number;
-  since: number;
-  timer: TimerHandle | undefined;
-}
-
-/**
- * Whether a dial was refused outright: no process is serving at the address
- * (`ConnectFailure` cause `refused`). Only then does join recovery read the
- * peer as hosting nothing (see `pullFrom`). A dial timeout or a handshake
- * close is the same `unknownTarget` rejection to a caller but says nothing
- * about a live silo behind the address, so those fail closed and are retried.
- */
 function resourceStatsOf(snapshot: LoadSnapshot): SiloResourceStats {
   return {
     activationCount: snapshot.activationCount,
@@ -540,14 +471,20 @@ function resourceStatsOf(snapshot: LoadSnapshot): SiloResourceStats {
   };
 }
 
+/**
+ * Whether a dial was refused outright: no process is serving at the address
+ * (`ConnectFailure` cause `refused`). Only then does a recovery read the member as hosting
+ * nothing. A dial timeout or a handshake close says nothing about a live silo behind the
+ * address, so those fail closed and are asked again for as long as the member is listed.
+ */
 function isNothingListening(err: unknown): boolean {
   return err instanceof ConnectFailure && err.cause === "refused";
 }
 
 function directoryOpGrainId(op: DirectoryOp): GrainId {
   if (op.kind === "lookup") return op.grainId;
-  if (op.kind === "recover" || op.kind === "recoverAck") return DIRECTORY_OP_TARGET;
-  return op.addr.grainId;
+  if (op.kind === "register" || op.kind === "unregister") return op.addr.grainId;
+  return DIRECTORY_OP_TARGET;
 }
 
 /** Carries a migrating activation's identity and dehydrated state to its new host. */
@@ -579,7 +516,8 @@ const randomPlacement = new RandomPlacement();
  * response messages with peers over the transport.
  */
 export class ClusterNode {
-  readonly partition: LocalDirectoryPartition;
+  /** This silo's directory partition (Orleans `GrainDirectoryPartition`); it holds the applied view. */
+  readonly partition: GrainDirectoryPartition;
 
   /** This silo's activation-repartitioner protocol object; `undefined` unless `repartitioning` was configured. */
   private readonly repartitioner?: ActivationRepartitioner;
@@ -674,15 +612,8 @@ export class ClusterNode {
    * delivery settles.
    */
   private readonly inFlightDurableJobs = new Map<string, Promise<DurableJobRunResult>>();
-  private ring: ConsistentHashRing;
   private listener: Listener | undefined;
 
-  /**
-   * The membership view version `this.ring` was built from: `-1` until the first view
-   * is applied (`start`), since the ring is not built from the view current at
-   * construction — a Kubernetes watch has not listed yet then.
-   */
-  private appliedVersion = -1;
   /** Set by `fence`: this silo was removed from the view and serves nothing again. */
   private fenced = false;
   /**
@@ -694,33 +625,10 @@ export class ClusterNode {
   private appliedMembers: SiloAddress[] = [];
   /** Notified after every view application, whichever caller drove it (see `onViewApplied`). */
   private readonly viewAppliedListeners = new Set<() => void>();
-  /**
-   * Entries this silo handed off, retained for a successor to pull, keyed by
-   * grain id. Populated (merged, not replaced — a later unrelated view change
-   * must not silently lose an as-yet-unpulled entry) on `updateView`; an entry
-   * is removed the moment its puller ACKs it, or once it expires (`retentionMs`
-   * past `producedAt`, or its silo falls out of the live view) — see `pruneHandoffSnapshot`.
-   */
-  private readonly handoffSnapshot = new Map<string, { entry: GrainAddress; producedAt: number }>();
-  /**
-   * In-flight range recovery: an operation for a grain a source owed before the
-   * pass waits on that source's pull so it never sees a transient miss, and the
-   * pass clears once every pull has settled.
-   */
-  private recovery: RecoveryPass | undefined;
-  /** Exhausted sources awaiting a re-armed pull, keyed by ring key (see `scheduleRecoveryReArm`). */
-  private readonly recoveryReArms = new Map<string, RecoveryReArm>();
-  /** Callers awaiting `this.appliedVersion` to reach a given version. */
+  /** Callers awaiting the applied view to reach a given version. */
   private viewWaiters: Array<{ version: number; resolve: () => void }> = [];
   private readonly time: TimeProvider;
   private readonly logger: Logger;
-  private readonly recoveryMaxAttempts: number;
-  private readonly recoveryBackoffMs: number;
-  private readonly recoveryRetentionMs: number;
-  private readonly recoveryRetryMs: number;
-  /** Entries adopted by recovery passes, and source pull budgets exhausted (for metrics). */
-  private recoveryAdopted = 0;
-  private recoveryExhausted = 0;
   private readonly loadPublishIntervalMs: number;
   /** The pending `scheduleLoadPublish` re-arm, cleared on `stop()`. */
   private loadPublishTimer: TimerHandle | undefined;
@@ -731,36 +639,61 @@ export class ClusterNode {
   /** The pending `scheduleClientDirectoryRefresh` re-arm, cleared on `stop()`. */
   private clientDirectoryRefreshTimer: TimerHandle | undefined;
 
-  /** Routes directory operations to the owning silo's partition over the transport. */
+  /** Carries directory requests to the owning silo's partition over the transport. */
   private readonly transportPeer: DirectoryPeer = {
-    lookup: async (owner, grainId) => {
-      const r = await this.sendDirectory(owner, {
-        kind: "lookup",
-        grainId,
-        version: this.appliedVersion,
-      });
-      return r == null ? undefined : (r as GrainAddress);
-    },
-    register: async (owner, addr, previous) =>
+    lookup: async (owner, version, grainId) =>
+      (await this.sendDirectory(owner, { kind: "lookup", grainId, version })) as DirectoryResult<
+        GrainAddress | undefined
+      >,
+    register: async (owner, version, addr, previous) =>
       (await this.sendDirectory(owner, {
         kind: "register",
         addr,
         previous,
-        version: this.appliedVersion,
-      })) as GrainAddress,
-    unregister: async (owner, addr) => {
-      await this.sendDirectory(owner, { kind: "unregister", addr, version: this.appliedVersion });
+        version,
+      })) as DirectoryResult<GrainAddress>,
+    unregister: async (owner, version, addr) =>
+      (await this.sendDirectory(owner, {
+        kind: "unregister",
+        addr,
+        version,
+      })) as DirectoryResult<undefined>,
+  };
+
+  /**
+   * How the partition reaches the other silos' partitions and directories: over the transport,
+   * or straight to this silo's own partition when the member is this silo. A member with no
+   * process at its address (the dial refused) hosts nothing and answers a recovery with nothing.
+   */
+  private readonly partitionPeers: PartitionPeers = {
+    getSnapshot: async (owner, request) =>
+      owner.equals(this.options.local)
+        ? this.partition.serveSnapshot(request)
+        : (((await this.sendDirectory(owner, {
+            kind: "snapshot",
+            previousVersion: request.previousVersion,
+            version: request.version,
+            ranges: encodeRanges(request.ranges),
+          })) as GrainAddress[] | null | undefined) ?? undefined),
+    acknowledgeSnapshot: async (owner, pair) => {
+      if (owner.equals(this.options.local)) {
+        this.partition.acknowledgeSnapshot(owner, pair);
+        return;
+      }
+      await this.sendDirectory(owner, { kind: "snapshotAck", ...pair });
     },
+    recoverActivations: (member, request) =>
+      this.askMember(member, request, "recover", () =>
+        this.partition.answerRecovery(this.options.local, request),
+      ),
+    registeredActivations: (member, request) =>
+      this.askMember(member, request, "registered", () => this.partition.answerRegistered(request)),
   };
 
   constructor(private readonly options: ClusterNodeOptions) {
     const time = options.time ?? systemTimeProvider;
     this.time = time;
     this.logger = options.logger ?? options.activationOptions?.logger ?? defaultLogger;
-    this.recoveryMaxAttempts = options.recovery?.maxAttempts ?? DEFAULT_RECOVERY_MAX_ATTEMPTS;
-    this.recoveryBackoffMs = options.recovery?.backoffMs ?? DEFAULT_RECOVERY_BACKOFF_MS;
-    this.recoveryRetentionMs = options.recovery?.retentionMs ?? DEFAULT_RECOVERY_RETENTION_MS;
-    this.recoveryRetryMs = options.recovery?.retryMs ?? DEFAULT_RECOVERY_RETRY_MS;
     this.loadPublishIntervalMs = options.loadPublishIntervalMs ?? DEFAULT_LOAD_PUBLISH_INTERVAL_MS;
     this.clientDropTimeoutMs = options.clientDropTimeoutMs ?? DEFAULT_CLIENT_DROP_TIMEOUT_MS;
     this.clientDirectoryRefreshMs =
@@ -791,21 +724,21 @@ export class ClusterNode {
       options.versionCompatibility !== undefined || options.versionSelector !== undefined;
     this.director = compatibilityDirector(options.versionCompatibility ?? "backwardCompatible");
     this.selector = versionSelector(options.versionSelector ?? "latest");
-    // Empty until `start()` applies the current view: a ring built here would be built
-    // from whatever the view was at construction, which under Kubernetes is the empty
-    // view before the watch's first list.
-    this.ring = new ConsistentHashRing([]);
-    // Orleans IsSiloDead: a directory entry whose host has fallen out of the
-    // membership view entirely is treated as a miss on lookup, not returned as a
-    // stale pointer. Membership PRESENCE, not readiness, is the test: a silo that
-    // is merely draining or not-ready is still serving the activations it hosts
-    // (see `memberSilos`), and returning its entry is what keeps a call from
-    // building a duplicate activation during a drain. The partition consults the
-    // snapshot each call so it tracks membership changes without needing explicit
-    // reconciliation just for reads.
-    this.partition = new LocalDirectoryPartition((silo) =>
-      memberSilos(options.membership.current()).some((s) => s.equals(silo)),
-    );
+    // The partition holds no view until `start()` applies the current one: a view taken here
+    // would be whatever membership held at construction, which under Kubernetes is the empty
+    // view before the watch's first list. It judges an entry by its host's membership (Orleans
+    // `IsSiloDead`), not readiness: a draining or not-ready silo still serves what it hosts.
+    this.partition = new GrainDirectoryPartition({
+      local: options.local,
+      peers: this.partitionPeers,
+      activations: { registeredIn: (ranges) => this.registeredActivationsIn(ranges) },
+      refreshView: (version) => this.awaitView(version),
+      time,
+      logger: this.logger,
+      ...(options.directoryRecoveryPatienceMs !== undefined
+        ? { recoveryPatienceMs: options.directoryRecoveryPatienceMs }
+        : {}),
+    });
     this.connections = new ConnectionManager(
       options.transport,
       options.local,
@@ -833,14 +766,13 @@ export class ClusterNode {
     this.serializer =
       options.serializer ??
       new MessagePackSerializer({ resolveGrainReference: (id) => this.rehydrate(id) });
-    this.directory = new DistributedGrainDirectory(
-      options.local,
-      this.partition,
-      () => this.ring,
-      options.directoryPeer ?? this.transportPeer,
-      () => this.updateView(), // refresh on a stale-view rejection, then re-resolve
-      (grainId) => this.awaitRecovered(grainId), // gate owned reads on range recovery
-    );
+    this.directory = new DistributedGrainDirectory({
+      local: options.local,
+      partition: this.partition,
+      peer: this.transportPeer,
+      refresh: (version) => this.awaitView(version),
+      time,
+    });
     this.catalog = new Catalog({
       grainTypes: this.grainTypes,
       factory: this.factory,
@@ -907,6 +839,7 @@ export class ClusterNode {
       remote: { send: (silo, req) => this.sendRemote(silo, req) },
       activeSilos: () => ringSilos(this.options.membership.current()),
       mayActivate: () => this.mayActivate(),
+      recoveryVersion: () => this.partition.recoveryVersion,
       refusal: () => (this.fenced ? this.fencedRefusal() : undefined),
       isLocalSystemType: (type) => this.isLocalSystemType(type),
       placementFor: (grainType) => this.placementFor(grainType),
@@ -1264,9 +1197,13 @@ export class ClusterNode {
     return this.localVersions.get(interfaceId)?.version;
   }
 
-  /** The hash ranges this silo owns on the current ring (drives reminder ownership). */
+  /**
+   * The hash ranges this silo owns in the view it has applied, as half-open tuples: the same
+   * arcs the directory partition owns, so reminder, stream-queue and durable-job ownership follow
+   * the directory exactly.
+   */
   ownedHashRanges(): Array<[number, number]> {
-    return this.ring.rangesFor(this.options.local);
+    return this.partition.view.ring.rangesFor(this.options.local);
   }
 
   /**
@@ -1398,48 +1335,56 @@ export class ClusterNode {
     return this.directory;
   }
 
-  /** Handed-off directory entries still retained for a successor to pull (introspection/metrics/tests). */
-  pendingHandoffCount(): number {
-    return this.handoffSnapshot.size;
+  /** Snapshots of given-up ranges this silo still holds for their new owners (introspection). */
+  pendingSnapshotCount(): number {
+    return this.partition.snapshotCount;
   }
 
   /**
-   * Range-recovery outcomes (introspection/metrics): entries adopted by recovery
-   * passes, and source pulls whose retry budget ran out and were re-armed. A
-   * non-zero `exhausted` means some ranges are running on lazy reactivation for
-   * now — the state that used to be invisible.
+   * Directory view-change outcomes (introspection/metrics): entries taken into this partition by
+   * snapshot transfer or recovery, and recoveries abandoned because `directoryRecoveryPatienceMs`
+   * elapsed before every member answered.
    */
   directoryRecoveryStats(): { recovered: number; exhausted: number } {
-    return { recovered: this.recoveryAdopted, exhausted: this.recoveryExhausted };
+    const { transferred, recovered, patienceExpired } = this.partition.stats;
+    return { recovered: transferred + recovered, exhausted: patienceExpired };
   }
 
   /** The membership view version this node last applied (`updateView`); `-1` before `start`. */
   get appliedViewVersion(): number {
-    return this.appliedVersion;
+    return this.partition.view.version;
   }
 
   /**
-   * Resolves once the range recovery in flight now (if any) has settled — every
-   * source's pull answered or exhausted. The host awaits it after `start()` so the
-   * join recovery of the first view finishes before startup tasks and readiness.
+   * Resolves once every directory view change applied so far has finished: each gained range
+   * transferred or recovered, each lost range moved into its snapshot. The host awaits it after
+   * `start()` so the first view's recovery finishes before startup tasks and readiness.
    */
   async recoverySettled(): Promise<void> {
-    const pass = this.recovery;
-    if (pass !== undefined) await Promise.all(pass.pulls.values());
+    await this.partition.settled();
   }
 
   /**
-   * The silos on the ring this node routes on: the active silos of the view it has
-   * APPLIED, which `membership.current()` can run ahead of. Ownership decisions
-   * outside the directory (durable-job shards) follow this, not the live view.
+   * The silos in the ring of the view this node has APPLIED, which `membership.current()` can
+   * run ahead of. Ownership decisions outside the directory (durable-job shards) follow this.
    */
   appliedRingSilos(): SiloAddress[] {
-    return [...this.ring.silos()];
+    return [...this.partition.view.ringSilos];
   }
 
-  /** Whether the applied view has any active silo to own ranges (an empty ring routes nothing). */
+  /** Whether the applied view has any silo to own ranges (an empty ring routes nothing). */
   hasAppliedView(): boolean {
-    return !this.ring.isEmpty;
+    return !this.partition.view.ring.isEmpty;
+  }
+
+  /**
+   * The directory integrity check (Orleans `IGrainDirectoryTestHooks.CheckIntegrityAsync`), a
+   * test hook: no entry in this silo's partition lies outside its ranges, and every registered
+   * live activation any member hosts in them has exactly its own entry here. Returns the
+   * violations found.
+   */
+  checkDirectoryIntegrity(): Promise<IntegrityViolation[]> {
+    return this.partition.checkIntegrity();
   }
 
   /**
@@ -1476,12 +1421,11 @@ export class ClusterNode {
       (preamble, connection) => this.onClientAccept(preamble, connection),
     );
     this.collector.start();
-    // Apply the view current now — after the listener is up, so the join-recovery
-    // pulls it starts can be answered. This is the first view this node applies: its
-    // ring was empty until here, so every range it owns is newly gained with no known
-    // previous owner, and `updateView` recovers them from every other member, with
-    // each owned operation waiting for all of those pulls (fail closed: Orleans treats
-    // a silo's first view as non-contiguous and recovers the range from every member).
+    // Apply the view current now — after the listener is up, so the requests it starts can be
+    // answered. This is the first view this node applies, so it moved from no view at all: no
+    // previous owner can hold a snapshot for that pair, and every range it owns is recovered from
+    // every member, locked until each has answered (Orleans treats a silo's first view as
+    // non-contiguous and recovers).
     this.updateView();
     // Orleans `DeploymentLoadPublisher.StartAsync` also publishes once immediately
     // on top of the recurring interval. Deliberately not mirrored here: at the
@@ -1498,13 +1442,6 @@ export class ClusterNode {
     if (this.clientDirectoryRefreshMs > 0) this.scheduleClientDirectoryRefresh();
   }
 
-  /**
-   * `deadlineMs`, when given, bounds `Catalog.deactivateAll`'s whole sweep
-   * (see its doc) — the host's overall stop budget minus whatever grace
-   * period it already spent, so the combined wait fits inside the process's
-   * own termination grace period instead of risking a SIGKILL mid-stop
-   * (issue #108).
-   */
   /**
    * Fence this silo: a view omitted it after it had been listed, so its peers have already
    * dropped its directory entries and reassigned its ranges (Orleans
@@ -1525,10 +1462,7 @@ export class ClusterNode {
     if (this.clientDirectoryRefreshTimer !== undefined)
       this.time.clearTimer(this.clientDirectoryRefreshTimer);
     this.clientDirectoryRefreshTimer = undefined;
-    for (const reArm of this.recoveryReArms.values()) {
-      if (reArm.timer !== undefined) this.time.clearTimer(reArm.timer);
-    }
-    this.recoveryReArms.clear();
+    this.partition.stop();
     this.collector.stop();
     this.catalog.abandonAll();
   }
@@ -1547,6 +1481,13 @@ export class ClusterNode {
     );
   }
 
+  /**
+   * `deadlineMs`, when given, bounds `Catalog.deactivateAll`'s whole sweep
+   * (see its doc) — the host's overall stop budget minus whatever grace
+   * period it already spent, so the combined wait fits inside the process's
+   * own termination grace period instead of risking a SIGKILL mid-stop
+   * (issue #108).
+   */
   async stop(deadlineMs?: number): Promise<void> {
     if (this.loadPublishTimer !== undefined) this.time.clearTimer(this.loadPublishTimer);
     this.loadPublishTimer = undefined;
@@ -1556,11 +1497,6 @@ export class ClusterNode {
     if (this.clientDirectoryRefreshTimer !== undefined)
       this.time.clearTimer(this.clientDirectoryRefreshTimer);
     this.clientDirectoryRefreshTimer = undefined;
-    // Nothing will consume a re-armed pull from here on.
-    for (const reArm of this.recoveryReArms.values()) {
-      if (reArm.timer !== undefined) this.time.clearTimer(reArm.timer);
-    }
-    this.recoveryReArms.clear();
     this.collector.stop();
     // Deactivate before tearing down transport: onDeactivate hooks may make cross-silo
     // calls (e.g. notifying a watcher grain on another silo), which need the listener and
@@ -1569,6 +1505,8 @@ export class ClusterNode {
       { code: "shutting-down", description: "node stopping" },
       deadlineMs,
     );
+    // Its unregistrations have gone to the owners; nothing more is served from this partition.
+    this.partition.stop();
     await this.listener?.close();
     await this.connections.closeAll();
     // Only now is nothing left that could answer a call: the listener is closed and every pooled
@@ -1582,37 +1520,28 @@ export class ClusterNode {
   }
 
   /**
-   * Reconcile the directory with a membership view change (versioned, lossless).
-   * Drop cache/connections/client registrations for silos that have left the
-   * view; in one partition pass drop entries whose host silo has left the view
-   * (the grain is gone) and set aside entries whose range the new ring assigns to
-   * another live silo (retained for that successor to pull). A silo that is only
-   * `draining` has left the RING — it takes no new placements — but it is still in
-   * the view and still serving, so its entries are kept rather than dropped.
-   * A silo that has just joined the active set, or that stayed active while a peer
-   * left the ring, recovers the ranges it now owns from whoever is holding their
-   * entries (see the gate at the end of this method) so their grains are not
-   * needlessly reactivated.
+   * Apply the membership view current now, if it is newer than the one applied. Silos that have
+   * left the view lose their cached routes, pooled connections and client registrations; silos
+   * newly in the ring are sent this silo's clients; and the view goes to the directory
+   * partition, which locks the ranges this silo gained or lost before this returns and then
+   * transfers or recovers them (`GrainDirectoryPartition.applyView`). A silo that is only
+   * `draining` has left the ring but is still a member: its activations keep their entries.
    */
   updateView(): void {
     const snapshot = this.options.membership.current();
+    const previous = this.partition.view;
+    if (snapshot.version <= previous.version) return;
     const local = this.options.local;
-    const oldRing = this.ring;
-    const newRing = this.buildRing();
-    const live = new Set(ringSilos(snapshot).map((s) => s.ringKey));
-    const present = new Set(memberSilos(snapshot).map((s) => s.ringKey));
+    const next = DirectoryView.of(snapshot);
+    const present = new Set(next.members.map((s) => s.ringKey));
     for (const key of this.remoteLoadStats.keys()) {
       if (!present.has(key)) this.remoteLoadStats.delete(key);
     }
-    // Silos newly active in this view: they never received this silo's
-    // `broadcastClientGossip` from before they joined, so republish this
-    // silo's clients to them now instead of leaving them to learn of it only
-    // from `clientDirectoryRefreshMs`'s next tick (Orleans' `ClientDirectory`
+    // Silos newly in the ring never received this silo's `broadcastClientGossip` from before
+    // they joined, so republish this silo's clients to them now instead of leaving them to learn
+    // of it only from `clientDirectoryRefreshMs`'s next tick (Orleans' `ClientDirectory`
     // republishing its table on every membership change).
-    const oldLive = new Set(oldRing.silos().map((s) => s.ringKey));
-    const newlyActive = ringSilos(snapshot).filter(
-      (s) => !oldLive.has(s.ringKey) && !s.equals(local),
-    );
+    const newlyActive = next.ringSilos.filter((s) => !previous.inRing(s) && !s.equals(local));
 
     // Departures are the member-set diff against the last applied view, whatever the
     // departed silo's status was: Kubernetes reports ready -> not ready -> removed, so
@@ -1625,89 +1554,16 @@ export class ClusterNode {
         this.clientDirectory.unregisterSilo(member);
       }
     }
-    this.appliedMembers = memberSilos(snapshot);
+    this.appliedMembers = [...next.members];
     this.republishClientDirectory(newlyActive);
     // Peer manifests may have shifted with the view (a silo upgraded/left);
     // drop them all and re-fetch lazily on the next version-aware placement.
     this.manifestCache.clear();
     this.manifestInflight.clear();
 
-    const handedOff = this.partition.drain((entry) => {
-      // Only the host's endpoint going away means the grain is gone and
-      // reactivates elsewhere; a host that is merely not ready is still running
-      // it, so its entry follows the range like any other.
-      if (!present.has(entry.silo.ringKey)) return "drop";
-      return newRing.ownerOf(entry.grainId).equals(local) ? "keep" : "handoff";
-    });
-    // Merge, don't replace: an entry already retained from a PRIOR handoff whose
-    // successor hasn't pulled it yet must survive an unrelated view change (some
-    // other silo joining/leaving) — only an ACK or expiry removes it.
-    const producedAt = this.time.now();
-    for (const entry of handedOff) {
-      this.handoffSnapshot.set(entry.grainId.toString(), { entry, producedAt });
-    }
-    this.pruneHandoffSnapshot(present);
-
-    const wasActive = oldRing.silos().some((s) => s.equals(local));
-    this.ring = newRing;
-    this.appliedVersion = snapshot.version;
+    this.partition.applyView(next);
     this.resolveViewWaiters();
-
-    // Done against the ring just installed, and synchronously, so no lookup can
-    // slip between the ring change and the entries coming back.
-    const peerLeftRing = oldRing.silos().some((s) => !live.has(s.ringKey));
-    if (live.has(local.ringKey)) {
-      this.reclaimOwnedHandoffs();
-      if (peerLeftRing) this.reclaimOwnActivations();
-    }
-
-    // Recovery runs for a silo that has just joined the active set AND for one
-    // that stayed in it while a peer left the ring — the incumbent that inherits
-    // a departed peer's ranges is in exactly the same position (it owns entries
-    // it has never seen, and the previous owner is holding them for it), and
-    // gating on the join transition alone left it never asking: the retained
-    // entries expired out from under a range that had already moved. Orleans
-    // acquires the added ranges on every partition on every view change.
-    //
-    // An empty old ring (this node's first view) leaves every gained range with no
-    // known previous owner; `awaitRecovered` then waits on every source's pull.
-    if (live.has(local.ringKey) && (!wasActive || peerLeftRing)) {
-      this.beginRecovery(this.recoverySources(), snapshot.version, (grainId) =>
-        oldRing.isEmpty ? undefined : oldRing.ownerOf(grainId),
-      );
-    }
     for (const listener of this.viewAppliedListeners) listener();
-  }
-
-  /**
-   * Take back the handed-off entries the current ring assigns to this silo again.
-   *
-   * A range that leaves this partition and later comes back — the successor
-   * crashed mid-join, or a joiner left again — would otherwise stay stranded in
-   * this silo's own `handoffSnapshot`: there is no successor left to pull it, the
-   * live partition no longer holds it, so a lookup misses and builds a second
-   * activation of a grain that never stopped running, and the retained copy is
-   * deleted for good once the retention window passes. This silo is the owner
-   * again, so it is the one that has to take it back.
-   *
-   * The registration is the same CAS as any handoff adoption: it never
-   * overwrites a fresher entry a concurrent reactivation put there.
-   */
-  private reclaimOwnedHandoffs(): void {
-    if (this.ring.isEmpty) return;
-    const reclaimed = [...this.handoffSnapshot.values()].filter(({ entry }) =>
-      this.ownsNow(entry.grainId),
-    );
-    if (reclaimed.length === 0) return;
-    this.partition.acceptHandoff(
-      reclaimed.map(({ entry }) => entry),
-      (entry) => this.ownsNow(entry.grainId),
-    );
-    for (const { entry } of reclaimed) this.handoffSnapshot.delete(entry.grainId.toString());
-  }
-
-  private buildRing(): ConsistentHashRing {
-    return new ConsistentHashRing(ringSilos(this.options.membership.current()));
   }
 
   /**
@@ -1719,29 +1575,11 @@ export class ClusterNode {
    */
   private mayActivate(): boolean {
     if (this.fenced) return false;
-    return this.ring.silos().some((s) => s.equals(this.options.local));
-  }
-
-  private ownsNow(grainId: GrainId): boolean {
-    return this.ring.ownerOf(grainId).equals(this.options.local);
+    return this.partition.view.inRing(this.options.local);
   }
 
   private otherRingSilos(): SiloAddress[] {
     return ringSilos(this.options.membership.current()).filter(
-      (s) => !s.equals(this.options.local),
-    );
-  }
-
-  /**
-   * The silos to pull recovered ranges from: every other silo still in the view,
-   * `active` or not. A draining peer is deliberately included — it is exactly
-   * where a rolling update's entries are parked: it has left the ring, so it
-   * handed its ranges off, but it is still up long enough to serve a pull, and
-   * the successor's only copy of those entries is the one it is holding.
-   * Excluding it would leave the entries unclaimed until they expire.
-   */
-  private recoverySources(): SiloAddress[] {
-    return memberSilos(this.options.membership.current()).filter(
       (s) => !s.equals(this.options.local),
     );
   }
@@ -1754,15 +1592,15 @@ export class ClusterNode {
    * change. Bounded by the call timeout either way.
    */
   private async awaitView(version: number): Promise<void> {
-    if (this.appliedVersion >= version) return;
+    if (this.appliedViewVersion >= version) return;
     const membership = this.options.membership;
     if (membership.current().version >= version) {
       this.updateView();
-      if (this.appliedVersion >= version) return;
+      if (this.appliedViewVersion >= version) return;
     } else {
       void membership.refresh(version).then(
         () => {
-          if (this.appliedVersion < version && membership.current().version >= version) {
+          if (this.appliedViewVersion < version && membership.current().version >= version) {
             this.updateView();
           }
         },
@@ -1785,330 +1623,52 @@ export class ClusterNode {
   private resolveViewWaiters(): void {
     const remaining: typeof this.viewWaiters = [];
     for (const w of this.viewWaiters) {
-      if (this.appliedVersion >= w.version) w.resolve();
+      if (this.appliedViewVersion >= w.version) w.resolve();
       else remaining.push(w);
     }
     this.viewWaiters = remaining;
   }
 
   /**
-   * An owned read waits on the pull that could bring ITS entry — the source that
-   * owned its range before the change — and on nothing else.
-   *
-   * Waiting on the whole multi-source pass instead made one slow-but-present peer
-   * stop every owned directory operation on this silo, locally and over the wire:
-   * each attempt is bounded by the call timeout and the pass by the retry budget,
-   * so a single flaky source could block all of this silo's directory traffic for
-   * a minute or more while the ranges it did not owe were ready to serve.
-   *
-   * Two cases wait on every source's pull instead. A grain whose previous owner
-   * crashed: no handoff exists, only the survivor hosting it can report it. And a
-   * grain whose previous owner is unknown — this node's first view, whose old ring
-   * was empty: any member may be hosting it, so the range stays closed until every
-   * member has reported (fail closed; letting it through placed a second activation
-   * of a grain live on an incumbent).
+   * Ask `member` for the activations it hosts in `request.ranges`: over the transport, or this
+   * silo's own answer when the member is this silo. A dial refused outright means no process is
+   * serving there, so it hosts nothing: an empty answer, not a failure to retry.
    */
-  private async awaitRecovered(grainId: GrainId): Promise<void> {
-    const pass = this.recovery;
-    if (pass === undefined) return;
-    const previousOwner = pass.previousOwner(grainId);
-    if (previousOwner === undefined) {
-      await Promise.all(pass.pulls.values());
-      return;
-    }
-    const pull = pass.pulls.get(previousOwner.ringKey);
-    if (pull !== undefined) {
-      await pull;
-      return;
-    }
-    // The previous owner is not among the sources: it left the view without handing off (a crash).
-    // Its entry, if the grain still runs, comes back only from the survivor hosting it, so wait for
-    // every survivor's report rather than letting the operation miss and place a second activation.
-    await Promise.all(pass.pulls.values());
-  }
-
-  /**
-   * Pull the ranges we now own from the given previous owners and merge them in.
-   * Each source is retried (bounded, backed off) independently, so one slow or
-   * flaky peer doesn't stall recovery from the others; a source that exhausts its
-   * budget is re-armed on a backoff rather than abandoned (see
-   * `scheduleRecoveryReArm`). Every directory operation for a range a source owed
-   * waits on that source's pull (see `awaitRecovered`), so no concurrent register
-   * can reach the partition ahead of the entry it was going to be served.
-   *
-   * `previousOwner` says where a grain's entry lived before this pass: the ring in
-   * force before the change for a view change, and the ring without this silo for
-   * a join. That is the source to wait for, and the only one waited on. A source
-   * can also return an entry it did not own then — `serveRecover` serves whatever
-   * it retains, from an older handoff — and nothing waits for that one, which
-   * costs the operation a miss that lazy activation rebuilds rather than holding
-   * every range this pass covers behind one slow peer.
-   *
-   * Ownership is decided against the LIVE `this.ring`, read inside the adopt
-   * pass rather than captured when the pull was issued: `updateView` replaces
-   * the ring wholesale and `acceptHandoff`'s loop is synchronous, so a live
-   * read makes the whole pass atomic with respect to any view change. A pull
-   * whose response lands after a further membership change therefore cannot
-   * register an entry the current ring assigns elsewhere — which would leave
-   * an orphan in this partition, on the far side of the `drain()` pass that
-   * already decided the range had moved on.
-   *
-   * Only the entries actually adopted are ACKed. The source's `serveRecover`
-   * is unfiltered by requester, so ACKing the whole served batch would delete
-   * entries this silo declined — stranding the range's true owner, whose own
-   * pull then comes back empty and degrades a live grain to lazy rebuild.
-   * Orleans scopes acknowledgement the same way, per transfer partner and
-   * range version (`RemoveSnapshotTransferPartner`); declining to ACK leaves
-   * the entry retained at the source for the real owner's pull, bounded by
-   * `recoveryRetentionMs`.
-   */
-  private beginRecovery(
-    sources: readonly SiloAddress[],
-    version: number,
-    previousOwner: PreviousOwnerLookup,
-  ): void {
-    if (sources.length === 0) return;
-    const pass = this.openRecovery(version, previousOwner);
-    for (const source of sources) this.addPull(pass, source);
-  }
-
-  /** Start a recovery pass and install it as the one directory operations wait on. */
-  private openRecovery(version: number, previousOwner: PreviousOwnerLookup): RecoveryPass {
-    const pass: RecoveryPass = { version, previousOwner, pulls: new Map(), outstanding: 0 };
-    this.recovery = pass;
-    return pass;
-  }
-
-  /** Issue one source's pull inside `pass`, keeping `pass.outstanding` current as it settles. */
-  private addPull(pass: RecoveryPass, source: SiloAddress): void {
-    pass.outstanding++;
-    const settled = (): void => {
-      pass.outstanding--;
-      if (pass.outstanding === 0 && this.recovery === pass) this.recovery = undefined;
-    };
-    pass.pulls.set(source.ringKey, this.pullFrom(source, pass).then(settled, settled));
-  }
-
-  /**
-   * Pull one source's handed-off entries: retry it (bounded, backed off), adopt
-   * what this silo owns under the live ring, and ACK exactly that. A source whose
-   * budget runs out leaves its ranges to lazy reactivation for now — logged,
-   * counted, and re-armed, never silently abandoned.
-   *
-   * A source with nothing listening at its endpoint is the one failure that is an
-   * answer: no process is serving there, so it hosts no activation and holds no
-   * handed-off entry (a node listens before it applies a view or activates anything,
-   * and stops listening only once its activations are gone). That is an empty
-   * batch, not a pull to retry — which is what lets the first view's fail-closed
-   * recovery (see `awaitRecovered`) complete in a cluster whose other listed
-   * members are still starting, or have crashed and are not yet out of the view.
-   */
-  private async pullFrom(source: SiloAddress, pass: RecoveryPass): Promise<void> {
+  private async askMember(
+    member: SiloAddress,
+    request: ActivationsRequest,
+    kind: "recover" | "registered",
+    here: () => GrainAddress[],
+  ): Promise<GrainAddress[]> {
+    if (member.equals(this.options.local)) return here();
     try {
-      const entries = await executeWithRetries<GrainAddress[] | undefined>(
-        async () => {
-          try {
-            return (await this.sendDirectory(source, {
-              kind: "recover",
-              version: pass.version,
-              requester: this.options.local,
-              ring: [...this.ring.silos()],
-            })) as GrainAddress[] | undefined;
-          } catch (err) {
-            if (isNothingListening(err)) return [];
-            throw err;
-          }
-        },
-        {
-          maxRetries: this.recoveryMaxAttempts,
-          shouldRetry: (_attempt, outcome) => outcome.kind === "error",
-          backoff: fixedBackoff(this.recoveryBackoffMs),
-          timeProvider: this.time,
-        },
-      );
-      // It answered: whatever it was holding that we wanted, we have (or it had
-      // nothing to give). Either way there is nothing to re-arm for.
-      this.recoveryReArms.delete(source.ringKey);
-      if (entries !== undefined && entries.length > 0) {
-        // The predicate doubles as the record of what was taken: it runs
-        // once per entry, synchronously, immediately before `register`, so
-        // `adopted` is exactly the set this partition took custody of —
-        // including an entry whose CAS lost to a concurrent reactivation,
-        // which is resolved here and must not linger at the source to be
-        // re-served later as a stale pointer.
-        const adopted: GrainAddress[] = [];
-        this.partition.acceptHandoff(entries, (e) => {
-          if (this.ring.isEmpty || !this.ownsNow(e.grainId)) return false;
-          adopted.push(e);
-          return true;
-        });
-        // ACK-delete: tell the source it can drop exactly what we adopted.
-        // Best-effort — a lost ACK just means the entries expire there instead.
-        if (adopted.length > 0) {
-          this.recoveryAdopted += adopted.length;
-          void this.sendDirectory(source, {
-            kind: "recoverAck",
-            addrs: adopted,
-            version: pass.version,
-          }).catch(() => undefined);
-        }
-      }
+      return (await this.sendDirectory(member, {
+        kind,
+        version: request.version,
+        ranges: encodeRanges(request.ranges),
+      })) as GrainAddress[];
     } catch (err) {
-      this.onRecoveryExhausted(source, pass, err);
+      if (isNothingListening(err)) return [];
+      // A pooled connection whose far end is gone can fail every send without ever reporting
+      // itself closed; drop it, so the member is dialled afresh when it is asked again.
+      if (err instanceof RejectionError && err.kind === "unknownTarget") {
+        void this.connections.drop(member);
+      }
+      throw err;
     }
   }
 
   /**
-   * A source's retry budget ran out. Its ranges degrade to lazy reactivation for
-   * now, which must be visible — the alternative is a cluster that silently
-   * rebuilds grains it could have kept, with nothing to point at — and must not be
-   * permanent: the peer may simply have been slow to accept connections (the case
-   * `start()` warns about), so the pull is re-armed.
+   * The directory entries this silo's activations in `ranges` stand for: every activation that
+   * has registered (it holds the address its registration returned) and is not deactivating or
+   * finished. Stateless workers and local system activations never register, so never appear.
    */
-  private onRecoveryExhausted(source: SiloAddress, pass: RecoveryPass, err: unknown): void {
-    this.recoveryExhausted++;
-    this.logger.warn(
-      "directory range recovery exhausted; those ranges fall back to lazy activation",
-      {
-        source: source.toString(),
-        attempts: this.recoveryMaxAttempts,
-        version: pass.version,
-        error: err instanceof Error ? err.message : String(err),
-      },
-    );
-    this.scheduleRecoveryReArm(source, pass.previousOwner);
-  }
-
-  /**
-   * Re-arm an exhausted source's pull on a backoff: a peer that is merely slow to
-   * accept connections at join time must not cost this silo its ranges for the
-   * rest of the process's life. The delay doubles per attempt (from `retryMs`,
-   * capped at the retention window) and is jittered, so a cluster whose peers all
-   * failed at once does not re-arm them in lockstep. Re-arms stop once the source
-   * has left the view or the retention window has passed: past that the source has
-   * pruned what it was holding, so there is nothing left to collect.
-   */
-  private scheduleRecoveryReArm(source: SiloAddress, previousOwner: PreviousOwnerLookup): void {
-    const reArm: RecoveryReArm = this.recoveryReArms.get(source.ringKey) ?? {
-      source,
-      previousOwner,
-      attempts: 0,
-      since: this.time.now(),
-      timer: undefined,
-    };
-    reArm.previousOwner = previousOwner;
-    reArm.attempts++;
-    if (reArm.timer !== undefined) this.time.clearTimer(reArm.timer);
-    reArm.timer = this.time.setTimer(() => {
-      reArm.timer = undefined;
-      this.retryRecovery(reArm);
-    }, this.reArmDelay(reArm.attempts));
-    this.recoveryReArms.set(source.ringKey, reArm);
-  }
-
-  /** One re-armed attempt: re-pull the source into the pass in flight, or a fresh one. */
-  private retryRecovery(reArm: RecoveryReArm): void {
-    const stillPresent = memberSilos(this.options.membership.current()).some((s) =>
-      s.equals(reArm.source),
-    );
-    if (!stillPresent || this.time.now() - reArm.since > this.recoveryRetentionMs) {
-      this.recoveryReArms.delete(reArm.source.ringKey);
-      return;
-    }
-    const pass = this.recovery ?? this.openRecovery(this.appliedVersion, reArm.previousOwner);
-    this.addPull(pass, reArm.source);
-  }
-
-  /** Half the delay fixed, half jittered — see `scheduleRecoveryReArm`. */
-  private reArmDelay(attempts: number): number {
-    const capped = Math.min(this.recoveryRetryMs * 2 ** (attempts - 1), this.recoveryRetentionMs);
-    const random = this.options.random ?? Math.random;
-    return Math.round(capped / 2 + random() * (capped / 2));
-  }
-
-  /**
-   * Serve a successor's recovery pull: the entries we handed off whose host is still live, and
-   * this silo's own live activations whose range `requester` owns — under the requester's ring
-   * (`requesterRing`) when it names one, since that is the view whose ranges it is recovering,
-   * and this silo's ring may not count the requester yet. The second half is what
-   * recovers a crashed owner's ranges (Orleans rebuilds them from every survivor's activations):
-   * the crash took its entries with it, and the hosts are the only ones who still know where
-   * those grains run. Adoption is a CAS that never overwrites a fresher entry, so reporting an
-   * activation the requester already has costs nothing.
-   */
-  private serveRecover(
-    requester: SiloAddress,
-    requesterRing: readonly SiloAddress[] | undefined,
-  ): GrainAddress[] {
-    const present = new Set(memberSilos(this.options.membership.current()).map((s) => s.ringKey));
-    this.pruneHandoffSnapshot(present);
-    const handedOff = [...this.handoffSnapshot.values()].map((v) => v.entry);
-    const ring = requesterRing !== undefined ? new ConsistentHashRing(requesterRing) : this.ring;
-    if (ring.isEmpty) return handedOff;
-    const hosted = this.localDirectoryAddresses().filter((addr) =>
-      ring.ownerOf(addr.grainId).equals(requester),
-    );
-    return [...handedOff, ...hosted];
-  }
-
-  /** The directory entries this silo's live, directory-registered activations stand for. */
-  private localDirectoryAddresses(): GrainAddress[] {
+  private registeredActivationsIn(ranges: readonly RingRange[]): GrainAddress[] {
+    if (this.fenced) return [];
     return this.catalog
-      .liveActivations()
-      .filter((a) => !this.catalog.isStatelessWorkerType(a.id.type))
-      .map((a) => ({ grainId: a.id, silo: this.options.local, activationId: a.activationId }));
-  }
-
-  /**
-   * Re-register this silo's own live activations in the ranges it now owns. When an owner
-   * crashes, the silo inheriting a range may itself host grains in it, and no pull reaches
-   * them: recovery only asks the other silos. Synchronous, against the ring just installed, and
-   * the same never-overwrite CAS as any adoption.
-   */
-  private reclaimOwnActivations(): void {
-    if (this.ring.isEmpty) return;
-    const owned = this.localDirectoryAddresses().filter((addr) => this.ownsNow(addr.grainId));
-    if (owned.length === 0) return;
-    this.partition.acceptHandoff(owned, (addr) => this.ownsNow(addr.grainId));
-  }
-
-  /**
-   * A puller's ACK for a completed pull: drop exactly the entries it confirmed
-   * applying — the ones it names, by identity. Deleting by grain id alone is not
-   * enough: the entry under that key can have been replaced since the pull was
-   * served (the range came back and departed again, or a fresh activation
-   * registered and was handed off), and a delayed ACK would then delete the newer
-   * entry, which the puller never saw and which may be the only copy left.
-   */
-  private ackServedRecovery(addrs: readonly GrainAddress[]): void {
-    for (const addr of addrs) {
-      const key = addr.grainId.toString();
-      const held = this.handoffSnapshot.get(key);
-      if (held !== undefined && grainAddressEquals(held.entry, addr)) {
-        this.handoffSnapshot.delete(key);
-      }
-    }
-  }
-
-  /**
-   * Drop handed-off entries that can no longer be usefully served: the host
-   * they point at left the membership view (the grain reactivates elsewhere
-   * regardless), or they've sat unpulled past `recoveryRetentionMs` — a
-   * successor that will never pull them (crashed, or never existed) must not
-   * pin this memory forever.
-   *
-   * `present` is the set of silos still *in* the view, not the `active` ring
-   * set: an entry whose host is draining is still the only pointer to a live
-   * activation, and dropping it here is exactly the loss this retention exists
-   * to prevent.
-   */
-  private pruneHandoffSnapshot(present: ReadonlySet<string>): void {
-    const now = this.time.now();
-    for (const [key, { entry, producedAt }] of this.handoffSnapshot) {
-      if (!present.has(entry.silo.ringKey) || now - producedAt > this.recoveryRetentionMs) {
-        this.handoffSnapshot.delete(key);
-      }
-    }
+      .registeredActivations()
+      .filter((a) => rangesContain(ranges, a.id.getUniformHashCode()))
+      .map((a) => a.registration!);
   }
 
   private placementFor(grainType: GrainType): PlacementStrategy {
@@ -2517,7 +2077,19 @@ export class ClusterNode {
       silo: this.options.local,
       activationId: activation.activationId,
     };
-    const winner = await this.directory.register(newAddr, payload.sourceAddr);
+    let winner = await this.directory.register(newAddr, payload.sourceAddr);
+    // The recovery-version rule, as for a claimed activation (see
+    // `DistributedDispatcherDeps.recoveryVersion`): a win stamped below this silo's recovery
+    // version is confirmed again before the activation holds it, and from the moment it does,
+    // with no await in between, a recovery answered here reports it.
+    let verified = -1;
+    while (grainAddressEquals(winner, newAddr)) {
+      const recoveryVersion = this.partition.recoveryVersion;
+      if (recoveryVersion <= verified || recoveryVersion <= (winner.version ?? -1)) break;
+      verified = recoveryVersion;
+      winner = await this.directory.register(newAddr, winner);
+    }
+    if (grainAddressEquals(winner, newAddr)) activation.registration = winner;
     if (!grainAddressEquals(winner, newAddr)) {
       // Another silo moved or activated the grain first: discard our activation
       // through its pipeline (removed, unregistered and disposed once), then
@@ -2991,7 +2563,7 @@ export class ClusterNode {
     if (replyTo === undefined) return;
     try {
       const op = this.serializer.deserialize<DirectoryOp>(message.body);
-      const result = await this.applyDirectoryOp(op);
+      const result = await this.applyDirectoryOp(op, replyTo);
       await this.reply(
         message,
         responseTo(message, "success", this.serializer.serialize(result), this.options.local),
@@ -3703,60 +3275,37 @@ export class ClusterNode {
     await this.repartitioner?.flushBuffers();
   }
 
-  private async applyDirectoryOp(
-    op: DirectoryOp,
-  ): Promise<GrainAddress | GrainAddress[] | undefined> {
-    // Linearise against our view: catch up if the caller is ahead of us; redirect
-    // the caller if it is behind and we no longer own the target (a `staleView`
-    // rejection it re-resolves), so we never serve under two ring topologies.
-    if (op.version > this.appliedVersion) await this.awaitView(op.version);
-    if (op.kind !== "recover" && op.kind !== "recoverAck" && op.version < this.appliedVersion) {
-      this.requireOwned(op.kind === "lookup" ? op.grainId : op.addr.grainId);
-    }
+  /** Hand a directory op from `from` to this silo's partition; the reply carries its answer. */
+  private async applyDirectoryOp(op: DirectoryOp, from: SiloAddress): Promise<unknown> {
     switch (op.kind) {
       case "lookup":
-        await this.awaitRecovered(op.grainId);
-        // The version check above is not enough on its own: it is decided before
-        // this wait, and a view change landing IN the wait moves the range out
-        // from under a caller whose version never looked stale. Re-check against
-        // the ring in force now, and reject so the caller re-resolves — rather
-        // than serving, or worse registering, an entry in a partition the ring no
-        // longer assigns (which nothing re-drains until the next view change).
-        this.requireOwnedAfterWait(op.grainId, op.version);
-        return this.partition.lookup(op.grainId);
+        return this.partition.lookup(op.version, op.grainId);
       case "register":
-        await this.awaitRecovered(op.addr.grainId);
-        this.requireOwnedAfterWait(op.addr.grainId, op.version);
-        return this.partition.register(op.addr, op.previous);
+        return this.partition.register(op.version, op.addr, op.previous);
       case "unregister":
-        await this.awaitRecovered(op.addr.grainId);
-        this.requireOwnedAfterWait(op.addr.grainId, op.version);
-        this.partition.unregister(op.addr);
-        return undefined;
+        return this.partition.unregister(op.version, op.addr);
+      case "snapshot":
+        return (
+          (await this.partition.serveSnapshot({
+            previousVersion: op.previousVersion,
+            version: op.version,
+            ranges: decodeRanges(op.ranges),
+          })) ?? null
+        );
+      case "snapshotAck":
+        this.partition.acknowledgeSnapshot(from, op);
+        return null;
       case "recover":
-        return this.serveRecover(op.requester, op.ring);
-      case "recoverAck":
-        this.ackServedRecovery(op.addrs);
-        return undefined;
+        return this.partition.answerRecovery(from, {
+          version: op.version,
+          ranges: decodeRanges(op.ranges),
+        });
+      case "registered":
+        return this.partition.answerRegistered({
+          version: op.version,
+          ranges: decodeRanges(op.ranges),
+        });
     }
-  }
-
-  /** Reject a directory op whose grain this silo does not own (an empty ring owns nothing). */
-  private requireOwned(grainId: GrainId): void {
-    if (this.ring.isEmpty || !this.ownsNow(grainId)) {
-      throw new RejectionError("stale directory view", "staleView");
-    }
-  }
-
-  /**
-   * The same check, made after the op has waited: ownership is only meaningful
-   * against the view in force when the partition is touched. Skipped when our view
-   * has not moved since the check above decided it (the common case, and the only
-   * case where the earlier decision can still be trusted).
-   */
-  private requireOwnedAfterWait(grainId: GrainId, opVersion: number): void {
-    if (opVersion >= this.appliedVersion) return;
-    this.requireOwned(grainId);
   }
 
   private async receiveRequest(message: Message): Promise<void> {
