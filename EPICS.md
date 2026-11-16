@@ -9,7 +9,8 @@ for how the design differs from Orleans.
 - **Core actor model** — grains, identity, `Proxy` references, turn scheduler, activation lifecycle,
   opt-in call-chain reentrancy.
 - **Messaging & multi-silo** — WebSocket/in-process transport, message envelope, serializer,
-  dispatcher, DHT directory + location cache with versioned lossless range handoff, static membership.
+  dispatcher, DHT directory + location cache with range-locked handover across a view change, static
+  membership.
 - **Placement** — random / prefer-local / activation-count / stateless-worker / silo-role /
   resource-optimized strategies, metadata placement filters, and version-aware placement.
 - **Kubernetes hosting** — EndpointSlice-watch membership, health probes, graceful drain, the
@@ -88,8 +89,9 @@ for how the design differs from Orleans.
   resolution, `Set` support and a circular-reference guard; legacy payloads decode unchanged.
 - **`@readOnly` dev-mode mutation guard** — `SiloConfig.readOnlyStateGuard` (persistent-state
   facets; breadth remainder in `todo.md`).
-- **Directory hardening** — handoff ACK-delete, recovery retry/backoff, register gated on silo
-  liveness (Orleans `RegisterCore` parity).
+- **Directory hardening** — a port of Orleans' `GrainDirectoryPartition`: range locks, snapshot
+  transfer keyed by the pair of views, recovery from every member, versioned requests, register
+  gated on silo liveness (Orleans `RegisterCore` parity).
 - **Transaction TM confirmation-worker keepalive** — periodic re-resolution of in-doubt
   prepared records with backoff.
 - **Stream failure handling** — provider-wired failure handler, durable poison store, explicit

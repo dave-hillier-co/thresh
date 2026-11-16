@@ -149,8 +149,14 @@ the range unlocks and the event is logged and counted.
 A responder also drops the requester from its snapshots, and raises its **recovery version**. A silo
 whose registration completed below its recovery version re-confirms it; if another activation now
 holds the entry, the local one deactivates as a duplicate and forwards its queue. That is the only
-place a duplicate can arise, and it is resolved there
-(`DistributedGrainDirectory._recoveryMembershipVersion`).
+place a duplicate can arise, and it is resolved there (Orleans
+`DistributedGrainDirectory._recoveryMembershipVersion`).
+
+In the port the recovery version lives on the partition (`GrainDirectoryPartition.recoveryVersion`),
+and two mechanisms apply the rule, each of which closes the window alone. The directory issues an
+operation again when the recovery version rose while it was in flight. The claim of a new activation
+and the acceptance of a migrated one then confirm the registration again while the recovery version
+is above the entry's, which covers a rise after the directory's last look.
 
 ### Requests
 
