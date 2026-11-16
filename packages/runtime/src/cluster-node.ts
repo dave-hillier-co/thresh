@@ -1482,11 +1482,26 @@ export class ClusterNode {
   }
 
   /**
-   * `deadlineMs`, when given, bounds `Catalog.deactivateAll`'s whole sweep
-   * (see its doc) — the host's overall stop budget minus whatever grace
-   * period it already spent, so the combined wait fits inside the process's
-   * own termination grace period instead of risking a SIGKILL mid-stop
-   * (issue #108).
+   * Stop the node: hand over the directory ranges it gave up, deactivate every activation, then
+   * stop the partition and close the transport.
+   *
+   * `deadlineMs`, when given, bounds the whole of it — the host's overall stop budget minus
+   * whatever grace period it already spent, so the combined wait fits inside the process's own
+   * termination grace period instead of risking a SIGKILL mid-stop (issue #108). It is shared in
+   * this order:
+   *
+   * 1. **The handover.** If this silo has applied a view in which it is out of the ring (it is
+   *    leaving) and its partition holds snapshots of ranges it gave up, it waits until
+   *    every one is collected (each partner has acknowledged it, left the view, or started a
+   *    recovery at or above its version), for at most HALF of `deadlineMs`. A silo that holds no
+   *    snapshot (it never saw itself leave, it owned nothing, or nobody remains to take its
+   *    ranges) waits for nothing. It goes on serving its activations meanwhile.
+   * 2. **Deactivation.** `Catalog.deactivateAll` gets whatever is left of `deadlineMs`, so it
+   *    always keeps at least half of it. Its unregistrations resolve the owner in the view this
+   *    node has applied, so after a handover they go to the new owners.
+   *
+   * Without `deadlineMs` nothing is bounded and nothing waits for the handover: a node stopped
+   * outside a host has no budget to share.
    */
   async stop(deadlineMs?: number): Promise<void> {
     if (this.loadPublishTimer !== undefined) this.time.clearTimer(this.loadPublishTimer);
@@ -1498,12 +1513,13 @@ export class ClusterNode {
       this.time.clearTimer(this.clientDirectoryRefreshTimer);
     this.clientDirectoryRefreshTimer = undefined;
     this.collector.stop();
+    const remainingMs = await this.handOver(deadlineMs);
     // Deactivate before tearing down transport: onDeactivate hooks may make cross-silo
     // calls (e.g. notifying a watcher grain on another silo), which need the listener and
     // outbound connections still up. Only close them once every activation has drained.
     await this.catalog.deactivateAll(
       { code: "shutting-down", description: "node stopping" },
-      deadlineMs,
+      remainingMs,
     );
     // Its unregistrations have gone to the owners; nothing more is served from this partition.
     this.partition.stop();
@@ -1517,6 +1533,22 @@ export class ClusterNode {
     this.correlation.rejectAll(
       new RejectionError(`silo ${this.options.local.toString()} is shutting down`, "siloDraining"),
     );
+  }
+
+  /**
+   * Step 1 of `stop`: wait, for at most half of `deadlineMs`, until the partition has handed
+   * over every range this silo gave up, and return what is left of `deadlineMs`. Only a leaving
+   * silo waits: one whose applied view has it out of the ring. A silo stopped while it is still
+   * in the ring (nobody marked it leaving) is not handing anything over, whatever snapshot an
+   * earlier view change left behind. A fenced silo's peers have already dropped its entries, so
+   * it has nothing to hand over.
+   */
+  private async handOver(deadlineMs: number | undefined): Promise<number | undefined> {
+    if (deadlineMs === undefined || this.fenced) return deadlineMs;
+    if (this.partition.view.inRing(this.options.local)) return deadlineMs;
+    const startedAt = this.time.now();
+    await this.partition.handedOver(deadlineMs / 2);
+    return Math.max(0, deadlineMs - (this.time.now() - startedAt));
   }
 
   /**

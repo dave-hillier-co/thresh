@@ -27,9 +27,19 @@ behavioural ports with `pnpm test:parity`.
 
 ## Stopping and killing silos
 
-`stopSilo` is a graceful shutdown: the silo drains, runs its deactivation hooks and leaves
-membership. `killSilo` is a crash, the stand-in for a killed pod (Orleans `KillSiloAsync`). The
-silo's transport is gone, so peers dialling it are refused and nothing it sends arrives. Every timer
+`stopSilo` is a graceful shutdown, as on Kubernetes: on the default membership the silo is first
+marked `draining` in the shared view, so it leaves the ring while it still serves and its
+directory ranges move to the other silos by snapshot. It then drains, waiting for those snapshots
+to be collected before it runs its deactivation hooks, and leaves membership. A `SiloHost` stopped
+directly (`host.stop()`), which nobody marks draining, keeps its ranges through its drain, and the
+survivors rebuild them once it has left. `dispose()` is a cluster stopping together: it marks every
+silo leaving first, so the ring is empty and no silo hands anything to one about to stop, then stops
+them in order. With no ring, an `onDeactivate` hook that calls a grain during `dispose()` reaches it
+only over a route its silo already holds. `stopBudgetMs` sets every silo's stop budget (the grace
+period is 0 here, so the handover may use half of it).
+
+`killSilo` is a crash, the stand-in for a killed pod (Orleans `KillSiloAsync`). The silo's
+transport is gone, so peers dialling it are refused and nothing it sends arrives. Every timer
 it armed is cancelled (grain timers, reminder ticks, durable-job polls, idle collection), its
 pulling-stream agents stop, and it sees no further membership change, so it runs no further
 ownership hooks. No shutdown code runs: no drain, no deactivation hook, no release of what it held.
@@ -78,7 +88,12 @@ silos start concurrently, and the kubelet marks each ready as its own readiness 
 cluster with no ready silo that is a cold start, and the ring is the joining silos until the first
 is ready.
 
-`stopSilo` marks the pod not ready, drains the silo, then removes the pod. `killSilo` leaves the
+`stopSilo` marks the pod terminating, drains the silo, then removes the pod.
+`stopSilo(silo, { terminating: "afterStopBegins" })` begins the stop first and reports the pod
+terminating after, as when the process is signalled before the endpoint changes; the silo goes on
+following its watch through the stop either way. `stopSilo(silo, { keepListed: true })` leaves the
+pod listed and terminating once the silo has stopped, for the test to remove with
+`kubernetes.removePod`. `killSilo` leaves the
 pod listed and ready, as after a real crash, until the test calls `kubernetes.depart` (or
 `markNotReady` and `removePod`). Until then the survivors still route to the dead silo, and those
 calls fail.

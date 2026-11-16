@@ -54,6 +54,35 @@ deactivation hooks, stops its reminders, stream agents and durable jobs, and fai
 probe, so the kubelet restarts it. Before its endpoint is first listed a pod is simply not yet a
 member and is not fenced.
 
+## Shutting down
+
+`SiloHost.stop()` (what a `SIGTERM` handler awaits) drains the silo in this order:
+
+1. **Readiness flips** to not ready, before anything else stops. The ownership work stops with it:
+   no reminder range, stream queue or durable-job shard is adopted from the moment the stop begins.
+2. **The grace period** (`gracefulShutdownMs`, 5 s by default under Kubernetes membership, 0 under
+   static membership) is waited out. It is the time Kubernetes' own proxies and the EndpointSlice
+   controller need to stop routing to the pod, which the silo cannot observe.
+3. **The handover.** The silo keeps following the EndpointSlice watch through its stop, so it sees
+   its own endpoint turn terminating, as its peers do, and gives its share of the directory to the
+   silos that remain. If it holds records the new owners have not yet collected, it waits for them,
+   for at most **half of what is left of the stop budget after the grace period**. A silo that has
+   not seen itself leave (its watch lags, or its endpoint was not marked terminating), that owned
+   nothing, or that has nobody left to hand over to waits for nothing; its share is rebuilt from
+   the survivors once it has gone. It goes on serving the grains it hosts throughout.
+4. **Deactivation.** Every activation is deactivated (`onDeactivate` runs) with whatever is left of
+   the budget, so deactivation always keeps at least half of what remained after the grace period.
+   Each unregisters at the grain's new owner.
+5. **The directory partition stops, the listener and connections close**, and the subsystems
+   below the node (storage clients, the membership watch, the health listener) are torn down.
+
+`stopBudgetMs` (30 s by default) bounds steps 2 to 4 together. Set it, with `gracefulShutdownMs`,
+to fit inside the pod's `terminationGracePeriodSeconds`: a silo still deactivating when the kubelet
+sends `SIGKILL` loses whatever its remaining `onDeactivate` hooks would have written. A pod whose
+endpoint is removed from the slices before it has finished (step 3 or 4) is fenced, as a running pod
+would be: its peers have already dropped its records, so the activations still up are abandoned
+without their hooks, and the stop completes.
+
 ## When a pod is lost
 
 Every silo owns a share of the grain directory: the record of which pod runs each grain. When
@@ -62,7 +91,9 @@ grain is never started a second time while its first activation may still be run
 records from the silo that held them, or, when that silo is gone, rebuild them by asking every
 listed pod which grains it runs.
 
-- **A pod that stops gracefully** hands its records on as it turns not ready; nothing waits.
+- **A pod that stops gracefully** hands its records on while it is still serving, and deactivates
+  only once they have been collected (see [Shutting down](#shutting-down)); nothing waits for its
+  drain.
 - **A pod that crashes** refuses connections once its process is gone, which counts as "I run
   nothing". As soon as its endpoint turns not ready, its share is rebuilt from the survivors, and its
   grains are started afresh on the next call.

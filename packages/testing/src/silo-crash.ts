@@ -1,5 +1,6 @@
 import { RejectionError } from "@thresh/core/errors";
 import type { MembershipService, MembershipSnapshot } from "@thresh/core/membership";
+import type { StaticMembershipService } from "@thresh/runtime/static-membership";
 import type { SiloAddress } from "@thresh/core/silo-address";
 import { nowNanosOf, type TimeProvider, type TimerHandle } from "@thresh/core/time-provider";
 import type {
@@ -154,14 +155,15 @@ export class CrashableTransport implements Transport {
 /**
  * One silo's window onto the shared static membership: it reports the silo's own `localSilo()`,
  * and a crash freezes it, so the dead silo sees no later view and runs no ownership hook (no
- * reminder range read, job shard claim or queue takeover) after it died.
+ * reminder range read, job shard claim or queue takeover) after it died. A graceful stop marks
+ * the silo draining through it first (`markDraining`), as a terminating pod's endpoint is.
  */
 export class SharedMembershipView implements MembershipService {
   private frozenAt: MembershipSnapshot | undefined;
   private readonly frozenListeners = new Set<() => void>();
 
   constructor(
-    private readonly shared: MembershipService,
+    private readonly shared: StaticMembershipService,
     private readonly local: SiloAddress,
   ) {}
 
@@ -204,6 +206,18 @@ export class SharedMembershipView implements MembershipService {
 
   refresh(version: number): Promise<void> {
     return this.frozenAt !== undefined ? Promise.resolve() : this.shared.refresh(version);
+  }
+
+  /**
+   * Mark this silo `draining` in the shared view, as Kubernetes marks a terminating pod's
+   * endpoint: it leaves the ring, so its ranges move to the silos that remain while it still
+   * serves, and it stays a member until it is removed. No-op once frozen or no longer listed.
+   */
+  markDraining(): void {
+    if (this.frozenAt !== undefined) return;
+    const member = this.shared.current().silos.find((m) => m.address.equals(this.local));
+    if (member === undefined || member.status === "draining") return;
+    this.shared.setStatus(this.local, "draining");
   }
 
   /** Stop following the shared view: hold the current snapshot and end every update stream. */

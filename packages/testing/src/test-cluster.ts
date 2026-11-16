@@ -140,6 +140,12 @@ export interface TestClusterOptions {
    * Unset, a range stays locked for as long as such a member is listed.
    */
   directoryRecoveryPatience?: Duration;
+  /**
+   * Every silo's overall stop budget (`SiloConfig.stopBudgetMs`): the grace period (0 here),
+   * the wait for a leaving silo's ranges to be collected (at most half of what is left), and
+   * deactivation together. Unset, the silo's own default (30s).
+   */
+  stopBudgetMs?: number;
   /** Load-shedding config applied to every silo in this cluster (Orleans `Configure<LoadSheddingOptions>`). */
   loadShedding?: Partial<LoadSheddingOptions>;
   /** Injectable RNG forwarded to every silo, for deterministic placement in tests. */
@@ -246,6 +252,24 @@ export interface StartSiloOptions {
    * active, until the test flips it.
    */
   readonly holdReadiness?: boolean;
+}
+
+/** How `TestCluster.stopSilo` takes a silo out. */
+export interface StopSiloOptions {
+  /**
+   * Under Kubernetes membership, when the pod is reported terminating: `"beforeStop"` (the
+   * default) reports it and lets the silos see it before the silo's stop begins;
+   * `"afterStopBegins"` begins the stop first, as when the process is signalled before the
+   * endpoint changes. Ignored on the default static membership, which marks the silo draining
+   * before it stops.
+   */
+  readonly terminating?: "beforeStop" | "afterStopBegins";
+  /**
+   * Under Kubernetes membership, leave the pod listed (terminating) once the silo has stopped,
+   * for the test to remove (`kubernetes.removePod`): the window between a pod's process
+   * exiting and its endpoint leaving the slice.
+   */
+  readonly keepListed?: boolean;
 }
 
 /** One silo's membership as it stands: the view its membership holds, and the one its node applied. */
@@ -569,24 +593,37 @@ export class TestCluster {
     return source.host.migrate(grainId, targetSilo);
   }
 
-  /** Graceful shutdown: the silo drains and departs the membership view. */
-  async stopSilo(handle: TestSiloHandle): Promise<void> {
+  /**
+   * Graceful shutdown: the silo is marked leaving (draining), drains — handing its directory
+   * ranges to the silos that remain, then deactivating — and departs the membership view.
+   */
+  async stopSilo(handle: TestSiloHandle, options: StopSiloOptions = {}): Promise<void> {
     const silo = this.take(handle);
-    await this.stopGracefully(silo);
+    await this.stopGracefully(silo, options);
   }
 
   /** Drain `silo` and take it out of membership, the way its kind of membership does. */
-  private async stopGracefully(silo: InternalSilo): Promise<void> {
+  private async stopGracefully(silo: InternalSilo, options: StopSiloOptions = {}): Promise<void> {
     if (this.k8s === undefined) {
+      // The view marks the silo draining before it stops and removes it after, as a terminating
+      // pod's endpoint does, so its ranges move by snapshot while it still serves.
+      silo.markLeaving();
       await silo.host.stop();
       this.shared?.removeSilo(silo.address);
       return;
     }
-    // A terminating pod's endpoint turns not ready and terminating first, the silo drains, and
-    // its endpoint goes after.
-    await this.k8s.terminate(silo);
-    await silo.host.stop();
-    await this.k8s.removePod(silo);
+    // A terminating pod's endpoint turns not ready and terminating, the silo drains, and its
+    // endpoint goes after.
+    if (options.terminating === "afterStopBegins") {
+      const stopping = silo.host.stop();
+      await Promise.resolve();
+      await this.k8s.terminate(silo);
+      await stopping;
+    } else {
+      await this.k8s.terminate(silo);
+      await silo.host.stop();
+    }
+    if (options.keepListed !== true) await this.k8s.removePod(silo);
   }
 
   /**
@@ -619,8 +656,10 @@ export class TestCluster {
   }
 
   /**
-   * Stop every live silo in a deterministic order — mirroring `stopSilo`'s
-   * stop-then-`removeSilo` sequencing per silo — rather than tearing them all
+   * Stop the cluster together: every live silo is marked leaving first, so the ring is empty
+   * and no silo hands a range to a silo that is about to stop (there is nobody to hand over to,
+   * so no stop waits for a handover). Then stop every live silo in a deterministic order —
+   * mirroring `stopSilo`'s stop-then-remove sequencing per silo — rather than tearing them all
    * down concurrently. A bare `Promise.all` would race: a silo mid-`stop()`
    * runs `onDeactivate` hooks that can make cross-silo calls (the
    * `ActivateDeactivateWatcherGrain` pattern), and if every silo's transport
@@ -643,8 +682,13 @@ export class TestCluster {
     }
     const remaining = this.live;
     this.live = [];
+    for (const silo of remaining) silo.markLeaving();
+    // Let every silo apply the view in which the cluster is leaving before any stops.
+    if (this.k8s !== undefined) await this.k8s.settle();
     for (const silo of remaining) {
-      await this.stopGracefully(silo).catch(() => undefined);
+      await silo.host.stop().catch(() => undefined);
+      if (this.k8s !== undefined) this.k8s.api.removePod(silo.address.podName);
+      else this.shared?.removeSilo(silo.address);
     }
   }
 
@@ -681,6 +725,7 @@ export class TestCluster {
       metadata,
       (builder) => builder.useMembership(membership),
       () => membership.freeze(),
+      () => membership.markDraining(),
     );
   }
 
@@ -700,6 +745,9 @@ export class TestCluster {
         }),
       // A crashed pod's watch is gone with its process; its endpoint stays until Kubernetes acts.
       () => k8s.disconnect({ address }),
+      () => {
+        if (k8s.listed({ address })) k8s.api.setTerminating(address.podName);
+      },
     );
     return silo;
   }
@@ -710,6 +758,7 @@ export class TestCluster {
     metadata: Readonly<Record<string, string>> | undefined,
     useMembership: (builder: SiloBuilder) => void,
     stopFollowingMembership: () => void,
+    markLeaving: () => void,
   ): InternalSilo {
     const clock = new SiloClock(this.options.time ?? systemTimeProvider);
     const transport = new CrashableTransport(
@@ -726,6 +775,9 @@ export class TestCluster {
       time: clock,
       // Nothing outside the process routes to these silos, so a drain has no one to wait for.
       gracefulShutdownMs: 0,
+      ...(this.options.stopBudgetMs !== undefined
+        ? { stopBudgetMs: this.options.stopBudgetMs }
+        : {}),
       ...(metadata !== undefined ? { metadata } : {}),
       ...(this.options.defaultResponseTimeout !== undefined
         ? { defaultResponseTimeout: this.options.defaultResponseTimeout }
@@ -820,7 +872,7 @@ export class TestCluster {
       );
       await transportGone;
     };
-    const silo: InternalSilo = { index, address, host, crash };
+    const silo: InternalSilo = { index, address, host, crash, markLeaving };
     this.live.push(silo);
     return silo;
   }
@@ -829,6 +881,8 @@ export class TestCluster {
 interface InternalSilo extends TestSiloHandle {
   /** Cut the silo off as a crash does; see `TestCluster.killSilo`. */
   crash(): Promise<void>;
+  /** Mark the silo leaving in membership (draining, or its pod terminating), without waiting. */
+  markLeaving(): void;
 }
 
 /** A `SiloBuilder` that remembers the stream providers it was given, so a crash can stop them. */

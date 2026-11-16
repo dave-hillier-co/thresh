@@ -190,6 +190,22 @@ re-resolves and retries after a pause, a bounded number of times. It differs fro
   registration is confirmed, in the same synchronous step that makes it visible to a recovery, so a
   registration that loses forwards its call to the winner and no duplicate activation exists to
   deactivate. A migrated activation, which exists before it registers, is deactivated when it loses.
+- **A leaving silo hands over, then deactivates, as two steps.** Orleans changes the silo's status
+  to `ShuttingDown` and deactivates its activations in the same lifecycle stage (`BecomeActive`'s
+  stop: `MembershipAgent.BecomeShuttingDown` and `Catalog.DeactivateAllActivations`), and lets the
+  range lock order them: the status change releases the silo's ranges, and an unregistration sent
+  during deactivation waits at the new owner until that owner has pulled the snapshot. Here the
+  silo does not publish its own status: Kubernetes marks the endpoint terminating, the silo learns
+  of it from its own watch like any peer, and the grace period (the time Kubernetes' proxies need
+  to stop routing to the pod) comes first. So the silo keeps following the watch through its stop
+  (its ownership hooks stay halted from the moment the stop begins), and when the grace has
+  elapsed it waits, explicitly, until every snapshot of a range it gave up has been collected
+  (each partner has acknowledged it, left the view, or started a recovery at or above its
+  version), for at most half of what remains of the stop budget, before it deactivates. Without
+  that wait a silo with little to deactivate could close its listener before a new owner had
+  pulled, and that owner would recover. A silo that never saw itself leave, owned nothing, or has
+  nobody to hand over to waits for nothing; a silo that sees itself removed during the drain fences
+  as a running silo does.
 
 ## Functional / reducer authoring
 

@@ -164,6 +164,10 @@ export class GrainDirectoryPartition {
   private recoveryVersionValue = -1;
   private stopped = false;
   private readonly viewChanges = new Set<Promise<void>>();
+  /** Releases of lost ranges still moving their entries into a snapshot. */
+  private releasing = 0;
+  /** Run whenever a snapshot is pushed or dropped, a release finishes, or the partition stops. */
+  private readonly handoverListeners = new Set<() => void>();
   private readonly counts = {
     transfers: 0,
     recoveries: 0,
@@ -263,6 +267,7 @@ export class GrainDirectoryPartition {
     const gained = subtractRanges(after, before);
     if (lost.length > 0) {
       const lock = this.lock(lost, next.version);
+      this.releasing++;
       this.track(this.release(previous, next, lost, lock));
     }
     if (gained.length > 0) {
@@ -291,6 +296,39 @@ export class GrainDirectoryPartition {
       "siloDraining",
     );
     for (const lock of this.locks) lock.fail(refusal);
+    this.notifyHandover();
+  }
+
+  /**
+   * Resolves once every range this partition gave up has been handed over — no release is still
+   * moving entries into a snapshot, and no snapshot is held — or once `timeoutMs` has elapsed on
+   * this partition's clock, or once it stops, whichever comes first. A snapshot is dropped when
+   * every partner has acknowledged it, left the view, or started a recovery at or above its
+   * version. A partition that holds nothing resolves at once, and no timer is left armed either
+   * way. A leaving silo waits on this before it deactivates (`ClusterNode.stop`).
+   */
+  handedOver(timeoutMs: number): Promise<void> {
+    if (this.isHandedOver()) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      const done = (): void => {
+        this.handoverListeners.delete(check);
+        this.time.clearTimer(timer);
+        resolve();
+      };
+      const check = (): void => {
+        if (this.isHandedOver()) done();
+      };
+      this.handoverListeners.add(check);
+      const timer = this.time.setTimer(done, timeoutMs);
+    });
+  }
+
+  private isHandedOver(): boolean {
+    return this.stopped || (this.releasing === 0 && this.snapshots.length === 0);
+  }
+
+  private notifyHandover(): void {
+    for (const listener of [...this.handoverListeners]) listener();
   }
 
   private track(change: Promise<void>): void {
@@ -354,6 +392,8 @@ export class GrainDirectoryPartition {
       }
     } finally {
       if (!this.stopped) this.unlock(lock);
+      this.releasing--;
+      this.notifyHandover();
     }
   }
 
@@ -714,6 +754,7 @@ export class GrainDirectoryPartition {
       if (snapshot(s)) s.partners = s.partners.filter((p) => !partner(p));
     }
     this.snapshots = this.snapshots.filter((s) => s.partners.length > 0);
+    this.notifyHandover();
   }
 
   // ── Integrity ──────────────────────────────────────────────────────────────
