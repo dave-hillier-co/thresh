@@ -45,6 +45,15 @@ slot that is live only during the *synchronous* body of the factory. Call them a
 the top level of the factory, never after an `await`, from a method body, or from
 `onActivate` — those throw an error naming the hook and the rule.
 
+The hooks that close the gap with the class form follow the same rule: `useMayInterleave(predicate)`
+(per-activation admission predicate), `useGrainFacet<T>(kind, { name, config })` (returns a handle whose
+`get()` is the bound third-party facet), `useOnDehydrate(handler)` / `useOnRehydrate(handler)`
+(migration state; synchronous, and not on the grain's call surface) and `useDependency(token)`.
+Dependencies are typed by a token: make one with `createDependencyToken<T>(name)` from
+`@thresh/core/grain-dependency`, register the value per silo with
+`builder.addGrainDependency(token, value)`, and `useDependency(token)` returns a `T`. Regular-expression
+channel subscriptions are an option, `regexImplicitChannelSubscriptions: [pattern]`, not a hook.
+
 The factory keeps its `ctx` parameter for reaching the runtime *after* setup:
 capture it in the closure and use `ctx.runtime` / `ctx.id` / `ctx.getGrain` from
 method bodies. That is not a hook call and stays valid for the activation's life.
@@ -108,6 +117,8 @@ type Account = GrainKey<bigint> & {
 
 Both paths resolve to the same key type. The older `GrainWithStringKey`,
 `GrainWithIntegerKey`, and compound-key marker names remain supported as aliases
-of `GrainKey<TKey>`, so a marked interface keeps its caller key type with no
-edit. If no kind is declared and no marker is present,
-`getGrain` defaults to `string` keys.
+of `GrainKey<TKey>`, so a marked interface keeps its caller key type. A marker
+is erased at runtime, so a marked interface with a non-string key must also
+state the kind as a value, `defineGrainInterface<Account>("Account", { key: "integer" })`;
+without it the call does not compile. If no kind is declared and no marker is
+present, `getGrain` defaults to `string` keys.

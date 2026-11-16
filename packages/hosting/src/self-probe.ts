@@ -8,8 +8,12 @@
  * turned inward — no gossip, no cluster-wide agreement, K8s stays the sole
  * membership authority (see the "Constraint" note in the design doc).
  *
- * On a timer, it calls a no-op system grain (`ISiloProbe`, `preferLocal`
- * placement) on THIS silo and tracks consecutive misses. Reaching
+ * On a timer, it calls a no-op system grain (`ISiloProbe`) on THIS silo and
+ * tracks consecutive misses. The node serves that grain through its local
+ * system-activation path — never placed, never in the directory, always
+ * answered by the silo that asked, on a joining or draining silo as on an
+ * active one — while the call still goes through the dispatcher and the
+ * activation's scheduler, which is what a wedged dispatcher stalls. Reaching
  * `missedThreshold` flips `HealthCheck.dispatcherResponsive` false, which
  * pulls the endpoint from service exactly the way `draining` does; a
  * subsequent success flips it back. The cadence defaults
@@ -22,6 +26,7 @@
  * `TimeProvider.setTimer`, so the whole loop is deterministic under a fake
  * clock in tests, and a failed tick never kills the loop.
  */
+import { defaultLogger, safeLogger, type Logger } from "@thresh/core/logger";
 import type { HealthCheck } from "@thresh/hosting/health-check";
 import type { TimeProvider, TimerHandle } from "@thresh/core/time-provider";
 import { withCallOptions } from "@thresh/runtime/invocation-context";
@@ -44,6 +49,8 @@ export interface SelfProbeWorkerOptions {
   timeoutMs?: number;
   /** Consecutive misses before readiness flips false. Defaults to 3 (Orleans `NumMissedProbesLimit`). */
   missedThreshold?: number;
+  /** Where the readiness flip and its recovery are reported (defaults to `defaultLogger`). */
+  logger?: Logger;
 }
 
 /**
@@ -53,8 +60,11 @@ export interface SelfProbeWorkerOptions {
  */
 export class SelfProbeWorker {
   private handle: TimerHandle | undefined;
+  /** The deadline timer of the probe in flight, cleared by `stop()` so none outlives the worker. */
+  private probeDeadline: TimerHandle | undefined;
   private stopped = true;
   private consecutiveMisses = 0;
+  private readonly logger: Logger;
   private readonly intervalMs: number;
   private readonly timeoutMs: number;
   private readonly missedThreshold: number;
@@ -63,6 +73,7 @@ export class SelfProbeWorker {
     this.intervalMs = options.intervalMs ?? DEFAULT_INTERVAL_MS;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.missedThreshold = options.missedThreshold ?? DEFAULT_MISSED_THRESHOLD;
+    this.logger = safeLogger(options.logger ?? defaultLogger);
   }
 
   /** Begin probing, one interval from now. */
@@ -71,12 +82,16 @@ export class SelfProbeWorker {
     this.scheduleNext();
   }
 
-  /** Stop probing and cancel any pending tick. */
+  /** Stop probing and cancel any pending tick, and the deadline of a probe in flight. */
   stop(): void {
     this.stopped = true;
     if (this.handle !== undefined) {
       this.options.time.clearTimer(this.handle);
       this.handle = undefined;
+    }
+    if (this.probeDeadline !== undefined) {
+      this.options.time.clearTimer(this.probeDeadline);
+      this.probeDeadline = undefined;
     }
   }
 
@@ -88,19 +103,33 @@ export class SelfProbeWorker {
   }
 
   private async tick(): Promise<void> {
+    const { health, time } = this.options;
     try {
       await this.probeOnce();
       this.consecutiveMisses = 0;
-      // A recovered silo re-enters service — but never flip a signal a drain
+      health.update({ probeFailingSinceMs: undefined });
+      // A recovered silo re-enters service -- but never flip a signal a drain
       // already owns: a probe that misses (or, here, succeeds) only because
       // the silo is mid-shutdown says nothing about the dispatcher's health.
-      if (!this.options.health.isDraining()) {
-        this.options.health.update({ dispatcherResponsive: true });
+      if (!health.isDraining()) {
+        if (!health.ready().checks.dispatcherResponsive) {
+          this.logger.info("self-probe recovered; the silo is ready again");
+        }
+        health.update({ dispatcherResponsive: true });
       }
-    } catch {
+    } catch (error) {
       this.consecutiveMisses += 1;
-      if (this.consecutiveMisses >= this.missedThreshold && !this.options.health.isDraining()) {
-        this.options.health.update({ dispatcherResponsive: false });
+      if (this.consecutiveMisses === 1) health.update({ probeFailingSinceMs: time.now() });
+      if (this.consecutiveMisses >= this.missedThreshold && !health.isDraining()) {
+        // Reported on the flip only: a wedged dispatcher misses every interval, and one line per
+        // miss would drown the line that matters.
+        if (health.ready().checks.dispatcherResponsive) {
+          this.logger.warn("self-probe failed; the silo is no longer ready", {
+            consecutiveMisses: this.consecutiveMisses,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        health.update({ dispatcherResponsive: false });
       }
     } finally {
       if (!this.stopped) this.scheduleNext();
@@ -129,22 +158,28 @@ export class SelfProbeWorker {
     return new Promise<void>((resolve, reject) => {
       let settled = false;
       const timer = this.options.time.setTimer(() => {
+        if (this.probeDeadline === timer) this.probeDeadline = undefined;
         if (settled) return;
         settled = true;
         reject(new Error(`self-probe exceeded its ${this.timeoutMs}ms deadline`));
         call.catch(() => {});
       }, this.timeoutMs);
+      this.probeDeadline = timer;
+      const disarm = (): void => {
+        this.options.time.clearTimer(timer);
+        if (this.probeDeadline === timer) this.probeDeadline = undefined;
+      };
       call.then(
         () => {
           if (settled) return;
           settled = true;
-          this.options.time.clearTimer(timer);
+          disarm();
           resolve();
         },
         (error: unknown) => {
           if (settled) return;
           settled = true;
-          this.options.time.clearTimer(timer);
+          disarm();
           reject(error instanceof Error ? error : new Error(String(error)));
         },
       );

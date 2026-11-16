@@ -1,5 +1,5 @@
 import type { GrainId } from "@thresh/core/grain-id";
-import { getDurableFields } from "@thresh/core/durable-state-metadata";
+import { bindDurableStateWriter, getDurableFields } from "@thresh/core/durable-state-metadata";
 import { isCustomStorageHost, JournaledGrain } from "@thresh/core/journaled-grain";
 import {
   bindDurableStates,
@@ -10,6 +10,7 @@ import {
   bindJournaledGrain,
   installJournalViewAdaptor,
 } from "@thresh/journaling/journaled-grain-binder";
+import { sharesJournalBacking } from "@thresh/core/journal-storage";
 import type { JournalStorageRegistry } from "@thresh/journaling/journal-storage-registry";
 import { StateMachineManagerImpl } from "@thresh/journaling/state-machine-manager-impl";
 
@@ -45,6 +46,8 @@ export async function bindJournalFacets(
     provider?: string;
     /** CAS attempts per confirm, for a custom-storage host. Ignored otherwise. */
     maxAttempts?: number;
+    /** Keep a JournaledGrain's events across compaction (default `false`). */
+    retainEvents?: boolean;
   } = {},
 ): Promise<void> {
   const isJournaledGrain = instance instanceof JournaledGrain;
@@ -61,7 +64,7 @@ export async function bindJournalFacets(
     isJournaledGrain &&
     !isCustomStorageHost(instance) &&
     fields.length > 0 &&
-    registry.get(durableProvider) === registry.get(opts.provider);
+    sharesJournalBacking(registry.get(durableProvider), registry.get(opts.provider));
   if (!sharesLog) {
     await bindDurableStates(instance, grainId, registry, opts);
     await bindJournaledGrain(instance, grainId, registry, opts);
@@ -73,7 +76,12 @@ export async function bindJournalFacets(
   });
 
   registerDurableMachines(instance, fields, manager);
-  installJournalViewAdaptor(instance, manager);
+  bindDurableStateWriter(instance, manager);
+  installJournalViewAdaptor(
+    instance,
+    manager,
+    opts.retainEvents !== undefined ? { retainEvents: opts.retainEvents } : {},
+  );
 
   if (opts.replay ?? true) await manager.replay();
 }

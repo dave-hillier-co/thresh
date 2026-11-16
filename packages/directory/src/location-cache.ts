@@ -39,6 +39,13 @@ export class LocationCache {
     this.cache.delete(key);
   }
 
+  /** How many entries point at `silo` (introspection: a departed silo should have none). */
+  entriesFor(silo: SiloAddress): number {
+    let count = 0;
+    for (const entry of this.cache.values()) if (entry.silo.equals(silo)) count += 1;
+    return count;
+  }
+
   invalidateSilo(silo: SiloAddress): void {
     for (const [key, entry] of this.cache) {
       if (entry.silo.equals(silo)) this.cache.delete(key);

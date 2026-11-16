@@ -1,8 +1,10 @@
 import { keyToString, type GrainKey } from "@thresh/core/grain-key";
 import type { GrainId } from "@thresh/core/grain-id";
+import type { GrainKeyKind } from "@thresh/core/grain-key";
 import type { GrainType } from "@thresh/core/grain-type";
 import { raceSignal } from "@thresh/core/abort";
 import { stableHash32 } from "@thresh/core/hash";
+import type { Logger } from "@thresh/core/logger";
 import type { TimeProvider } from "@thresh/core/time-provider";
 import type {
   ActivationBoundStreamProvider,
@@ -72,8 +74,10 @@ export interface PullingStreamProviderCoreOptions {
   deliveryResponseTimeoutMs?: number;
   /** Backoff between retries to the same subscriber; defaults to 2^attempt * 50ms, capped at 5s. */
   retryBackoffMs?: (attempt: number) => number;
-  /** Clock driving delivery deadlines and backoff sleeps — a true boundary, fake it in tests. */
+  /** Clock driving delivery deadlines, backoff sleeps and the pulling agents' poll waits — a true boundary, fake it in tests. */
   time?: TimeProvider;
+  /** Where a pulling agent reports a poll failure (see `QueuePullingAgentOptions.logger`). */
+  logger?: Logger;
 }
 
 /** Validates `queueCount` (Orleans-style fail-fast config check); defaults to 8. */
@@ -115,6 +119,7 @@ export function validatePollIntervalMs(
  */
 export class PullingStreamProviderCore implements ActivationBoundStreamProvider {
   private readonly pollIntervalMs: number;
+  private readonly agentOptions: { time?: TimeProvider; logger?: Logger };
   private readonly agents = new Map<number, QueuePullingAgent>();
   /**
    * Set by `stop()` and never cleared: the host stops this provider before
@@ -127,6 +132,7 @@ export class PullingStreamProviderCore implements ActivationBoundStreamProvider 
   private readonly fanOutDelivery: FanOutDelivery;
   private deliver: StreamDeliver = async () => undefined;
   private implicitTypesFor: (namespace: string) => Iterable<GrainType> = () => [];
+  private implicitKeyKindFor: ((type: GrainType) => GrainKeyKind | undefined) | undefined;
 
   constructor(
     private readonly name: string,
@@ -135,6 +141,10 @@ export class PullingStreamProviderCore implements ActivationBoundStreamProvider 
     options: PullingStreamProviderCoreOptions = {},
   ) {
     this.pollIntervalMs = validatePollIntervalMs(name, options.pollIntervalMs);
+    this.agentOptions = {
+      ...(options.time !== undefined ? { time: options.time } : {}),
+      ...(options.logger !== undefined ? { logger: options.logger } : {}),
+    };
     // Bound to `this.deliver` through a closure (rather than captured by value)
     // so a later `setDeliver` call still reaches every subsequent fan-out.
     this.fanOutDelivery = new FanOutDelivery(
@@ -168,8 +178,12 @@ export class PullingStreamProviderCore implements ActivationBoundStreamProvider 
    * fans each event out to these grain types' matching-key activations as well as
    * to the registry's explicit subscribers (Orleans' `[ImplicitStreamSubscription]`).
    */
-  setImplicitSubscribers(typesFor: (namespace: string) => Iterable<GrainType>): void {
+  setImplicitSubscribers(
+    typesFor: (namespace: string) => Iterable<GrainType>,
+    keyKindFor?: (type: GrainType) => GrainKeyKind | undefined,
+  ): void {
     this.implicitTypesFor = typesFor;
+    this.implicitKeyKindFor = keyKindFor;
   }
 
   /**
@@ -199,7 +213,7 @@ export class PullingStreamProviderCore implements ActivationBoundStreamProvider 
       const agent = new QueuePullingAgent(
         this.queues[i]!,
         (streamKey, event, token, signal) => this.fanOut(streamKey, event, token, signal),
-        { pollIntervalMs: this.pollIntervalMs },
+        { pollIntervalMs: this.pollIntervalMs, ...this.agentOptions },
       );
       this.agents.set(i, agent);
       agent.start();
@@ -247,7 +261,11 @@ export class PullingStreamProviderCore implements ActivationBoundStreamProvider 
     // types bound to the stream's namespace), deduplicated so a grain that is both
     // gets the event once.
     const explicit = await raceSignal(this.registry.subscribers(streamKey), signal);
-    const implicit = implicitSubscriberIds(streamKey, this.implicitTypesFor);
+    const implicit = implicitSubscriberIds(
+      streamKey,
+      this.implicitTypesFor,
+      this.implicitKeyKindFor,
+    );
     const seen = new Set<string>();
     const subscribers: GrainId[] = [];
     for (const subscriber of [...explicit, ...implicit]) {

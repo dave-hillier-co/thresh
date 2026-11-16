@@ -7,7 +7,7 @@
 //
 // This framework now has the DEACTIVATE-path span (`OnDeactivate`, Lifecycle
 // source — `@thresh/observability/activation-tracing`'s `withOnDeactivateSpan`,
-// wired around `ActivationData.runDeactivateHook`'s `instance.onDeactivate`
+// wired around the deactivation pipeline's `instance.onDeactivate`
 // call) plus a `StorageWrite` span (Storage source) around
 // `PersistentStateImpl.write`. Both inherit the ambient OTel context the same
 // way the activation-path spans do (async-hooks context manager +
@@ -15,12 +15,12 @@
 // deactivation triggered by (or observed from) a call under a given trace
 // shares that trace id — no separate wiring needed.
 //
-// `deactivateOnIdle()` is lazy here (Orleans parity: flagged during the
-// triggering turn, actually run on the NEXT call for that grain id — see
-// `Catalog.finalizeStale`), unlike upstream's synchronous
-// `HostedCluster.DeactivateAsync`. Since every case below wraps BOTH the
-// triggering call and the follow-up call in the SAME `harness.withParentSpan`,
-// this makes no observable difference to the trace-id assertions.
+// `deactivateOnIdle()` starts the deactivation once the triggering turn
+// finishes (Orleans `DeactivateOnIdle`), and the follow-up call is held until
+// it has run, then rerouted to a fresh activation — standing in for
+// upstream's synchronous `HostedCluster.DeactivateAsync`. Every case below
+// wraps BOTH the triggering call and the follow-up call in the SAME
+// `harness.withParentSpan`.
 //
 // Three cases are EXCLUDED (`orleansTest.excluded`, not `orleansTest.gap` —
 // see each call site for its precise reason):
@@ -39,7 +39,7 @@
 // this framework's periodic `ActivationCollector` fires its sweep off the
 // SAME `TimeProvider` a test advances (`FakeTimeProvider.advance`), and that
 // advance call synchronously walks into the sweep's `collectIdle` →
-// `collectOne` → `runDeactivateHook`/`dehydrate` chain, entirely as ordinary
+// `collectOne` → `ActivationData.deactivate` → `dehydrate` chain, entirely as ordinary
 // async/await continuations — no new `setTimeout`/timer boundary is crossed.
 // `AsyncLocalStorageContextManager` (the harness's OTel context manager)
 // propagates through that continuation exactly like any other awaited call,
@@ -48,7 +48,7 @@
 // into the resulting `OnDeactivate`/`Dehydrate` spans — the collection sweep
 // only looks "detached" at the call-site (`forceMigrationSweep` in
 // `migration-tests.test.ts`), not at the trace-context level. `collectOne`
-// itself was reordered to run `runDeactivateHook` BEFORE
+// itself was reordered to run the hook BEFORE
 // `dehydrate`/hand-off (previously the reverse, to protect against an
 // `onDeactivate` hook clearing state before dehydration) — matching upstream
 // `ActivationData.FinishDeactivating`, which always calls
@@ -296,11 +296,11 @@ describe("UnitTests.General.DeactivationTracingTests", () => {
         "test-parent-inconsistent-state",
         async () => {
           await expect(grain.throwInconsistentStateException()).rejects.toThrow();
-          // The escaped `InconsistentStateError` flags the activation for
-          // deactivation (Orleans' `InsideRuntimeClient.cs:326`); the catalog
-          // finalizes it — running `OnDeactivate` — on this next lookup, then
-          // serves the call from a fresh activation. That stands in for
-          // upstream's `WaitForDeactivationAsync` followed by the same call.
+          // The escaped `InconsistentStateError` deactivates the activation
+          // (Orleans' `InsideRuntimeClient.cs:326`); this next call is held
+          // until `OnDeactivate` has run, then served by a fresh activation.
+          // That stands in for upstream's `WaitForDeactivationAsync` followed
+          // by the same call.
           await grain.getActivityId();
         },
       );
@@ -379,6 +379,9 @@ describe("UnitTests.General.DeactivationTracingTests (migration)", () => {
     cluster = await TestCluster.start({
       initialSilos: 2,
       time,
+      // A directed migration is still rehydrating on its target when the sweep below leaps the
+      // fake clock 65 s; an activation timeout inside that leap would fail it, so keep it beyond.
+      activationTimeout: { minutes: 5 },
       grains: [
         {
           ctor: DeactivationMigrationTracingTestGrain,

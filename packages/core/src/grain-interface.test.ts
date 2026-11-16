@@ -278,14 +278,14 @@ describe("defineGrainInterface — declaring the key kind", () => {
     get(): Promise<number>;
   }
 
-  it("takes the kind as the second type argument, needing no runtime option", () => {
-    const IByInteger = defineGrainInterface<ICounter, "integer">("IKey.integer");
+  it("takes the kind as the second type argument, and records it as a value", () => {
+    const IByInteger = defineGrainInterface<ICounter, "integer">("IKey.integer", {
+      key: "integer",
+    });
 
     expectTypeOf(IByInteger).toEqualTypeOf<GrainInterface<ICounter, "integer">>();
     expectTypeOf<KeyTypeOf<NonNullable<(typeof IByInteger)["__k"]>>>().toEqualTypeOf<bigint>();
-    // No runtime evidence of the kind — the same as the legacy marker path, and
-    // why `GrainInterface.key` is optional.
-    expect(IByInteger.key).toBeUndefined();
+    expect(IByInteger.key).toBe("integer");
   });
 
   it("records the kind at runtime when the option repeats it", () => {
@@ -297,8 +297,8 @@ describe("defineGrainInterface — declaring the key kind", () => {
   });
 
   it("rejects a runtime key that disagrees with the type argument", () => {
+    // @ts-expect-error the declared kind is "integer"; the option must agree
     const iface = defineGrainInterface<ICounter, "integer">("IKey.integer.conflict", {
-      // @ts-expect-error the declared kind is "integer"; the option must agree
       key: "guid",
     });
 
@@ -306,10 +306,21 @@ describe("defineGrainInterface — declaring the key kind", () => {
     expect(iface.key).toBe("guid");
   });
 
-  it("still derives the kind from a legacy phantom marker when none is declared", () => {
-    const iface = defineGrainInterface<ICounter & GrainWithIntegerKey>("IKey.marker");
+  it("still types the key from a legacy phantom marker, and records the kind stated beside it", () => {
+    const iface = defineGrainInterface<ICounter & GrainWithIntegerKey>("IKey.marker", {
+      key: "integer",
+    });
 
     expectTypeOf<KeyTypeOf<NonNullable<(typeof iface)["__k"]>>>().toEqualTypeOf<bigint>();
-    expect(iface.key).toBeUndefined();
+    expect(iface.key).toBe("integer");
+  });
+
+  it("refuses a non-string kind that is only a type: a marker alone is erased at runtime", () => {
+    // @ts-expect-error the kind must be stated as a value
+    defineGrainInterface<ICounter & GrainWithIntegerKey>("IKey.marker.unstated");
+    // @ts-expect-error the second type argument alone is erased too
+    defineGrainInterface<ICounter, "integer">("IKey.integer.unstated");
+    // A string key is the fallback and needs no statement.
+    expect(defineGrainInterface<ICounter>("IKey.string.unstated").key).toBeUndefined();
   });
 });

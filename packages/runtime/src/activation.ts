@@ -6,6 +6,7 @@ import {
   type BroadcastChannelHandler,
 } from "@thresh/core/broadcast-channel";
 import type { Duration } from "@thresh/core/duration";
+import { isRemotelyCallable } from "@thresh/core/remote-method-surface";
 import {
   DurableJobConsumerInterface,
   durableJobHandler,
@@ -29,12 +30,16 @@ import {
 import type { Grain } from "@thresh/core/grain";
 import type { GrainContext } from "@thresh/core/grain-context";
 import type { GrainId } from "@thresh/core/grain-id";
-import { getGrainMetadata, type GrainConstructor } from "@thresh/core/grain-metadata";
+import {
+  getGrainMetadata,
+  getInstanceMayInterleave,
+  type GrainConstructor,
+} from "@thresh/core/grain-metadata";
 import { MigrationBag } from "@thresh/core/grain-migration-participant";
 import type { GrainRuntime } from "@thresh/core/grain-runtime";
 import type { GrainTimer, TimerOptions } from "@thresh/core/grain-timer";
 import type { InvokeMethodOptions } from "@thresh/core/invoke-options";
-import { type Logger, noopLogger } from "@thresh/core/logger";
+import { type Logger, defaultLogger } from "@thresh/core/logger";
 import {
   formatDeactivationReason,
   type ActivationReason,
@@ -62,7 +67,10 @@ import { getReducerFields } from "@thresh/core/reducer-state-metadata";
 import { guardReducerStateForReadOnly } from "@thresh/core/reducer-state-readonly-guard";
 import { getDurableFields } from "@thresh/core/durable-state-metadata";
 import { guardDurableFieldForReadOnly } from "@thresh/core/durable-state-readonly-guard";
-import { guardTransactionalStateForReadOnly } from "@thresh/core/transactional-state-readonly-guard";
+import {
+  guardTransactionalStateForReadOnly,
+  unguardedTransactionalState,
+} from "@thresh/core/transactional-state-readonly-guard";
 import type { InvocationRequest } from "@thresh/core/request";
 import {
   type CallChainReentrantGrainContext,
@@ -78,7 +86,7 @@ import {
   StreamConsumerInterface,
   type StreamHandler,
 } from "@thresh/core/stream";
-import type { TransactionParticipant } from "@thresh/core/transaction-info";
+import { blocksDeactivation, type TransactionParticipant } from "@thresh/core/transaction-info";
 import { TransactionResourceInterface } from "@thresh/core/transaction-resource";
 import { getTransactionalFields } from "@thresh/core/transactional-state-metadata";
 import { deadlineSignal } from "@thresh/runtime/ambient-signal";
@@ -93,7 +101,57 @@ import {
   withRehydrateSpan,
 } from "@thresh/observability/activation-tracing";
 
-export type ActivationState = "creating" | "activating" | "valid" | "deactivating" | "invalid";
+/**
+ * The activation lifecycle (Orleans `ActivationState`, plus `failed` for an
+ * activation whose `onActivate` threw):
+ *
+ * - `creating`: constructed; its activate operation has not been scheduled.
+ * - `activating`: the activate operation (state binding or rehydration, then
+ *   `onActivate`) is queued or running. Work that arrives waits.
+ * - `valid`: serving. The only state that admits work.
+ * - `failed`: activation threw. The deactivation pipeline is finishing it;
+ *   work is rejected with the original error.
+ * - `deactivating`: a deactivation was requested (idle collection,
+ *   `deactivateOnIdle`, an escaped `InconsistentStateError`, a migration, a
+ *   silo stop). Work that arrives is held and rerouted once the pipeline has
+ *   finished, or dropped if it is a timer tick. Its migrating sub-state is a
+ *   deactivation carrying a migration request (`isMigrating`), which hands the
+ *   state to another silo before finalizing.
+ * - `invalid`: finalized (unregistered, removed, disposed) or abandoned as
+ *   stuck. Terminal.
+ *
+ * {@link ACTIVATION_TRANSITIONS} lists every legal move; any other throws.
+ */
+export type ActivationState =
+  | "creating"
+  | "activating"
+  | "valid"
+  | "failed"
+  | "deactivating"
+  | "invalid";
+
+/**
+ * The legal lifecycle transitions, from each state to the states it may move
+ * to. `valid -> invalid` is abandonment of a stuck activation (Orleans
+ * `DeactivateStuckActivation`); every other route to `invalid` passes through
+ * the deactivation pipeline.
+ */
+export const ACTIVATION_TRANSITIONS: Readonly<Record<ActivationState, readonly ActivationState[]>> =
+  {
+    creating: ["activating", "deactivating"],
+    activating: ["valid", "failed", "deactivating"],
+    valid: ["deactivating", "invalid"],
+    failed: ["invalid"],
+    deactivating: ["invalid"],
+    invalid: [],
+  };
+
+/** Throw unless `from -> to` is in {@link ACTIVATION_TRANSITIONS}. */
+export function assertActivationTransition(from: ActivationState, to: ActivationState): void {
+  if (!ACTIVATION_TRANSITIONS[from].includes(to)) {
+    throw new Error(`illegal activation state transition: ${from} -> ${to}`);
+  }
+}
 
 /**
  * Turn-scheduler and deactivation knobs (Orleans `SchedulingOptions` +
@@ -112,24 +170,84 @@ export interface ActivationOptions {
   maxRequestProcessingTimeMs?: number;
   /**
    * Orleans `CollectionOptions.DeactivationTimeout`: force deactivation to
-   * proceed once `onDeactivate` has run this long, even if the hook itself
-   * hasn't settled — see {@link ActivationData.awaitWithDeactivationTimeout}.
+   * proceed once this long has passed since it was requested, even if
+   * `onDeactivate` hasn't settled — see
+   * {@link ActivationData.awaitWithDeactivationTimeout}.
    */
   deactivationTimeoutMs?: number;
+  /**
+   * Orleans `CollectionOptions.ActivationTimeout`: give up on an activation whose state binding
+   * (or rehydration) and `onActivate` have not finished this long after the activate operation
+   * began (Orleans arms it in `ActivationData.Activate`, `cts.CancelAfter(ActivationTimeout)`).
+   * The activation then fails as one whose `onActivate` threw: its waiting calls are rejected and
+   * it leaves the catalog, so a later call activates afresh. Unset waits as long as it takes.
+   */
+  activationTimeoutMs?: number;
   /** Sink for soft-limit/stuck-turn/deactivation-timeout warnings; defaults to discarding them. */
   logger?: Logger;
   /**
    * Called once this activation has deactivated itself because its blocking
    * turn is stuck (`maxRequestProcessingTimeMs` exceeded — Orleans
    * `DeactivateStuckActivation`/`ActivationUnresponsive`). By the time this
-   * fires `state` is already `"invalid"` and every turn queued behind the
-   * wedged one has been rejected; wired by the `Catalog` to remove this
-   * activation from its own maps and unregister it from the directory, the
-   * same way it does for an ordinary deactivation, so the next call for this
-   * grain id activates a fresh one instead of finding this one again.
+   * fires `state` is already `"invalid"` and the `deactivationSteps`'
+   * unregister and removal steps have run, so the next call for this grain
+   * id activates a fresh one instead of finding this one again. A
+   * notification only: the `Catalog` does not need it.
    */
   onStuck?: (activation: ActivationData) => void;
+  /**
+   * The parts of a deactivation owned outside the activation — supplied by the
+   * `Catalog` (and, through it, the `ClusterNode`) and run by the activation's
+   * own pipeline ({@link ActivationData.deactivate}) exactly once, in Orleans'
+   * `FinishDeactivating` order. Absent for an activation built on its own.
+   */
+  deactivationSteps?: DeactivationSteps;
 }
+
+/**
+ * What {@link ActivationData.deactivate}'s pipeline delegates (Orleans: the
+ * `IActivationMigrationManager`, the `GrainLocator` and the catalog's
+ * `UnregisterMessageTarget`). Each step is contained: one that throws is
+ * logged and the pipeline carries on.
+ */
+export interface DeactivationSteps {
+  /**
+   * Dehydrate `activation` and hand it to `target`, or to a placement-chosen
+   * silo when `target` is undefined (Orleans `StartMigrationAsync`, with
+   * `ForwardingAddress` as the explicit target). Resolves to whether the target
+   * accepted.
+   */
+  migrate?: (activation: ActivationData, target: SiloAddress | undefined) => Promise<boolean>;
+  /** Unregister from the grain directory and drop any cached address. */
+  unregister?: (activation: ActivationData) => void;
+  /** Remove from the catalog, so the next lookup activates afresh. */
+  remove?: (activation: ActivationData) => void;
+  /** Dispose the grain instance and unbind its state. */
+  dispose?: (activation: ActivationData) => void | Promise<void>;
+}
+
+/** Options for {@link ActivationData.deactivate}. */
+export interface DeactivateOptions {
+  /** Migrate to this silo instead of only deactivating (Orleans `ForwardingAddress`). */
+  migrateTo?: SiloAddress;
+  /** Passed through to `onDeactivate`. */
+  signal?: AbortSignal;
+}
+
+/** How a deactivation ended; every caller that joined it sees the same outcome. */
+export interface DeactivationOutcome {
+  /** Whether the activation's state was handed to another silo that accepted it. */
+  migrated: boolean;
+}
+
+/**
+ * Orleans `ActivationLifetime.OnStopAsync`'s bound: a deactivation waits at
+ * most this long for a transactional resource's lock or undecided prepared
+ * record to clear, then proceeds.
+ */
+const DEACTIVATION_BLOCK_MAX_WAIT_MS = 5_000;
+/** How often that wait re-checks the block (Orleans polls every 10 ms). */
+const DEACTIVATION_BLOCK_POLL_MS = 10;
 
 /** Split a `namespace/key` string; with no slash the whole string is the namespace and key is empty. */
 function parseNamespaceKey(key: string): [namespace: string, key: string] {
@@ -147,11 +265,56 @@ function parseNamespaceKey(key: string): [namespace: string, key: string] {
 const runInRootAsyncContext = AsyncLocalStorage.snapshot();
 
 /**
- * Thrown from inside a call's turn when the activation turned out to be
- * deactivating or migrating by the time the turn ran; `invoke` catches it
- * once the turn has ended and holds the call for a reroute (never escapes).
+ * The rejection a queued turn gets when the activation stops being valid
+ * before the turn could start (see `ActivationData.admit`): a call or stream
+ * delivery is then held for a reroute, a timer tick dropped. Never escapes.
  */
-const HOLD_FOR_REROUTE: unique symbol = Symbol("hold-for-reroute");
+const EVICTED: unique symbol = Symbol("evicted");
+
+/** The lifecycle operations (Orleans' `Command` types run by `ProcessOperationsAsync`). */
+type OperationName = "activate" | "deactivate" | "dehydrate";
+
+interface PendingOperation {
+  readonly name: OperationName;
+  /** Runs the operation; settles once it has finished, never rejects. */
+  readonly run: () => Promise<void>;
+  /** Drops it unrun, rejecting whoever scheduled it with `error` (the activation was abandoned). */
+  readonly discard: (error: unknown) => void;
+}
+
+/** How calls held on a deactivation that refuses them are answered (Orleans `DeactivationException`). */
+interface Refusal {
+  readonly error: () => unknown;
+  /** The activation itself failed (its `onActivate` threw). */
+  readonly activationFailed: boolean;
+}
+
+/**
+ * One deactivation (Orleans' `Command.Deactivate` plus the activation's
+ * deactivation fields): created by the first request, joined by every later
+ * one.
+ */
+interface Deactivation {
+  readonly reason: DeactivationReason;
+  /** The state it began from (Orleans `PreviousState`): `onDeactivate` runs only from `valid`. */
+  readonly previousState: ActivationState;
+  readonly signal: AbortSignal | undefined;
+  /** When it began (Orleans `DeactivationStartTime`), for stuck-deactivation detection. */
+  readonly startedAtMs: number;
+  /**
+   * The migrating sub-state (Orleans `DehydrationContext`): set when a
+   * migration was requested before or during the deactivation; `target` is
+   * the explicit `ForwardingAddress`, undefined to let placement choose.
+   */
+  migration: { readonly target: SiloAddress | undefined } | undefined;
+  /** Held calls are rejected with this instead of rerouted. */
+  refusal: Refusal | undefined;
+  /** `DeactivationTimeout`, armed when the deactivation was requested (Orleans `CancelAfter`). */
+  readonly timeout: { readonly elapsed: Promise<void>; readonly handle: TimerHandle } | undefined;
+  readonly completion: Promise<DeactivationOutcome>;
+  /** Settles `completion` (Orleans' deactivation completion source); later calls do nothing. */
+  readonly complete: (outcome: DeactivationOutcome) => void;
+}
 
 /**
  * The runtime's per-grain bookkeeping object and the grain's `GrainContext`.
@@ -174,7 +337,15 @@ export class ActivationData implements GrainContext {
 
   private _instance!: Grain;
   runtime!: GrainRuntime;
-  state: ActivationState = "creating";
+  private _state: ActivationState = "creating";
+
+  /** Where this activation is in its lifecycle; see {@link ActivationState}. */
+  get state(): ActivationState {
+    return this._state;
+  }
+
+  /** Observes every lifecycle transition, after it has happened. Diagnostic only. */
+  onStateChanged: ((from: ActivationState, to: ActivationState) => void) | undefined;
 
   get instance(): Grain {
     return this._instance;
@@ -190,42 +361,37 @@ export class ActivationData implements GrainContext {
   set instance(value: Grain) {
     this._instance = value;
     this.scheduler.setMayInterleave(
-      getGrainMetadata(value.constructor as GrainConstructor)?.mayInterleave,
+      getGrainMetadata(value.constructor as GrainConstructor)?.mayInterleave ??
+        getInstanceMayInterleave(value),
     );
   }
 
-  /**
-   * The error thrown from pre-activation/`onActivate` when activation failed,
-   * captured so the first call that cannot proceed surfaces the ORIGINAL
-   * application error (Orleans parity) rather than a generic one. Undefined
-   * unless `onActivate` (or `preActivate`) threw.
-   */
-  private activationFailure: unknown;
-  private didFailActivation = false;
-
   /** True when this activation failed to activate (its `onActivate` threw). */
   get activationFailed(): boolean {
-    return this.didFailActivation;
+    return this.deactivation?.refusal?.activationFailed === true;
   }
 
   /**
-   * True only for the `deactivateRequestedDuringActivation` case: this
-   * activation asked to deactivate from within its own `onActivate` and so
-   * never went valid (Orleans: the triggering — and any queued — call is
-   * rejected with "Forwarding failed" rather than held, since there is no
-   * "settled" state to reroute it to). Distinct from an ordinary deactivation
-   * or migration (see `invoke`'s "deactivating"/`dehydrated` handling below),
-   * which HOLDS a call and reroutes it once the process finishes.
-   */
-  private neverActivated = false;
-
-  /**
-   * Resolved by `finalizeDeactivation` for every waiter queued while this
-   * activation was mid-deactivation or mid-migration (`dehydrated` but not
-   * yet finalized) — see `invoke`'s hold-and-reroute branch and
+   * Resolved once the deactivation pipeline has finished, for every call held
+   * while this activation was deactivating — see `rerouteOrReject` and
    * `awaitFinalized`.
    */
   private finalizationWaiters: Array<() => void> = [];
+
+  /**
+   * The deactivation under way or finished (Orleans' deactivation command and
+   * completion source): set by the first request, joined by every later one.
+   */
+  private deactivation: Deactivation | undefined;
+  private readonly steps: DeactivationSteps | undefined;
+
+  /**
+   * Lifecycle operations waiting to run (Orleans `_pendingOperations`), in
+   * order, each only once no request turn is running.
+   */
+  private readonly operations: PendingOperation[] = [];
+  /** The operation running now, if any; no request turn starts meanwhile. */
+  private runningOperation: OperationName | undefined;
 
   /** Runs once before `onActivate` (e.g. read persistent state); set by the catalog. */
   preActivate: (() => Promise<void>) | undefined;
@@ -256,7 +422,7 @@ export class ActivationData implements GrainContext {
    * `RequestContext` placement hint (Orleans `IPlacementDirector.PlacementHintKey`),
    * captured at `requestMigration` time since it must be read while the
    * triggering call's `RequestContext` is still in scope — by the time the
-   * idle sweep actually migrates, that scope is long gone. Resolved against
+   * deactivation pipeline migrates, that scope is long gone. Resolved against
    * live candidates at migration time (see `ClusterNode.migrateActivation`).
    */
   migrationHint: string | undefined;
@@ -265,29 +431,25 @@ export class ActivationData implements GrainContext {
    * (Orleans `IGrainManagementExtension.MigrateOnIdle`'s
    * `RequestContext.CallContextData`), restored around `onDehydrate` in
    * {@link dehydrate} — captured for the same reason as `migrationHint`
-   * (the idle sweep that actually dehydrates runs well after the triggering
-   * call's `RequestContext` scope has ended), but carrying every key so a
+   * (the pipeline that dehydrates runs after the triggering call's
+   * `RequestContext` scope has ended), but carrying every key so a
    * migration participant can read app-specific ambient data such as a
    * caller-set "fail this dehydration" flag, not just the placement hint.
    */
   migrationRequestContext: Record<string, string> | undefined;
   /** State captured on the source silo to restore on the target; set by the catalog. */
   rehydrationBag: Record<string, unknown> | undefined;
+  /**
+   * The directory entry this activation's registration returned, stamped with the view version
+   * of the owner that took it (Orleans `ActivationData.Address` once registered). `undefined`
+   * until it has registered, and for an activation that never does (a stateless worker, a local
+   * system activation, a single-silo catalog). A directory recovery reports only activations
+   * that hold one.
+   */
+  registration: GrainAddress | undefined;
 
   private lastActiveMs: number;
   private keepAliveUntilMs = 0;
-  private deactivateRequested = false;
-  private pendingDeactivationReason: DeactivationReason | undefined;
-  /**
-   * True when `deactivateOnIdle()` was called while this activation was still
-   * `"activating"` (from within `onActivate`). Orleans rejects the triggering
-   * (and any in-flight) call rather than serving it from an activation that
-   * asked to go away before it ever became valid, so this activation never
-   * transitions to `"valid"` — see `beginActivate`.
-   */
-  private deactivateRequestedDuringActivation = false;
-  private migrationRequested = false;
-  private dehydrated = false;
   private readonly timers = new Set<GrainTimerImpl>();
   /** Handlers for pulling-agent stream delivery, keyed by `namespace/key`. */
   private readonly streamHandlers = new Map<string, StreamHandler<unknown>>();
@@ -303,27 +465,19 @@ export class ActivationData implements GrainContext {
   private extensionFactories?: Map<number, (activation: ActivationData) => object>;
 
   private readonly deactivationTimeoutMs: number | undefined;
+  private readonly activationTimeoutMs: number | undefined;
   private readonly logger: Logger;
   private readonly onStuckHook: ((activation: ActivationData) => void) | undefined;
-  private stuckRejection: RejectionError | undefined;
   /**
-   * Every "noActivation" rejection `rerouteOrReject` handed a held call —
-   * calls that never ran here, so `isRerouteRejection` can tell them apart
-   * from a same-kind rejection a call's own body threw (from a nested call).
+   * Every "noActivation" rejection handed to a call that never ran here —
+   * held and released by `rerouteOrReject`, or rejected as queued behind a
+   * stuck turn — so `isRerouteRejection` can tell them apart from a same-kind
+   * rejection a call's own body threw (from a nested call).
    */
   private readonly rerouteRejections = new WeakSet<RejectionError>();
   private readonly maxRequestProcessingTimeMs: number | undefined;
-  /** When `runDeactivateHook` moved this activation to "deactivating" (Orleans `DeactivationStartTime`). */
-  private deactivationStartedAtMs: number | undefined;
   /** Timer that declares a deactivation stuck while calls are held on it; see `watchForStuckDeactivation`. */
   private stuckDeactivationTimer: TimerHandle | undefined;
-  /**
-   * Set when this activation was abandoned as stuck — its blocking turn
-   * (`handleStuckTurn`) or its deactivation (`abandonStuckDeactivation`) ran
-   * past `maxRequestProcessingTimeMs` — and the catalog's `onStuck` has
-   * already removed it and run `onDeactivated`.
-   */
-  private abandonedAsStuck = false;
 
   constructor(
     id: GrainId,
@@ -336,15 +490,23 @@ export class ActivationData implements GrainContext {
     this.id = id;
     this.activationId = activationId;
     this.deactivationTimeoutMs = options.deactivationTimeoutMs;
-    this.logger = options.logger ?? noopLogger;
+    this.activationTimeoutMs = options.activationTimeoutMs;
+    this.logger = options.logger ?? defaultLogger;
     this.onStuckHook = options.onStuck;
+    this.steps = options.deactivationSteps;
     this.maxRequestProcessingTimeMs = options.maxRequestProcessingTimeMs;
-    // Even a fully reentrant grain must finish activating (running state
-    // binding, then `onActivate`) before any request is dispatched — Orleans
-    // never interleaves a request with `OnActivateAsync`.
+    // Requests start only while this activation is valid and no lifecycle
+    // operation is pending or running (Orleans `ProcessPendingRequests` checks
+    // `State` first, and its message loop runs `ProcessOperationsAsync` only
+    // when nothing is executing): so even on a fully reentrant grain no
+    // request interleaves with `onActivate`, `onDeactivate` or a dehydration.
     this.scheduler = new TurnScheduler({
       reentrant,
-      barrierFirstTurn: true,
+      admissionGate: () =>
+        this._state === "valid" &&
+        this.runningOperation === undefined &&
+        this.operations.length === 0,
+      onDrained: () => this.processOperations(),
       time,
       logger: this.logger,
       grainId: id.toString(),
@@ -372,18 +534,16 @@ export class ActivationData implements GrainContext {
    * scheduling the `onDeactivate` hook — scheduling it would only queue
    * another turn behind the wedged one, which would never run either
    * (`docs/design-notes-parity-gaps.md`'s "(B) Stuck-turn watcher" already
-   * settled on this outcome: "marked invalid and re-created"). Returns the
-   * rejection the `TurnScheduler` uses for every turn still queued behind
-   * the wedged one and every turn scheduled from now on; `onStuck` (wired by
-   * the `Catalog`) removes this activation from the catalog and directory so
-   * the next call activates a fresh one.
+   * settled on this outcome: "marked invalid and re-created"). `abandon`
+   * removes this activation from the catalog and directory so the next call
+   * activates a fresh one, and its move to `invalid` takes every queued turn
+   * out to reroute. Returns the rejection the `TurnScheduler` keeps for any
+   * turn scheduled on it directly from now on.
    */
   private handleStuckTurn(turn: Turn<unknown>): unknown {
-    this.state = "invalid";
     // Stop this orphaned activation's timers: every tick would only be
     // rejected by the scheduler (and logged) forever, keeping it alive.
-    for (const timer of this.timers) timer.dispose();
-    this.timers.clear();
+    this.disposeTimers();
     this.logger.warn("activation is stuck processing a request; deactivating", {
       grainId: this.id.toString(),
       ...(turn.method !== undefined ? { method: turn.method } : {}),
@@ -392,14 +552,59 @@ export class ActivationData implements GrainContext {
       `activation ${this.id.toString()} is stuck and has been deactivated`,
       "noActivation",
     );
-    this.stuckRejection = rejection;
-    this.abandonedAsStuck = true;
-    this.clearStuckDeactivationTimer();
-    // Release any call held for a reroute while this activation was
-    // deactivating: it will never reach `finalizeDeactivation` now.
-    this.releaseFinalizationWaiters();
-    this.onStuckHook?.(this);
+    this.rerouteRejections.add(rejection);
+    this.abandon();
     return rejection;
+  }
+
+  /**
+   * Give this activation up as stuck (a wedged turn, or a wedged
+   * `onDeactivate`): mark it invalid and run the pipeline's unregister and
+   * removal steps now, once, so the next call for this grain activates a fresh
+   * one, then release every held call to reroute. The disposal step is
+   * skipped — it assumes the grain's code ran to an end, which it did not —
+   * and a deactivation still awaiting the wedged hook finds this activation
+   * already finalized when it returns, so nothing runs twice.
+   *
+   * Lifecycle operations still pending are discarded unrun — they wait for
+   * the wedged code to finish, which may never happen — and a deactivation
+   * under way is settled now (Orleans `AbandonStuckDeactivatingActivation`:
+   * `GetDeactivationCompletionSource().TrySetResult`), so whoever awaits
+   * `deactivate()` — silo stop, an idle sweep, a migration — is released.
+   */
+  private abandon(): void {
+    this.clearStuckDeactivationTimer();
+    this.transition("invalid");
+    void this.runStep("unregister", this.steps?.unregister);
+    void this.runStep("remove", this.steps?.remove);
+    this.onStuckHook?.(this);
+    const discarded = this.operations.splice(0, this.operations.length);
+    if (discarded.length > 0) {
+      const error = new RejectionError(
+        `activation ${this.id.toString()} is stuck and has been abandoned`,
+        "noActivation",
+      );
+      for (const operation of discarded) operation.discard(error);
+    }
+    const deactivation = this.deactivation;
+    if (deactivation !== undefined) {
+      if (deactivation.timeout !== undefined) this.time.clearTimer(deactivation.timeout.handle);
+      deactivation.complete({ migrated: false });
+    }
+    this.releaseFinalizationWaiters();
+  }
+
+  /**
+   * Give this activation up because its silo has fenced itself (Orleans
+   * `MembershipTableManager.KillMyselfLocally`): its timers stop, and a valid activation turns
+   * invalid, so nothing queued on it or due on a timer runs grain code again. No hook runs and no
+   * pipeline step runs — not the unregister (the silo's peers have already dropped its directory
+   * entries), not the removal (the catalog drops it wholesale), not the disposal.
+   */
+  abandonFenced(): void {
+    this.disposeTimers();
+    this.clearStuckDeactivationTimer();
+    if (this._state === "valid") this.transition("invalid");
   }
 
   /**
@@ -409,21 +614,28 @@ export class ActivationData implements GrainContext {
    * declared stuck (`IsStuckDeactivating`) and abandoned. Held calls sit
    * outside the turn scheduler (#91), so its own stuck-turn detection never
    * sees them waiting on a wedged `onDeactivate`; this is that check for them.
-   * No-op without `maxRequestProcessingTimeMs` or an `onStuck` hook.
+   * The pending deactivate operation is a waiter in the same sense: it waits
+   * for the running turns to drain, as the hook turn queued behind a wedged
+   * turn did before lifecycle operations had their own queue, so a turn
+   * that never drains is declared stuck with no call held at all. A running
+   * hook with nothing waiting on it is left alone, as before.
+   * No-op without `maxRequestProcessingTimeMs`, or with neither
+   * `deactivationSteps` nor an `onStuck` hook to act on it.
    */
   private watchForStuckDeactivation(): void {
-    if (this.maxRequestProcessingTimeMs === undefined || this.onStuckHook === undefined) return;
-    if (this.state !== "deactivating" || this.deactivationStartedAtMs === undefined) return;
+    if (this.maxRequestProcessingTimeMs === undefined) return;
+    if (this.onStuckHook === undefined && this.steps === undefined) return;
+    if (this._state !== "deactivating" || this.deactivation === undefined) return;
     if (this.stuckDeactivationTimer !== undefined) return;
     const remainingMs =
-      this.deactivationStartedAtMs + this.maxRequestProcessingTimeMs - this.time.now();
+      this.deactivation.startedAtMs + this.maxRequestProcessingTimeMs - this.time.now();
     if (remainingMs <= 0) {
       this.abandonStuckDeactivation();
       return;
     }
     this.stuckDeactivationTimer = this.time.setTimer(() => {
       this.stuckDeactivationTimer = undefined;
-      if (this.state === "deactivating" && this.finalizationWaiters.length > 0) {
+      if (this._state === "deactivating" && this.isWaitingOnDeactivation) {
         this.abandonStuckDeactivation();
       }
     }, remainingMs);
@@ -431,9 +643,9 @@ export class ActivationData implements GrainContext {
 
   /**
    * Orleans `AbandonStuckDeactivatingActivation`: give up on a deactivation
-   * whose `onDeactivate` is wedged — mark this activation invalid, let the
-   * catalog remove it and unregister it (`onStuck`, as for a stuck turn), and
-   * release every held call to reroute to a fresh activation. The wedged hook
+   * whose `onDeactivate` is wedged — mark this activation invalid, unregister
+   * and remove it (`abandon`, as for a stuck turn), and release every held
+   * call to reroute to a fresh activation. The wedged hook
    * keeps running in the background; whoever started the deactivation still
    * awaits it, and finds this activation already abandoned when it returns.
    */
@@ -442,11 +654,15 @@ export class ActivationData implements GrainContext {
       grainId: this.id.toString(),
       maxRequestProcessingTimeMs: this.maxRequestProcessingTimeMs,
     });
-    this.state = "invalid";
-    this.abandonedAsStuck = true;
-    this.clearStuckDeactivationTimer();
-    this.onStuckHook?.(this);
-    this.releaseFinalizationWaiters();
+    this.abandon();
+  }
+
+  /** Something waits on the deactivation: a held call, or the deactivate operation not yet started. */
+  private get isWaitingOnDeactivation(): boolean {
+    return (
+      this.finalizationWaiters.length > 0 ||
+      this.operations.some((operation) => operation.name === "deactivate")
+    );
   }
 
   private clearStuckDeactivationTimer(): void {
@@ -456,110 +672,187 @@ export class ActivationData implements GrainContext {
   }
 
   /**
-   * True when `error` is the rejection this activation handed a call that it
-   * never ran because the activation was deactivated as stuck — a call that
-   * is safe to re-deliver to a fresh activation (Orleans reroutes it).
-   */
-  isStuckRejection(error: unknown): boolean {
-    return this.stuckRejection !== undefined && error === this.stuckRejection;
-  }
-
-  /**
    * True when `error` is a rejection this activation handed a call it never
-   * ran — deactivated as stuck (`isStuckRejection`), or held while
-   * deactivating/migrating and released once that settled
-   * (`rerouteOrReject`). Such a call is safe to re-deliver to a fresh
-   * activation; any other error, including a "noActivation" rejection a
-   * call's own body threw, is not (a resend would run it twice).
+   * ran — queued behind a turn judged stuck, or held while deactivating and
+   * released once that finished (`rerouteOrReject`). Such a call is safe to
+   * re-deliver to a fresh activation; any other error, including a
+   * "noActivation" rejection a call's own body threw, is not (a resend would
+   * run it twice).
    */
   isRerouteRejection(error: unknown): boolean {
-    return (
-      this.isStuckRejection(error) ||
-      (error instanceof RejectionError && this.rerouteRejections.has(error))
-    );
+    return error instanceof RejectionError && this.rerouteRejections.has(error);
   }
 
   /**
-   * True once this activation was abandoned as stuck (see `handleStuckTurn`
-   * and `abandonStuckDeactivation`): the catalog's `onStuck` already removed
-   * it and ran `onDeactivated`, so no later sweep may dispose or report it again.
+   * Move to `to`, which {@link ACTIVATION_TRANSITIONS} must allow. Leaving the
+   * states that may still admit work (`creating`, `activating`, `valid`)
+   * takes every queued turn out of the scheduler (Orleans
+   * `ProcessRequestsToInvalidActivation`): a queued call or stream delivery
+   * is held for a reroute or refused, a queued timer tick dropped — see
+   * `admit`.
    */
-  get isDeactivatedAsStuck(): boolean {
-    return this.abandonedAsStuck;
+  private transition(to: ActivationState): void {
+    const from = this._state;
+    assertActivationTransition(from, to);
+    this._state = to;
+    this.onStateChanged?.(from, to);
+    if (!this.mayAdmitWork) this.scheduler.evictQueued(() => EVICTED);
   }
 
-  /** Schedule `onActivate` as the first turn, so it precedes any message. */
+  /** Whether work may still be admitted (it waits until `valid` if not there yet). */
+  private get mayAdmitWork(): boolean {
+    return this._state === "creating" || this._state === "activating" || this._state === "valid";
+  }
+
+  /**
+   * The one admission gate for every kind of work on this activation — grain
+   * calls, system and extension calls and stream deliveries (`request`), and
+   * grain timer ticks (`tick`). Work reaching an activation that may still
+   * admit it is queued on the scheduler, which starts it only once the
+   * activation is valid and no lifecycle operation is pending or running
+   * (Orleans `ProcessPendingRequests`). Otherwise, and for work that was
+   * still queued when the activation stopped being valid, the outcome is the
+   * same for every kind: a request is held and rerouted once the
+   * deactivation has finished (or refused, see `rerouteOrReject`), never
+   * occupying the scheduler; a tick is dropped without running grain code.
+   */
+  private admit<R>(kind: "request" | "tick", turn: Turn<R>): Promise<R | undefined> {
+    const refused = (): Promise<undefined> =>
+      kind === "tick" ? Promise.resolve(undefined) : this.rerouteOrReject();
+    if (!this.mayAdmitWork) return refused();
+    return this.scheduler.schedule(turn).catch((error: unknown) => {
+      if (error === EVICTED) return refused();
+      throw error;
+    });
+  }
+
+  /**
+   * Queue a lifecycle operation (Orleans `ScheduleOperation`). Operations run
+   * one at a time, in order, each only once no request turn is running, and
+   * no request turn starts while one is pending or running — on a reentrant
+   * grain too.
+   */
+  private scheduleOperation<T>(name: OperationName, body: () => Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      this.operations.push({
+        name,
+        run: () => Promise.resolve().then(body).then(resolve, reject),
+        discard: reject,
+      });
+      this.processOperations();
+    });
+  }
+
+  /**
+   * Orleans `ProcessOperationsAsync`, reached whenever nothing is executing:
+   * run the next pending operation, and once the queue is empty let the
+   * scheduler admit requests again (if the activation is valid by then).
+   */
+  private processOperations(): void {
+    if (this.runningOperation !== undefined) return;
+    // A request turn is running: the scheduler's `onDrained` resumes here.
+    if (this.scheduler.isExecuting) return;
+    const next = this.operations.shift();
+    if (next === undefined) return;
+    this.runningOperation = next.name;
+    void next.run().finally(() => {
+      this.runningOperation = undefined;
+      this.processOperations();
+      if (this.runningOperation === undefined) this.scheduler.reevaluate();
+    });
+  }
+
+  /**
+   * Queue the activate operation (Orleans `Command.Activate`): state binding
+   * or rehydration (`preActivate`), then `onActivate`, before any work runs.
+   */
   beginActivate(reason: ActivationReason): void {
-    this.state = "activating";
-    void this.scheduler
-      .schedule({
-        options: {},
-        run: async () => {
-          try {
-            if (this.preActivate !== undefined) await this.preActivate();
-            // No call-chain id of its own (the call that triggered this
-            // activation is a different chain), but a section `onActivate`
-            // opens lands on this activation.
-            await runWithCallChain(undefined, this.callChainContext, () =>
-              this.instance.onActivate(reason),
-            );
-            if (this.deactivateRequestedDuringActivation) {
-              // The grain asked to deactivate from onActivate: never go valid.
-              // Run the deactivate hook inline (NOT via runDeactivateHook/the
-              // scheduler — this callback is itself still running as the
-              // activation turn, so scheduling another turn here would
-              // deadlock) so the next queued turn (the call that triggered
-              // this activation) observes "invalid" and is rejected rather
-              // than served (Orleans parity: "Forwarding failed"). Set
-              // BEFORE flipping to "deactivating" so a call whose turn runs
-              // concurrently (a reentrant grain) sees it immediately too and
-              // rejects outright instead of holding for a reroute that will
-              // never come.
-              this.neverActivated = true;
-              this.state = "deactivating";
-              for (const timer of this.timers) timer.dispose();
-              this.timers.clear();
-              await this.instance
-                .onDeactivate({
-                  code: "application-requested",
-                  description: "deactivateOnIdle requested during activation",
-                })
-                .catch(() => undefined);
-              this.state = "invalid";
-              return;
-            }
-            this.state = "valid";
-          } catch (err) {
-            // Activation failed: mark invalid and capture the error (set
-            // synchronously here, before this turn settles and the next queued
-            // call runs) so the first failing call can surface the original
-            // application error instead of a generic "activation unavailable".
-            this.state = "invalid";
-            this.activationFailure = err;
-            this.didFailActivation = true;
-            throw err;
-          }
+    this.transition("activating");
+    void this.scheduleOperation("activate", () => this.activate(reason));
+  }
+
+  private async activate(reason: ActivationReason): Promise<void> {
+    try {
+      await this.withinActivationTimeout(async () => {
+        if (this.preActivate !== undefined) await this.preActivate();
+        // No call-chain id of its own (the call that triggered this activation
+        // is a different chain), but a section `onActivate` opens lands on this
+        // activation.
+        await runWithCallChain(undefined, this.callChainContext, () =>
+          this.instance.onActivate(reason),
+        );
+      });
+    } catch (error) {
+      this.failActivation(error);
+      return;
+    }
+    // A deactivation that began while activating (a silo stop, or the grain
+    // asking to go away from `onActivate`) owns the state from here, as in
+    // Orleans: only an undisturbed activation goes valid.
+    if (this._state === "activating") this.transition("valid");
+  }
+
+  /**
+   * Run the activation's work, but never past `activationTimeoutMs` (Orleans
+   * `CollectionOptions.ActivationTimeout`, which cancels `ActivateAsync`). JS cannot abort the
+   * work itself, so a hung `onActivate` keeps running in the background; the activation stops
+   * waiting for it and fails, which ends the activate operation and lets the deactivation
+   * pipeline remove it. A late settlement of the abandoned work is ignored.
+   */
+  private withinActivationTimeout(work: () => Promise<void>): Promise<void> {
+    const timeoutMs = this.activationTimeoutMs;
+    const running = work();
+    if (timeoutMs === undefined) return running;
+    return new Promise<void>((resolve, reject) => {
+      const handle = this.time.setTimer(() => {
+        this.logger.warn("activation exceeded ActivationTimeout; failing it", {
+          grainId: this.id.toString(),
+          activationTimeoutMs: timeoutMs,
+        });
+        reject(
+          new GrainCallError(
+            `activation of ${this.id.toString()} did not complete within ${timeoutMs}ms (ActivationTimeout)`,
+          ),
+        );
+      }, timeoutMs);
+      running.then(
+        () => {
+          this.time.clearTimer(handle);
+          resolve();
         },
-      })
-      .catch(() => undefined);
+        (error: unknown) => {
+          this.time.clearTimer(handle);
+          reject(error);
+        },
+      );
+    });
+  }
+
+  /**
+   * Activation failed: the first call that cannot proceed — and every one
+   * queued behind it — surfaces the ORIGINAL error (Orleans parity) rather than
+   * a generic one, and the activation goes through the deactivation pipeline
+   * (Orleans `Deactivate(ActivationFailed)`, no `OnDeactivateAsync` since it
+   * never became valid) so it is unregistered, removed and disposed now.
+   */
+  private failActivation(error: unknown): void {
+    const refusal: Refusal = { error: () => error, activationFailed: true };
+    // A deactivation that began during activation finishes the job; its held
+    // calls now get the activation's error too.
+    if (this.deactivation !== undefined) {
+      this.deactivation.refusal = refusal;
+      return;
+    }
+    void this.startDeactivation(
+      { code: "runtime-requested", description: "activation failed" },
+      undefined,
+      refusal,
+      "failed",
+    );
   }
 
   invoke(req: InvocationRequest, opts?: InvokeCallOptions): Promise<unknown> {
     this.touch();
-    // Deactivating (idle collection, `deactivateOnIdle`, shutdown), or
-    // migrating (`dehydrated` — the directory hand-off to the target is in
-    // flight but this activation hasn't finished tearing down yet): checked
-    // BEFORE scheduling a turn, deliberately — not from inside one. Holding
-    // this call open as a running turn would occupy the (non-reentrant)
-    // scheduler for as long as the hold lasts, and the deactivation/migration
-    // this call is waiting on itself needs to SCHEDULE a turn (the
-    // `onDeactivate` hook) to ever complete, which would then never be
-    // admitted: a deadlock. Checking here instead means a held call never
-    // touches the scheduler at all, so it can never block the very turn it's
-    // waiting on. See `awaitFinalized`/`rerouteOrReject`.
-    if (this.state === "invalid" || this.state === "deactivating" || this.dehydrated) {
-      return this.rerouteOrReject();
-    }
     // Composed once per call: the caller's own `opts.signal` plus whatever
     // `AbortSignal` a `req.deadline` (ambient or freshly set — see
     // `InvokeCallOptions.deadlineMs`) derives, on THIS activation's own clock
@@ -569,85 +862,60 @@ export class ActivationData implements GrainContext {
     const deadline =
       req.deadline === undefined ? undefined : deadlineSignal(req.deadline, this.time);
     const signal = combineSignals([opts?.signal, deadline?.signal]);
-    return this.scheduler
-      .schedule({
-        options: req.options,
-        ...(req.reentrancyId !== undefined ? { reentrancyId: req.reentrancyId } : {}),
-        method: req.method,
-        args: req.args,
-        ...(signal !== undefined ? { signal } : {}),
-        run: () => {
-          // A wire-arrived request whose caller has already stopped waiting
-          // (its time-to-live ran out while it sat in this activation's
-          // queue) is not run at all -- Orleans `InsideRuntimeClient.Invoke`
-          // drops an expired message at exactly this point (issue #90).
-          if (req.expiresAt !== undefined && this.time.now() >= req.expiresAt) {
-            throw new GrainCallTimeoutError(
-              `request ${req.method} to ${this.id.toString()} expired before it ran`,
-            );
-          }
-          // Re-checked here as well as pre-schedule: a call queued behind a
-          // turn that changes this activation's fate saw "valid"/"activating"
-          // at schedule time. That turn may have failed activation
-          // (`onActivate` threw, or `deactivateRequestedDuringActivation`) —
-          // rejected outright, as Orleans does — or dehydrated it for
-          // migration, or it was queued ahead of a deactivation's
-          // `onDeactivate` turn (shutdown's `deactivateAll`, the rebalancer).
-          // Those must not run here (a dehydrated activation's state has
-          // already been handed off, so running would lose the write) and are
-          // held instead — but the hold happens AFTER this turn ends (see the
-          // `.catch` below), never inside it, for the deadlock reason given
-          // on the pre-schedule check.
-          if (this.state === "invalid" || this.state === "deactivating" || this.dehydrated) {
-            if (this.didFailActivation) throw this.activationFailure;
-            if (this.neverActivated) {
-              throw new GrainCallError(`activation unavailable: ${this.id.toString()}`);
-            }
-            throw HOLD_FOR_REROUTE;
-          }
-          // A fresh, mutable copy of the incoming headers so `requestContext.set`
-          // during the turn does not mutate the caller's bag but does flow to
-          // downstream calls. Scoped via `runWithRequestContext` (the SAME
-          // ambient store a non-grain/client caller uses), nested inside
-          // `invocationContext.run` so both are in scope for the turn.
-          const restoreReadOnlyGuard =
-            this.readOnlyStateGuard && req.options?.readOnly === true
-              ? this.applyReadOnlyGuard()
-              : undefined;
-          const invocation = runWithRequestContext(
-            req.headers !== undefined ? { ...req.headers } : {},
-            () =>
-              // The request's call-chain id (if its chain opted in) stays
-              // ambient so this turn's own calls carry it onward.
-              runWithCallChain(req.reentrancyId, this.callChainContext, () =>
-                invocationContext.run(
-                  {
-                    senderId: req.sender,
-                    ownerId: this.id,
-                    transaction: req.transaction,
-                    deadline: req.deadline,
-                    signal,
-                  },
-                  () => this.callMethod(req),
-                ),
+    return this.admit("request", {
+      options: req.options,
+      ...(req.reentrancyId !== undefined ? { reentrancyId: req.reentrancyId } : {}),
+      method: req.method,
+      args: req.args,
+      ...(signal !== undefined ? { signal } : {}),
+      run: () => {
+        // A wire-arrived request whose caller has already stopped waiting
+        // (its time-to-live ran out while it sat in this activation's
+        // queue) is not run at all -- Orleans `InsideRuntimeClient.Invoke`
+        // drops an expired message at exactly this point (issue #90).
+        if (req.expiresAt !== undefined && this.time.now() >= req.expiresAt) {
+          throw new GrainCallTimeoutError(
+            `request ${req.method} to ${this.id.toString()} expired before it ran`,
+          );
+        }
+        // A fresh, mutable copy of the incoming headers so `requestContext.set`
+        // during the turn does not mutate the caller's bag but does flow to
+        // downstream calls. Scoped via `runWithRequestContext` (the SAME
+        // ambient store a non-grain/client caller uses), nested inside
+        // `invocationContext.run` so both are in scope for the turn.
+        const restoreReadOnlyGuard =
+          this.readOnlyStateGuard && req.options?.readOnly === true
+            ? this.applyReadOnlyGuard()
+            : undefined;
+        const invocation = runWithRequestContext(
+          req.headers !== undefined ? { ...req.headers } : {},
+          () =>
+            // The request's call-chain id (if its chain opted in) stays
+            // ambient so this turn's own calls carry it onward.
+            runWithCallChain(req.reentrancyId, this.callChainContext, () =>
+              invocationContext.run(
+                {
+                  senderId: req.sender,
+                  ownerId: this.id,
+                  transaction: req.transaction,
+                  deadline: req.deadline,
+                  signal,
+                },
+                () => this.callMethod(req),
               ),
-          ).catch((error: unknown) => {
-            this.deactivateOnInconsistentState(error);
-            throw error;
-          });
-          return restoreReadOnlyGuard === undefined
-            ? invocation
-            : invocation.finally(restoreReadOnlyGuard);
-        },
-      })
-      .catch((err: unknown) => {
-        if (err === HOLD_FOR_REROUTE) return this.rerouteOrReject();
-        throw err;
-      })
-      .finally(() => {
-        this.touch();
-        deadline?.dispose();
-      });
+            ),
+        ).catch((error: unknown) => {
+          this.deactivateOnInconsistentState(error);
+          throw error;
+        });
+        return restoreReadOnlyGuard === undefined
+          ? invocation
+          : invocation.finally(restoreReadOnlyGuard);
+      },
+    }).finally(() => {
+      this.touch();
+      deadline?.dispose();
+    });
   }
 
   /**
@@ -737,12 +1005,14 @@ export class ActivationData implements GrainContext {
     this.streamHandlers.delete(streamKey);
   }
 
-  /** Run a stream delivery callback as a turn; rejects if the activation is gone. */
+  /**
+   * Run a stream delivery callback as a turn, through the same admission gate
+   * as a grain call: a delivery reaching this activation once it is
+   * deactivating is held and then rejected with a reroute rejection, never
+   * run here, so the stream redelivers it to the next activation.
+   */
   runStreamTurn(callback: () => Promise<void>): Promise<unknown> {
-    if (this.state === "invalid" || this.state === "deactivating") {
-      return Promise.reject(new GrainCallError(`activation unavailable: ${this.id.toString()}`));
-    }
-    return this.scheduler.schedule({ options: {}, run: callback });
+    return this.admit("request", { options: {}, run: callback });
   }
 
   /** Register a non-durable timer that fires as a turn; cancelled on deactivation. */
@@ -758,8 +1028,11 @@ export class ActivationData implements GrainContext {
     const turnOptions: InvokeMethodOptions = options?.interleave ? { alwaysInterleave: true } : {};
     const timer = new GrainTimerImpl(
       this.time,
+      // Through the same admission gate as every other kind of work: a tick
+      // that comes due, or is still queued, once this activation is no longer
+      // valid is dropped without running grain code.
       (cb) =>
-        this.scheduler.schedule({
+        this.admit("tick", {
           options: turnOptions,
           // Orleans creates the timer under `ExecutionContextSuppressor`
           // ("Avoid capturing async locals", GrainTimer.cs:42-46) so a tick
@@ -815,94 +1088,219 @@ export class ActivationData implements GrainContext {
     return timer;
   }
 
-  async deactivate(reason: DeactivationReason, signal?: AbortSignal): Promise<void> {
-    await this.runDeactivateHook(reason, signal);
-    this.finalizeDeactivation();
+  /**
+   * Deactivate this activation — the ONE entry point for every deactivation
+   * (Orleans `ActivationData.Deactivate`): idle collection, an explicit
+   * `deactivateOnIdle`, a migration, a failed or lost activation, silo
+   * shutdown. The first call starts the pipeline; every later call joins it
+   * and resolves with the same outcome once it has finished (Orleans'
+   * deactivation completion source), so no caller ever finalizes under
+   * another caller's running hook.
+   *
+   * Deactivation is a state transition the moment it is requested (Orleans
+   * `Deactivate` sets `Deactivating` at once): admission stops, queued and
+   * arriving calls are held to be rerouted once it has finished, and the
+   * pipeline itself is a lifecycle operation that starts once the running
+   * request turns have drained — so it never interleaves with one, on a
+   * reentrant grain too.
+   *
+   * The pipeline runs Orleans' `FinishDeactivating` order: timers disposed,
+   * then `onDeactivate` (only if the activation was valid when deactivation
+   * began), then — if a migration was requested, before or during the hook,
+   * or `migrateTo` names a target — the dehydrate and hand-off
+   * (`DeactivationSteps.migrate`), then directory unregister, catalog
+   * removal, and instance disposal with state unbinding, exactly once.
+   * `migrateTo` on a call that joins a deactivation already under way
+   * changes nothing: that deactivation's outcome is returned.
+   */
+  deactivate(
+    reason: DeactivationReason,
+    options: DeactivateOptions = {},
+  ): Promise<DeactivationOutcome> {
+    return this.startDeactivation(
+      reason,
+      options.migrateTo !== undefined ? { target: options.migrateTo } : undefined,
+      undefined,
+      "deactivating",
+      options.signal,
+    );
+  }
+
+  private startDeactivation(
+    reason: DeactivationReason,
+    migration: Deactivation["migration"],
+    refusal: Refusal | undefined,
+    to: "deactivating" | "failed",
+    signal?: AbortSignal,
+  ): Promise<DeactivationOutcome> {
+    if (this.deactivation !== undefined) return this.deactivation.completion;
+    // Stuck and abandoned: nothing left to run (Orleans: `Deactivate` on an
+    // invalid activation returns).
+    if (this._state === "invalid") return Promise.resolve({ migrated: false });
+    let complete!: (outcome: DeactivationOutcome) => void;
+    const completion = new Promise<DeactivationOutcome>((resolve) => (complete = resolve));
+    const deactivation: Deactivation = {
+      reason,
+      previousState: this._state,
+      signal,
+      startedAtMs: this.time.now(),
+      migration,
+      refusal,
+      timeout: this.armDeactivationTimeout(),
+      completion,
+      complete,
+    };
+    this.deactivation = deactivation;
+    this.transition(to);
+    // An abandonment discards the operation unrun and settles the completion itself.
+    void this.scheduleOperation("deactivate", () => this.runDeactivation(deactivation)).then(
+      complete,
+      () => complete({ migrated: false }),
+    );
+    // The pipeline waits for running turns to drain; one that never does is
+    // declared stuck from here (see `watchForStuckDeactivation`).
+    this.watchForStuckDeactivation();
+    return deactivation.completion;
+  }
+
+  private armDeactivationTimeout(): Deactivation["timeout"] {
+    const timeoutMs = this.deactivationTimeoutMs;
+    if (timeoutMs === undefined) return undefined;
+    let handle!: TimerHandle;
+    const elapsed = new Promise<void>((resolve) => {
+      handle = this.time.setTimer(resolve, timeoutMs);
+    });
+    return { elapsed, handle };
+  }
+
+  /** The deactivate operation (Orleans `FinishDeactivating`); see `deactivate`. */
+  private async runDeactivation(deactivation: Deactivation): Promise<DeactivationOutcome> {
+    this.disposeTimers();
+    let migrated = false;
+    try {
+      // Orleans calls `OnDeactivateAsync` only when the previous state was
+      // Valid: a failed activation, or one stopped before it went valid, gets
+      // no hook.
+      if (deactivation.previousState === "valid") {
+        await this.awaitWithDeactivationTimeout(
+          this.invokeDeactivateHook(deactivation.reason, deactivation.signal).catch(
+            (error: unknown) => this.reportHookFailure(error),
+          ),
+          deactivation,
+        );
+      }
+      await this.awaitDeactivationBlockCleared();
+      if (
+        deactivation.migration !== undefined &&
+        deactivation.refusal === undefined &&
+        this._state === "deactivating" &&
+        this.steps?.migrate !== undefined
+      ) {
+        migrated = await this.steps.migrate(this, deactivation.migration.target).catch(() => false);
+      }
+    } catch (error) {
+      this.logger.warn("deactivation failed; finalizing anyway", {
+        grainId: this.id.toString(),
+        error,
+      });
+    }
+    if (deactivation.timeout !== undefined) this.time.clearTimer(deactivation.timeout.handle);
+    await this.finishDeactivation();
+    return { migrated };
   }
 
   /**
-   * Run the `onDeactivate` hook only, leaving the activation in the
-   * "deactivating" state so the caller can inspect `wantsMigration` (which
-   * the hook may have just set, e.g. via `migrateOnIdle` called from
-   * `onDeactivate`) before finalizing. No-op if already deactivating/invalid.
-   *
-   * `signal`, when given, is passed straight through to `onDeactivate` — no
-   * caller supplies one today (this is plumbing for a future
-   * deactivate-with-timeout caller); it does not preempt this scheduled turn
-   * itself.
+   * Orleans `ActivationLifetime.OnStopAsync`: while a transactional-state
+   * facet blocks deactivation (`isDeactivationBlocked`), wait for it to clear
+   * — polled every {@link DEACTIVATION_BLOCK_POLL_MS} on this activation's
+   * clock, as Orleans polls every 10 ms — but never longer than
+   * {@link DEACTIVATION_BLOCK_MAX_WAIT_MS}, then proceed regardless. Runs after
+   * `onDeactivate` and before the migration hand-off, where Orleans stops the
+   * grain lifecycle. Synchronous checks on each tick, so a fake clock drives
+   * it deterministically.
    */
-  async runDeactivateHook(reason: DeactivationReason, signal?: AbortSignal): Promise<void> {
-    if (this.state === "invalid" || this.state === "deactivating") return;
-    this.state = "deactivating";
-    this.deactivationStartedAtMs = this.time.now();
-    // Calls already held while this was dehydrating for a migration wait on
-    // this deactivation too; watch it for them.
-    if (this.finalizationWaiters.length > 0) this.watchForStuckDeactivation();
+  private awaitDeactivationBlockCleared(): Promise<void> {
+    if (!this.isDeactivationBlocked) return Promise.resolve();
+    const startedAtMs = this.time.now();
+    return new Promise<void>((resolve) => {
+      const poll = (): void => {
+        const waitedMs = this.time.now() - startedAtMs;
+        if (!this.isDeactivationBlocked || waitedMs >= DEACTIVATION_BLOCK_MAX_WAIT_MS) {
+          resolve();
+          return;
+        }
+        this.time.setTimer(
+          poll,
+          Math.min(DEACTIVATION_BLOCK_POLL_MS, DEACTIVATION_BLOCK_MAX_WAIT_MS - waitedMs),
+        );
+      };
+      poll();
+    });
+  }
+
+  /** Orleans `DisposeTimers`: no grain timer ticks once a deactivation has begun. */
+  private disposeTimers(): void {
     for (const timer of this.timers) timer.dispose();
     this.timers.clear();
-    const hookPromise = this.scheduler
-      .schedule({
-        options: {},
-        run: () =>
-          withOnDeactivateSpan(
-            {
-              grainId: this.id.toString(),
-              grainType: this.id.type,
-              siloId: this.localSiloId(),
-              activationId: this.activationId,
-              reason: formatDeactivationReason(reason),
-            },
-            () =>
-              runWithCallChain(undefined, this.callChainContext, () =>
-                this.instance.onDeactivate(reason, signal),
-              ),
-          ),
-      })
-      .catch((error) => {
-        // Log rather than silently discard: an `onDeactivate` hook that
-        // throws must not stop deactivation (the caller still needs to
-        // finalize and free the activation), but a swallowed error here was
-        // previously invisible — see the DeactivationTimeout warn just below
-        // for the sibling failure mode this mirrors.
-        this.logger.warn("onDeactivate hook failed", {
-          grainId: this.id.toString(),
-          error,
-        });
-        return undefined;
-      });
-    await this.awaitWithDeactivationTimeout(hookPromise);
   }
 
   /**
-   * Await `hookPromise` (the scheduled `onDeactivate` turn), but never longer
-   * than `deactivationTimeoutMs` (Orleans `CollectionOptions.DeactivationTimeout`,
-   * enforced upstream via `cts.CancelAfter(DeactivationTimeout)`). JS has no
-   * way to abort an in-flight `async` function without a cooperating
-   * cancellation signal, so a hung hook keeps running in the background after
-   * this returns — but the caller (`deactivate()`) proceeds to
-   * force-invalidate the activation (directory unregister, cleanup) instead
-   * of blocking forever on it. A no-op (waits indefinitely) when no timeout
-   * is configured, matching the pre-existing behaviour.
+   * Log rather than silently discard: an `onDeactivate` hook that throws must
+   * not stop deactivation (the activation still needs to be finalized and
+   * freed).
    */
-  private async awaitWithDeactivationTimeout(hookPromise: Promise<void>): Promise<void> {
-    if (this.deactivationTimeoutMs === undefined) {
+  private reportHookFailure(error: unknown): void {
+    this.logger.warn("onDeactivate hook failed", { grainId: this.id.toString(), error });
+  }
+
+  /** `onDeactivate` itself, inside its span. */
+  private invokeDeactivateHook(
+    reason: DeactivationReason,
+    signal: AbortSignal | undefined,
+  ): Promise<void> {
+    return withOnDeactivateSpan(
+      {
+        grainId: this.id.toString(),
+        grainType: this.id.type,
+        siloId: this.localSiloId(),
+        activationId: this.activationId,
+        reason: formatDeactivationReason(reason),
+      },
+      () =>
+        runWithCallChain(undefined, this.callChainContext, () =>
+          this.instance.onDeactivate(reason, signal),
+        ),
+    );
+  }
+
+  /**
+   * Await `hookPromise` (the `onDeactivate` call), but never past
+   * `deactivation.timeout` — `deactivationTimeoutMs` counted from when the
+   * deactivation was requested (Orleans `CollectionOptions.DeactivationTimeout`,
+   * enforced upstream via `cts.CancelAfter(DeactivationTimeout)` in
+   * `Deactivate` and `OnDeactivateAsync(...).WaitAsync(ct)`). JS has no way to
+   * abort an in-flight `async` function without a cooperating cancellation
+   * signal, so a hung hook keeps running in the background after this returns
+   * — but the pipeline proceeds to force-invalidate the activation (directory
+   * unregister, cleanup) instead of blocking forever on it. Waits
+   * indefinitely when no timeout is configured.
+   */
+  private async awaitWithDeactivationTimeout(
+    hookPromise: Promise<void>,
+    deactivation: Deactivation,
+  ): Promise<void> {
+    if (deactivation.timeout === undefined) {
       await hookPromise;
       return;
     }
-    const timeoutMs = this.deactivationTimeoutMs;
-    let timedOut = false;
-    const timeout = new Promise<void>((resolve) => {
-      const handle = this.time.setTimer(() => {
-        timedOut = true;
-        resolve();
-      }, timeoutMs);
-      void hookPromise.finally(() => this.time.clearTimer(handle));
-    });
-    await Promise.race([hookPromise, timeout]);
+    const timedOut = await Promise.race([
+      hookPromise.then(() => false),
+      deactivation.timeout.elapsed.then(() => true),
+    ]);
     if (timedOut) {
       this.logger.warn("onDeactivate exceeded DeactivationTimeout; forcing deactivation", {
         grainId: this.id.toString(),
-        deactivationTimeoutMs: timeoutMs,
+        deactivationTimeoutMs: this.deactivationTimeoutMs,
       });
     }
   }
@@ -913,7 +1311,7 @@ export class ActivationData implements GrainContext {
    * `ActivationData` with no local-silo address configured on its runtime
    * (`GrainRuntimeImpl.localSiloAddress` throws in that case), and the
    * deactivate hook must still run rather than being swallowed by
-   * `runDeactivateHook`'s outer `.catch`.
+   * deactivation pipeline's hook failure handler.
    */
   private localSiloId(): string {
     try {
@@ -923,11 +1321,56 @@ export class ActivationData implements GrainContext {
     }
   }
 
-  /** Complete a deactivation whose hook already ran via `runDeactivateHook`. */
-  finalizeDeactivation(): void {
-    this.state = "invalid";
+  /**
+   * The pipeline's last stage (Orleans: `GrainLocator.Unregister`,
+   * `UnregisterMessageTarget`, `DisposeAsync`): move to `invalid`, then
+   * unregister, remove and dispose — unless an abandonment as stuck already
+   * moved it there and did the unregister and removal — and only then release
+   * the calls held for a reroute, so they re-resolve against a catalog that no
+   * longer holds this activation. Unregister and removal run synchronously
+   * with the move to invalid.
+   */
+  private async finishDeactivation(): Promise<void> {
+    if (this._state !== "invalid") {
+      this.transition("invalid");
+      this.clearStuckDeactivationTimer();
+      // A timer registered after the pipeline began (by the hook itself)
+      // never outlives the activation.
+      this.disposeTimers();
+      const unregistering = this.runStep("unregister", this.steps?.unregister);
+      const removing = this.runStep("remove", this.steps?.remove);
+      await unregistering;
+      await removing;
+      await this.runStep("dispose", this.steps?.dispose);
+    }
     this.clearStuckDeactivationTimer();
     this.releaseFinalizationWaiters();
+  }
+
+  /**
+   * Run one externally owned deactivation step, containing a failure: a user
+   * `disposeInstance`/`deactivateState`/`onDeactivated` hook that throws is
+   * logged and the pipeline carries on, so one bad grain never stops a sweep.
+   * The step's synchronous part runs before this returns.
+   */
+  private runStep(
+    name: string,
+    step: ((activation: ActivationData) => void | Promise<void>) | undefined,
+  ): Promise<void> {
+    if (step === undefined) return Promise.resolve();
+    const report = (error: unknown): void => {
+      this.logger.warn("activation disposal failed during deactivation", {
+        grainId: this.id.toString(),
+        step: name,
+        error,
+      });
+    };
+    try {
+      return Promise.resolve(step(this)).catch(report);
+    } catch (error) {
+      report(error);
+      return Promise.resolve();
+    }
   }
 
   private releaseFinalizationWaiters(): void {
@@ -937,38 +1380,37 @@ export class ActivationData implements GrainContext {
   }
 
   /**
-   * Resolves once this activation is fully torn down (`finalizeDeactivation`
-   * has run) — immediately if that has already happened. Used by `invoke`'s
-   * hold-and-reroute branch to block a call reaching a deactivating/migrating
-   * activation until there is something settled to reroute it against.
+   * Resolves once this activation is fully torn down (the deactivation pipeline
+   * has run) — immediately if that has already happened. Used by
+   * `rerouteOrReject` to hold a call reaching a deactivating activation until
+   * there is something settled to reroute it against.
    */
   private awaitFinalized(): Promise<void> {
-    if (this.state === "invalid") return Promise.resolve();
+    if (this._state === "invalid") return Promise.resolve();
     const finalized = new Promise<void>((resolve) => this.finalizationWaiters.push(resolve));
     this.watchForStuckDeactivation();
     return finalized;
   }
 
   /**
-   * `invoke`'s handling for a call that reached this activation while it was
-   * deactivating, migrating (`dehydrated`), or already fully torn down after
-   * either. A failed activation, or one that never went valid
-   * (`neverActivated`), is rejected outright — there is nothing to hold for
-   * or reroute to. Otherwise this HOLDS (Orleans
+   * What a call or stream delivery gets when it reaches this activation once
+   * it is no longer valid, or was still queued when it stopped being valid. A
+   * deactivation that refuses its calls — a failed activation, or one that
+   * asked to go away from its own `onActivate` and so never went valid
+   * (Orleans answers those with "Forwarding failed") — rejects outright:
+   * there is nothing to hold for or reroute to. Otherwise this HOLDS (Orleans
    * `ProcessRequestsToInvalidActivation`/`RerouteAllQueuedMessages`,
-   * forwarding to `ForwardingAddress` on migration) until
-   * `finalizeDeactivation` runs, then signals the dispatcher to re-resolve —
-   * a fresh directory lookup/placement by then reflects either the migrated
-   * activation's new host or nothing at all, both of which
-   * `LocalDispatcher` (see `isRerouteRejection`) and `DistributedDispatcher`
-   * (see `isStaleActivationRejection`) retry against — rather than surfacing
-   * this as an application error.
+   * forwarding to `ForwardingAddress` on migration) until the deactivation
+   * pipeline finishes, then signals the dispatcher to re-resolve — a fresh
+   * directory lookup/placement by then reflects either the migrated
+   * activation's new host or nothing at all, both of which `LocalDispatcher`
+   * (see `isRerouteRejection`) and `DistributedDispatcher` (see
+   * `isStaleActivationRejection`) retry against — rather than surfacing this
+   * as an application error.
    */
   private rerouteOrReject(): Promise<never> {
-    if (this.didFailActivation) return Promise.reject(this.activationFailure);
-    if (this.neverActivated) {
-      return Promise.reject(new GrainCallError(`activation unavailable: ${this.id.toString()}`));
-    }
+    const refusal = this.deactivation?.refusal;
+    if (refusal !== undefined) return Promise.reject(refusal.error());
     return this.awaitFinalized().then((): never => {
       const rejection = new RejectionError(
         `activation unavailable: ${this.id.toString()}`,
@@ -980,25 +1422,33 @@ export class ActivationData implements GrainContext {
   }
 
   /**
-   * Why a pending `requestDeactivation` wants this activation gone, when the
-   * requester named a reason (e.g. `"application-error"` for an escaped
-   * `InconsistentStateError`). Undefined for a plain `deactivateOnIdle()`,
-   * which keeps each finalizer's own default reason.
+   * Deactivate as soon as the running turns have drained (Orleans
+   * `DeactivateOnIdle`, and the runtime's own requests such as an escaped
+   * `InconsistentStateError`): the activation moves to `deactivating` now, so
+   * nothing more is admitted, and the pipeline starts once nothing is
+   * executing. Asked from `onActivate`, the activation never goes valid and
+   * the calls waiting on it are refused rather than rerouted (Orleans
+   * parity: `DeactivateOnIdleWhileActivate`). Joins a deactivation already
+   * under way; a no-op once invalid.
    */
-  get requestedDeactivationReason(): DeactivationReason | undefined {
-    return this.pendingDeactivationReason;
-  }
-
   requestDeactivation(reason?: DeactivationReason): void {
-    if (reason !== undefined && this.pendingDeactivationReason === undefined) {
-      this.pendingDeactivationReason = reason;
-    }
-    this.deactivateRequested = true;
-    // Called during onActivate (still "activating"): don't defer to the next
-    // idle sweep — the activation must never become servable (see
-    // `beginActivate`). Called during a regular turn ("valid"): unchanged,
-    // deferred flag picked up by the next `collectIdle` sweep.
-    if (this.state === "activating") this.deactivateRequestedDuringActivation = true;
+    const duringActivation = this._state === "activating";
+    void this.startDeactivation(
+      reason ?? {
+        code: "application-requested",
+        description: duringActivation
+          ? "deactivateOnIdle requested during activation"
+          : "deactivateOnIdle requested",
+      },
+      undefined,
+      duringActivation
+        ? {
+            error: () => new GrainCallError(`activation unavailable: ${this.id.toString()}`),
+            activationFailed: false,
+          }
+        : undefined,
+      "deactivating",
+    );
   }
 
   /**
@@ -1013,32 +1463,48 @@ export class ActivationData implements GrainContext {
     this.keepAliveUntilMs = byMs <= 0 ? 0 : this.time.now() + byMs;
   }
 
-  /** Mark this activation to migrate (rather than deactivate) when next idle. */
+  /**
+   * Migrate this activation once the running turns have drained (Orleans
+   * `MigrateOnIdle` / `TryStartMigration`): it moves to `deactivating` with a
+   * migration request now, so later calls are held and rerouted to wherever
+   * it lands. Requested while a deactivation is already under way (from
+   * `onDeactivate`, say), that deactivation migrates instead. `target`, when
+   * given, is the directed destination; otherwise placement chooses, honouring
+   * the caller's ambient placement hint.
+   */
   requestMigration(target?: SiloAddress): void {
-    this.migrationRequested = true;
+    if (this._state === "invalid" || this._state === "failed") return;
     this.migrationTarget = target;
     // No explicit target: capture the caller's ambient placement hint now,
-    // while it's still in scope — the idle sweep that actually migrates runs
-    // well after this call's RequestContext scope has ended.
+    // while it's still in scope — the pipeline that actually migrates runs
+    // after this call's RequestContext scope has ended.
     this.migrationHint = target === undefined ? RequestContext.get(PLACEMENT_HINT_KEY) : undefined;
     const store = requestContextStore();
     this.migrationRequestContext = store !== undefined ? { ...store } : undefined;
+    if (this.deactivation !== undefined) {
+      // Placement resolves `migrationTarget` (see `DeactivationSteps.migrate`).
+      this.deactivation.migration ??= { target: undefined };
+      return;
+    }
+    void this.startDeactivation(
+      { code: "migrating", description: "migrating to another silo" },
+      { target: undefined },
+      undefined,
+      "deactivating",
+    );
   }
 
-  /** Whether `dehydrate` has run: its state has been handed off and it must not serve calls again. */
-  get isDehydrated(): boolean {
-    return this.dehydrated;
-  }
-
+  /** Whether this activation is deactivating in order to migrate (the migrating sub-state). */
   get wantsMigration(): boolean {
-    return this.migrationRequested;
+    return this.deactivation?.migration !== undefined;
   }
 
   /**
    * Gather the activation's in-memory state into a transport-safe bag by running
-   * each migration participant's `onDehydrate` on a turn. Marks the activation
-   * dehydrated so no further calls run here — they are held until the move
-   * settles, then re-resolve to the new host.
+   * each migration participant's `onDehydrate`. Inside a deactivation's
+   * migration step (Orleans: `OnDehydrate` within `FinishDeactivating`) this
+   * runs as part of that operation; called on its own it is queued as a
+   * lifecycle operation. Either way no request turn runs alongside it.
    *
    * Wrapped in a `Dehydrate` span (Lifecycle source) ONLY when the activation
    * actually has migration participants — a grain with none (or one that
@@ -1051,25 +1517,23 @@ export class ActivationData implements GrainContext {
     const participants = migrationParticipantsOf(this.instance);
     const gather = async (): Promise<Record<string, unknown>> => {
       const bag = new MigrationBag();
-      await this.scheduler.schedule({
-        options: {},
-        run: () => {
-          runWithRequestContext(this.migrationRequestContext ?? {}, () => {
-            for (const participant of participants) {
-              try {
-                participant.onDehydrate(bag);
-              } catch {
-                // Orleans (`ActivationData.OnDehydrate`): log-and-continue — a
-                // participant that fails to dehydrate simply contributes no
-                // state to the bag; migration proceeds and the target
-                // reactivates fresh rather than the whole move aborting.
-              }
+      const snapshot = (): Promise<void> => {
+        runWithRequestContext(this.migrationRequestContext ?? {}, () => {
+          for (const participant of participants) {
+            try {
+              participant.onDehydrate(bag);
+            } catch {
+              // Orleans (`ActivationData.OnDehydrate`): log-and-continue — a
+              // participant that fails to dehydrate simply contributes no
+              // state to the bag; migration proceeds and the target
+              // reactivates fresh rather than the whole move aborting.
             }
-          });
-          this.dehydrated = true;
-          return Promise.resolve();
-        },
-      });
+          }
+        });
+        return Promise.resolve();
+      };
+      if (this.runningOperation === "deactivate") await snapshot();
+      else await this.scheduleOperation("dehydrate", snapshot);
       return bag.data;
     };
     if (participants.length === 0) return gather();
@@ -1091,8 +1555,24 @@ export class ActivationData implements GrainContext {
    * guard. `previousRegistration`, when given, is recorded as the
    * `orleans.rehydrate.previousRegistration` tag (the source silo's prior
    * directory entry for this activation).
+   *
+   * A participant that throws is logged and the activation carries on without
+   * the rest of the carried state, as Orleans' `RehydrateInternal` does
+   * (log-and-continue, mirroring `dehydrate`): the migrated activation comes
+   * up fresh on the target rather than failing.
    */
   async applyRehydration(previousRegistration?: GrainAddress): Promise<void> {
+    try {
+      await this.restoreRehydrationBag(previousRegistration);
+    } catch (error) {
+      this.logger.warn("rehydrating a migrated activation failed; continuing without its state", {
+        grainId: this.id.toString(),
+        error,
+      });
+    }
+  }
+
+  private async restoreRehydrationBag(previousRegistration?: GrainAddress): Promise<void> {
     if (this.rehydrationBag === undefined) return;
     const participants = migrationParticipantsOf(this.instance);
     const ctx = new MigrationBag(this.rehydrationBag);
@@ -1126,29 +1606,27 @@ export class ActivationData implements GrainContext {
    * configured collection age.
    */
   isStale(ageLimitOverrideMs?: number): boolean {
-    if (this.state !== "valid") return false;
+    if (this._state !== "valid") return false;
     if (this.scheduler.busy) return false;
     const now = this.time.now();
     if (now < this.keepAliveUntilMs) return false;
-    if (this.deactivateRequested) return true;
     return now - this.lastActiveMs >= (ageLimitOverrideMs ?? this.collectionAgeMs);
   }
 
   /**
-   * True when a caller (e.g. `IGrainManagementExtension.deactivateOnIdle()`)
-   * has flagged this activation to go away and it is idle right now (not
-   * mid-turn). Unlike `isStale()`, this ignores `keepAliveUntilMs` and the
-   * age-based idle threshold — it exists solely so `Catalog.getOrActivate`
-   * can notice a PENDING explicit deactivation request lazily, on the very
-   * next lookup for this grain id, and finalize the old activation before
-   * handing out a fresh one (see `grain-management-extension.ts` for why the
-   * finalization can't happen synchronously inside `deactivateOnIdle()`
-   * itself). `delayDeactivation` deliberately does not suppress this: an
-   * explicit deactivateOnIdle() request should not be overridden by an
-   * unrelated keep-alive.
+   * Whether a transactional-state facet holds a transaction lock or a prepared
+   * record whose outcome is unknown (Orleans `ActivationLifetime.BlockDeactivation`).
+   * It does not keep the activation out of collection or migration: the
+   * deactivation pipeline waits a bounded time for it to clear
+   * (`awaitDeactivationBlockCleared`).
    */
-  get deactivationRequestedAndIdle(): boolean {
-    return this.state === "valid" && !this.scheduler.busy && this.deactivateRequested;
+  get isDeactivationBlocked(): boolean {
+    const instance = this._instance as Grain | undefined;
+    if (instance === undefined) return false;
+    const record = instance as unknown as Record<string, unknown>;
+    return getTransactionalFields(instance).some((field) =>
+      blocksDeactivation(unguardedTransactionalState(record[field.fieldName])),
+    );
   }
 
   /**
@@ -1159,12 +1637,10 @@ export class ActivationData implements GrainContext {
    * is cleared before the error travels on, so a caller that merely
    * propagates it is not deactivated too (`IsSourceActivation`,
    * InsideRuntimeClient.cs:326-329). Routed through `requestDeactivation`,
-   * like `deactivateOnIdle()`, so the catalog finalizes it once the failing
-   * turn has settled — on the next lookup for this grain or the next idle
-   * sweep — with its full cleanup (directory unregistration, state unbinding,
-   * instance disposal), and the next call is handed a fresh activation rather
-   * than rejected by this one mid-teardown. Deactivating directly from inside
-   * the failing turn would deadlock against the deactivation's own turn.
+   * like `deactivateOnIdle()`: the activation stops admitting work now, the
+   * pipeline runs once the running turns have drained, and every call that
+   * arrives meanwhile is held and rerouted to a fresh activation rather than
+   * served stale or rejected by this one mid-teardown.
    */
   private deactivateOnInconsistentState(error: unknown): void {
     if (!(error instanceof InconsistentStateError) || !error.isSourceActivation) return;
@@ -1184,10 +1660,8 @@ export class ActivationData implements GrainContext {
    * `invoke()` — so a plain call, or any call on a silo that never opted in,
    * never allocates a proxy. Transaction-resource system calls (`prepare`/
    * `commit`/`abort`/`status`, routed through `invokeTransactionResource`)
-   * are unaffected: they run as exclusive (non-`readOnly`) turns, and the
-   * scheduler never runs an exclusive turn concurrently with a `readOnly`
-   * one (see `TurnScheduler`), so by the time one starts this closure has
-   * already restored the real transactional-state facet.
+   * are always-interleave, so one may run while this guard is in place;
+   * `invokeTransactionResource` unwraps the guard to reach the real facet.
    */
   private applyReadOnlyGuard(): () => void {
     const record = this.instance as unknown as Record<string, unknown>;
@@ -1289,6 +1763,12 @@ export class ActivationData implements GrainContext {
     const iface = getGrainInterface(req.interfaceId);
     if (iface?.extension === true) {
       return await this.invokeExtension(req, iface.name);
+    }
+    // Only the grain type's declared method surface is dispatched: a runtime
+    // hook, a framework base-class member or an Object.prototype name is
+    // refused without touching the instance (see `remote-method-surface`).
+    if (!isRemotelyCallable(this.instance, req.method)) {
+      throw new GrainCallError(`grain ${this.id.toString()} has no method ${req.method}`);
     }
     const fn = (this.instance as unknown as Record<string, unknown>)[req.method];
     if (typeof fn !== "function") {
@@ -1547,12 +2027,13 @@ export class ActivationData implements GrainContext {
   private async invokeTransactionResource(req: InvocationRequest): Promise<unknown> {
     const [stateName, ...rest] = req.args as [string, ...unknown[]];
     const field = getTransactionalFields(this.instance).find((f) => f.stateName === stateName);
+    // Unguarded: an always-interleave protocol call may land mid-`@readOnly` turn.
     const resource =
       field === undefined
         ? undefined
-        : ((this.instance as unknown as Record<string, unknown>)[field.fieldName] as
-            | TransactionParticipant
-            | undefined);
+        : (unguardedTransactionalState(
+            (this.instance as unknown as Record<string, unknown>)[field.fieldName],
+          ) as TransactionParticipant | undefined);
     if (resource === undefined) {
       throw new GrainCallError(
         `grain ${this.id.toString()} has no transactional state "${stateName}"`,

@@ -6,6 +6,7 @@ import type {
   ShouldRetry,
 } from "@thresh/core/durable-job";
 import { Guid } from "@thresh/core/guid";
+import { defaultLogger, type Logger } from "@thresh/core/logger";
 import type { TimeProvider, TimerHandle } from "@thresh/core/time-provider";
 import {
   recordJobCompleted,
@@ -13,7 +14,7 @@ import {
   recordJobStarted,
 } from "@thresh/observability/durable-job-metrics";
 import { InMemoryJobQueue, type QueuedJob } from "@thresh/durable-jobs/job-model";
-import type { JobShardStore } from "@thresh/durable-jobs/job-shard-store";
+import type { JobShardStore, PersistedJob } from "@thresh/durable-jobs/job-shard-store";
 
 /** Delivers one attempt of a job to the target grain as a turn; resolves its result. */
 export type RunJob = (job: JobRunContext) => Promise<DurableJobRunResult>;
@@ -35,6 +36,8 @@ export interface ShardExecutorOptions {
   slowStartIntervalMs: number;
   overloadBackoffMs: number;
   shouldRetry: ShouldRetry;
+  /** Receives every persist failure the executor tolerates (it never throws them). */
+  logger?: Logger;
 }
 
 /**
@@ -86,6 +89,13 @@ export class ShardExecutor {
   private readonly inFlight = new Set<Promise<void>>();
   /** Wall-clock time (per the injected `TimeProvider`) this shard started ramping from. */
   private readonly startedAtMs: number;
+  private readonly logger: Logger;
+  /**
+   * Ids this executor has completed, dropped or cancelled whose store entry may
+   * still exist (a lost `persistRemove`), so a re-read of the shard does not
+   * resurrect them. Pruned against the store on every `refresh`.
+   */
+  private readonly finished = new Set<string>();
 
   constructor(
     readonly shardKey: number,
@@ -98,6 +108,18 @@ export class ShardExecutor {
   ) {
     this.concurrency = Math.max(1, options.slowStartInitialConcurrency);
     this.startedAtMs = this.time.now();
+    this.logger = options.logger ?? defaultLogger;
+  }
+
+  /** Log a persist failure that the executor tolerates; control flow is unchanged. */
+  private logPersistFailure(operation: string, jobId: string): (error: unknown) => void {
+    return (error) => {
+      this.logger.error(`durable job ${operation} failed`, {
+        error,
+        shardKey: this.shardKey,
+        jobId,
+      });
+    };
   }
 
   /** Number of jobs in this shard's working set (queued, not yet completed). */
@@ -107,12 +129,38 @@ export class ShardExecutor {
 
   /** Load the shard's persisted jobs into the working set and arm the poll loop. */
   async load(): Promise<void> {
-    for (const persisted of await this.store.readJobs(this.shardKey)) {
+    await this.ingest(await this.store.readJobs(this.shardKey));
+    this.schedulePoll();
+  }
+
+  /**
+   * Re-read the shard from the store and pick up any job this executor has not
+   * loaded: the store is the source of truth, so a job written by a path the
+   * owner never saw (a lost forward, a scheduler that raced the claim) is still
+   * run. Jobs already known, in flight, or finished here are left alone.
+   */
+  async refresh(): Promise<void> {
+    if (this.stopped) return;
+    const persisted = await this.store.readJobs(this.shardKey);
+    if (this.stopped) return;
+    const ids = new Set(persisted.map((p) => p.job.id));
+    for (const id of this.finished) if (!ids.has(id)) this.finished.delete(id);
+    await this.ingest(
+      persisted.filter((p) => !this.jobs.has(p.job.id) && !this.finished.has(p.job.id)),
+    );
+    this.schedulePoll();
+  }
+
+  private async ingest(persistedJobs: readonly PersistedJob[]): Promise<void> {
+    for (const persisted of persistedJobs) {
       // Idempotent fast-path: a tombstone entry (a prior RunId already marked
       // completed but whose `persistRemove` was lost) means the job ran. Skip
       // invocation and clean the entry — at-most-once for that RunId.
       if (persisted.completed === true) {
-        await this.store.persistRemove(this.shardKey, persisted.job.id).catch(() => undefined);
+        this.finished.add(persisted.job.id);
+        await this.store
+          .persistRemove(this.shardKey, persisted.job.id)
+          .catch(this.logPersistFailure("remove", persisted.job.id));
         continue;
       }
       this.jobs.set(persisted.job.id, persisted.job);
@@ -123,11 +171,13 @@ export class ShardExecutor {
         payload: persisted.job,
       });
     }
-    this.schedulePoll();
   }
 
   /** Add a freshly scheduled job to the working set (already persisted by the manager). */
   enqueue(job: DurableJob): void {
+    // Already loaded (a forward and a refresh can both deliver one job): keep the live entry.
+    if (this.jobs.has(job.id)) return;
+    this.finished.delete(job.id);
     this.jobs.set(job.id, job);
     this.queue.add({
       id: job.id,
@@ -142,7 +192,10 @@ export class ShardExecutor {
   async cancel(jobId: string): Promise<boolean> {
     const removed = this.queue.cancel(jobId);
     this.jobs.delete(jobId);
-    await this.store.persistRemove(this.shardKey, jobId).catch(() => undefined);
+    this.finished.add(jobId);
+    await this.store
+      .persistRemove(this.shardKey, jobId)
+      .catch(this.logPersistFailure("remove", jobId));
     return removed;
   }
 
@@ -307,7 +360,9 @@ export class ShardExecutor {
       // marker; once we mark it completed below, a lost `persistRemove` is
       // recoverable — the next claimer's `load()` will skip and clean up.
       const runId = Guid.newGuid().toString();
-      await this.store.persistRunStart(this.shardKey, durable.id, runId).catch(() => undefined);
+      await this.store
+        .persistRunStart(this.shardKey, durable.id, runId)
+        .catch(this.logPersistFailure("run-start", durable.id));
       recordJobStarted({ "thresh.job.name": durable.name });
       const context: JobRunContext = {
         id: durable.id,
@@ -348,9 +403,14 @@ export class ShardExecutor {
       // Mark the RunId completed *before* removing, so a crash between the two
       // leaves a tombstone the next claimer can detect and skip (per-RunId
       // dedup against double-invocation on shard rebalance).
-      await this.store.persistRunComplete(this.shardKey, job.id, runId).catch(() => undefined);
+      await this.store
+        .persistRunComplete(this.shardKey, job.id, runId)
+        .catch(this.logPersistFailure("run-complete", job.id));
       this.jobs.delete(job.id);
-      await this.store.persistRemove(this.shardKey, job.id).catch(() => undefined);
+      this.finished.add(job.id);
+      await this.store
+        .persistRemove(this.shardKey, job.id)
+        .catch(this.logPersistFailure("remove", job.id));
       recordJobCompleted({ "thresh.job.id": job.id });
       return;
     }
@@ -365,7 +425,10 @@ export class ShardExecutor {
     const backoff = this.options.shouldRetry(attempt, result.error);
     if (backoff === undefined) {
       this.jobs.delete(job.id);
-      await this.store.persistRemove(this.shardKey, job.id).catch(() => undefined);
+      this.finished.add(job.id);
+      await this.store
+        .persistRemove(this.shardKey, job.id)
+        .catch(this.logPersistFailure("remove", job.id));
       return;
     }
     // This run counts as a made attempt: bump so the next run is attempt + 1.
@@ -379,6 +442,6 @@ export class ShardExecutor {
     this.schedulePoll();
     void this.store
       .persistRetry(this.shardKey, job.id, new Date(dueMs), job.dequeueCount)
-      .catch(() => undefined);
+      .catch(this.logPersistFailure("retry", job.id));
   }
 }

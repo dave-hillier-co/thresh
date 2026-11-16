@@ -19,7 +19,7 @@ import {
   type AnyGrainInterface,
   type GrainInterface,
 } from "@thresh/core/grain-interface";
-import type { GrainKey } from "@thresh/core/grain-key";
+import { keyKindOf, keyToString, type GrainKey } from "@thresh/core/grain-key";
 import { GRAIN_REF, GRAIN_REF_CAST } from "@thresh/core/grain-reference";
 import type { GrainType } from "@thresh/core/grain-type";
 import type { InvokeMethodOptions } from "@thresh/core/invoke-options";
@@ -47,6 +47,27 @@ import type { TransactionAgent } from "@thresh/runtime/transaction-agent";
  * settles on the first rejection it observes — so this only matters for the
  * aggregate shapes that don't collapse on their own.
  */
+/**
+ * Property names that JavaScript itself, or common tooling (JSON, template
+ * strings, util.inspect, test-framework matchers, React), reads off an arbitrary
+ * value. A reference must never turn one into a remote call: it would be a call
+ * the author never made, to a method the grain does not declare, whose rejection
+ * nobody awaits. `then` is hidden for the same reason (a reference is not
+ * thenable). `toString` is separate: it answers locally. `inspect` is deliberately
+ * absent: Node reads `Symbol.for("nodejs.util.inspect.custom")`, not the string
+ * `inspect` (since Node 11), and `inspect` is a legitimate grain method name.
+ */
+const PROTOCOL_NAMES: ReadonlySet<string> = new Set([
+  "then",
+  "toJSON",
+  "valueOf",
+  "toLocaleString",
+  "constructor",
+  "asymmetricMatch",
+  "nodeType",
+  "$$typeof",
+]);
+
 function singleRootCause(error: unknown): unknown {
   if (error instanceof AggregateError && error.errors.length > 0) {
     return singleRootCause(error.errors[0]);
@@ -77,8 +98,9 @@ export class GrainFactory {
     private readonly time: TimeProvider = systemTimeProvider,
     /**
      * Silo-wide default response timeout (ms), applied when a method has no
-     * `options.responseTimeout` of its own. Off by default (`undefined`): no
-     * silo behaves differently unless this is explicitly configured.
+     * `options.responseTimeout` of its own. `undefined` here means no deadline
+     * at all; a silo passes at least its call timeout, so every call it makes,
+     * to a grain on this silo or another, has one.
      */
     private readonly defaultResponseTimeoutMs?: number,
   ) {}
@@ -96,6 +118,15 @@ export class GrainFactory {
   }
 
   getGrain<T>(def: GrainInterface<T>, key: GrainKey): T {
+    // Where the interface declares a key kind, a key of another kind is a caller error: the grain
+    // type reads its key text as the declared kind and would otherwise fail inside the activation.
+    const declared = def.key ?? getGrainInterface(def.id)?.key;
+    if (declared !== undefined && keyKindOf(key) !== declared) {
+      throw new Error(
+        `getGrain(${def.name}): the interface declares a ${declared} key but was given a ` +
+          `${keyKindOf(key)} key (${keyToString(key)})`,
+      );
+    }
     const target = new GrainId(this.resolveGrainType(def.id), key);
     return this.buildProxy(def, target);
   }
@@ -155,17 +186,20 @@ export class GrainFactory {
         // wire codec's "is this a grain ref?" check rely on `in`).
         has: (_t, prop): boolean => {
           if (prop === GRAIN_REF) return true;
-          // Keep `"then" in ref` false too, for the same reason `get` hides it.
-          if (prop === "then") return false;
+          // Keep `in` consistent with `get`: a hidden protocol name is absent.
+          if (typeof prop === "string" && (PROTOCOL_NAMES.has(prop) || prop === "toString")) {
+            return prop === "toString";
+          }
           return typeof prop === "string";
         },
         get: (_t, prop, receiver): unknown => {
           if (prop === GRAIN_REF) return { grainId: target, interfaceId: def.id };
           if (prop === GRAIN_REF_CAST) return this.castTo(def, target, receiver);
           if (typeof prop !== "string") return undefined;
-          // Never appear thenable: a grain ref must not resolve `.then` to a
-          // dispatcher, or awaiting/Promise.resolve-ing one would invoke it.
-          if (prop === "then") return undefined;
+          // Never appear thenable, JSON-serializable or coercible through a
+          // remote call: a protocol name resolves to nothing (see PROTOCOL_NAMES).
+          if (PROTOCOL_NAMES.has(prop)) return undefined;
+          if (prop === "toString") return (): string => `GrainReference(${target.toString()})`;
           const options = def.options[prop] ?? {};
           // `async` so a synchronous boundary-validation throw (e.g. a `join`
           // method called with no ambient transaction) surfaces as a rejected

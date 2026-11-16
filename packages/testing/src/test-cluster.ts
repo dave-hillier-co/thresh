@@ -6,10 +6,14 @@ import type { GrainInterface } from "@thresh/core/grain-interface";
 import type { GrainKeyKind } from "@thresh/core/grain-key";
 import type { Registrable } from "@thresh/core/grain-registration";
 import type { KeyTypeOf } from "@thresh/core/key-kinds";
-import type { MembershipService, MembershipSnapshot } from "@thresh/core/membership";
+import { noopLogger, type Logger } from "@thresh/core/logger";
 import { SiloAddress } from "@thresh/core/silo-address";
 import type { StreamProvider } from "@thresh/core/stream";
-import type { TimeProvider } from "@thresh/core/time-provider";
+import { systemTimeProvider, type TimeProvider } from "@thresh/core/time-provider";
+import {
+  FaultInjectingTransport,
+  NetworkFaults,
+} from "@thresh/messaging/fault-injecting-transport";
 import { InProcessNetwork, InProcessTransport } from "@thresh/messaging/in-process-transport";
 import { ICancellationSourcesExtension } from "@thresh/runtime/cancellation-extension";
 import { MemoryJobShardStore } from "@thresh/durable-jobs/memory-job-shard-store";
@@ -20,12 +24,21 @@ import { MemoryReminderTable } from "@thresh/reminders/memory-reminder-table";
 import { MemoryStreamProvider } from "@thresh/streams/memory-stream-provider";
 import { StaticMembershipService } from "@thresh/runtime/static-membership";
 import type { LoadSheddingOptions } from "@thresh/runtime/load-shedding";
+import type { LocalCallSemantics } from "@thresh/runtime/local-call-semantics-dispatcher";
 import type { PlacementStrategy } from "@thresh/runtime/placement/placement-strategy";
 import { MemoryTransactionalStorage } from "@thresh/transactions/memory-transactional-storage";
-import { createSilo, type SiloBuilder } from "@thresh/hosting/silo-builder";
+import type { TransactionsOptions } from "@thresh/transactions/transactions-options";
+import { SiloBuilder, type SiloConfig } from "@thresh/hosting/silo-builder";
 import type { SiloHost } from "@thresh/hosting/silo-host";
 import { createClient, type ClientNode } from "@thresh/client/client-node";
 import { membershipGatewayProvider } from "@thresh/client/gateway-provider";
+import {
+  ringSilos,
+  type MembershipService,
+  type MembershipSnapshot,
+} from "@thresh/core/membership";
+import { CrashableTransport, SharedMembershipView, SiloClock } from "@thresh/testing/silo-crash";
+import { KubernetesControls, SILO_METADATA_LABEL_PREFIX } from "@thresh/testing/test-kubernetes";
 
 export type { GrainRegistrationSpec, ClientNode };
 
@@ -47,6 +60,11 @@ export interface TestClusterOptions {
    * config, not per-silo state.
    */
   serviceId?: string;
+  /**
+   * The logger every silo in the cluster is built with. Defaults to `noopLogger`, so a suite's
+   * output is not filled with the runtime's own warnings; pass a recording logger to assert on them.
+   */
+  logger?: Logger;
   /** Grains registered on every silo. */
   grains?: ReadonlyArray<TestGrainSpec>;
   /** Clock injected into every silo; pass a `FakeTimeProvider` for determinism. */
@@ -60,6 +78,8 @@ export interface TestClusterOptions {
    * `.UseTransactions()`).
    */
   transactions?: boolean;
+  /** Transactions tunables forwarded to every silo (see `SiloConfig.transactionsOptions`). */
+  transactionsOptions?: Partial<TransactionsOptions>;
   /**
    * Whether silos are built with a reminder service. Defaults to `true` (every
    * silo gets the cluster-wide `reminderTable`); pass `false` to build silos
@@ -114,6 +134,18 @@ export interface TestClusterOptions {
    * Defaults to 30s.
    */
   callTimeout?: Duration;
+  /**
+   * How long a silo's directory waits for members that do not answer a range recovery before it
+   * unlocks the range without them, forwarded to every silo (`SiloConfig.directoryRecoveryPatience`).
+   * Unset, a range stays locked for as long as such a member is listed.
+   */
+  directoryRecoveryPatience?: Duration;
+  /**
+   * Every silo's overall stop budget (`SiloConfig.stopBudgetMs`): the grace period (0 here),
+   * the wait for a leaving silo's ranges to be collected (at most half of what is left), and
+   * deactivation together. Unset, the silo's own default (30s).
+   */
+  stopBudgetMs?: number;
   /** Load-shedding config applied to every silo in this cluster (Orleans `Configure<LoadSheddingOptions>`). */
   loadShedding?: Partial<LoadSheddingOptions>;
   /** Injectable RNG forwarded to every silo, for deterministic placement in tests. */
@@ -137,6 +169,18 @@ export interface TestClusterOptions {
   defaultPlacementStrategy?: PlacementStrategy;
   /** How often the idle-collection sweep runs on every silo (defaults to 60s). */
   collectionIntervalSeconds?: number;
+  /**
+   * How long an activation's state load and `onActivate` may take before it fails
+   * (`SiloConfig.activationTimeout`, Orleans `CollectionOptions.ActivationTimeout`). On the
+   * injected `time`. Defaults to 30s.
+   */
+  activationTimeout?: Duration | false;
+  /**
+   * How long a turn may run before a request waiting behind it has the activation deactivated
+   * as stuck (`SiloConfig.scheduling.maxRequestProcessingTime`, Orleans
+   * `SiloMessagingOptions.MaxRequestProcessingTime`). On the injected `time`. Defaults to 2h.
+   */
+  maxRequestProcessingTime?: Duration;
   /**
    * How often every silo pushes its load snapshot to its peers (Orleans
    * `DeploymentLoadPublisherOptions`, defaults to 1s). Lower it in a test that
@@ -164,6 +208,74 @@ export interface TestClusterOptions {
    * tests that need to observe traffic on the wire.
    */
   network?: InProcessNetwork;
+  /**
+   * The faults every silo's transport injects (see `TestCluster.faults`). Defaults to a fresh
+   * `NetworkFaults` on the cluster's clock with nothing set; pass one to arm a fault before the
+   * cluster starts, e.g. a refused connect that must hold from the first dial.
+   */
+  faults?: NetworkFaults;
+  /**
+   * Which membership the silos run on.
+   *
+   * `"static"` (the default) gives every silo a window onto ONE shared membership object: a
+   * view change reaches every silo at once with the same version, and a stopped or killed silo
+   * leaves every view in the same instant. That is a property of this fixture, not of
+   * production, where each silo follows its own watch.
+   *
+   * `"kubernetes"` is the production path: each silo runs `useKubernetesMembership` over its
+   * OWN watch of one fake EndpointSlice API server, which the test drives through
+   * `TestCluster.kubernetes` — readiness, two-step departure, a lagging watch, a forced relist.
+   * Views then change silo by silo and can differ; `viewOf` shows each silo's. A silo joins as
+   * a pod does: listed not ready (joining, outside the ring while any peer is active) as it
+   * starts, then marked ready by the kubelet once its own readiness passes — or held not ready
+   * (`startAdditionalSilo({ holdReadiness: true })`). A graceful stop marks its pod terminating
+   * (draining) before the silo drains and removes it after, and a kill leaves its pod listed,
+   * ready, until the test takes it away (`kubernetes.depart`), as after a real crash.
+   */
+  membership?: "static" | "kubernetes";
+  /**
+   * What every silo does to a same-silo call's arguments, result and thrown error
+   * (`SiloConfig.localCallSemantics`). `"wire"` by default: they make the serializer round trip,
+   * so a suite that happens to land caller and callee together still sees no aliasing, class
+   * instances as the wire delivers them and error classes as the wire rebuilds them. `"copy"`
+   * gives the same through the deep copier (sharing values marked `immutable`); pass
+   * `"reference"` for a test that pins local-only behaviour.
+   */
+  localCallSemantics?: LocalCallSemantics;
+}
+
+/** How `TestCluster.startAdditionalSilo` brings a silo up. */
+export interface StartSiloOptions {
+  /**
+   * Under Kubernetes membership, leave the silo's pod not ready after it starts instead of letting
+   * the kubelet mark it ready: it stays a joining member, outside the ring while any peer is
+   * active, until the test flips it.
+   */
+  readonly holdReadiness?: boolean;
+}
+
+/** How `TestCluster.stopSilo` takes a silo out. */
+export interface StopSiloOptions {
+  /**
+   * Under Kubernetes membership, when the pod is reported terminating: `"beforeStop"` (the
+   * default) reports it and lets the silos see it before the silo's stop begins;
+   * `"afterStopBegins"` begins the stop first, as when the process is signalled before the
+   * endpoint changes. Ignored on the default static membership, which marks the silo draining
+   * before it stops.
+   */
+  readonly terminating?: "beforeStop" | "afterStopBegins";
+  /**
+   * Under Kubernetes membership, leave the pod listed (terminating) once the silo has stopped,
+   * for the test to remove (`kubernetes.removePod`): the window between a pod's process
+   * exiting and its endpoint leaving the slice.
+   */
+  readonly keepListed?: boolean;
+}
+
+/** One silo's membership as it stands: the view its membership holds, and the one its node applied. */
+export interface SiloView {
+  readonly membership: MembershipSnapshot;
+  readonly appliedVersion: number;
 }
 
 export interface TestSiloHandle {
@@ -174,9 +286,11 @@ export interface TestSiloHandle {
 
 /**
  * An in-process multi-silo cluster for tests — the analogue of
- * `Orleans.TestingHost.TestCluster`. Silos share one `InProcessNetwork`, a
- * mutable membership view, and one set of memory providers (so grain state,
- * reminders, journals and jobs survive a silo's death the way a durable
+ * `Orleans.TestingHost.TestCluster`. Silos share one `InProcessNetwork` (each
+ * behind its own fault-injecting transport, see `faults`), a membership (one
+ * shared static view by default, or each silo's own Kubernetes watch, see
+ * `TestClusterOptions.membership`), and one set of memory providers (so grain
+ * state, reminders, journals and jobs survive a silo's death the way a durable
  * backend would); ported functional tests only supply grains.
  */
 export class TestCluster {
@@ -191,6 +305,8 @@ export class TestCluster {
   // version equality meaning view equality — e.g. the directory's `staleView`
   // guard — and must keep sharing one service to do so.
   private shared: StaticMembershipService | undefined;
+  // Set only for `membership: "kubernetes"`.
+  private readonly k8s: KubernetesControls | undefined;
 
   // Cluster-wide "durable" backends, shared by every silo.
   readonly storage = new MemoryGrainStorage();
@@ -207,21 +323,103 @@ export class TestCluster {
   // The cluster client, connected on first access — see `client`.
   private connectedClient: Promise<ClientNode> | undefined;
 
+  /**
+   * Network faults between this cluster's silos: drop, delay, refuse connects, partition and
+   * heal, by direct call or explicit schedule. Every silo's transport is a
+   * `FaultInjectingTransport` over this one object, applying faults to what that silo sends.
+   */
+  readonly faults: NetworkFaults;
+
   private constructor(
     private readonly options: TestClusterOptions,
     readonly network: InProcessNetwork,
-  ) {}
+  ) {
+    this.faults = options.faults ?? new NetworkFaults(options.time);
+    this.k8s =
+      options.membership === "kubernetes"
+        ? new KubernetesControls(() =>
+            this.live.every((s) => {
+              const view = this.viewOf(s);
+              return view.appliedVersion === view.membership.version;
+            }),
+          )
+        : undefined;
+  }
 
   static async start(options: TestClusterOptions = {}): Promise<TestCluster> {
     const cluster = new TestCluster(options, options.network ?? new InProcessNetwork());
     const count = options.initialSilos ?? 2;
+    if (cluster.k8s !== undefined) {
+      // Pods come up one at a time, each joining the cluster the ones before it formed.
+      for (let i = 0; i < count; i += 1) await cluster.startAdditionalSilo();
+      return cluster;
+    }
     for (let i = 0; i < count; i += 1) cluster.buildSilo();
     await Promise.all(cluster.live.map((s) => s.host.start()));
     return cluster;
   }
 
+  /**
+   * The fake Kubernetes API server and the controls over it, for a cluster started with
+   * `membership: "kubernetes"`. Throws on the default static membership, which has no
+   * Kubernetes to drive.
+   */
+  get kubernetes(): KubernetesControls {
+    if (this.k8s === undefined) {
+      throw new Error(
+        'TestCluster.kubernetes needs a cluster started with membership: "kubernetes"',
+      );
+    }
+    return this.k8s;
+  }
+
+  /**
+   * `silo`'s membership view and the view version its node has applied — the pair that tells
+   * a silo whose watch lags (an older view) from one still applying a view it has (an applied
+   * version behind its own view's).
+   */
+  viewOf(silo: TestSiloHandle): SiloView {
+    // `SiloHost` exposes neither its membership nor its node; read them the way the hosting
+    // tests do. Introspection only.
+    const parts = (
+      silo.host as unknown as {
+        parts: { membership: MembershipService; node: { readonly appliedViewVersion: number } };
+      }
+    ).parts;
+    return {
+      membership: parts.membership.current(),
+      appliedVersion: parts.node.appliedViewVersion,
+    };
+  }
+
   get silos(): ReadonlyArray<TestSiloHandle> {
     return this.live;
+  }
+
+  /**
+   * The grain directory's integrity check on every live silo (Orleans
+   * `IGrainDirectoryTestHooks.CheckIntegrityAsync`, which the upstream resilience tests run per
+   * silo): no partition holds an entry outside the ranges it owns, and every registered live
+   * activation in the cluster has exactly its own entry at its owner — so no grain is registered
+   * as active in two places. Under Kubernetes membership it first lets every silo apply the view
+   * its own watch holds (`kubernetes.settle`). Throws, listing every violation, if any is found.
+   */
+  async checkIntegrity(): Promise<void> {
+    if (this.k8s !== undefined) await this.k8s.settle();
+    const violations: string[] = [];
+    for (const silo of this.live) {
+      const node = (
+        silo.host as unknown as {
+          parts: { node: { checkDirectoryIntegrity(): Promise<Array<{ detail: string }>> } };
+        }
+      ).parts.node;
+      for (const violation of await node.checkDirectoryIntegrity()) {
+        violations.push(`${silo.address.podName}: ${violation.detail}`);
+      }
+    }
+    if (violations.length > 0) {
+      throw new Error(`grain directory integrity violated:\n  ${violations.join("\n  ")}`);
+    }
   }
 
   /**
@@ -288,7 +486,7 @@ export class TestCluster {
     // The same error `primary` raises: a cluster with no silos left (or one
     // already disposed) has nothing for a client to talk to.
     const membership = this.shared;
-    if (membership === undefined || this.live.length === 0) {
+    if ((membership === undefined && this.k8s === undefined) || this.live.length === 0) {
       throw new Error("TestCluster has no live silos");
     }
     const client = createClient({
@@ -297,7 +495,10 @@ export class TestCluster {
       // Every live silo is a gateway, the way Orleans' test client shares the
       // silos' membership table: a cluster that kills or restarts its primary
       // keeps a usable client instead of one pinned to a dead endpoint.
-      gateways: membershipGatewayProvider(membership),
+      gateways:
+        membership !== undefined
+          ? membershipGatewayProvider(membership)
+          : { getGateways: () => ringSilos(this.viewOf(this.primary).membership) },
     }).registerGrains(this.options.grains ?? []);
     await client.connect();
     return client;
@@ -347,10 +548,38 @@ export class TestCluster {
     });
   }
 
-  async startAdditionalSilo(): Promise<TestSiloHandle> {
+  /**
+   * Start one more silo. Under Kubernetes membership its pod is listed not ready as it starts
+   * (a joining member, outside the ring while any peer is active), and the kubelet marks it ready
+   * once the silo's own readiness passes — unless `holdReadiness`, which leaves the pod not ready
+   * until the test flips it (`kubernetes.setReady`, or `kubernetes.kubelet`). Ignored under the
+   * default static membership, where a silo is active from the start.
+   */
+  async startAdditionalSilo(options: StartSiloOptions = {}): Promise<TestSiloHandle> {
     const silo = this.buildSilo();
     await silo.host.start();
+    if (this.k8s !== undefined && options.holdReadiness !== true) await this.k8s.kubelet(silo);
     return silo;
+  }
+
+  /**
+   * Start `count` more silos at once, as a Deployment rolls out several pods together: every pod
+   * is listed not ready before any silo starts, the silos start concurrently, and the kubelet
+   * marks each ready as its own readiness passes (unless `holdReadiness`). On a cluster with no
+   * ready silo this is a cold start: the ring is the joining silos until the first is ready.
+   */
+  async startAdditionalSilos(
+    count: number,
+    options: StartSiloOptions = {},
+  ): Promise<TestSiloHandle[]> {
+    const silos = Array.from({ length: count }, () => this.buildSilo());
+    await Promise.all(
+      silos.map(async (silo) => {
+        await silo.host.start();
+        if (this.k8s !== undefined && options.holdReadiness !== true) await this.k8s.kubelet(silo);
+      }),
+    );
+    return silos;
   }
 
   /**
@@ -364,22 +593,84 @@ export class TestCluster {
     return source.host.migrate(grainId, targetSilo);
   }
 
-  /** Graceful shutdown: the silo drains and departs the membership view. */
-  async stopSilo(handle: TestSiloHandle): Promise<void> {
+  /**
+   * Graceful shutdown: the silo is marked leaving (draining), drains — handing its directory
+   * ranges to the silos that remain, then deactivating — and departs the membership view.
+   */
+  async stopSilo(handle: TestSiloHandle, options: StopSiloOptions = {}): Promise<void> {
     const silo = this.take(handle);
-    await silo.host.stop();
-    this.shared?.removeSilo(silo.address);
+    await this.stopGracefully(silo, options);
+  }
+
+  /** Drain `silo` and take it out of membership, the way its kind of membership does. */
+  private async stopGracefully(silo: InternalSilo, options: StopSiloOptions = {}): Promise<void> {
+    if (this.k8s === undefined) {
+      // The view marks the silo draining before it stops and removes it after, as a terminating
+      // pod's endpoint does, so its ranges move by snapshot while it still serves.
+      silo.markDraining?.();
+      await silo.host.stop();
+      this.shared?.removeSilo(silo.address);
+      return;
+    }
+    // A terminating pod's endpoint turns not ready and terminating, the silo drains, and its
+    // endpoint goes after.
+    if (options.terminating === "afterStopBegins") {
+      const stopping = silo.host.stop();
+      await Promise.resolve();
+      await this.k8s.terminate(silo);
+      await stopping;
+    } else {
+      await this.k8s.terminate(silo);
+      await silo.host.stop();
+    }
+    if (options.keepListed !== true) await this.k8s.removePod(silo);
   }
 
   /**
-   * Abrupt failure: detach the silo from the network and declare it dead to the
-   * survivors, without running any shutdown hooks — the in-process stand-in for
-   * a killed pod.
+   * Abrupt failure — the in-process stand-in for a crashed pod (Orleans
+   * `KillSiloAsync`, an ungraceful stop). The silo is declared dead to the
+   * survivors and its process is cut off: its transport is gone (peers dialling
+   * it are refused and nothing it sends arrives), every timer it armed is
+   * cancelled and none fires again (grain timers, reminder ticks, durable-job
+   * polls, idle collection), its pulling-stream agents stop, its view of
+   * membership freezes (so it runs no further ownership hooks). No shutdown
+   * code runs: no drain, no deactivation hook, no release of anything it held.
+   * Its activations stay in memory, unreachable. One thing an in-process
+   * stand-in cannot do is preempt JavaScript already running: a turn that was
+   * mid-flight finishes its own code (its outgoing calls fail; nothing new
+   * starts). `stopSilo` remains the graceful path.
    */
   async killSilo(handle: TestSiloHandle): Promise<void> {
     const silo = this.take(handle);
-    this.network.unregister(silo.address);
+    // The listener closes synchronously inside `crash()`, and the view drops the silo in the
+    // same tick, so no peer ever sees it listed but unreachable through this harness's doing.
+    const crashed = silo.crash();
     this.shared?.removeSilo(silo.address);
+    await crashed;
+  }
+
+  /**
+   * A container that restarts in place, under Kubernetes membership: the silo's process dies as
+   * in `killSilo` (if it is still live; a silo already killed, whose pod is still listed, may be
+   * restarted too), its endpoint turns not ready, and a new silo process starts with the SAME
+   * `SiloAddress` — pod name, uid and endpoint. The pod is listed throughout: a joining member
+   * while it is not ready, outside the ring while any peer is active. The kubelet marks it ready
+   * once the new process's own readiness passes, unless `holdReadiness`. What the old process
+   * hosted is gone; peers may still hold entries and routes naming the address. Throws under the
+   * default static membership, which has no pod to restart.
+   */
+  async restartInPlace(
+    handle: TestSiloHandle,
+    options: StartSiloOptions = {},
+  ): Promise<TestSiloHandle> {
+    const k8s = this.kubernetes;
+    const old = this.live.find((s) => s === handle);
+    if (old !== undefined) await this.killSilo(old);
+    const silo = this.buildKubernetesSilo(handle.index, handle.address);
+    await k8s.settle();
+    await silo.host.start();
+    if (options.holdReadiness !== true) await k8s.kubelet(silo);
+    return silo;
   }
 
   /** Kill-then-replace: a fresh silo joins with a new uid, like a restarted pod. */
@@ -389,14 +680,18 @@ export class TestCluster {
   }
 
   /**
-   * Stop every live silo in a deterministic order — mirroring `stopSilo`'s
-   * stop-then-`removeSilo` sequencing per silo — rather than tearing them all
-   * down concurrently. A bare `Promise.all` would race: a silo mid-`stop()`
-   * runs `onDeactivate` hooks that can make cross-silo calls (the
-   * `ActivateDeactivateWatcherGrain` pattern), and if every silo's transport
-   * were closing at once, that call could land on a peer whose listener is
-   * already gone. Stopping one at a time, and updating membership between
-   * each, keeps the remaining silos reachable until it is their own turn.
+   * Stop the cluster one silo at a time, in the order the silos started, each leaving the way
+   * `stopSilo` makes a silo leave — marked draining (its pod terminating), stopped, then removed
+   * from membership — while the silos not yet stopped are still active (Orleans'
+   * `StopAllSilosAsync`, which stops each silo in turn). Each hands its ranges to the silos that
+   * remain, so an `onDeactivate` hook can still call a grain on a silo that has not stopped yet
+   * (the `ActivateDeactivateWatcherGrain` pattern); the last has nobody ready to hand over to and
+   * waits for nothing. A bare `Promise.all` would race: if every silo's transport were closing at
+   * once, such a call could land on a peer whose listener is already gone.
+   *
+   * A silo whose host a test already stopped (or began stopping) directly is taken out first, the
+   * same way: it is no longer serving, so no silo should hand a range to it. Every network fault
+   * injected through `faults` is healed first, so a link a test broke does not hold a handover.
    *
    * The cluster client (if one was ever created) is closed FIRST, matching
    * Orleans' `StopAllSilosAsync`, which calls `StopClusterClientAsync` before
@@ -411,11 +706,30 @@ export class TestCluster {
     if (client !== undefined) {
       await client.then((c) => c.close()).catch(() => undefined);
     }
-    const remaining = this.live;
-    this.live = [];
-    for (const silo of remaining) {
-      await silo.host.stop().catch(() => undefined);
-      this.shared?.removeSilo(silo.address);
+    // A link a test broke would hold a leaver's handover for its whole bound; teardown is not
+    // under test.
+    this.faults.healAll();
+    const stopping = (s: InternalSilo): boolean => s.host.health.isDraining();
+    this.live = [...this.live.filter(stopping), ...this.live.filter((s) => !stopping(s))];
+    // Each silo is taken out of `live` only at its turn, so a settle while it leaves waits for
+    // the silos that remain to apply the view in which it is leaving, as `stopSilo` does.
+    for (let silo = this.live[0]; silo !== undefined; silo = this.live[0]) {
+      this.live = this.live.slice(1);
+      const leaving = silo;
+      await this.stopGracefully(leaving, { keepListed: true }).catch(() => undefined);
+      this.leaveMembership(leaving);
+    }
+  }
+
+  /**
+   * Take `silo` out of membership if it is still listed (a stop that failed leaves it so). The
+   * next silo's own stop lets the rest apply the change, so nothing waits for it here.
+   */
+  private leaveMembership(silo: InternalSilo): void {
+    if (this.k8s !== undefined) {
+      if (this.k8s.listed(silo)) this.k8s.api.removePod(silo.address.podName);
+    } else if (this.shared?.current().silos.some((m) => m.address.equals(silo.address))) {
+      this.shared.removeSilo(silo.address);
     }
   }
 
@@ -429,6 +743,7 @@ export class TestCluster {
   private buildSilo(): InternalSilo {
     const index = this.nextIndex;
     this.nextIndex += 1;
+    if (this.k8s !== undefined) return this.buildKubernetesSilo(index);
     const address = new SiloAddress(
       `test-silo-${index}`,
       `uid-${index}`,
@@ -444,21 +759,85 @@ export class TestCluster {
     } else {
       this.shared.addSilo(address, "active", metadata);
     }
-    const membership = new MembershipView(this.shared, address);
-    const builder = createSilo({
+    const membership = new SharedMembershipView(this.shared, address);
+    return this.buildSiloOn(
+      index,
+      address,
+      metadata,
+      (builder) => builder.useMembership(membership),
+      () => membership.freeze(),
+      () => membership.markDraining(),
+    );
+  }
+
+  /** A silo on a new pod, or, given the address of a listed pod, a new process on that pod. */
+  private buildKubernetesSilo(index: number, restarting?: SiloAddress): InternalSilo {
+    const k8s = this.kubernetes;
+    const metadataFor = (address: SiloAddress): Readonly<Record<string, string>> | undefined =>
+      this.options.siloMetadata?.({ index, address });
+    const { address, metadata, watch } =
+      restarting === undefined
+        ? k8s.addPod(index, metadataFor)
+        : k8s.restartPod({ address: restarting }, metadataFor);
+    const silo = this.buildSiloOn(
+      index,
+      address,
+      metadata,
+      (builder) =>
+        builder.useKubernetesMembership(watch, {
+          portName: "silo",
+          metadataLabelPrefix: SILO_METADATA_LABEL_PREFIX,
+        }),
+      // A crashed pod's watch is gone with its process; its endpoint stays until Kubernetes acts.
+      () => k8s.disconnect({ address }),
+    );
+    return silo;
+  }
+
+  private buildSiloOn(
+    index: number,
+    address: SiloAddress,
+    metadata: Readonly<Record<string, string>> | undefined,
+    useMembership: (builder: SiloBuilder) => void,
+    stopFollowingMembership: () => void,
+    markDraining?: () => void,
+  ): InternalSilo {
+    const clock = new SiloClock(this.options.time ?? systemTimeProvider);
+    const transport = new CrashableTransport(
+      new FaultInjectingTransport(
+        new InProcessTransport(this.network, this.clusterId),
+        this.faults,
+      ),
+    );
+    const builder = new TestSiloBuilder({
       clusterId: this.options.clusterId ?? "test-cluster",
       serviceId: this.options.serviceId ?? this.options.clusterId ?? "test-cluster",
       local: address,
-      ...(this.options.time !== undefined ? { time: this.options.time } : {}),
+      logger: this.options.logger ?? noopLogger,
+      time: clock,
+      // Nothing outside the process routes to these silos, so a drain has no one to wait for.
+      gracefulShutdownMs: 0,
+      ...(this.options.stopBudgetMs !== undefined
+        ? { stopBudgetMs: this.options.stopBudgetMs }
+        : {}),
       ...(metadata !== undefined ? { metadata } : {}),
       ...(this.options.defaultResponseTimeout !== undefined
         ? { defaultResponseTimeout: this.options.defaultResponseTimeout }
         : {}),
       ...(this.options.callTimeout !== undefined ? { callTimeout: this.options.callTimeout } : {}),
+      ...(this.options.directoryRecoveryPatience !== undefined
+        ? { directoryRecoveryPatience: this.options.directoryRecoveryPatience }
+        : {}),
+      ...(this.options.transactionsOptions !== undefined
+        ? { transactionsOptions: this.options.transactionsOptions }
+        : {}),
       ...(this.options.loadShedding !== undefined
         ? { loadShedding: this.options.loadShedding }
         : {}),
+      testHooks: true,
       ...(this.options.random !== undefined ? { random: this.options.random } : {}),
+      // "wire" unless a test chooses: a same-silo call shows what a cross-silo call would.
+      localCallSemantics: this.options.localCallSemantics ?? "wire",
       ...(this.options.collectionAgeSeconds !== undefined
         ? { collectionAgeSeconds: this.options.collectionAgeSeconds }
         : {}),
@@ -471,6 +850,12 @@ export class TestCluster {
       ...(this.options.collectionIntervalSeconds !== undefined
         ? { collectionIntervalSeconds: this.options.collectionIntervalSeconds }
         : {}),
+      ...(this.options.activationTimeout !== undefined
+        ? { activationTimeout: this.options.activationTimeout }
+        : {}),
+      ...(this.options.maxRequestProcessingTime !== undefined
+        ? { scheduling: { maxRequestProcessingTime: this.options.maxRequestProcessingTime } }
+        : {}),
       ...(this.options.loadPublishIntervalMs !== undefined
         ? { loadPublishIntervalMs: this.options.loadPublishIntervalMs }
         : {}),
@@ -480,9 +865,10 @@ export class TestCluster {
       ...(this.options.clientDirectoryRefreshMs !== undefined
         ? { clientDirectoryRefreshMs: this.options.clientDirectoryRefreshMs }
         : {}),
-    })
-      .useMembership(membership)
-      .useInProcessTransport(this.network)
+    });
+    useMembership(builder);
+    builder
+      .useTransport(transport)
       .useMemoryStreams("default", undefined, this.streamProvider("default"))
       .useBroadcastChannels()
       .useMemoryDurableJobs(this.jobShardStore)
@@ -513,32 +899,53 @@ export class TestCluster {
       else builder.registerGrain(spec);
     }
     this.options.configureSilo?.(builder, { index, address }, this);
-    const silo: InternalSilo = { index, address, membership, host: builder.build() };
+    const host = builder.build();
+    const shared = new Set<StreamProvider>(this.memoryStreamProviders.values());
+    const crash = async (): Promise<void> => {
+      clock.stop();
+      stopFollowingMembership();
+      const transportGone = transport.crash();
+      // Pulling agents poll on their own timers; stopping a provider only stops its polling. A
+      // provider shared with the survivors is theirs too and keeps running.
+      await Promise.all(
+        builder.givenStreamProviders
+          .filter((provider) => !shared.has(provider))
+          .map((provider) => (provider as { stop?: () => Promise<void> }).stop?.()),
+      );
+      await transportGone;
+    };
+    const silo: InternalSilo = {
+      index,
+      address,
+      host,
+      crash,
+      ...(markDraining !== undefined ? { markDraining } : {}),
+    };
     this.live.push(silo);
     return silo;
   }
 }
 
 interface InternalSilo extends TestSiloHandle {
-  readonly membership: MembershipService;
+  /** Cut the silo off as a crash does; see `TestCluster.killSilo`. */
+  crash(): Promise<void>;
+  /**
+   * Mark the silo draining in the shared static view, without waiting. Static membership only: a
+   * Kubernetes pod is reported terminating through `KubernetesControls.terminate`.
+   */
+  markDraining?(): void;
 }
 
-/** Reports each silo's own `localSilo()` while sharing one membership view. */
-class MembershipView implements MembershipService {
-  constructor(
-    private readonly shared: StaticMembershipService,
-    private readonly local: SiloAddress,
-  ) {}
+/** A `SiloBuilder` that remembers the stream providers it was given, so a crash can stop them. */
+class TestSiloBuilder extends SiloBuilder {
+  readonly givenStreamProviders: StreamProvider[] = [];
 
-  current(): MembershipSnapshot {
-    return this.shared.current();
+  constructor(config: SiloConfig) {
+    super(config);
   }
 
-  updates(): AsyncIterableIterator<MembershipSnapshot> {
-    return this.shared.updates();
-  }
-
-  localSilo(): SiloAddress {
-    return this.local;
+  override addStreamProvider(name: string, provider: StreamProvider): this {
+    this.givenStreamProviders.push(provider);
+    return super.addStreamProvider(name, provider);
   }
 }

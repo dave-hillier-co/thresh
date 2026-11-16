@@ -43,18 +43,21 @@ export interface IPlacementTestGrain extends GrainKey<Guid> {
 
 export const IPlacementTestGrain = defineGrainInterface<IPlacementTestGrain>(
   "UnitTests.GrainInterfaces.IPlacementTestGrain",
+  { key: "guid" },
 );
 
 export type IRandomPlacementTestGrain = IPlacementTestGrain;
 
 export const IRandomPlacementTestGrain = defineGrainInterface<IRandomPlacementTestGrain>(
   "UnitTests.GrainInterfaces.IRandomPlacementTestGrain",
+  { key: "guid" },
 );
 
 export type IPreferLocalPlacementTestGrain = IPlacementTestGrain;
 
 export const IPreferLocalPlacementTestGrain = defineGrainInterface<IPreferLocalPlacementTestGrain>(
   "UnitTests.GrainInterfaces.IPreferLocalPlacementTestGrain",
+  { key: "guid" },
 );
 
 /**
@@ -68,6 +71,7 @@ export type IActivationCountBasedPlacementTestGrain = IPlacementTestGrain;
 export const IActivationCountBasedPlacementTestGrain =
   defineGrainInterface<IActivationCountBasedPlacementTestGrain>(
     "UnitTests.GrainInterfaces.IActivationCountBasedPlacementTestGrain",
+    { key: "guid" },
   );
 
 /**
@@ -81,6 +85,7 @@ export type IStatelessWorkerPlacementTestGrain = IPlacementTestGrain;
 export const IStatelessWorkerPlacementTestGrain =
   defineGrainInterface<IStatelessWorkerPlacementTestGrain>(
     "UnitTests.GrainInterfaces.IStatelessWorkerPlacementTestGrain",
+    { key: "guid" },
   );
 
 /** Upstream `IOtherStatelessWorkerPlacementTestGrain`: `[StatelessWorker(2)]`. */
@@ -89,4 +94,5 @@ export type IOtherStatelessWorkerPlacementTestGrain = IPlacementTestGrain;
 export const IOtherStatelessWorkerPlacementTestGrain =
   defineGrainInterface<IOtherStatelessWorkerPlacementTestGrain>(
     "UnitTests.GrainInterfaces.IOtherStatelessWorkerPlacementTestGrain",
+    { key: "guid" },
   );

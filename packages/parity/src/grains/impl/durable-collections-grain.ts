@@ -45,7 +45,7 @@ export class DurableCollectionsGrain extends Grain implements IDurableCollection
   private set!: DurableSet<unknown>;
 
   async setValue(v: unknown): Promise<void> {
-    await this.value.set(v);
+    this.value.set(v);
   }
 
   async getValue(): Promise<unknown> {
@@ -53,11 +53,11 @@ export class DurableCollectionsGrain extends Grain implements IDurableCollection
   }
 
   async clearValue(): Promise<void> {
-    await this.value.clear();
+    this.value.clear();
   }
 
   async dictSet(key: unknown, value: unknown): Promise<void> {
-    await this.dict.set(key, value);
+    this.dict.set(key, value);
   }
 
   async dictGet(key: unknown): Promise<unknown> {
@@ -73,7 +73,7 @@ export class DurableCollectionsGrain extends Grain implements IDurableCollection
   }
 
   async dictClear(): Promise<void> {
-    await this.dict.clear();
+    this.dict.clear();
   }
 
   async dictSize(): Promise<number> {
@@ -93,15 +93,15 @@ export class DurableCollectionsGrain extends Grain implements IDurableCollection
   }
 
   async listAdd(v: unknown): Promise<void> {
-    await this.list.add(v);
+    this.list.add(v);
   }
 
   async listSet(i: number, v: unknown): Promise<void> {
-    await this.list.set(i, v);
+    this.list.set(i, v);
   }
 
   async listRemoveAt(i: number): Promise<void> {
-    await this.list.removeAt(i);
+    this.list.removeAt(i);
   }
 
   async listGet(i: number): Promise<unknown> {
@@ -109,7 +109,7 @@ export class DurableCollectionsGrain extends Grain implements IDurableCollection
   }
 
   async listClear(): Promise<void> {
-    await this.list.clear();
+    this.list.clear();
   }
 
   async listLength(): Promise<number> {
@@ -129,11 +129,11 @@ export class DurableCollectionsGrain extends Grain implements IDurableCollection
   }
 
   async listInsert(i: number, v: unknown): Promise<void> {
-    await this.list.insert(i, v);
+    this.list.insert(i, v);
   }
 
   async queueEnqueue(v: unknown): Promise<void> {
-    await this.queue.enqueue(v);
+    this.queue.enqueue(v);
   }
 
   async queueDequeue(): Promise<unknown> {
@@ -153,7 +153,7 @@ export class DurableCollectionsGrain extends Grain implements IDurableCollection
   }
 
   async queueClear(): Promise<void> {
-    await this.queue.clear();
+    this.queue.clear();
   }
 
   async queueSize(): Promise<number> {
@@ -173,7 +173,7 @@ export class DurableCollectionsGrain extends Grain implements IDurableCollection
   }
 
   async setClear(): Promise<void> {
-    await this.set.clear();
+    this.set.clear();
   }
 
   async setSize(): Promise<number> {
@@ -182,6 +182,10 @@ export class DurableCollectionsGrain extends Grain implements IDurableCollection
 
   async setToArray(): Promise<unknown[]> {
     return [...this.set.values()];
+  }
+
+  async writeState(): Promise<void> {
+    await this.writeDurableState();
   }
 
   async activationTag(): Promise<string> {

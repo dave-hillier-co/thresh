@@ -37,6 +37,7 @@ describe("Orleans.Journaling.Tests.DurableQueueTests", () => {
       await grain.queueEnqueue("one");
       await grain.queueEnqueue("two");
       await grain.queueEnqueue("three");
+      await grain.writeState();
 
       expect(await grain.queueSize()).toBe(3);
 
@@ -45,12 +46,15 @@ describe("Orleans.Journaling.Tests.DurableQueueTests", () => {
       expect(await grain.queueSize()).toBe(3);
 
       expect(await grain.queueDequeue()).toBe("one");
+      await grain.writeState();
       expect(await grain.queueSize()).toBe(2);
 
       expect(await grain.queueDequeue()).toBe("two");
+      await grain.writeState();
       expect(await grain.queueSize()).toBe(1);
 
       expect(await grain.queueDequeue()).toBe("three");
+      await grain.writeState();
       expect(await grain.queueSize()).toBe(0);
     },
   );
@@ -64,6 +68,7 @@ describe("Orleans.Journaling.Tests.DurableQueueTests", () => {
       await grain.queueEnqueue("one");
       await grain.queueEnqueue("two");
       await grain.queueEnqueue("three");
+      await grain.writeState();
 
       await cluster.restartSilo(cluster.primary);
       const grain2 = cluster.getGrain(IDurableCollectionsGrain, key);
@@ -72,6 +77,7 @@ describe("Orleans.Journaling.Tests.DurableQueueTests", () => {
       expect(await grain2.queuePeek()).toBe("one");
 
       const dequeued = await grain2.queueDequeue();
+      await grain2.writeState();
       expect(dequeued).toBe("one");
       expect(await grain2.queueSize()).toBe(2);
     },
@@ -87,12 +93,14 @@ describe("Orleans.Journaling.Tests.DurableQueueTests", () => {
 
       await grain.queueEnqueue(person1);
       await grain.queueEnqueue(person2);
+      await grain.writeState();
 
       expect(await grain.queueSize()).toBe(2);
       const peeked = (await grain.queuePeek()) as typeof person1;
       expect(peeked.name).toBe("John");
 
       const dequeued = (await grain.queueDequeue()) as typeof person1;
+      await grain.writeState();
       expect(await grain.queueSize()).toBe(1);
       expect(dequeued.name).toBe("John");
       expect(dequeued.age).toBe(30);
@@ -105,8 +113,10 @@ describe("Orleans.Journaling.Tests.DurableQueueTests", () => {
     await grain.queueEnqueue("one");
     await grain.queueEnqueue("two");
     await grain.queueEnqueue("three");
+    await grain.writeState();
 
     await grain.queueClear();
+    await grain.writeState();
 
     expect(await grain.queueSize()).toBe(0);
   });
@@ -121,6 +131,7 @@ describe("Orleans.Journaling.Tests.DurableQueueTests", () => {
       const grain = cluster.getGrain(IDurableCollectionsGrain, freshKey());
 
       expect(await grain.queueSize()).toBe(0);
+      await grain.writeState();
 
       await expect(grain.queuePeekOrThrow()).rejects.toThrow(/empty/i);
       await expect(grain.queueDequeueOrThrow()).rejects.toThrow(/empty/i);
@@ -134,6 +145,7 @@ describe("Orleans.Journaling.Tests.DurableQueueTests", () => {
 
       const expectedItems = ["one", "two", "three"];
       for (const item of expectedItems) await grain.queueEnqueue(item);
+      await grain.writeState();
 
       const actualItems = await grain.queueToArray();
 
@@ -149,6 +161,7 @@ describe("Orleans.Journaling.Tests.DurableQueueTests", () => {
 
       const itemCount = 1000;
       for (let i = 0; i < itemCount; i++) await grain.queueEnqueue(i);
+      await grain.writeState();
 
       expect(await grain.queueSize()).toBe(itemCount);
       expect(await grain.queuePeek()).toBe(0);
@@ -162,6 +175,7 @@ describe("Orleans.Journaling.Tests.DurableQueueTests", () => {
         expect(await grain2.queueDequeue()).toBe(i);
       }
 
+      await grain2.writeState();
       expect(await grain2.queueSize()).toBe(0);
     },
     30_000,
@@ -176,8 +190,11 @@ describe("Orleans.Journaling.Tests.DurableQueueTests", () => {
       const batchSize = 100;
 
       for (let i = 0; i < batchSize; i++) await grain.queueEnqueue(i);
+      await grain.writeState();
       for (let i = 0; i < batchSize / 2; i++) await grain.queueDequeue();
+      await grain.writeState();
       for (let i = batchSize; i < batchSize * 2; i++) await grain.queueEnqueue(i);
+      await grain.writeState();
 
       expect(await grain.queueSize()).toBe(batchSize + batchSize / 2);
 
@@ -193,6 +210,7 @@ describe("Orleans.Journaling.Tests.DurableQueueTests", () => {
         expect(await grain2.queueDequeue()).toBe(i);
       }
 
+      await grain2.writeState();
       expect(await grain2.queueSize()).toBe(0);
     },
     15_000,

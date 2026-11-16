@@ -20,4 +20,5 @@ export interface IExternalTypeGrain extends GrainKey<bigint> {
 }
 export const IExternalTypeGrain = defineGrainInterface<IExternalTypeGrain>(
   "UnitTests.GrainInterfaces.IExternalTypeGrain",
+  { key: "integer" },
 );

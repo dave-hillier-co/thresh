@@ -10,6 +10,7 @@ import {
   recordJobCompleted,
   recordJobFailed,
   recordJobStarted,
+  recordShardPoisoned,
   registerDurableJobQueueDepth,
 } from "@thresh/observability/durable-job-metrics";
 
@@ -45,6 +46,12 @@ describe("durable-job metrics", () => {
     expect(started!.dataPoints[0]!.value).toBe(2);
     expect(completed!.dataPoints[0]!.value).toBe(1);
     expect(failed!.dataPoints[0]!.value).toBe(1);
+  });
+
+  it("counts poisoned shards", async () => {
+    recordShardPoisoned({ "thresh.job.shard": 3 });
+    const poisoned = await metric("thresh.durablejobs.shard.poisoned");
+    expect(poisoned!.dataPoints[0]!.value).toBe(1);
   });
 
   it("samples the queue-depth observable gauge from the given callback", async () => {

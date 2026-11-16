@@ -1,3 +1,5 @@
+import { markFrameworkGrainBase } from "./remote-method-surface";
+import { writeDurableState } from "./durable-state-metadata";
 import type { GrainContext } from "./grain-context";
 import type { GrainId } from "./grain-id";
 import type { GrainInterface } from "./grain-interface";
@@ -35,6 +37,17 @@ export abstract class Grain {
     return this.context.runtime.getGrain(def, key);
   }
 
+  /**
+   * Orleans' `DurableGrain.WriteStateAsync`: append everything the grain's durable structures
+   * (`@durableState`, `@durableDictionary`, `@durableList`, `@durableQueue`, `@durableSet`) have
+   * buffered since the last write, across all of them, in ONE storage write. Mutations are in
+   * memory only until this resolves; a grain that is deactivated without writing loses them.
+   * Rejects if the grain has no durable state.
+   */
+  protected writeDurableState(): Promise<void> {
+    return writeDurableState(this);
+  }
+
   onActivate(_reason: ActivationReason): Promise<void> {
     return Promise.resolve();
   }
@@ -49,3 +62,5 @@ export abstract class Grain {
     return Promise.resolve();
   }
 }
+
+markFrameworkGrainBase(Grain);

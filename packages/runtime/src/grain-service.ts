@@ -1,5 +1,5 @@
 import type { GrainInterface } from "@thresh/core/grain-interface";
-import { noopLogger, type Logger } from "@thresh/core/logger";
+import { defaultLogger, type Logger } from "@thresh/core/logger";
 
 /**
  * Lifecycle phase of a {@link GrainService} instance (Orleans
@@ -45,7 +45,7 @@ export abstract class GrainService {
    * matching the pre-existing (silent) behaviour for anyone who never
    * overrides `startInBackground()` — which raises nothing.
    */
-  protected logger: Logger = noopLogger;
+  protected logger: Logger = defaultLogger;
 
   /**
    * Invoked once at silo startup, before `start()`. Override to run setup;

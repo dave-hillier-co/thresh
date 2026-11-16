@@ -2,9 +2,23 @@ import type { GrainId } from "@thresh/core/grain-id";
 import type { GrainType } from "@thresh/core/grain-type";
 import type { SiloAddress } from "@thresh/core/silo-address";
 
-/** Per-silo resource signals for load-aware placement; extensible with cpu/memory later. */
+/**
+ * Per-silo resource signals for load-aware placement (the fields of Orleans'
+ * `SiloRuntimeStatistics` that `ResourceOptimizedPlacementDirector` reads). Every field is
+ * optional: a silo that has reported nothing for one leaves it out.
+ */
 export interface SiloResourceStats {
   activationCount?: number;
+  /** Whether the silo is shedding load; such a silo is not scored. */
+  isOverloaded?: boolean;
+  /** CPU utilisation, 0-100. */
+  cpuUsagePercentage?: number;
+  /** Memory the silo's process uses, in bytes. */
+  memoryUsageBytes?: number;
+  /** Memory still available to the silo's process, in bytes. */
+  availableMemoryBytes?: number;
+  /** The most memory the silo's process can use, in bytes. */
+  maximumAvailableMemoryBytes?: number;
 }
 
 /** Information a placement strategy may consult when choosing a silo. */
@@ -21,7 +35,7 @@ export interface PlacementContext {
   activationCount?: (silo: SiloAddress) => number;
   /** Static metadata a silo advertises via membership (role, zone, ...), for metadata filters. */
   siloMetadata?: (silo: SiloAddress) => Readonly<Record<string, string>> | undefined;
-  /** Resource signals for resource-optimized placement; local from the catalog, remote from membership. */
+  /** Resource signals for resource-optimized placement; local read live, remote from the peer's last pushed load snapshot. */
   resourceStats?: (silo: SiloAddress) => SiloResourceStats | undefined;
   /**
    * Whether a silo is currently shedding load (Orleans `SiloRuntimeStatistics.IsOverloaded`,

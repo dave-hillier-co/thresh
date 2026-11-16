@@ -24,4 +24,5 @@ export interface IRoundtripSerializationGrain extends GrainKey<bigint> {
 }
 export const IRoundtripSerializationGrain = defineGrainInterface<IRoundtripSerializationGrain>(
   "UnitTests.GrainInterfaces.IRoundtripSerializationGrain",
+  { key: "integer" },
 );

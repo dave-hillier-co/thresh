@@ -1,7 +1,12 @@
 import type { createClient } from "redis";
 import { InconsistentStateError } from "@thresh/core/errors";
 import type { GrainId } from "@thresh/core/grain-id";
-import type { JournalEntry, JournalSegment, JournalStorage } from "@thresh/core/journal-storage";
+import {
+  backingObjectId,
+  type JournalEntry,
+  type JournalSegment,
+  type JournalStorage,
+} from "@thresh/core/journal-storage";
 import { DEFAULT_SERVICE_ID } from "@thresh/core/default-service-id";
 
 /** A connected node-redis client (the subset this provider drives). */
@@ -68,6 +73,8 @@ return redis.call('INCR', KEYS[2])`;
 export class RedisJournalStorage implements JournalStorage {
   private readonly keyPrefix: string;
   private readonly serviceId: string;
+  /** Two providers over one client, prefix and service share this key (see `JournalStorage.backingKey`). */
+  readonly backingKey: string;
 
   constructor(
     private readonly client: RedisClient,
@@ -75,6 +82,7 @@ export class RedisJournalStorage implements JournalStorage {
   ) {
     this.keyPrefix = options.keyPrefix ?? "thresh";
     this.serviceId = options.serviceId ?? DEFAULT_SERVICE_ID;
+    this.backingKey = `redis:${backingObjectId(client)}:${this.keyPrefix}:${this.serviceId}`;
   }
 
   async read(logName: string, grainId: GrainId, signal?: AbortSignal): Promise<JournalSegment> {

@@ -2,22 +2,27 @@ import { describe, expect, it } from "vitest";
 import { GrainId } from "@thresh/core/grain-id";
 import type { GrainType } from "@thresh/core/grain-type";
 import type { TimeProvider, TimerHandle } from "@thresh/core/time-provider";
-import type { ParticipantId, TransactionInfo } from "@thresh/core/transaction-info";
+import type { TransactionInfo } from "@thresh/core/transaction-info";
+import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
 import { invocationContext } from "@thresh/runtime/invocation-context";
 import { systemTimeProvider } from "@thresh/runtime/time-provider";
 import { TransactionAgent } from "@thresh/runtime/transaction-agent";
 import {
   TransactionAbortedError,
+  TransactionInDoubtError,
   TransactionLockUpgradeError,
   TransactionReadOnlyViolatedError,
 } from "@thresh/core/errors";
 import { MemoryTransactionalStorage } from "@thresh/transactions/memory-transactional-storage";
 import { TransactionalStateImpl } from "@thresh/transactions/transactional-state-impl";
 import type { TransactionalStateStorage } from "@thresh/core/transactional-storage";
-
-interface Balance {
-  cents: number;
-}
+import {
+  accountId,
+  openAccount,
+  settle,
+  TransactionNetwork,
+  type Balance,
+} from "@thresh/transactions/test-support/transaction-network";
 
 const grainId = (key: string) => new GrainId("Account" as GrainType, key);
 
@@ -116,20 +121,15 @@ describe("TransactionalStateImpl (Slice 2)", () => {
     await agent.resolve(check);
   });
 
-  it("does not report a commit as durable when the commit-record write fails", async () => {
-    // A storage whose `store` throws on the TM's commit-record write — the one
-    // call with no pending states and no commit/abort deltas.
+  it("does not report a commit as durable when the TM's commit write fails", async () => {
+    // A storage whose `store` throws on the TM's commit write: the one that
+    // carries the commit record.
     const inner = new MemoryTransactionalStorage();
-    let failRecordCommit = false;
+    let failCommit = false;
     const flaky: TransactionalStateStorage = {
       load: (stateName, id) => inner.load(stateName, id),
       store: (stateName, id, expectedETag, metadata, statesToPrepare, commitUpTo, abortAfter) => {
-        if (
-          failRecordCommit &&
-          statesToPrepare.length === 0 &&
-          commitUpTo === undefined &&
-          abortAfter === undefined
-        ) {
+        if (failCommit && Object.keys(metadata.commitRecords).length > 0) {
           throw new Error("durable write failed");
         }
         return inner.store(
@@ -143,45 +143,39 @@ describe("TransactionalStateImpl (Slice 2)", () => {
         );
       },
     };
-    const manager = new TransactionalStateImpl<Balance>(
-      "ledger",
-      grainId("tm"),
-      () => ({ cents: 0 }),
-      flaky,
-    );
-    await manager.load();
+    const clock = new FakeTimeProvider();
+    const network = new TransactionNetwork();
+    const ping = { remoteTransactionPingFrequencyMs: 1_000 };
+    const tm = await openAccount(network, flaky, "tm", clock, ping, 0);
+    const b = await openAccount(network, inner, "b", clock, ping, 0);
+    const local = new TransactionAgent(clock);
+    const transfer = async () => {
+      const tx = local.startTransaction();
+      await inTransaction(tx, () => tm.performUpdate((s) => (s.cents += 1)));
+      await inTransaction(tx, () => b.performUpdate((s) => (s.cents += 1)));
+      return tx;
+    };
 
-    failRecordCommit = true;
-    await expect(manager.recordCommit("T1", 1, [])).rejects.toThrow("durable write failed");
+    failCommit = true;
+    // The agent cannot tell whether the write landed: in doubt, not committed.
+    await expect(local.resolve(await transfer())).rejects.toBeInstanceOf(TransactionInDoubtError);
+    // Nothing is durable at the TM, so the participant that voted learns of
+    // the abort when it pings, and rolls back: one outcome everywhere.
+    failCommit = false;
+    clock.advance(1_000);
+    await settle();
+    expect((await inner.load("balance", accountId("tm"))).committedSequenceId).toBe(0);
+    const bAfter = await inner.load("balance", accountId("b"));
+    expect(bAfter.pendingStates).toEqual([]);
+    expect(bAfter.committedSequenceId).toBe(0);
 
-    // `status` is what a participant's recovery query reads, so the live
-    // manager must never answer "committed" for a record that is not durable:
-    // a participant would commit on that answer, while the TM's own pending
-    // record resolves to abort once the TM reactivates over the same storage —
-    // one transaction, two outcomes, decided by which activation answers.
-    expect(manager.status("T1")).toBe(false);
-    const reloaded = new TransactionalStateImpl<Balance>(
-      "ledger",
-      grainId("tm"),
-      () => ({ cents: 0 }),
-      inner,
-    );
-    await reloaded.load();
-    expect(reloaded.status("T1")).toBe(false);
-
-    // The normal path is unchanged: once the write lands, both the live
-    // manager and a fresh activation over the same storage report committed.
-    failRecordCommit = false;
-    await manager.recordCommit("T2", 2, []);
-    expect(manager.status("T2")).toBe(true);
-    const afterCommit = new TransactionalStateImpl<Balance>(
-      "ledger",
-      grainId("tm"),
-      () => ({ cents: 0 }),
-      inner,
-    );
-    await afterCommit.load();
-    expect(afterCommit.status("T2")).toBe(true);
+    // The normal path: once the write lands both commit, and the record goes.
+    await local.resolve(await transfer());
+    await settle();
+    const tmAfter = await inner.load("balance", accountId("tm"));
+    expect(tmAfter.committedState).toEqual({ cents: 1 });
+    expect(tmAfter.metadata.commitRecords).toEqual({});
+    expect((await inner.load("balance", accountId("b"))).committedState).toEqual({ cents: 1 });
   });
 
   it("a transaction sees its own tentative writes within the transaction", async () => {
@@ -276,7 +270,7 @@ describe("TransactionalStateImpl (Slice 2)", () => {
       () => ({ cents: 100 }),
       storage,
       undefined,
-      { lockTimeoutMs: 5_000 },
+      { lockAcquireTimeoutMs: 5_000 },
       clock,
     );
     await contended.load();
@@ -289,7 +283,7 @@ describe("TransactionalStateImpl (Slice 2)", () => {
       () => ({ cents: 0 }),
       new MemoryTransactionalStorage(),
       undefined,
-      { lockTimeoutMs: 5_000 },
+      { lockAcquireTimeoutMs: 5_000 },
       clock,
     );
     await other.load();
@@ -391,462 +385,6 @@ describe("TransactionalStateImpl (Slice 2)", () => {
 
     const check = agent.startTransaction();
     expect(await inTransaction(check, () => state.performRead((s) => s.cents))).toBe(105);
-    await agent.resolve(check);
-  });
-
-  /** A deterministic fake clock in the same shape the lock-deadline test above uses. */
-  function fakeClock(): TimeProvider & { advance(ms: number): Promise<void> } {
-    let current = 0;
-    const timers = new Map<number, { at: number; fire: () => void }>();
-    let nextId = 1;
-    const fireDue = () => {
-      for (const [id, t] of [...timers]) {
-        if (t.at <= current) {
-          timers.delete(id);
-          t.fire();
-        }
-      }
-    };
-    return {
-      now: () => current,
-      setTimer: (handler, delayMs): TimerHandle => {
-        const id = nextId++;
-        timers.set(id, { at: current + delayMs, fire: handler });
-        return id;
-      },
-      clearTimer: (handle) => {
-        timers.delete(handle as number);
-      },
-      advance: async (ms: number) => {
-        current += ms;
-        fireDue();
-        await Promise.resolve();
-        await Promise.resolve();
-      },
-    };
-  }
-
-  it("re-resolves an in-doubt pending record via a periodic confirmation worker after the TM crashes", async () => {
-    // A prepared-but-uncommitted record whose TM is a different, remote
-    // participant — simulating a crash right after prepare, before commit.
-    const clock = fakeClock();
-    const storage = new MemoryTransactionalStorage();
-    const manager = { grainId: grainId("tm"), stateName: "balance" };
-
-    const seed = new TransactionalStateImpl<Balance>(
-      "balance",
-      grainId("a"),
-      () => ({ cents: 100 }),
-      storage,
-      undefined,
-      undefined,
-      clock,
-    );
-    await seed.load();
-    const tx = agent.startTransaction();
-    await inTransaction(tx, () => seed.performUpdate((s) => (s.cents = 250)));
-    await seed.prepare(tx.id, tx.timeStamp, manager);
-    // Crash: never commits/aborts, leaving the prepared record in-doubt.
-
-    // The reactivated facet's resolver: unreachable on the first attempt (the
-    // TM's silo is still down), answers "committed" on the second.
-    let calls = 0;
-    const resolveStatus = async (): Promise<boolean> => {
-      calls += 1;
-      if (calls === 1) throw new Error("TM unreachable");
-      return true;
-    };
-
-    const recovered = new TransactionalStateImpl<Balance>(
-      "balance",
-      grainId("a"),
-      () => ({ cents: 100 }),
-      storage,
-      resolveStatus,
-      { confirmationIntervalMs: 1_000, confirmationMaxIntervalMs: 5_000 },
-      clock,
-    );
-    await recovered.load();
-
-    // Recovery attempted once during load() and failed; the record is still
-    // in-doubt (not yet visible as committed) and no second attempt has run yet.
-    expect(calls).toBe(1);
-    const beforeRetry = agent.startTransaction();
-    expect(await inTransaction(beforeRetry, () => recovered.performRead((s) => s.cents))).toBe(100);
-    await agent.resolve(beforeRetry);
-
-    // Drive the confirmation worker's backoff delay: it retries and this time
-    // the TM answers "committed".
-    await clock.advance(1_000);
-    expect(calls).toBe(2);
-
-    const after = agent.startTransaction();
-    expect(await inTransaction(after, () => recovered.performRead((s) => s.cents))).toBe(250);
-    await agent.resolve(after);
-
-    // Resolved: the worker doesn't keep firing, and a fresh activation sees no
-    // pending record left to recover.
-    recovered.unload();
-    const reloaded = new TransactionalStateImpl<Balance>(
-      "balance",
-      grainId("a"),
-      () => ({ cents: 100 }),
-      storage,
-    );
-    await reloaded.load();
-    const check = agent.startTransaction();
-    expect(await inTransaction(check, () => reloaded.performRead((s) => s.cents))).toBe(250);
-    await agent.resolve(check);
-  });
-
-  /** The TM an in-doubt record was prepared against: remote, and never activated here. */
-  const tmManager = { grainId: grainId("tm"), stateName: "balance" };
-
-  /**
-   * Stage `cents` for a transaction on `storage` whose activation then crashes
-   * mid-commit, leaving a prepared record behind at sequence id 1 — the in-doubt
-   * state a reactivated facet has to resolve. Returns the crashed transaction's id.
-   */
-  async function seedInDoubt(
-    storage: MemoryTransactionalStorage,
-    clock: TimeProvider & { advance(ms: number): Promise<void> },
-    cents = 250,
-  ): Promise<string> {
-    const crashed = new TransactionalStateImpl<Balance>(
-      "balance",
-      grainId("a"),
-      () => ({ cents: 100 }),
-      storage,
-      undefined,
-      undefined,
-      clock,
-    );
-    await crashed.load();
-    const tx = agent.startTransaction();
-    await inTransaction(tx, () => crashed.performUpdate((s) => (s.cents = cents)));
-    await crashed.prepare(tx.id, tx.timeStamp, tmManager);
-    // Crash: never commits or aborts, leaving the prepared record in-doubt.
-    return tx.id;
-  }
-
-  it("resolves an in-doubt record without promoting a later live transaction's tentative state", async () => {
-    const clock = fakeClock();
-    const storage = new MemoryTransactionalStorage();
-    // T1 writes 250 and its activation dies mid-commit, leaving the staged
-    // record in doubt at sequence id 1.
-    const t1Id = await seedInDoubt(storage, clock);
-
-    // The reactivated facet cannot reach the TM, so T1 stays in doubt and the
-    // resource keeps serving — exactly what the confirmation worker is for.
-    let tmReachable = false;
-    const resolveStatus = async (): Promise<boolean> => {
-      if (!tmReachable) throw new Error("TM unreachable");
-      return true; // T1 committed
-    };
-    const activation = new TransactionalStateImpl<Balance>(
-      "balance",
-      grainId("a"),
-      () => ({ cents: 100 }),
-      storage,
-      resolveStatus,
-      { confirmationIntervalMs: 1_000, confirmationMaxIntervalMs: 5_000 },
-      clock,
-    );
-    await activation.load();
-
-    // T2 — a live transaction on the still-serving resource — writes and
-    // prepares. It must not be handed T1's sequence id: `store` replaces a
-    // pending state by sequence id, so it would overwrite T1's staged state,
-    // and recovery would then promote whatever record happens to sit at that id.
-    const t2 = agent.startTransaction();
-    await inTransaction(t2, () => activation.performUpdate((s) => (s.cents = 500)));
-    await activation.prepare(t2.id, t2.timeStamp, tmManager);
-
-    const staged = await storage.load("balance", grainId("a"));
-    expect(staged.pendingStates.map((p) => [p.sequenceId, p.transactionId])).toEqual([
-      [1, t1Id],
-      [2, t2.id],
-    ]);
-    expect(staged.pendingStates[0]?.state).toEqual({ cents: 250 });
-
-    // The TM becomes reachable and answers "T1 committed": recovery promotes
-    // sequence id 1 — T1's own state — leaving T2's record staged and unpromoted.
-    tmReachable = true;
-    await clock.advance(1_000);
-
-    // T2 then aborts. Its caller was told "aborted", so none of its write may
-    // be durable, and T1's committed write must still be.
-    await agent.abort(t2);
-
-    const durable = await storage.load("balance", grainId("a"));
-    expect(durable.committedSequenceId).toBe(1);
-    expect(durable.committedState).toEqual({ cents: 250 });
-    expect(durable.pendingStates).toEqual([]);
-
-    const reloaded = new TransactionalStateImpl<Balance>(
-      "balance",
-      grainId("a"),
-      () => ({ cents: 100 }),
-      storage,
-    );
-    await reloaded.load();
-    const check = agent.startTransaction();
-    expect(await inTransaction(check, () => reloaded.performRead((s) => s.cents))).toBe(250);
-    await agent.resolve(check);
-  });
-
-  it("keeps an unresolved record when a live transaction aborts", async () => {
-    const clock = fakeClock();
-    const storage = new MemoryTransactionalStorage();
-    // T1's staged record is left in doubt at sequence id 1.
-    const t1Id = await seedInDoubt(storage, clock);
-
-    let tmReachable = false;
-    const resolveStatus = async (): Promise<boolean> => {
-      if (!tmReachable) throw new Error("TM unreachable");
-      return true;
-    };
-    const activation = new TransactionalStateImpl<Balance>(
-      "balance",
-      grainId("a"),
-      () => ({ cents: 100 }),
-      storage,
-      resolveStatus,
-      { confirmationIntervalMs: 1_000, confirmationMaxIntervalMs: 5_000 },
-      clock,
-    );
-    await activation.load();
-
-    // A live transaction stages its own write at id 2, then its caller aborts it.
-    const t2 = agent.startTransaction();
-    await inTransaction(t2, () => activation.performUpdate((s) => (s.cents = 500)));
-    await activation.prepare(t2.id, t2.timeStamp, tmManager);
-    await agent.abort(t2);
-
-    // Aborting T2 may only discard T2's record. T1 is a different transaction
-    // whose fate is still undecided, and dropping its staged state would lose
-    // T1's write for good even if its TM later reports it committed.
-    const staged = await storage.load("balance", grainId("a"));
-    expect(staged.pendingStates.map((p) => [p.sequenceId, p.transactionId])).toEqual([[1, t1Id]]);
-
-    // The TM comes back, the confirmation worker resolves T1 as committed, and
-    // the write staged all along becomes the committed version.
-    tmReachable = true;
-    await clock.advance(1_000);
-    const durable = await storage.load("balance", grainId("a"));
-    expect(durable.committedSequenceId).toBe(1);
-    expect(durable.committedState).toEqual({ cents: 250 });
-  });
-
-  it("does not adopt a record a later commit already promoted past", async () => {
-    const clock = fakeClock();
-    const storage = new MemoryTransactionalStorage();
-    // T1's staged record (250) is left in doubt at sequence id 1.
-    await seedInDoubt(storage, clock);
-
-    let tmReachable = false;
-    const resolveStatus = async (): Promise<boolean> => {
-      if (!tmReachable) throw new Error("TM unreachable");
-      return true; // T1 committed
-    };
-    const activation = new TransactionalStateImpl<Balance>(
-      "balance",
-      grainId("a"),
-      () => ({ cents: 100 }),
-      storage,
-      resolveStatus,
-      { confirmationIntervalMs: 1_000, confirmationMaxIntervalMs: 5_000 },
-      clock,
-    );
-    await activation.load();
-
-    // A live transaction writes 500 and commits while T1 is still unresolved.
-    // Its sequence id is the higher one, so its commit promotes past T1's
-    // record: 500 at id 2 is the committed version from here on.
-    const t2 = agent.startTransaction();
-    await inTransaction(t2, () => activation.performUpdate((s) => (s.cents = 500)));
-    await activation.prepare(t2.id, t2.timeStamp, tmManager);
-    await activation.commit(t2.id);
-
-    // The TM comes back and answers "T1 committed" — but the record that
-    // resolution was raised for has been superseded by a later commit, so it is
-    // no longer the newest committed version. Adopting its state anyway would
-    // leave this activation reporting a value the durable record does not hold:
-    // a live TM and a fresh activation disagreeing over the same storage.
-    tmReachable = true;
-    await clock.advance(1_000);
-
-    const check = agent.startTransaction();
-    expect(await inTransaction(check, () => activation.performRead((s) => s.cents))).toBe(500);
-    await agent.resolve(check);
-
-    const durable = await storage.load("balance", grainId("a"));
-    expect(durable.committedSequenceId).toBe(2);
-    expect(durable.committedState).toEqual({ cents: 500 });
-  });
-
-  it("keeps a lower unresolved record when a higher one resolves as aborted", async () => {
-    const clock = fakeClock();
-    const storage = new MemoryTransactionalStorage();
-
-    // Two records staged on the same state, both unresolved: the lower one left
-    // in doubt by an activation that crashed, the higher one staged behind it by
-    // a later activation that crashed before it could commit or abort.
-    await storage.store(
-      "balance",
-      grainId("a"),
-      undefined,
-      { timeStamp: 1, commitRecords: {} },
-      [
-        {
-          sequenceId: 1,
-          transactionId: "T-lower",
-          timeStamp: 1,
-          transactionManager: tmManager,
-          state: { cents: 250 },
-        },
-        {
-          sequenceId: 2,
-          transactionId: "T-higher",
-          timeStamp: 2,
-          transactionManager: tmManager,
-          state: { cents: 400 },
-        },
-      ],
-      undefined,
-      undefined,
-    );
-
-    // The lower record's TM is unreachable; the higher one's answers that it
-    // never committed.
-    let lowerReachable = false;
-    const resolveStatus = async (_manager: ParticipantId, transactionId: string) => {
-      if (transactionId === "T-lower") {
-        if (!lowerReachable) throw new Error("TM unreachable");
-        return true;
-      }
-      return false;
-    };
-    const activation = new TransactionalStateImpl<Balance>(
-      "balance",
-      grainId("a"),
-      () => ({ cents: 100 }),
-      storage,
-      resolveStatus,
-      { confirmationIntervalMs: 1_000, confirmationMaxIntervalMs: 5_000 },
-      clock,
-    );
-    await activation.load();
-
-    // Dropping the aborted higher record may only discard that record. The
-    // lower one belongs to a different transaction whose fate is undecided, and
-    // dropping it would lose its write for good: the TM has no record left to
-    // promote once it does become reachable.
-    const staged = await storage.load("balance", grainId("a"));
-    expect(staged.pendingStates.map((p) => [p.sequenceId, p.transactionId])).toEqual([
-      [1, "T-lower"],
-    ]);
-
-    // With its TM reachable, the surviving record resolves as committed.
-    lowerReachable = true;
-    await clock.advance(1_000);
-    const durable = await storage.load("balance", grainId("a"));
-    expect(durable.committedSequenceId).toBe(1);
-    expect(durable.committedState).toEqual({ cents: 250 });
-  });
-
-  it("re-arms the confirmation worker when a resolution write fails", async () => {
-    // The record is left in doubt by an unreachable TM; the worker then gets
-    // an answer but its own durable write fails (an etag conflict with a live
-    // activation, or any provider error). The failure must not escape the
-    // pass: escaping is an unhandled rejection, and worse, it skips the
-    // reschedule — permanently disabling the one mechanism that resolves
-    // in-doubt records, while the record still looks pending.
-    const clock = fakeClock();
-    const storage = new MemoryTransactionalStorage();
-    const manager = { grainId: grainId("tm"), stateName: "balance" };
-
-    const seed = new TransactionalStateImpl<Balance>(
-      "balance",
-      grainId("a"),
-      () => ({ cents: 100 }),
-      storage,
-      undefined,
-      undefined,
-      clock,
-    );
-    await seed.load();
-    const tx = agent.startTransaction();
-    await inTransaction(tx, () => seed.performUpdate((s) => (s.cents = 250)));
-    await seed.prepare(tx.id, tx.timeStamp, manager);
-    // Crash: never commits/aborts, leaving the prepared record in-doubt.
-
-    // Resolution writes (the ones carrying a commit or abort delta) fail until
-    // `failResolutions` is cleared.
-    let failResolutions = true;
-    const flaky: TransactionalStateStorage = {
-      load: (stateName, id) => storage.load(stateName, id),
-      store: (stateName, id, expectedETag, metadata, statesToPrepare, commitUpTo, abortAfter) => {
-        if (failResolutions && (commitUpTo !== undefined || abortAfter !== undefined)) {
-          throw new Error("transactional store etag conflict");
-        }
-        return storage.store(
-          stateName,
-          id,
-          expectedETag,
-          metadata,
-          statesToPrepare,
-          commitUpTo,
-          abortAfter,
-        );
-      },
-    };
-
-    // Unreachable on the activation-time attempt (so the record stays in doubt
-    // and the worker is scheduled), reachable on every later attempt.
-    let calls = 0;
-    const resolveStatus = async (): Promise<boolean> => {
-      calls += 1;
-      if (calls === 1) throw new Error("TM unreachable");
-      return true;
-    };
-
-    const recovered = new TransactionalStateImpl<Balance>(
-      "balance",
-      grainId("a"),
-      () => ({ cents: 100 }),
-      flaky,
-      resolveStatus,
-      { confirmationIntervalMs: 1_000, confirmationMaxIntervalMs: 5_000 },
-      clock,
-    );
-    await recovered.load();
-    expect(calls).toBe(1);
-
-    // The worker's first pass does query the TM, then dies on the write.
-    await clock.advance(1_000);
-    expect(calls).toBe(2);
-
-    // It re-armed on its (doubled) backoff: one more pass, whose write now
-    // succeeds, resolves the record and commits the staged write.
-    failResolutions = false;
-    await clock.advance(2_000);
-    expect(calls).toBe(3);
-
-    const after = agent.startTransaction();
-    expect(await inTransaction(after, () => recovered.performRead((s) => s.cents))).toBe(250);
-    await agent.resolve(after);
-
-    recovered.unload();
-    const reloaded = new TransactionalStateImpl<Balance>(
-      "balance",
-      grainId("a"),
-      () => ({ cents: 100 }),
-      storage,
-    );
-    await reloaded.load();
-    const check = agent.startTransaction();
-    expect(await inTransaction(check, () => reloaded.performRead((s) => s.cents))).toBe(250);
     await agent.resolve(check);
   });
 });

@@ -25,4 +25,5 @@ export interface IPersonGrain extends GrainKey<Guid> {
 
 export const IPersonGrain = defineGrainInterface<IPersonGrain>(
   "UnitTests.GrainInterfaces.IPersonGrain",
+  { key: "guid" },
 );

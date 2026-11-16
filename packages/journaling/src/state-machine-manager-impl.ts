@@ -1,3 +1,4 @@
+import { InconsistentStateError } from "@thresh/core/errors";
 import type { GrainId } from "@thresh/core/grain-id";
 import type { JournalStorage } from "@thresh/core/journal-storage";
 import type { DurableStateMachine, StateMachineManager } from "@thresh/core/durable-state-machine";
@@ -10,9 +11,10 @@ interface LogEnvelope {
   /**
    * Frame kind: `"op"` = incremental mutation, `"snap"` = full-state snapshot,
    * `"vessel"` = buffered data kept for a currently-unregistered structure (see
-   * `RetirementRecord`).
+   * `RetirementRecord`), `"hist"` = history a machine keeps across compaction (see
+   * `DurableStateMachine.retainedHistory`); its payload is an array.
    */
-  k: "op" | "snap" | "vessel";
+  k: "op" | "snap" | "vessel" | "hist";
   /** Machine-specific payload (op/snapshot) or a `VesselPayload`; opaque to callers. */
   p: unknown;
 }
@@ -23,6 +25,8 @@ interface VesselPayload {
   count: number;
   /** Raw op/snapshot payloads applied to this name before/while unregistered. */
   ops: unknown[];
+  /** Retained-history payloads buffered for this name, restored ahead of `ops` on resurrection. */
+  history?: unknown[];
 }
 
 /**
@@ -35,6 +39,7 @@ interface VesselPayload {
  */
 interface RetirementRecord {
   ops: unknown[];
+  history: unknown[];
   compactionsSinceOrphaned: number;
 }
 
@@ -67,7 +72,14 @@ export class StateMachineManagerImpl implements StateMachineManager {
   private readonly retirementGraceCompactions: number;
   private readonly retiring = new Map<string, RetirementRecord>();
   private version: number | undefined;
+  /** Entries written since the log was last compacted: what the snapshot threshold counts. */
   private liveEntryCount = 0;
+  /** Serialised entries buffered by the machines since the last successful write, in call order. */
+  private buffered: string[] = [];
+  /** Set by a lost-writer conflict: the next `writeState` re-reads the log before writing. */
+  private needsRecovery = false;
+  /** Tail of the chain that runs storage writes one at a time (they share one version CAS). */
+  private writeChain: Promise<unknown> = Promise.resolve();
 
   constructor(
     private readonly logName: string,
@@ -91,17 +103,25 @@ export class StateMachineManagerImpl implements StateMachineManager {
   async replay(): Promise<void> {
     const segment = await this.storage.read(this.logName, this.grainId);
     this.version = segment.version;
-    this.liveEntryCount = segment.entries.length;
+    this.liveEntryCount = 0;
+    this.buffered = [];
+    this.needsRecovery = false;
     this.retiring.clear();
     for (const machine of this.machines.values()) machine.reset();
     for (const raw of segment.entries) {
       const env = deserializeValue<LogEnvelope>(raw);
+      // Retained history is not a mutation: it does not count towards the next compaction.
+      if (env.k !== "hist") this.liveEntryCount += 1;
       const machine = this.machines.get(env.m);
       if (machine !== undefined) {
         // Registered this activation: a vessel frame unwraps into the buffered
         // ops it holds (resurrection), applied in original order.
-        if (env.k === "vessel") {
-          for (const op of (env.p as VesselPayload).ops) machine.apply(op);
+        if (env.k === "hist") {
+          machine.applyHistory?.(env.p as unknown[]);
+        } else if (env.k === "vessel") {
+          const vessel = env.p as VesselPayload;
+          if (vessel.history !== undefined) machine.applyHistory?.(vessel.history);
+          for (const op of vessel.ops) machine.apply(op);
         } else {
           machine.apply(env.p);
         }
@@ -113,11 +133,17 @@ export class StateMachineManagerImpl implements StateMachineManager {
         const payload = env.p as VesselPayload;
         this.retiring.set(env.m, {
           ops: [...payload.ops],
+          history: [...(payload.history ?? [])],
           compactionsSinceOrphaned: payload.count,
         });
       } else {
-        const record = this.retiring.get(env.m) ?? { ops: [], compactionsSinceOrphaned: 0 };
-        record.ops.push(env.p);
+        const record = this.retiring.get(env.m) ?? {
+          ops: [],
+          history: [],
+          compactionsSinceOrphaned: 0,
+        };
+        if (env.k === "hist") record.history.push(...(env.p as unknown[]));
+        else record.ops.push(env.p);
         this.retiring.set(env.m, record);
       }
     }
@@ -127,7 +153,63 @@ export class StateMachineManagerImpl implements StateMachineManager {
     return this.appendRange(machineName, [payload]);
   }
 
-  async appendRange(machineName: string, payloads: readonly unknown[]): Promise<void> {
+  buffer(machineName: string, payload: unknown): void {
+    if (!this.machines.has(machineName)) {
+      throw new Error(`unknown durable state machine "${machineName}"`);
+    }
+    this.buffered.push(
+      serializeValue({ m: machineName, k: "op", p: payload } satisfies LogEnvelope),
+    );
+  }
+
+  writeState(): Promise<void> {
+    return this.serialised(async () => {
+      // Mirrors JournaledStateManager.WorkLoop: after a lost-writer signal the next work item
+      // recovers (reset, re-read) before it does anything else.
+      if (this.needsRecovery) await this.replay();
+      if (this.buffered.length === 0) return;
+      // Take the batch now; entries buffered while the write is in flight wait for the next one.
+      const entries = this.buffered;
+      this.buffered = [];
+      try {
+        this.version = await this.storage.append(this.logName, this.grainId, entries, this.version);
+      } catch (error) {
+        // The committed buffer is not consumed on failure: the entries stay pending, ahead of
+        // anything buffered meanwhile, and memory is left as it is.
+        this.buffered = [...entries, ...this.buffered];
+        if (error instanceof InconsistentStateError) this.needsRecovery = true;
+        throw error;
+      }
+      this.liveEntryCount += entries.length;
+      await this.compactIfDue();
+    });
+  }
+
+  appendRange(machineName: string, payloads: readonly unknown[]): Promise<void> {
+    return this.serialised(() => this.appendRangeNow(machineName, payloads));
+  }
+
+  /** Runs `work` after every earlier write has settled, whether it succeeded or failed. */
+  private serialised<T>(work: () => Promise<T>): Promise<T> {
+    const run = this.writeChain.then(work, work);
+    this.writeChain = run.catch(() => {});
+    return run;
+  }
+
+  /** Compact when the live log has outgrown the threshold and no mutation is waiting to be written. */
+  private async compactIfDue(): Promise<void> {
+    // A snapshot captures every machine's memory, so it must not run while buffered mutations
+    // exist: that would make unwritten changes durable outside a `writeState`.
+    if (this.buffered.length > 0) return;
+    // Keep the threshold above the machine count so we don't recompact on every append.
+    if (this.liveEntryCount < Math.max(this.snapshotThreshold, this.machines.size + 1)) return;
+    // The entries are already durable by the time we get here; a failure compacting them must
+    // not propagate into the caller, or a retrying caller would re-append the same entries.
+    // `liveEntryCount` is left as-is, so the next write tries again.
+    await this.compactNow().catch(() => {});
+  }
+
+  private async appendRangeNow(machineName: string, payloads: readonly unknown[]): Promise<void> {
     const machine = this.machines.get(machineName);
     if (machine === undefined) throw new Error(`unknown durable state machine "${machineName}"`);
     if (payloads.length === 0) return;
@@ -140,22 +222,32 @@ export class StateMachineManagerImpl implements StateMachineManager {
     this.version = await this.storage.append(this.logName, this.grainId, entries, this.version);
     for (const payload of payloads) machine.apply(payload);
     this.liveEntryCount += payloads.length;
-    // Keep the threshold above the machine count so we don't recompact on every append.
-    if (this.liveEntryCount >= Math.max(this.snapshotThreshold, this.machines.size + 1)) {
-      // The entry above is already durable and applied by the time we get
-      // here; a failure compacting it must not propagate into `append`'s
-      // caller, or a retrying caller (e.g. `DurableList.add`) would re-append
-      // and apply the same entry twice. `liveEntryCount` (and thus this
-      // threshold check) is left as-is, so the next append tries the
-      // compaction again.
-      await this.compact().catch(() => {});
-    }
+    await this.compactIfDue();
   }
 
-  async compact(): Promise<void> {
-    const frames = [...this.machines.values()].map((machine) =>
-      serializeValue({ m: machine.name, k: "snap", p: machine.snapshot() } satisfies LogEnvelope),
-    );
+  /**
+   * Force a snapshot + truncate. The snapshot is of every machine's memory, so mutations still
+   * buffered become durable in it (and the buffer is emptied), as in Orleans' snapshot work item.
+   */
+  compact(): Promise<void> {
+    return this.serialised(() => this.compactNow());
+  }
+
+  private async compactNow(): Promise<void> {
+    // History a machine keeps (a JournaledGrain's events) is written ahead of the snapshot frames:
+    // a snapshot makes activation fast, it does not license discarding history.
+    const frames: string[] = [];
+    for (const machine of this.machines.values()) {
+      const history = machine.retainedHistory?.() ?? [];
+      if (history.length === 0) continue;
+      frames.push(serializeValue({ m: machine.name, k: "hist", p: history } satisfies LogEnvelope));
+    }
+    const historyFrames = frames.length;
+    for (const machine of this.machines.values()) {
+      frames.push(
+        serializeValue({ m: machine.name, k: "snap", p: machine.snapshot() } satisfies LogEnvelope),
+      );
+    }
     // Work out the retirement bookkeeping this compaction implies, but only
     // commit it once the replace is durable: a failed compaction (swallowed by
     // the in-turn path in `append`, then retried) wrote nothing, so it must not
@@ -166,25 +258,36 @@ export class StateMachineManagerImpl implements StateMachineManager {
       // Grace period elapsed while still unregistered: purge for good by
       // simply not writing a frame for it.
       if (count >= this.retirementGraceCompactions) continue;
-      nextRetiring.set(name, { ops: record.ops, compactionsSinceOrphaned: count });
+      nextRetiring.set(name, {
+        ops: record.ops,
+        history: record.history,
+        compactionsSinceOrphaned: count,
+      });
       frames.push(
         serializeValue({
           m: name,
           k: "vessel",
-          p: { count, ops: record.ops } satisfies VesselPayload,
+          p: { count, ops: record.ops, history: record.history } satisfies VesselPayload,
         } satisfies LogEnvelope),
       );
     }
     this.version = await this.storage.replace(this.logName, this.grainId, frames, this.version);
-    this.liveEntryCount = frames.length;
+    this.liveEntryCount = frames.length - historyFrames;
+    this.buffered = [];
     this.retiring.clear();
     for (const [name, record] of nextRetiring) this.retiring.set(name, record);
+    for (const machine of this.machines.values()) machine.compacted?.();
   }
 
-  async clear(): Promise<void> {
+  clear(): Promise<void> {
+    return this.serialised(() => this.clearNow());
+  }
+
+  private async clearNow(): Promise<void> {
     await this.storage.clear(this.logName, this.grainId);
     this.version = undefined;
     this.liveEntryCount = 0;
+    this.buffered = [];
     this.retiring.clear();
     for (const machine of this.machines.values()) machine.reset();
   }

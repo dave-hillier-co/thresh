@@ -3,7 +3,10 @@ import type { StateMachineManager } from "@thresh/core/durable-state-machine";
 import { isCustomStorageHost, JournaledGrain } from "@thresh/core/journaled-grain";
 import type { JournalStorageRegistry } from "@thresh/journaling/journal-storage-registry";
 import { StateMachineManagerImpl } from "@thresh/journaling/state-machine-manager-impl";
-import { LogViewAdaptorImpl } from "@thresh/journaling/log-view-adaptor-impl";
+import {
+  LogViewAdaptorImpl,
+  type LogViewAdaptorOptions,
+} from "@thresh/journaling/log-view-adaptor-impl";
 import { CustomStorageLogViewAdaptorImpl } from "@thresh/journaling/custom-storage-log-view-adaptor-impl";
 
 /**
@@ -17,11 +20,13 @@ import { CustomStorageLogViewAdaptorImpl } from "@thresh/journaling/custom-stora
 export function installJournalViewAdaptor<TState, TEvent>(
   instance: JournaledGrain<TState, TEvent>,
   manager: StateMachineManager,
+  options: LogViewAdaptorOptions = {},
 ): void {
   const adaptor = new LogViewAdaptorImpl<TState, TEvent>(
     () => instance.initialState(),
     (state, event) => instance.transitionState(state, event),
     manager,
+    options,
   );
   manager.register(adaptor);
   instance.installLogViewAdaptor(adaptor);
@@ -49,6 +54,11 @@ export async function bindJournaledGrain(
     provider?: string;
     /** CAS attempts per confirm, for a custom-storage host. Ignored otherwise. */
     maxAttempts?: number;
+    /**
+     * Keep the JournaledGrain's events across compaction (default `false`: a snapshot replaces
+     * them); `true` opts in to whole-log retention. See `LogViewAdaptorOptions.retainEvents`.
+     */
+    retainEvents?: boolean;
   } = {},
 ): Promise<void> {
   if (!(instance instanceof JournaledGrain)) return;
@@ -70,7 +80,11 @@ export async function bindJournaledGrain(
     ...(opts.snapshotThreshold !== undefined ? { snapshotThreshold: opts.snapshotThreshold } : {}),
   });
 
-  installJournalViewAdaptor(instance, manager);
+  installJournalViewAdaptor(
+    instance,
+    manager,
+    opts.retainEvents !== undefined ? { retainEvents: opts.retainEvents } : {},
+  );
 
   if (opts.replay ?? true) await manager.replay();
 }

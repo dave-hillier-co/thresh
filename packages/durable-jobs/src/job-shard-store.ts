@@ -58,14 +58,19 @@ export interface JobShardStore {
    * (when `adoptFromDead` lists dead silo ring keys) currently owned by a dead
    * silo — in which case `adoptedCount` is incremented. A poisoned shard is never
    * claimable. Returns the resulting record on success, or `undefined` if the
-   * claim lost (another silo owns it, or it is poisoned).
+   * claim lost (another silo owns it, or it is poisoned, including by this very
+   * claim: the adoption that pushes the count past `maxAdoptedCount` poisons it).
    */
   claimShard(
     shardKey: number,
     owner: string,
     options: { adoptFromDead?: readonly string[]; maxAdoptedCount: number },
   ): Promise<ShardRecord | undefined>;
-  /** Release a shard this silo owns (graceful drain), so a successor can claim it. */
+  /**
+   * Release a shard this silo owns (graceful drain), so a successor can claim it.
+   * A graceful release resets `adoptedCount` to zero (Orleans' `ReleaseOwnership`):
+   * only adoptions from owners judged dead count toward poison.
+   */
   releaseShard(shardKey: number, owner: string): Promise<void>;
 }
 

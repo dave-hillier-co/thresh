@@ -27,4 +27,5 @@ export interface ILogTestGrain extends GrainKey<bigint> {
 
 export const ILogTestGrain = defineGrainInterface<ILogTestGrain>(
   "UnitTests.GrainInterfaces.ILogTestGrain",
+  { key: "integer" },
 );

@@ -46,7 +46,8 @@ from `ProcessPendingRequests` for a request `MayInvokeRequest` refuses). A long 
 on, or one every arrival may interleave with (a fully reentrant grain), is never deactivated.
 Deactivation marks the activation `invalid`, disposes its timers, rejects every queued and later
 turn with `RejectionError("noActivation")`, and unregisters it from the catalog and directory
-(`TurnScheduler`'s `onStuck` → `ActivationData.handleStuckTurn` → `Catalog.handleStuckActivation`).
+(`TurnScheduler`'s `onStuck` → `ActivationData.handleStuckTurn`, which runs the deactivation
+pipeline's unregister and removal steps).
 Those rejected calls never ran, so they are re-delivered to a fresh activation, Orleans' reroute:
 `LocalDispatcher` retries that exact rejection, and `DistributedDispatcher` re-resolves a cached
 route on `noActivation`. Like upstream, it never interrupts the wedged turn itself (JS has no thread
@@ -178,24 +179,39 @@ Routing is faithful to Orleans rather than shortcutting on this codebase's direc
 
 ---
 
-## 8. Directory hardening (versioned range locks, ACK'd handoff, crash-broadcast recovery)
+## 8. Directory hardening (range locks, snapshot transfer, recovery from the hosts)
 
-**Problem.** Recovery is best-effort one-shot pull. If the pull fails, entries are silently lost. Handoff snapshots are retained indefinitely if the successor never pulls. There is no versioned coordination across partition transitions, so a register racing with a view change can see incomplete state.
+**Done.** The design is [design-membership-and-directory.md](design-membership-and-directory.md)
+and it is built: the directory is served by a range-locked partition (`GrainDirectoryPartition` in
+`@thresh/directory`, a port of Orleans' `GrainDirectoryPartition`). This section keeps the problem
+as it was found and says what answers it.
 
-**Orleans.** `RangeChangeNotification` wedges block range access until the prior owner has finished transfer; `GrainDirectoryHandoffManager` orchestrates ACK-and-delete; on crash, all live silos broadcast recovery requests for ranges they newly own.
+**Problem (as found).** Recovery was a best-effort one-shot pull, so a failed pull silently lost
+entries. Entries moved to a successor sat in a per-grain map that nothing checked. A register
+racing with a view change could see incomplete state.
 
-**TS today.** Single post-join `recovery` Promise gates owned reads; one `recover` RPC per source; no ACK or expiration on handoff entries.
+**Orleans.** A range is locked across a view change until its entries have been transferred from the
+previous owner or rebuilt from the hosts (`AcquireRangeAsync`, `ReleaseRangeAsync`); callers wait.
+Requests carry the caller's view version, and an owner that does not own the hash answers "refresh
+required". A new owner whose previous owner is unknown asks every member for the activations it hosts
+in the range (`RecoverRegisteredActivations`).
 
-**Constraint.** `deviations.md` explicitly says K8s is the membership SSOT and we don't reintroduce gossip. Whatever we build must layer on K8s view changes, not replace them.
+**TS now.**
+- A view change locks the ranges a silo gains and loses before the view is applied. A lost range's
+  entries move into a snapshot keyed by the pair of view versions the silo moved between; the new owner
+  takes it only when it moved between exactly the same pair, acknowledges it, and the previous owner
+  drops it. Nothing is reported missing because it is in transit: requests wait on the lock.
+- Otherwise the new owner recovers the range by asking every member for the registered, live
+  activations it hosts in it. A member that refuses the connection hosts nothing and is an answer; one
+  that does not answer is asked again with backoff for as long as it is a member, and the range stays
+  locked. `directoryRecoveryPatience` (off by default) bounds the wait and unlocks the range, which is
+  logged and counted (`thresh.directory.recovery.patience_expired`).
+- A silo whose registration completed below its recovery version confirms it again; a duplicate
+  deactivates and forwards.
+- `checkIntegrity` (`TestCluster.checkIntegrity()`) verifies the result.
 
-**Options.**
-- **(A) Versioned range gate.** Replace the single `recovery` Promise with a per-range gate keyed by `(membershipVersion, rangeId)`. On view change, opens a gate per range that must transfer; closes when the source acknowledges drain or a timeout fires (rebuild lazily on miss). Targets the real race window without adding broadcast traffic.
-- **(B) ACK'd handoff with tombstone TTL.** Source retains handoff entries until the successor sends an explicit ACK; entries TTL out after `handoffTimeoutMs` if no ACK. Layers cleanly on top of (A).
-- **(C) Broadcast crash recovery.** On crash, every live silo enumerates ranges it newly owns and pulls from any silo that might have a copy. Matches Orleans but reintroduces a quasi-gossip pattern. Skip unless lazy reactivation proves insufficient.
-
-**Recommendation.** **(A) + (B)**. Skip (C) until we have evidence lazy reactivation is losing user-visible state. Add a metric (per item #7) for "lookups that resolved via lazy reactivation" so we can quantify the gap before adding broadcast.
-
-**Open questions.** What is the right `handoffTimeoutMs` default? (Orleans-equivalent is on the order of seconds.) How does the range gate interact with `StatelessWorker` (which bypasses the directory entirely)?
+**Not done, and decided against.** Broadcast crash recovery as a separate mechanism: recovery from
+the hosts covers it, and a crashed silo is recovered when Kubernetes removes it from the view.
 
 ---
 
@@ -285,37 +301,37 @@ Two further rules on fail-fast:
 
 ### How the single-activation guarantee survives — the crux
 
-The guarantee rests on one fact: **the only authority that may replace a directory entry pointing at a live-in-membership silo is that silo leaving the membership view.** `LocalDirectoryPartition.register` overwrites an existing entry in exactly two cases, and there is deliberately no "force" register:
+The guarantee rests on one fact: **the only authority that may replace a directory entry pointing at a live-in-membership silo is that silo leaving the membership view.** `GrainDirectoryPartition.register` overwrites an existing entry in exactly two cases, and there is deliberately no "force" register:
 
-1. `!isSiloLive(existing.silo)` — Orleans `RegisterCore`'s dead-silo overwrite. `ClusterNode` wires that predicate to `activeSilos(membership.current())`.
+1. `!view.isMember(existing.silo)` — Orleans `RegisterCore`'s dead-silo overwrite, evaluated against the view the partition has applied (`DirectoryView.isMember`): presence, not readiness, so a silo that is listed but not ready keeps its entries.
 2. The caller passes the exact `previous` address it means to replace (`grainAddressEquals`) — the known-stale-after-a-move case, used by migration.
 
 Case (2) is not available to a suspecting caller: passing the hung peer's address as `previous` would be a **forged CAS**, asserting "I know that activation is gone", which is exactly what a local timeout does not establish. Case (1) is membership-gated by construction — and note it is evaluated on the *range owner's* view, not the suspector's, which is why admitting suspicion as an input would make the CAS outcome depend on which caller arrived first.
 
 So suspicion is barred from every input to that decision:
 
-- **Never into `LocalDirectoryPartition`'s `isSiloLive` predicate.** Two independent disqualifications. It gates the dead-silo overwrite, so a local suspicion would hand out a second activation of a grain still live and serving. And that same partition answers *remote* lookups through `handleDirectoryRequest`, so a "local" suspicion injected there is published to every peer that asks — gossip in a different hat, failing `deviations.md` literally.
-- **Never into `buildRing()`.** A locally-suspicious ring makes this silo compute a different `ownerOf` than its peers, so registers and lookups for one grain reach two owners and the single-winner CAS stops being one.
+- **Never into the partition's membership test (`DirectoryView.isMember`).** Two independent disqualifications. It gates the dead-silo overwrite, so a local suspicion would hand out a second activation of a grain still live and serving. And that same partition answers *remote* requests through `handleDirectoryRequest`, so a "local" suspicion injected there is published to every peer that asks — gossip in a different hat, failing `deviations.md` literally.
+- **Never into the directory view's ring (`DirectoryView.ring`, built from the membership snapshot).** A locally-suspicious ring makes this silo compute a different `ownerOf` than its peers, so registers and lookups for one grain reach two owners and the single-winner CAS stops being one.
 - **Never `directory.unregister` an entry pointing at a suspect peer.** This is the most dangerous available action and it is one line away: `claimAndActivateLocally` already does this shape of repair for a stale *local* self-pointer. Applied to a remote entry on a merely-suspected peer it is a straight double activation.
-- **Never route a directory op away from the ring owner.** `DistributedGrainDirectory.route` derives the owner from `this.ring()`, which every silo computes identically from the same view; that agreement is *why* the register CAS is authoritative.
+- **Never route a directory op away from the ring owner.** `DistributedGrainDirectory.route` derives the owner from the applied view's ring, which every silo computes identically from the same view; that agreement is *why* the register CAS is authoritative.
 - **Never redirect a call to an existing activation.** `routeTo` follows the directory. A caller's private opinion of the host does not move state.
-- **Never suppress `otherActiveSilos()`, `beginRecovery`'s sources, or `pruneHandoffSnapshot`'s live set** — that silently drops handed-off entries destined for a silo that is still alive.
+- **Never suppress the members a recovery asks, or the partners a snapshot waits for** — a recovery rebuilt without a live member's activations unlocks a range missing entries, and a snapshot dropped for a partner that is still alive sends it to recovery for nothing.
 - **Never suppress `isClientOriginatedRequest`'s membership check** — a suppressed peer's requests would be misread as external-client traffic and gated as a gateway call.
 - **Never suppress the durable-job manager's `activeRingKeys`, or any other ownership set derived from membership.** This is the one re-placement authority in the tree that is about *work* rather than grains, and it is not covered by any bullet above. `LocalDurableJobManager` is handed `activeRingKeys: activeSilos(membership.current()).map(s => s.ringKey)` at `silo-builder.ts:1545` and again on every view change at `:1561`, and `refreshOwnership` (`local-durable-job-manager.ts:159-180`) claims any shard whose recorded `owner` is *absent from that set* — "owned by a dead silo" is decided entirely by set membership, with no CAS against the current owner's liveness. The same set picks the cross-silo forwarding target at `silo-builder.ts:1551-1556`. An implementer applying this design's stated spirit ("suppress the suspect peer wherever we pick a target") there would have two silos running executors for the same shard and firing the same jobs — the same class of break as a forged directory CAS, and with no etag to catch it, since two executors firing the same job is two legitimate deliveries, not one conflicting write. The pulling-stream ownership hook alongside it is protected only *indirectly*, by the ban on suppressing `buildRing()` (its ranges come from the ring); say so explicitly rather than relying on the reader to notice.
 
 This is also why suspicion must not be implemented as a `MembershipService` decorator that downgrades a member's status: every one of the sites above reads through `activeSilos()`, so a decorator hits them all at once. A decorator has an unrelated concrete break too — `SiloBuilder` derives the shutdown grace from `this.membership instanceof KubernetesMembership`, so wrapping the service silently collapses the drain grace to zero.
 
-What *does* authorise re-placement already works today without (C): K8s drops the endpoint → `KubernetesMembership` emits a new snapshot → `LocalDirectoryPartition.lookup`'s live check turns the peer's entries into misses (Orleans `IsSiloDead`), `updateView`'s `drain` classifies them `"drop"`, and the next call re-places through `placeAndInvoke`. Every directory op carries the sender's `appliedVersion`, which is the fencing token that linearises a register against a concurrent view change — a stale caller gets `staleView` and re-resolves.
+What *does* authorise re-placement already works today without (C): K8s drops the endpoint → `KubernetesMembership` emits a new snapshot → `GrainDirectoryPartition.applyView` deletes every entry hosted on the silo that left (and `lookup` hides one whose host is not a member, Orleans `IsSiloDead`), and the next call re-places through `placeAndInvoke`. Every directory op carries the sender's view version, which is the fencing token that linearises a register against a concurrent view change — an owner that does not own the hash in the version it holds answers "refresh required" and the caller re-resolves.
 
-**The Orleans mechanism this port lacks.** In Orleans, re-placement after a declared-dead silo is safe not because of the directory but because the dead silo *commits suicide*: a silo that reads its own status as dead in the membership table terminates rather than continuing to serve. There is no analogue for a pod that is wedged but that K8s has not killed. It is tempting to close this by having `SelfProbeWorker` fence itself when the silo observes *itself absent* from the active view — reject that: `KubernetesMembership.onSlices` always includes the local silo in the snapshot by design (a transient empty watch must not convince a silo the cluster vanished), so "absent from my own view" is unreachable under the only membership provider that has this problem. Persistence gives no cross-incarnation fencing beyond etags (`InconsistentStateError`), which catches a duplicate only if both activations write.
+**The Orleans mechanism this port lacks.** In Orleans, re-placement after a declared-dead silo is safe not because of the directory but because the dead silo *commits suicide*: a silo that reads its own status as dead in the membership table terminates rather than continuing to serve. There is no analogue for a pod that is wedged but that K8s has not killed. A silo does fence itself when its own view drops it (it sees itself removed from a listing it was previously in, design-membership-and-directory.md decision 1), but that is the case where Kubernetes has already removed the pod. A wedged pod that Kubernetes has not removed stays listed, so "absent from my own view" never fires for it, and `SelfProbeWorker` cannot be made to fence on that signal. Persistence gives no cross-incarnation fencing beyond etags (`InconsistentStateError`), which catches a duplicate only if both activations write.
 
 **Stage 3: self-fencing, and why it must be suicide-shaped rather than readiness-shaped.** The reachable self-fencing is the *inverted* one — evict the observer, never the observed — and it is the third stage of this design rather than part of the first: when suspected peers reach `ceil((n-1)/2)` and `n >= 3`, this silo stops suppressing and fences *itself*. It catches what the self-probe structurally cannot: the self-probe never leaves the process, so a wedged *egress* path (the exact case stage 3 exists for) is invisible to it while the local dispatcher stays perfectly healthy. And it is the suppression cap read from the other end, so the two compose with no dead zone.
 
 "Self-eviction is always permissible under K8s-as-authority" is *not* true of readiness alone, and an earlier draft of this note said it was. Failing readiness removes the endpoint; it does **not** stop the silo serving, and the two together are a double activation. The concrete break, entirely from code that exists today:
 
 1. Silo `S` has a wedged egress path and a healthy dispatcher. It suspects `ceil((n-1)/2)` peers and flips its readiness signal false; the kubelet drops `S`'s endpoint.
-2. Peer `P`'s `KubernetesMembership` snapshot loses `S`. The range owner `O` (which is not `S`) runs `updateView`, whose `partition.drain` classifies grain `G`'s entry for `S` as `"drop"` (`cluster-node.ts:1140-1141`, "host gone — grain reactivates"). The next call to `G` re-places it on `P`. This is correct and is the mechanism the design relies on.
-3. Meanwhile `S` has not stopped. **Nothing in this port deactivates on readiness failure** — `SelfProbeWorker` only calls `health.update({ dispatcherResponsive: false })` (`self-probe.ts:103`), and the only caller of `catalog.deactivateAll` is `stop()` (`cluster-node.ts:1103-1108`). And as established two paragraphs above, `KubernetesMembership.onSlices` always includes the local silo, so `S` still reads itself as active. So `S` still holds `G`'s activation and still serves it: to any client using `S` as its gateway (`deliverToProxy`), to any locally-originated call, and — if `S` owns `G`'s range — through `S`'s own directory partition, whose `isSiloLive` predicate says `S` is live. Two live activations of `G`, both serving.
+2. Peer `P`'s `KubernetesMembership` snapshot loses `S`. The range owner `O` (which is not `S`) applies the view, and `GrainDirectoryPartition.applyView` deletes grain `G`'s entry for `S` because `S` is no longer a member. The next call to `G` re-places it on `P`. This is correct and is the mechanism the design relies on.
+3. Meanwhile `S` has not stopped. **Nothing in this port deactivates on readiness failure** — `SelfProbeWorker` only calls `health.update({ dispatcherResponsive: false })` (`self-probe.ts:103`), and the only caller of `catalog.deactivateAll` is `stop()` (`cluster-node.ts:1103-1108`). `S`'s own view is the same slices its peers see, so it sees itself removed and fences itself (the self-fence of decision 1) only after that removal has happened; until then, and for any silo that never sees its own removal (a held watch), nothing stops it. So `S` still holds `G`'s activation and still serves it: to any client using `S` as its gateway (`deliverToProxy`), to any locally-originated call, and — if `S` owns `G`'s range — through `S`'s own directory partition, whose applied view still lists `S` as a member. Two live activations of `G`, both serving.
 
 So stage 3 is defined as a **local, unforced replica of Orleans' suicide**, not as a readiness flip:
 
@@ -330,11 +346,11 @@ Guards, mirroring `SelfProbeWorker`: no trip while already draining (`health.isD
 
 ### Out of scope
 
-No K8s API writes and no RBAC for endpoint mutation (that is (B)). No cross-silo exchange of suspicion in any form — no gossip, no vote, no suspicion piggybacked on a directory answer. No change to `SiloMember.status` or to any `MembershipSnapshot`. No recovery of grains stranded on a wedged peer. No suspicion input to the directory, the ring, the location cache, handoff or recovery. No fail-fast on system messages. No `"siloUnavailable"` on the wire — it is raised locally only, so `serializeError`/`interpretResponse` wire compatibility is untouched during a rolling upgrade.
+No K8s API writes and no RBAC for endpoint mutation (that is (B)). No cross-silo exchange of suspicion in any form — no gossip, no vote, no suspicion piggybacked on a directory answer. No change to `SiloMember.status` or to any `MembershipSnapshot`. No recovery of grains stranded on a wedged peer. No suspicion input to the directory, the ring, the location cache, snapshot transfer or recovery. No fail-fast on system messages. No `"siloUnavailable"` on the wire — it is raised locally only, so `serializeError`/`interpretResponse` wire compatibility is untouched during a rolling upgrade.
 
 ### Risks and mitigations
 
-- **Scope creep in review** — "we know the peer is dead, why not re-place?" The guardrail must be a test plus a named comment at `isSiloLive`, `buildRing`, and the durable-job manager's `activeRingKeys`, because the enabling code is already present at all three and reads as an obvious simplification. The third is the one a future implementer is most likely to miss: it is about work, not grains, and it lives in `@thresh/hosting` rather than anywhere near the directory.
+- **Scope creep in review** — "we know the peer is dead, why not re-place?" The guardrail must be a test plus a named comment at `DirectoryView.isMember`, the directory view's ring, and the durable-job manager's `activeRingKeys`, because the enabling code is already present at all three and reads as an obvious simplification. The third is the one a future implementer is most likely to miss: it is about work, not grains, and it lives in `@thresh/hosting` rather than anywhere near the directory.
 - **`isStaleActivationRejection` as a silent re-placement trigger.** Adding `"siloUnavailable"` to that set is an easy, plausible-looking future edit that turns fail-fast into cache invalidation plus `placeAndInvoke`, with no test failing unless one asserts the set explicitly.
 - **Slow-but-alive peer starved.** Mitigated by counting only transport silence, never a reply of any kind, by keying off `callTimeoutMs` (30s default) rather than any application deadline, and by the epoch rule, which stops the late timeouts of pre-recovery calls from immediately re-tripping. Residual, stated accurately: a peer under sustained GC pressure that misses three same-epoch `callTimeoutMs` windows is suppressed for one full TTL and **cannot shorten it with application traffic** — fail-fast intercepts calls to its existing activations too (`routeTo` → `remote.send` → `sendRemote`), so recovery evidence comes only from system messages (directory ops as range owner, `pingSilo`, manifest, migration/recovery) or from the TTL expiring. The mitigation is therefore the TTL's size (30s), not "it recovers on the first success".
 - **Asymmetric partition** (A→B broken, B→A fine). A stops placing on B; B keeps placing on A. Suspicion neither causes nor fixes the partition — A's registers into ranges B *owns* fail regardless — it only stops A adding to the pile. Stage 3 is what resolves it, by draining and restarting A, and only at `n >= 3`; the `n >= 3` guard is load-bearing, since at `n = 2` both silos would otherwise fence themselves and empty the cluster.
@@ -350,7 +366,7 @@ No K8s API writes and no RBAC for endpoint mutation (that is (B)). No cross-silo
 3. `packages/core/src/errors.ts` — add `"siloUnavailable"` to `RejectionKind`, documented as locally-raised-only.
 4. `packages/runtime/src/cluster-node.ts` — construct `PeerSuspicion` when `options.peerSuspicion` is set; feed the connection-lost callback and the correlation hooks; fail fast at the top of `sendRemote`; wrap the dispatcher's `activeSilos` dep and `gatherClusterLoad` in `suppress`.
 5. `packages/runtime/src/placement/repartitioning/activation-repartitioner.ts` — the repartitioner has **no partner list in `ClusterNode` to wrap**: it is constructed with the whole `MembershipService` (`cluster-node.ts:657-668`) and computes its own partners at `activation-repartitioner.ts:225` via `activeSilos(this.deps.membership.current())`. Since a `MembershipService` decorator is forbidden above, the edit is: add `candidateSilos: () => SiloAddress[]` to `ActivationRepartitionerDeps` (defaulting to `activeSilos(this.deps.membership.current())` so existing construction sites are unaffected), replace the `activeSilos` call at `:225` with it, and have `ClusterNode` pass `() => suspicion.suppress(activeSilos(options.membership.current()))`.
-6. `packages/directory/src/local-directory-partition.ts`, `ClusterNode.buildRing`, and `packages/hosting/src/silo-builder.ts` — comment only, in the style of the existing Orleans `IsSiloDead` citation: why suspicion must never reach `isSiloLive`, the ring, or the durable-job manager's `activeRingKeys` (`:1545`/`:1551`/`:1561`).
+6. `packages/directory/src/grain-directory-partition.ts`, `packages/directory/src/directory-view.ts`, and `packages/hosting/src/silo-builder.ts` — comment only, in the style of the existing Orleans `IsSiloDead` citation: why suspicion must never reach the membership test, the ring, or the durable-job manager's `activeRingKeys`.
 7. `packages/observability/src/runtime-metrics.ts` — the suspicion and suppression counters.
 8. `packages/hosting/src/silo-builder.ts` — a `peerSuspicion` config block alongside `selfProbe`, off by default.
 9. Stage 3 only: `packages/hosting/src/health-check.ts` — the `peerReachability` signal and its `ready()` check (the diagnosis), plus a self-fence trigger in `@thresh/hosting` that runs the *existing* shutdown path — `health.update({ draining: true })` then the host stop that calls `catalog.deactivateAll` before closing transport — and then exits non-zero. No new drain machinery; stage 3 is a caller of the shutdown path, which is why it is credible as suicide.

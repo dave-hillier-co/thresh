@@ -1,31 +1,51 @@
 /**
  * Tunables for the transactions subsystem, mirroring Orleans'
- * `TransactionalStateOptions`. Only the options we exercise are modelled.
- *
- * `lockTimeoutMs` bounds how long a transaction may wait to acquire a state's
- * reader-writer lock before it is aborted with a deadline-exceeded reason.
- * Orleans' default is 8s; we default to 30s to match the value referenced in
- * the durable-transactions roadmap.
+ * `TransactionalStateOptions` (`Orleans.Transactions/State/TransactionalStateOptions.cs`).
+ * Only the options we exercise are modelled, under Orleans' names and defaults.
  */
 export interface TransactionsOptions {
-  /** Maximum wait time when acquiring a state's lock, in milliseconds. */
+  /**
+   * Orleans `LockTimeout`: the longest a group of transactions may hold a
+   * state's lock, in milliseconds. When it passes, the holders that have not
+   * prepared lose the lock and their tentative state is rolled back, so their
+   * later prepare votes no and waiting transactions proceed. Extended whenever
+   * another transaction joins the holders, as Orleans extends its lock group's
+   * deadline.
+   */
   readonly lockTimeoutMs: number;
   /**
-   * Initial delay before the confirmation worker retries an in-doubt pending
-   * record whose TM could not be reached during activation `load()`. Doubles
-   * on each further failed attempt, capped at `confirmationMaxIntervalMs`.
+   * Orleans `LockAcquireTimeout`: the longest a transaction may wait to
+   * acquire a state's lock before it is aborted with a deadline-exceeded reason.
    */
-  readonly confirmationIntervalMs: number;
-  /** Cap on the confirmation worker's backoff delay, in milliseconds. */
-  readonly confirmationMaxIntervalMs: number;
+  readonly lockAcquireTimeoutMs: number;
+  /**
+   * Orleans `PrepareTimeout`: the longest the TM's commit queue waits for the
+   * `prepared` votes of a transaction at its head before it aborts it.
+   */
+  readonly prepareTimeoutMs: number;
+  /**
+   * Orleans `RemoteTransactionPingFrequency`: how often a prepared participant
+   * that has not heard the outcome pings its TM.
+   */
+  readonly remoteTransactionPingFrequencyMs: number;
+  /**
+   * Orleans `ConfirmationRetryDelay`: how long the TM waits before it resends
+   * a `confirm` a participant did not acknowledge, or retries removing a
+   * commit record whose write failed.
+   */
+  readonly confirmationRetryDelayMs: number;
 }
 
-export const DEFAULT_LOCK_TIMEOUT_MS = 30_000;
-export const DEFAULT_CONFIRMATION_INTERVAL_MS = 1_000;
-export const DEFAULT_CONFIRMATION_MAX_INTERVAL_MS = 60_000;
+export const DEFAULT_LOCK_TIMEOUT_MS = 8_000;
+export const DEFAULT_LOCK_ACQUIRE_TIMEOUT_MS = 10_000;
+export const DEFAULT_PREPARE_TIMEOUT_MS = 20_000;
+export const DEFAULT_REMOTE_TRANSACTION_PING_FREQUENCY_MS = 60_000;
+export const DEFAULT_CONFIRMATION_RETRY_DELAY_MS = 30_000;
 
 export const defaultTransactionsOptions: TransactionsOptions = {
   lockTimeoutMs: DEFAULT_LOCK_TIMEOUT_MS,
-  confirmationIntervalMs: DEFAULT_CONFIRMATION_INTERVAL_MS,
-  confirmationMaxIntervalMs: DEFAULT_CONFIRMATION_MAX_INTERVAL_MS,
+  lockAcquireTimeoutMs: DEFAULT_LOCK_ACQUIRE_TIMEOUT_MS,
+  prepareTimeoutMs: DEFAULT_PREPARE_TIMEOUT_MS,
+  remoteTransactionPingFrequencyMs: DEFAULT_REMOTE_TRANSACTION_PING_FREQUENCY_MS,
+  confirmationRetryDelayMs: DEFAULT_CONFIRMATION_RETRY_DELAY_MS,
 };

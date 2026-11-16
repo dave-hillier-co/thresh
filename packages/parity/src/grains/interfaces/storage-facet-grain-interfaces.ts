@@ -9,19 +9,23 @@ export interface IStorageFacetGrain extends GrainKey<bigint> {
 
 export const IStorageFacetGrain = defineGrainInterface<IStorageFacetGrain>(
   "Tester.IStorageFacetGrain",
+  { key: "integer" },
 );
 
 export type IStorageFactoryGrain = IStorageFacetGrain;
 export const IStorageFactoryGrain = defineGrainInterface<IStorageFactoryGrain>(
   "Tester.IStorageFactoryGrain",
+  { key: "integer" },
 );
 
 export type IStorageDefaultFacetGrain = IStorageFacetGrain;
 export const IStorageDefaultFacetGrain = defineGrainInterface<IStorageDefaultFacetGrain>(
   "Tester.IStorageDefaultFacetGrain",
+  { key: "integer" },
 );
 
 export type IStorageDefaultFactoryGrain = IStorageFacetGrain;
 export const IStorageDefaultFactoryGrain = defineGrainInterface<IStorageDefaultFactoryGrain>(
   "Tester.IStorageDefaultFactoryGrain",
+  { key: "integer" },
 );

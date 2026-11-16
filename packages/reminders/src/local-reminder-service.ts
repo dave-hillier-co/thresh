@@ -1,7 +1,7 @@
 import { durationToMs, type Duration } from "@thresh/core/duration";
 import type { GrainId } from "@thresh/core/grain-id";
 import { isHashInRanges, type HashRange } from "@thresh/core/hash-ring";
-import { noopLogger, type Logger } from "@thresh/core/logger";
+import { defaultLogger, type Logger } from "@thresh/core/logger";
 import { recordReminderFired, recordReminderMissed } from "@thresh/observability/reminder-metrics";
 import type {
   ReminderEntry,
@@ -62,6 +62,13 @@ export class LocalReminderService implements ReminderRegistry {
   private readonly minimumPeriodMs: number;
   /** Orleans `localTableSequence`: bumped at each reconcile read and each local (re)schedule. */
   private localSequence = 0;
+  /**
+   * Set by `stop()` and never cleared: a stopped service arms no timer again. A membership
+   * reconcile, a table read or a tick delivery still in flight when the silo stopped would
+   * otherwise re-arm the refresh (which then re-arms itself for ever) or a reminder tick, and
+   * keep the process alive after the silo is gone.
+   */
+  private stopped = false;
 
   constructor(
     private readonly table: ReminderTable,
@@ -73,7 +80,7 @@ export class LocalReminderService implements ReminderRegistry {
     options: ReminderServiceOptions = {},
   ) {
     this.ranges = ranges;
-    this.logger = options.logger ?? noopLogger;
+    this.logger = options.logger ?? defaultLogger;
     this.minimumPeriodMs =
       options.minimumPeriod === undefined
         ? DEFAULT_MINIMUM_PERIOD_MS
@@ -115,6 +122,7 @@ export class LocalReminderService implements ReminderRegistry {
 
   /** On a membership change (or first start): adopt the given ranges and reconcile. */
   async refreshOwnership(ranges: readonly HashRange[]): Promise<void> {
+    if (this.stopped) return;
     this.ranges = ranges;
     try {
       await this.reconcile();
@@ -126,6 +134,7 @@ export class LocalReminderService implements ReminderRegistry {
   }
 
   stop(): void {
+    this.stopped = true;
     if (this.refreshHandle !== undefined) this.time.clearTimer(this.refreshHandle);
     this.refreshHandle = undefined;
     this.cancelAll();
@@ -167,7 +176,7 @@ export class LocalReminderService implements ReminderRegistry {
   }
 
   private scheduleRefresh(): void {
-    if (this.refreshIntervalMs <= 0) return;
+    if (this.stopped || this.refreshIntervalMs <= 0) return;
     if (this.refreshHandle !== undefined) this.time.clearTimer(this.refreshHandle);
     this.refreshHandle = this.time.setTimer(() => {
       this.scheduleRefresh(); // re-arm before reconciling, so the cadence is steady
@@ -190,12 +199,21 @@ export class LocalReminderService implements ReminderRegistry {
    * reconciled onto a new owner, with a long-past `startAt` doesn't fire
    * immediately — issue: reminder fires a catch-up tick after downtime) and
    * after every fire (so ticks stay on the grid instead of drifting by
-   * fire-time + period — issue: reminder double-fire on rebalance).
+   * fire-time + period — issue: reminder double-fire on rebalance). The one
+   * exception to the skip is a reminder that has never fired at all: see below.
    */
   private nextDueAt(entry: ReminderEntry): Date {
     const periodMs = durationToMs(entry.period);
     if (periodMs <= 0) return entry.startAt; // one-shot: never reconciled/rescheduled after firing
     const startMs = entry.startAt.getTime();
+    // A registration that has never fired, discovered after its first due time
+    // (it was registered on a silo that does not own its range, and this owner
+    // only found the row at a refresh): no tick has been delivered, so none was
+    // "missed" on the grid. Fire it now rather than skip a whole period. Only a
+    // reminder that HAS fired stays on its grid.
+    if (entry.lastFiredAt === undefined && startMs <= this.time.now()) {
+      return new Date(this.time.now());
+    }
     // Like CalculateInitialDueTime, measure from *now*: the first grid
     // boundary at or after now (a boundary exactly at now is due now). A
     // recorded tick only ever pushes that later — never to a boundary that is
@@ -210,6 +228,7 @@ export class LocalReminderService implements ReminderRegistry {
   }
 
   private scheduleEntry(entry: ReminderEntry, firstDueAt: Date = this.nextDueAt(entry)): void {
+    if (this.stopped) return;
     const key = this.key(entry.grainId, entry.name);
     this.cancel(key);
     const dueMs = Math.max(0, firstDueAt.getTime() - this.time.now());
@@ -223,9 +242,10 @@ export class LocalReminderService implements ReminderRegistry {
   private fire(entry: ReminderEntry): void {
     const key = this.key(entry.grainId, entry.name);
     const current = this.scheduled.get(key);
-    if (current === undefined) return;
+    if (current === undefined || this.stopped) return;
     const periodMs = durationToMs(entry.period);
     const firedAt = new Date(this.time.now());
+    let scheduledNext: Scheduled | undefined;
     if (periodMs > 0) {
       // Reschedule first (fixed-rate) before delivering the tick. Persist the
       // tick instant so a future owner (rebalance/restart) resumes from it
@@ -234,11 +254,54 @@ export class LocalReminderService implements ReminderRegistry {
       // so a late tick doesn't drag every later tick's schedule with it.
       const tickedEntry: ReminderEntry = { ...entry, lastFiredAt: firedAt };
       const nextDueMs = Math.max(0, this.nextDueAt(tickedEntry).getTime() - this.time.now());
-      this.scheduled.set(key, {
+      scheduledNext = {
         entry: tickedEntry,
         handle: this.time.setTimer(() => this.fire(tickedEntry), nextDueMs),
         sequence: current.sequence, // same registration, just its next tick
+      };
+      this.scheduled.set(key, scheduledNext);
+    } else {
+      // One-shot: done locally; it is removed from the table below, once its
+      // registration is confirmed, so a refresh can't re-fire it.
+      this.scheduled.delete(key);
+    }
+    void this.deliverIfRegistered(entry, firedAt, scheduledNext);
+  }
+
+  /**
+   * Deliver one tick only if the registration it belongs to is still the table's.
+   * The owner schedules from what it read at its last refresh, but an unregister
+   * or re-registration may have gone through any silo since (Orleans routes both
+   * to the range owner; here there is no owner-routed call), so the table is
+   * checked at each tick and a stale schedule is dropped rather than delivered.
+   * A failed check is logged and the tick delivered anyway: a table blip must not
+   * silence a live reminder.
+   */
+  private async deliverIfRegistered(
+    entry: ReminderEntry,
+    firedAt: Date,
+    scheduledNext: Scheduled | undefined,
+  ): Promise<void> {
+    const key = this.key(entry.grainId, entry.name);
+    try {
+      const row = await this.table.read(entry.grainId, entry.name);
+      if (row === undefined || row.etag !== entry.etag) {
+        // Unregistered, or replaced, since this schedule was made: drop this one.
+        if (scheduledNext !== undefined && this.scheduled.get(key) === scheduledNext) {
+          this.cancel(key);
+          // A replacement is the table's now; pick it up on the grid it defines.
+          if (row !== undefined && this.owns(row.grainId)) this.scheduleEntry(row);
+        }
+        return;
+      }
+    } catch (error) {
+      this.logger.error("reminder registration check failed", {
+        error,
+        grainId: entry.grainId.toString(),
+        name: entry.name,
       });
+    }
+    if (scheduledNext !== undefined) {
       void this.table
         .recordFired(entry.grainId, entry.name, entry.etag, firedAt)
         .catch((error: unknown) => {
@@ -249,8 +312,6 @@ export class LocalReminderService implements ReminderRegistry {
           });
         });
     } else {
-      // One-shot: done. Remove it from the table so a refresh can't re-fire it.
-      this.scheduled.delete(key);
       void this.table.remove(entry.grainId, entry.name, entry.etag).catch((error: unknown) => {
         this.logger.error("reminder one-shot cleanup failed", {
           error,
@@ -262,7 +323,8 @@ export class LocalReminderService implements ReminderRegistry {
     const status: TickStatus = {
       firstTickAt: entry.startAt,
       period: entry.period,
-      currentTickAt: new Date(this.time.now()),
+      // The instant the tick came due, not the instant the registration check returned.
+      currentTickAt: firedAt,
     };
     void this.onFire(entry.grainId, entry.name, status)
       .then(() => recordReminderFired({ "thresh.reminder.name": entry.name }))

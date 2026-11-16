@@ -39,6 +39,9 @@ class MembershipView implements MembershipService {
   updates() {
     return this.shared.updates();
   }
+  refresh(version: number) {
+    return this.shared.refresh(version);
+  }
   localSilo() {
     return this.local;
   }
@@ -89,7 +92,7 @@ describe("directory entries across a readiness flip (draining vs gone)", () => {
     try {
       expect(await nodes[0]!.getGrain(ICounter, key).increment(5)).toBe(5);
       expect(nodes[1]!.isActive(grainId)).toBe(true);
-      expect(nodes[0]!.partition.lookup(grainId)?.silo.equals(silo(1))).toBe(true);
+      expect(nodes[0]!.partition.entryFor(grainId)?.silo.equals(silo(1))).toBe(true);
 
       // silo-1's readiness flips (a rolling update's drain, or a failed probe):
       // it leaves the ring, but it is still a member of the view and still
@@ -98,7 +101,7 @@ describe("directory entries across a readiness flip (draining vs gone)", () => {
       nodes[0]!.updateView();
       nodes[1]!.updateView();
 
-      expect(nodes[0]!.partition.lookup(grainId)?.silo.equals(silo(1))).toBe(true);
+      expect(nodes[0]!.partition.entryFor(grainId)?.silo.equals(silo(1))).toBe(true);
 
       // The call therefore reaches the original activation with its state intact
       // rather than building a second one with divergent state.
@@ -134,7 +137,7 @@ describe("directory entries across a readiness flip (draining vs gone)", () => {
 
     try {
       expect(await nodes[0]!.getGrain(ICounter, key).increment(5)).toBe(5);
-      expect(nodes[0]!.partition.lookup(grainId)?.silo.equals(silo(1))).toBe(true);
+      expect(nodes[0]!.partition.entryFor(grainId)?.silo.equals(silo(1))).toBe(true);
 
       // The endpoint is removed (the pod is gone), not merely not ready: the
       // grain's host will never come back, so its entry is dead weight and the
@@ -144,7 +147,7 @@ describe("directory entries across a readiness flip (draining vs gone)", () => {
       nodes[0]!.updateView();
       nodes[1]!.updateView();
 
-      expect(nodes[0]!.partition.lookup(grainId)).toBeUndefined();
+      expect(nodes[0]!.partition.entryFor(grainId)).toBeUndefined();
     } finally {
       await nodes[0]!.stop();
       await nodes[1]!.stop();

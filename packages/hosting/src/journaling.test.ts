@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { durableDictionary, durableList, durableState, grain } from "@thresh/core/decorators";
-import { defineGrain, useDurableDictionary } from "@thresh/core/define-grain";
+import { defineGrain, useDurableDictionary, useWriteDurableState } from "@thresh/core/define-grain";
 import { Grain } from "@thresh/core/grain";
 import { GrainId } from "@thresh/core/grain-id";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
@@ -26,7 +26,8 @@ class CartGrain extends Grain implements ICart {
   private items!: DurableList<string>;
 
   async add(item: string): Promise<number> {
-    await this.items.add(item);
+    this.items.add(item);
+    await this.writeDurableState();
     return this.items.length;
   }
 
@@ -47,9 +48,11 @@ const IInventory = defineGrainInterface<IInventory>("IInventory", {
 
 const InventoryGrain = defineGrain<IInventory>("Inventory", () => {
   const stock = useDurableDictionary<string, number>("stock");
+  const writeState = useWriteDurableState();
   return {
     stock: async (sku, qty) => {
-      await stock.set(sku, qty);
+      stock.set(sku, qty);
+      await writeState();
     },
     qty: async (sku) => stock.get(sku),
     skus: async () => stock.size,
@@ -156,7 +159,8 @@ class WarehouseGrain extends Grain implements IWarehouse {
   private stockLevels!: DurableDictionary<string, number>;
 
   async stock(sku: string, qty: number): Promise<void> {
-    await this.stockLevels.set(sku, qty);
+    this.stockLevels.set(sku, qty);
+    await this.writeDurableState();
   }
 
   async qty(sku: string): Promise<number | undefined> {
@@ -344,7 +348,8 @@ class TabGrain extends JournaledGrain<number, TabEvent> {
   }
 
   async setLabel(label: string): Promise<void> {
-    await this.labelCell.set(label);
+    this.labelCell.set(label);
+    await this.writeDurableState();
   }
 
   async count(): Promise<number> {

@@ -27,6 +27,7 @@ describe("gateway providers", () => {
         silos: active.map((s) => ({ address: s, status: "active" as const })),
       }),
       updates: async function* () {},
+      refresh: async () => {},
       localSilo: () => silo(0),
     });
     expect((await provider.getGateways()).length).toBe(2);

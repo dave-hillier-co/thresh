@@ -56,6 +56,11 @@ stores above. Worth a service dimension eventually for tidiness, not urgently.
   - **Reminders/durable jobs:** `setTimeout` overflow past ~24.8 days (#101), non-owner reminder
     update (#102), stranded job shards (#103), backoff from poll start (#114), reminder catch-up
     drift (#115).
+- [Design review — 2026-11-14](docs/project-review-2026-11-14.md) — a read for design issues rather
+  than line-level bugs: responsibilities in the wrong place, invariants held by timing, mechanisms
+  that should be one, and holes in the failure model. About 60 findings in nine groups, the most
+  serious reproduced by probes against the production wiring (Kubernetes membership composed with
+  the host and node) that no test in the suite exercises. Indexed below.
 - The 2026-09-02 correctness review's findings were fixed in-tree (transaction lock release /
   in-doubt `recordCommit`, transport `'error'` handling and per-peer fast-fail, monotonic stream
   cursors, drained durable-job stop, reminder `lastFiredAt`, codec prototype-pollution guard,
@@ -78,12 +83,8 @@ stores above. Worth a service dimension eventually for tidiness, not urgently.
       `dispatchDetachingOneWay`.
 - [ ] `LocalDispatcher`'s logger is not wired from `SiloOptions` (there is no logger option there),
       so a `Silo`-hosted (non-`createSilo`) host logs detached one-way failures to `noopLogger`.
-- [ ] `serveRecover()` is unfiltered by requester: it serves the whole `handoffSnapshot` to any
-      puller. With the precise ACK this is merely wasteful for the puller — but it also means a
-      pull can return an entry the source did not own when the pull was issued, which is the one
-      case `awaitRecovered`'s per-source gate cannot wait for (costing a miss that lazy activation
-      rebuilds rather than a wrong answer). Filtering needs `message.sendingSilo` threaded into
-      `applyDirectoryOp`.
+- [x] `serveRecover()` is unfiltered by requester. Gone with the per-grain handoff: a snapshot is
+      served only for the ranges and the pair of views its requester moved between (M6).
 - [ ] Per-silo override of a **decorator-declared** `collectionAgeSeconds` is still impossible
       (only the process-wide grain metadata can change it, which by construction cannot differ
       between two silos in one process). Out of scope for #66, which is closed; needs its own issue
@@ -95,7 +96,7 @@ stores above. Worth a service dimension eventually for tidiness, not urgently.
 
 ### Findings from the 2026-09-22 review
 
-All filed as issues #67–#84 and fixed on `integration/2026-09-22-review-fixes` (**not yet on `main`**).
+All filed as issues #67–#84 and fixed on `integration/2026-09-22-review-fixes`, since merged to `main`.
 Every fix carries a test that was run and observed failing first; the full suite, typecheck, lint and
 all six runnable examples pass on the merged branch. Every finding's evidence, repro and severity is
 in [`docs/project-review-2026-09-22.md`](docs/project-review-2026-09-22.md).
@@ -115,15 +116,13 @@ in [`docs/project-review-2026-09-22.md`](docs/project-review-2026-09-22.md).
       the review doc and on the issue.
 - [x] [#71](https://github.com/dave-hillier-co/thresh/issues/71) **F5** — ownership is re-checked after
       the wait on both the local and remote paths.
-- [ ] [#72](https://github.com/dave-hillier-co/thresh/issues/72) **F6** — **open, needs a design
-      decision.** Documented and pinned, not fixed: a cluster-wide version needs a shared ordered view
-      identity plus a rolling-upgrade story, and "stop injecting self" would defeat the self-probe and
-      break local placement. Coupled to #67. See the issue's decision comment.
-- [x] [#73](https://github.com/dave-hillier-co/thresh/issues/73) **F7** — exhausted recovery is logged,
-      counted (`thresh.directory.recovery.*`), re-armed on a jittered backoff, and gated per source
-      rather than globally. The per-source gate is an approximation: `serveRecover` is still unfiltered
-      by requester, so a source can return an entry it did not own, costing a miss that lazy activation
-      rebuilds (never a wrong answer).
+- [x] [#72](https://github.com/dave-hillier-co/thresh/issues/72) **F6** — decided in
+      [`docs/design-membership-and-directory.md`](docs/design-membership-and-directory.md) and built:
+      a silo follows the watch like any peer, so one version means one ring on every silo. The
+      self-probe is a local system activation and a silo outside the ring creates no activation.
+- [x] [#73](https://github.com/dave-hillier-co/thresh/issues/73) **F7** — superseded by M6: recovery
+      no longer exhausts. A range stays locked until every listed member has answered, and the
+      optional `directoryRecoveryPatience` is the only way it opens early (logged and counted).
 - [ ] [#74](https://github.com/dave-hillier-co/thresh/issues/74) **F8** — **partly fixed.** Placement
       reads a peer's pushed count, and every silo now pushes it on a `DeploymentLoadPublisher`-style
       timer (`loadPublishIntervalMs`, default 1s), so the activation-count inversion is gone.
@@ -261,6 +260,209 @@ Follow-ups surfaced while fixing them:
 - [ ] `shardActivationBufferMs` is resolved but unused (Thresh shards have no start time distinct from
       their jobs' due times).
 
+### Design review (2026-11-14)
+
+Every finding's evidence and direction is in
+[`docs/project-review-2026-11-14.md`](docs/project-review-2026-11-14.md); the ids below are its
+headings. Not filed as issues. Fixes land on `integration/2026-11-14-design-review-fixes`, and
+the larger redesigns on `integration/2026-11-14-design-review-redesigns` stacked on it, each
+carrying a test that was observed failing first. Redis-, Postgres- and Kafka-backed paths cannot
+run locally. CI runs the Redis and Postgres ones on the redesigns branch, where the test step is
+given the Postgres service's credentials (`PG_URL`); without that, on `main` and on the fixes
+branch, every Postgres test skips itself. Nothing runs the Kafka tests.
+
+Membership and partition ownership:
+
+- [x] **M1** view changes are delivered by a one-shot wake-up to a loop that awaits store I/O.
+      `updates()` has latest-value semantics and the host reconciles to the level.
+- [x] **M2** a silo's ring is frozen at construction; under Kubernetes it starts empty. The node
+      applies the current view in `start()`; ownership hooks run from one path.
+- [x] **M3** join recovery runs with the read gate open (duplicate activations on join). An
+      unknown previous owner now waits on every source, and the pull names the requester's ring.
+- [x] **M4** a dead silo that is still listed keeps its grains. A removed silo is cleared from
+      the cache, the pool and the client directory, and a peer that cannot be reached fails with
+      the transports' one `ConnectFailure`. A dial that is refused outright removes the one entry
+      that was followed and the grain is placed afresh, and a silo that does not host what the
+      directory says it hosts removes the entry, so a crashed pod's grains answer again while the
+      pod is still listed and after its container restarts in place. Residuals: until Kubernetes
+      marks a dead pod not ready it is still in the ring, so calls that need it as a directory
+      owner or a placement target are refused (there is no failure detector: option C above); a
+      refused dial on a forwarded hop is not repaired at the forwarding silo; and the
+      unregistration a repair makes has no bound of its own.
+- [x] **M5** per-silo view versions break routine routing (#72). The view is a pure function of
+      the EndpointSlices, its version is the highest `resourceVersion` observed, a watch must
+      report a revision, and `MembershipService.refresh(version)` lets a silo catch up on demand.
+      Residual: a refresh adopts the requested version for the list it read, so two silos can
+      briefly hold different contents under one version until the next slice write.
+- [x] **M6** the directory handoff fails open and has no range or version unit. The directory is
+      a port of Orleans' `GrainDirectoryPartition`: range locks across a view change, snapshots
+      keyed by the pair of views, recovery from every member, versioned requests, the recovery
+      version rule and `TestCluster.checkIntegrity()`. Failing closed has a cost while a pod is
+      unreachable but listed (`docs/deviations.md`). A leaving silo follows the watch through
+      its stop, waits for its snapshots to be collected (only by partners that are ready, and for
+      at most half of what is left of the stop budget) and then deactivates; `TestCluster` marks
+      a silo draining before a graceful stop on either membership and disposes one silo at a
+      time. Residuals: a partner that stays a ready member but never pulls or recovers holds a
+      leaver for the whole bound; calls a stopping silo itself has in flight when its transport
+      closes are rejected; and `thresh.directory.recovery.exhausted` now duplicates
+      `thresh.directory.recovery.patience_expired`.
+- [ ] **M7** **partly fixed.** A graceful release resets a job shard's adoption count, poisoning
+      is logged and counted, and job ownership follows the node's applied view. Still open: the
+      three services have no shared ownership abstraction and no fencing epoch on their writes.
+- [x] **M8** health signals do not measure what they name. `membershipHealthy` follows the
+      applied view, `overloaded` follows the load-shedding detector, `transportReady` follows the
+      listener, and liveness can fail after sustained self-probe failure (opt-in). Residual: a
+      listener `error` event still leaves `transportReady` true.
+- [x] **M9** silo replies use a reverse-dialled connection; responses match by id alone. A
+      reply travels down the request's connection, a pending call is bound to its connection and
+      to a process epoch, and a dial is bounded. Residual: the epoch is tested only at unit
+      level, and each silo still dials its own connection for the requests it sends.
+
+Transactions:
+
+- [x] **T1** the caller-side agent drives 2PC; the TM is only a commit-record register. The TM
+      drives the commit through a ported `TransactionQueue`; the agent only sends `prepare` and
+      awaits `prepareAndCommit`. Recorded departures: the memory-only committer stays outside the
+      protocol, and participant clocks are not merged into the transaction time stamp.
+- [x] **T2** `prepare` validates nothing (a re-activated participant loses its write). `prepare`
+      carries the access counts and votes no unless the lock is still held with them.
+- [x] **T3** `status(): boolean` conflates "not yet decided" with "aborted". Status is
+      committed / undetermined / presumed abort.
+- [x] **T4** nothing times out or is collected. Holders expire, waiters are bounded, protocol
+      calls interleave, no timer outlives its resource, commit records are collected once every
+      writer confirms, and a prepared participant pings its TM.
+- [x] **T5** pending records are siblings but the storage contract encodes a chain (root of
+      #78). A new transaction builds on the newest pending state, loaded records queue ahead of
+      new work, and an abort cascades; both residual scenarios of #78 are tests.
+- [x] **T6** nothing blocks deactivation while a lock or prepared record is live. Deactivation
+      waits for the block on every path, bounded at Orleans' 5 s.
+
+Activation lifecycle:
+
+- [x] **L1** deactivation has no single owner. One joinable pipeline on the activation, in
+      Orleans' order, used by every path; no invalid entry waits in the catalog for a sweep.
+- [x] **L2** lifecycle operations are ordinary turns; a deactivation request is a polled flag.
+      Lifecycle operations run on their own queue, never beside a request turn, and a
+      deactivation request stops admission at once.
+- [x] **L3** a 5-value state plus about 13 flags; admission is decided in about ten places. One
+      state with a tested transition table, and one admission gate for calls, stream deliveries,
+      timer ticks and system calls.
+- [ ] **L4** directory registration lives outside the activation; cold-grain order rests on timing
+- [x] **L5** the placement pipeline exists twice. Migration targets come from the same pipeline
+      as new activations; directed movers pass a hint; stateless workers and system grains never
+      migrate.
+- [x] **L6** the only environment-statistics source is a test stub, with public latches. An
+      injectable provider with a Node default feeds load shedding and placement; the latches
+      work only on a silo built with test hooks. Resource-optimized scoring uses its weights but
+      has no Kalman filtering or candidate subset yet (the open part of #74).
+- [x] **L7** idle collection is a sequential full-map sweep. Stale activations are selected in
+      one pass and deactivated with bounded concurrency; sweeps never overlap.
+- [x] **L8** a same-silo call has no default deadline. It has the call timeout, like a
+      cross-silo call; a method's or the silo's response timeout still overrides it.
+
+Wire surface and location transparency:
+
+- [x] **W1** dispatch by bare method name: no declared wire surface. Only a type's declared
+      methods dispatch, references keep JavaScript protocol names local, and a `JournaledGrain`'s
+      framework hooks are excluded.
+- [x] **W2** the value codec reserves keys inside user data. Objects owning `$thresh` or a
+      dangerous key travel in a `plainObject` envelope and round-trip as themselves.
+- [x] **W3** local calls bypass the codec, so placement decides call semantics. A same-silo call
+      copies its arguments and result by default (`localCallSemantics: "copy"`), as the codec
+      would deliver them but without encoding; `immutable()` shares a value; `TestCluster` uses
+      the full round trip. On BeneDB's all-local check path copying costs about a sixth of
+      throughput.
+- [ ] **W4** no compatibility contract for the wire or stored state
+- [x] **W5** a decode failure is a process fault. An undecodable frame closes that connection
+      and is counted; one failure policy wraps every system handler. Residual: a frame that
+      decodes to a non-message object is delivered to the handler, whose failure is contained.
+- [x] **W6** "safe to resend" has three definitions. Refused-before-execution is carried on
+      the response, and both dispatchers and the client resend only on that or a connect
+      failure; one function builds the request envelope.
+- [x] **W7** the error taxonomy lives in parallel tables that have drifted. One table, a test
+      that enumerates every exported error, and `isThreshRuntimeError` classifies as Orleans does.
+- [x] **W8** `GrainId` has two equalities. One identity, read through the key kind the grain
+      type declares. A non-string kind must be stated as a value on `defineGrainInterface`
+      (`{ key: "integer" }`); the compiler checks it against the marker.
+
+Verification model:
+
+- [ ] **V1** **partly fixed.** `TestCluster` can run every silo on its own Kubernetes
+      membership over a shared fake API, with held and released views, and a kill is now a
+      crash. The default is still the shared static membership.
+- [ ] **V2** **partly fixed.** A shared memory stream provider binds per silo and delivers
+      through a live one. The memory and pulling providers are still different models.
+- [ ] **V3** three host layers with different defaults
+- [ ] **V4** the parity metric covers neither the largest deviation nor functional grains
+- [x] **V5** no fault-injection seam. A fault-injecting transport (drop, delay, fail connects,
+      partition) and storage decorators ship in the harness.
+- [ ] The parity stress test `DuplicateActivationsTests.DuplicateActivations` failed once in a
+      full `pnpm test:parity` run on a heavily loaded machine, after the leave-wait merge, and its
+      message was not captured. It then passed in five full runs and twelve runs alone, most of
+      them under deliberate load. If it fails again, keep the output: a timeout is load, a
+      reported duplicate is a defect in the directory.
+- [ ] `turn-scheduler.test.ts` "drains a deep queue of exclusive turns in time linear in its
+      length" asserts on wall-clock time and fails when the machine is saturated.
+
+State and journaling:
+
+- [x] **S1** the journal adaptor swallows the lost-writer signal and stays stale. A lost
+      append resyncs; only the conditional entries are dropped; a lost unconditional confirm is
+      retried on top of the refreshed view.
+- [x] **S2** one storage write per durable-collection mutation, no atomic unit. Mutators are
+      synchronous and buffer; `writeDurableState()` appends everything buffered in one write.
+- [x] **S3** `JournaledGrain` event history is truncated by the shared compaction threshold.
+      Truncation is the documented default and whole-history retention is opt-in. Opting in
+      rewrites the history at every compaction until the storage seam can snapshot without
+      truncating.
+- [x] **S4** log sharing is inferred by object identity over a constant log name. Sharing is
+      decided by a storage's `backingKey`.
+- [ ] **S5** no shared facet contract
+- [x] **S6** the in-memory grain store is not a model of the durable ones. It round-trips state
+      through the value codec.
+- [ ] **S7** **partly fixed.** A transactional state uses the storage provider it names. Still
+      open: the storage backend does not cover transactional storage or job shards, and neither
+      has a Postgres store.
+- [ ] **S8** `defineReducerGrain` effects are neither atomic nor durable
+
+Streams, reminders and durable jobs:
+
+- [ ] **B1** pulling-stream delivery state is one cursor per physical queue (root of #97, #112)
+- [ ] **B2** retention and rewind are not part of the queue seam
+- [ ] **B3** **partly fixed.** The owner re-reads its shard, so a lost forward no longer strands
+      a job; failures are logged; Redis keys carry the service id. Shards are still cluster-wide
+      time buckets.
+- [ ] **B4** **partly fixed.** A never-fired reminder found past its due time fires promptly, so
+      the first tick is late by at most one refresh, not one period. Registration is still not
+      routed to the range owner as Orleans does.
+- [ ] **B5** the `PullableQueue` contract assumes token order equals visibility order (root of #99)
+- [ ] **B6** Kafka holds no authoritative assignment or offsets
+
+Composition, configuration and operability:
+
+- [ ] **C1** **partly fixed.** An unknown stream provider name and a filter that would be
+      ignored are refused. The builder still creates resources at call time and validates by
+      special case.
+- [ ] **C2** options live in four hand-synchronised layers
+- [x] **C3** lifecycle is hook arrays, not a staged lifecycle. Every subsystem starts and stops
+      at a stage of one lifecycle; stop runs in reverse and is contained; a failed start rolls
+      back; grain activators compose. Residual: the stop bound is per participant.
+- [x] **C4** the logger is not a seam and the runtime is silent by default. One `logger` on the
+      silo configuration reaches the node, dispatchers, reminders, jobs, the endpoint watch, the
+      self-probe and the WebSocket transport; the default writes warn and error to the console.
+      Residual: the Redis, Postgres and Kafka stream providers and grain services do not take it.
+- [ ] **C5** `ClusterNode` stands in for a missing system-target abstraction
+- [ ] **C6** `GrainRuntime` is a god-interface
+- [ ] **C7** the silo builder statically imports every backing driver
+
+API boundary and consumer coupling:
+
+- [ ] **A1** nothing separates public API from internals
+- [ ] **A2** nothing runs BeneDB when Thresh changes
+- [x] **A3** two authoring models are not in lockstep. A feature-matrix test derived from the
+      two modules' exports, and hooks for the functional path's gaps (may-interleave, facets,
+      regex channel subscriptions, migration hooks off the call surface, per-silo dependencies).
+
 ## Beyond parity
 
 - [ ] [#38](https://github.com/dave-hillier-co/thresh/issues/38) Browser state
@@ -286,7 +488,7 @@ Follow-ups surfaced while fixing them:
 ## Orleans test-suite port (parity suite)
 
 The functional test suites of Orleans `v10.1.0` are ported 1:1 into `packages/parity`;
-`pnpm parity:scorecard [--run]` reports the standing: **570 ported / 0 gap / 742 excluded** over
+`pnpm parity:scorecard [--run]` reports the standing: **571 ported / 0 gap / 741 excluded** over
 ten in-scope suites (1312 declarations, every one accounted for). Earlier citations of
 502 / 0 / 475 — including the 2026-08-04 review's parity row — came from the scorecard's old
 regex parser, which could only see declarations whose first argument was an inline literal;

@@ -341,31 +341,60 @@ describe("TurnScheduler", () => {
     a.resolve();
   });
 
-  it("barrierFirstTurn: a reentrant scheduler still queues everything behind the first turn", async () => {
-    const sched = new TurnScheduler({ reentrant: true, barrierFirstTurn: true });
+  it("a closed admission gate holds every turn, even on a reentrant scheduler, until reevaluated", async () => {
+    let open = false;
+    const sched = new TurnScheduler({ reentrant: true, admissionGate: () => open });
     const log: string[] = [];
-    const activation = deferred();
+    void sched.schedule({ options: {}, run: async () => void log.push("a") });
     void sched.schedule({
-      options: {},
-      run: async () => {
-        log.push("activate:start");
-        await activation.promise;
-        log.push("activate:end");
-      },
-    });
-    void sched.schedule({
-      options: {},
-      run: async () => {
-        log.push("call:start");
-      },
+      options: { alwaysInterleave: true },
+      run: async () => void log.push("b"),
     });
     await flush();
-    // The second turn must not start until the first (activation) settles,
-    // even though the scheduler is fully reentrant.
-    expect(log).toEqual(["activate:start"]);
-    activation.resolve();
+    expect(log).toEqual([]);
+    open = true;
+    sched.reevaluate();
     await flush();
-    expect(log).toEqual(["activate:start", "activate:end", "call:start"]);
+    expect(log).toEqual(["a", "b"]);
+  });
+
+  it("reports when the last running turn settles, before reconsidering the queue", async () => {
+    const order: string[] = [];
+    let open = true;
+    const sched = new TurnScheduler({
+      reentrant: true,
+      admissionGate: () => open,
+      onDrained: () => {
+        order.push("drained");
+        open = false; // an owner starting a lifecycle operation here
+      },
+    });
+    const a = deferred();
+    const b = deferred();
+    void sched.schedule({ options: {}, run: () => a.promise });
+    void sched.schedule({ options: {}, run: () => b.promise });
+    await flush();
+    a.resolve();
+    await flush();
+    expect(order).toEqual([]); // one turn still running
+    open = false;
+    void sched.schedule({ options: {}, run: async () => void order.push("late") });
+    open = true;
+    b.resolve();
+    await flush();
+    expect(order).toEqual(["drained"]); // the late turn waits behind the closed gate
+    expect(sched.busy).toBe(true);
+  });
+
+  it("evicts queued turns without touching running ones", async () => {
+    const sched = new TurnScheduler();
+    const a = deferred();
+    const running = sched.schedule({ options: {}, run: () => a.promise });
+    const queued = sched.schedule({ options: {}, run: async () => "ran" });
+    sched.evictQueued(() => "evicted");
+    await expect(queued).rejects.toBe("evicted");
+    a.resolve();
+    await expect(running).resolves.toBeUndefined();
   });
 
   describe("ambient cancellation (turn.signal)", () => {

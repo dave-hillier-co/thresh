@@ -9,6 +9,7 @@ import type { CompatibilityKind } from "@thresh/core/version-compatibility";
 import type { VersionSelectorKind } from "@thresh/core/version-selector";
 import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
 import type { Message } from "@thresh/messaging/message";
+import type { Connection } from "@thresh/messaging/transport";
 import { TestCluster } from "@thresh/testing/test-cluster";
 
 interface ICounter extends GrainKey<string> {
@@ -32,9 +33,14 @@ const COUNTER = (key: string) => new GrainId("Counter", key);
 /** In-process network that counts manifest-exchange requests it carries. */
 class SpyNetwork extends InProcessNetwork {
   manifestRequests = 0;
-  override deliver(to: SiloAddress, message: Message, from: SiloAddress): void {
+  override deliver(
+    to: SiloAddress,
+    message: Message,
+    from: SiloAddress,
+    connection?: Connection,
+  ): void {
     if (message.system === "manifest") this.manifestRequests++;
-    super.deliver(to, message, from);
+    super.deliver(to, message, from, connection);
   }
 }
 

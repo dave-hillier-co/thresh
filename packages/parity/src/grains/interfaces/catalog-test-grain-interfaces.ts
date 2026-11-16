@@ -9,4 +9,5 @@ export interface ICatalogTestGrain extends GrainKey<bigint> {
 
 export const ICatalogTestGrain = defineGrainInterface<ICatalogTestGrain>(
   "UnitTests.GrainInterfaces.ICatalogTestGrain",
+  { key: "integer" },
 );

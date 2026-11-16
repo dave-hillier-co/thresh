@@ -30,6 +30,68 @@ Journaling stores events, periodically snapshots state, and truncates the log. `
 collections. Configure memory, Redis or Postgres journaling (`addPostgresJournaling`) under the same
 provider name used by the grain.
 
+Durable collections buffer their mutations, as `Orleans.Journaling` does. A mutator (`set`, `add`,
+`enqueue`, `dequeue`, `delete`, ...) is a synchronous in-memory operation that returns what the
+Orleans one returns (nothing, a boolean or the element), and a read right after it sees the change.
+Nothing reaches storage until the grain writes its durable state: `writeDurableState()` on a class
+grain (a protected method of `Grain`), or the function `useWriteDurableState()` returns in a hook
+grain. That one call is Orleans' `WriteStateAsync`: it appends everything buffered across all of the
+grain's durable structures in one storage write, and that write is the unit of durability. Ten
+mutations and one write cost one append, and a method that dequeues from one structure and adds to
+another is atomic when it writes once at the end: a crash before the write leaves neither change
+durable.
+
+```ts
+const jobs = useDurableQueue<string>("jobs");
+const done = useDurableSet<string>("done");
+const writeState = useWriteDurableState();
+
+// ... in a method:
+const job = jobs.dequeue();
+if (job !== undefined) done.add(job);
+await writeState(); // one append carries both changes
+```
+
+What happens to buffered entries follows Orleans' `JournaledStateManager`:
+
+- A failed write rejects to its caller and rolls nothing back. Memory keeps the mutations, the
+  entries stay buffered, the activation continues, and the next write retries them together with
+  anything buffered since.
+- A write that loses to another incarnation (`InconsistentStateError`) rejects the same way, and the
+  next write first re-reads the log, discarding the in-memory state and every buffered entry.
+- Deactivation and crashes flush nothing. Mutations not yet written are dropped, and the next
+  activation replays only what a write made durable. Write before the method returns, or in
+  `onDeactivate`, whatever must survive.
+- Overlapping writes run one after another. Compaction runs after a write and only while nothing is
+  buffered, so a snapshot never makes an unwritten mutation durable; a `JournaledGrain` sharing the
+  log keeps writing its own events at `confirmEvents`, which does not flush the durable collections.
+- An entry the value codec cannot encode makes the mutator throw and leaves memory unchanged.
+
+Compaction truncates the log to a snapshot at the threshold (`snapshotThreshold`, default 100
+entries), for durable collections and for a `JournaledGrain` alike. A `JournaledGrain` therefore
+defaults to snapshot-plus-tail, which is what Orleans' StateStorage-based provider gives:
+activation starts from the snapshot, only the events since it are held, and
+`retrieveConfirmedEvents` throws for a range that starts below the snapshot's version; the error
+names the `retainEvents` option. Whole-log retention, which is what Orleans' LogStorage-based
+provider gives, is the opt-in: pass `retainEvents: true` to the journal binders, or set
+`retainJournaledEvents: true` in the silo config. With it, `retrieveConfirmedEvents` serves the full
+range before and after re-activation. Until the storage seam can snapshot without truncating,
+opting in costs a full rewrite of the retained history at every compaction, and the activation
+holds that history in memory, so a grain that raises events without bound pays for it in both.
+
+A conditional raise (`raiseConditionalEvent`) that returns `false` has lost a race to another
+writer. Before it returns, the confirmed state and version are refreshed from storage, so a retry
+computed from them can succeed. This holds for the journal substrate and for custom-storage grains.
+Only the conditional entries are dropped: an event raised unconditionally (`raiseEvent`) before it
+stays pending and is written on top of the refreshed view, as Orleans does. A `confirmEvents` that
+loses the race to another writer likewise re-reads storage and writes its events on top, rather
+than leaving the grain stale.
+
+Providers registered under different names over the same backing store (the same Postgres pool,
+tables and service id, or the same Redis client, prefix and service id) share one log per grain;
+the provider name is not part of a storage key, and a grain's `JournaledGrain` events and durable
+fields over such providers run under one manager.
+
 ## Choosing where state lives
 
 An application should name its providers and leave the database to the host. `useStorageBackend`

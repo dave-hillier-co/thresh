@@ -122,10 +122,14 @@ describe("value-codec", () => {
       expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
     });
 
-    it("drops __proto__/constructor/prototype keys rather than exposing them as data", () => {
+    it("keeps __proto__/constructor/prototype keys as own data, never as a prototype", () => {
       const payload = '{"a":1,"__proto__":{"polluted":true}}';
       const decoded = deserializeValue<Record<string, unknown>>(payload);
-      expect(decoded).toEqual({ a: 1 });
+      expect(Object.getPrototypeOf(decoded)).toBe(Object.prototype);
+      expect(Object.keys(decoded).sort()).toEqual(["__proto__", "a"]);
+      expect(Object.getOwnPropertyDescriptor(decoded, "__proto__")?.value).toEqual({
+        polluted: true,
+      });
     });
   });
 
@@ -180,7 +184,10 @@ describe("value-codec", () => {
       const bytes = new Uint8Array([1, 2, 3]);
 
       expect(encodeValue(bytes)).toBe(bytes);
-      expect(decodeValue(encodeValue(bytes))).toBe(bytes);
+      // Decoding hands back a fresh, exact copy (a transport's view must not alias its message).
+      const decoded = decodeValue(encodeValue(bytes)) as Uint8Array;
+      expect(decoded).not.toBe(bytes);
+      expect([...decoded]).toEqual([1, 2, 3]);
     });
   });
 

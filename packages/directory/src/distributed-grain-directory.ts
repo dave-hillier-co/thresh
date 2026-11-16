@@ -2,47 +2,81 @@ import { RejectionError } from "@thresh/core/errors";
 import type { GrainAddress } from "@thresh/core/grain-address";
 import type { GrainId } from "@thresh/core/grain-id";
 import type { SiloAddress } from "@thresh/core/silo-address";
+import type { TimeProvider } from "@thresh/core/time-provider";
 import {
   recordDirectoryLookup,
   recordDirectoryRegistration,
   type DirectoryLocality,
 } from "@thresh/observability/directory-metrics";
-import type { ConsistentHashRing } from "@thresh/directory/consistent-hash-ring";
 import type { DirectoryPeer } from "@thresh/directory/directory-peer";
 import type { GrainDirectory } from "@thresh/directory/grain-directory";
-import type { LocalDirectoryPartition } from "@thresh/directory/local-directory-partition";
+import type {
+  DirectoryResult,
+  GrainDirectoryPartition,
+} from "@thresh/directory/grain-directory-partition";
 
-/** Bounded re-resolution attempts when a peer reports our membership view is stale. */
-const MAX_STALE_RETRIES = 5;
+/** Re-resolutions a request makes after owners say "refresh required", before it is refused. */
+const DEFAULT_MAX_ATTEMPTS = 10;
+/** The pause before the first retry; it grows by half each time, to at most `MAX_RETRY_DELAY_MS`. */
+const INITIAL_RETRY_DELAY_MS = 10;
+const MAX_RETRY_DELAY_MS = 500;
+
+export interface DistributedGrainDirectoryOptions {
+  local: SiloAddress;
+  /** This silo's partition, which also holds the view this silo has applied. */
+  partition: GrainDirectoryPartition;
+  /** Carries operations to the partitions of other silos. */
+  peer: DirectoryPeer;
+  /**
+   * Bring this silo's applied view up to at least `version` (refreshing membership): how a
+   * caller told to refresh catches up before it re-resolves the owner.
+   */
+  refresh: (version: number) => Promise<void>;
+  /** The clock the pause between retries runs on. */
+  time: TimeProvider;
+  maxAttempts?: number;
+}
 
 /**
- * The distributed directory as seen from one silo. The ring (derived from the
- * current membership view) decides which silo owns a grain's entry: owned-here
- * operations hit the local partition; others route to the owner via the peer.
- * Because every silo computes the same ring from the same view, they agree on
- * owners without coordination, so `register` CAS is authoritative.
+ * The distributed directory as seen from one silo (Orleans `DistributedGrainDirectory`, the
+ * client half). The view this silo has applied decides which silo owns a grain's entry; the
+ * request carries that view's version to the owner, which catches up if it is behind, waits out
+ * any range lock on the grain's hash, and answers "refresh required" if it does not own the hash.
+ * The caller then refreshes to the owner's version, re-resolves and retries after a pause, a
+ * bounded number of times.
  *
- * Two membership-change concerns ride on this path. A caller whose ring is stale
- * is told so by the owner (a `staleView` rejection); it then `refresh`es its view
- * and re-resolves the owner. And an owner-local access waits on `onOwnedAccess`
- * so a range still being recovered after a join is not read before its entries
- * have been pulled — closing the reactivation window the old drop-and-rebuild had.
+ * Requests are sent at a view at least as new as this silo's recovery version — the newest view
+ * at which a member recovering a range has asked this silo for its activations — and an
+ * operation during which the recovery version rose is sent again, so a registration can never
+ * land at an owner the recovering member has already superseded (Orleans `InvokeAsync`).
  */
 export class DistributedGrainDirectory implements GrainDirectory {
-  constructor(
-    private readonly local: SiloAddress,
-    private readonly partition: LocalDirectoryPartition,
-    private readonly ring: () => ConsistentHashRing,
-    private readonly peer: DirectoryPeer,
-    private readonly refresh: () => void = () => undefined,
-    private readonly onOwnedAccess: (grainId: GrainId) => Promise<void> = async () => undefined,
-  ) {}
+  private readonly local: SiloAddress;
+  private readonly partition: GrainDirectoryPartition;
+  private readonly peer: DirectoryPeer;
+  private readonly refresh: (version: number) => Promise<void>;
+  private readonly time: TimeProvider;
+  private readonly maxAttempts: number;
+
+  constructor(options: DistributedGrainDirectoryOptions) {
+    this.local = options.local;
+    this.partition = options.partition;
+    this.peer = options.peer;
+    this.refresh = options.refresh;
+    this.time = options.time;
+    this.maxAttempts = options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
+  }
+
+  /** See `GrainDirectoryPartition.recoveryVersion`. */
+  get recoveryVersion(): number {
+    return this.partition.recoveryVersion;
+  }
 
   async lookup(grainId: GrainId): Promise<GrainAddress | undefined> {
     return this.route(
       grainId,
-      () => this.partition.lookup(grainId),
-      (owner) => this.peer.lookup(owner, grainId),
+      (version) => this.partition.lookup(version, grainId),
+      (owner, version) => this.peer.lookup(owner, version, grainId),
       recordDirectoryLookup,
     );
   }
@@ -50,8 +84,8 @@ export class DistributedGrainDirectory implements GrainDirectory {
   async register(addr: GrainAddress, previous?: GrainAddress): Promise<GrainAddress> {
     return this.route(
       addr.grainId,
-      () => this.partition.register(addr, previous),
-      (owner) => this.peer.register(owner, addr, previous),
+      (version) => this.partition.register(version, addr, previous),
+      (owner, version) => this.peer.register(owner, version, addr, previous),
       recordDirectoryRegistration,
     );
   }
@@ -59,86 +93,58 @@ export class DistributedGrainDirectory implements GrainDirectory {
   async unregister(addr: GrainAddress): Promise<void> {
     await this.route(
       addr.grainId,
-      () => {
-        this.partition.unregister(addr);
-        return undefined;
-      },
-      async (owner) => {
-        await this.peer.unregister(owner, addr);
-      },
+      (version) => this.partition.unregister(version, addr),
+      (owner, version) => this.peer.unregister(owner, version, addr),
     );
   }
 
-  /** Applied locally on every silo when a peer leaves: drop entries pointing at it. */
-  async unregisterSilo(silo: SiloAddress): Promise<void> {
-    this.partition.unregisterSilo(silo);
-  }
-
   /**
-   * Resolve the owner of `grainId` and run the operation there. Owned-here
-   * operations wait for any in-flight range recovery first, then re-check that
-   * the range is still ours before touching the partition; remote calls
-   * re-resolve and retry (bounded) when the owner reports our view is stale.
+   * Nothing to do: each partition deletes the entries of a silo that has left when it applies
+   * the view without it (Orleans `UnregisterSilos` on the distributed directory is a no-op too).
    */
+  async unregisterSilo(_silo: SiloAddress): Promise<void> {}
+
   private async route<T>(
     grainId: GrainId,
-    onOwned: () => T | Promise<T>,
-    onRemote: (owner: SiloAddress) => Promise<T>,
+    onLocal: (version: number) => Promise<DirectoryResult<T>>,
+    onRemote: (owner: SiloAddress, version: number) => Promise<DirectoryResult<T>>,
     record: (locality: DirectoryLocality) => void = () => undefined,
   ): Promise<T> {
-    for (let attempt = 0; ; attempt++) {
-      const ring = this.ring();
-      // An empty ring has no owner to resolve, and `ConsistentHashRing.ownerOf`
-      // reports that as an invariant violation — a plain `Error`. Reached through
-      // here it is not one: an empty ring means this silo's membership view has no
-      // active silos at all (a static/dev view emptied by `setSilos([])`; the
-      // Kubernetes watch keeps itself in its own view, so it never empties — see
-      // issue #72). Refusing to route on it is a membership refusal the caller can
-      // retry once its view advances, so reject with the kind that says so,
-      // `staleView` — the kind the dispatcher's stale-rejection predicate and the
-      // bounded remote retry below act on — rather than a plain `Error` that every
-      // classifier reads as a programming fault (issue #70).
-      if (ring.isEmpty) {
-        throw new RejectionError("no active silos to resolve a directory owner", "staleView");
+    const hash = grainId.getUniformHashCode();
+    let delayMs = INITIAL_RETRY_DELAY_MS;
+    for (let attempt = 1; ; attempt++) {
+      const recoveryVersion = this.partition.recoveryVersion;
+      if (this.partition.view.version < recoveryVersion) {
+        await this.refresh(recoveryVersion);
       }
-      const owner = ring.ownerOf(grainId);
-      if (owner.equals(this.local)) {
-        await this.onOwnedAccess(grainId);
-        // That await yields — a microtask at the very least, with no recovery to
-        // wait for — and `updateView` runs on exactly such a microtask (the
-        // membership watch's own continuation). So the ring can move this range
-        // elsewhere inside it: writing here regardless would leave an entry in a
-        // partition the ring no longer assigns, which nothing re-drains until the
-        // next view change, and the grain's true owner would then find no entry
-        // and build a second activation. Re-resolve instead, the way `awaitView`
-        // advances and then re-checks.
-        if (this.ownsHere(grainId)) {
-          record("local");
-          return onOwned();
-        }
-        if (attempt >= MAX_STALE_RETRIES) {
-          throw new RejectionError("directory ownership moved during the wait", "staleView");
-        }
-        this.refresh(); // advance our view, then recompute the owner and retry
-        continue;
+      const view = this.partition.view;
+      const owner = view.ownerOf(hash);
+      // An empty ring has no owner: this silo's view has no silo that may own a range. That is a
+      // membership state the caller can retry once its view advances, so it is refused as a stale
+      // view, the kind the dispatcher's stale-rejection handling acts on (issue #70).
+      if (owner === undefined) {
+        throw new RejectionError("no silo in the ring to resolve a directory owner", "staleView");
       }
-      record("remote");
-      try {
-        return await onRemote(owner);
-      } catch (err) {
-        if (attempt >= MAX_STALE_RETRIES || !isStaleView(err)) throw err;
-        this.refresh(); // advance our view, then recompute the owner and retry
+      const isLocal = owner.equals(this.local);
+      if (attempt === 1) record(isLocal ? "local" : "remote");
+      const result = isLocal ? await onLocal(view.version) : await onRemote(owner, view.version);
+      const reissue = this.partition.recoveryVersion !== recoveryVersion;
+      if (!reissue && result.kind === "ok") return result.value;
+      if (attempt >= this.maxAttempts) {
+        throw new RejectionError(
+          `directory owner of ${grainId.toString()} still moving after ${attempt} attempts`,
+          "staleView",
+        );
       }
+      if (result.kind === "refresh" && result.version > this.partition.view.version) {
+        await this.refresh(result.version);
+      }
+      await this.pause(delayMs);
+      delayMs = Math.min(delayMs * 1.5, MAX_RETRY_DELAY_MS);
     }
   }
 
-  /** Whether the range is this silo's under the CURRENT ring (an empty ring owns nothing). */
-  private ownsHere(grainId: GrainId): boolean {
-    const ring = this.ring();
-    return !ring.isEmpty && ring.ownerOf(grainId).equals(this.local);
+  private pause(ms: number): Promise<void> {
+    return new Promise((resolve) => this.time.setTimer(resolve, ms));
   }
-}
-
-function isStaleView(err: unknown): boolean {
-  return err instanceof RejectionError && err.kind === "staleView";
 }

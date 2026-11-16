@@ -125,6 +125,23 @@ export function markMayInterleave(ctor: GrainConstructor, predicate: MayInterlea
   mayInterleaveRegistry.set(ctor, predicate);
 }
 
+// A functional grain's predicate is built inside its factory, so it is per
+// activation (a closure over that activation's state), not per constructor.
+const instanceMayInterleaveRegistry = new WeakMap<object, MayInterleavePredicate>();
+
+/** Record the admission predicate a functional grain's factory registered for one activation. */
+export function setInstanceMayInterleave(
+  instance: object,
+  predicate: MayInterleavePredicate,
+): void {
+  instanceMayInterleaveRegistry.set(instance, predicate);
+}
+
+/** The admission predicate registered for this activation instance, if its factory made one. */
+export function getInstanceMayInterleave(instance: object): MayInterleavePredicate | undefined {
+  return instanceMayInterleaveRegistry.get(instance);
+}
+
 function markSubscription(
   registry: WeakMap<GrainConstructor, Set<string>>,
   ctor: GrainConstructor,

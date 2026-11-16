@@ -18,6 +18,10 @@
 // journaling parity suite (durable-value-tests.test.ts and friends), using its
 // `value` for simple/complex single-value state and its `dict`/`list`/`queue`/
 // `set` for the multi-collection cases.
+// Write points follow upstream's test grains (TestDurableGrain.cs, TestMultiCollectionGrain.cs):
+// every mutating grain method there ends in `WriteStateAsync()` and so is followed here by
+// `writeState()`, except `DequeueItem`, which does not write; its dequeue becomes durable with
+// the next write (the `setDelete` that follows it in the tests).
 import { afterAll, beforeAll, describe, expect } from "vitest";
 import { castGrainReference } from "@thresh/core/grain-reference";
 import { IGrainManagementExtension } from "@thresh/runtime/grain-management-extension";
@@ -60,6 +64,7 @@ describe("Orleans.Journaling.Tests.DurableGrainTests", () => {
       const target = cluster.getGrain(IDurableCollectionsGrain, freshKey());
 
       await target.setValue({ name: "Test Name", counter: 42 });
+      await target.writeState();
 
       expect(await target.getValue()).toEqual({ name: "Test Name", counter: 42 });
 
@@ -75,7 +80,9 @@ describe("Orleans.Journaling.Tests.DurableGrainTests", () => {
       const target = cluster.getGrain(IDurableCollectionsGrain, freshKey());
 
       await target.setValue({ name: "Initial Name", counter: 10 });
+      await target.writeState();
       await target.setValue({ name: "Updated Name", counter: 20 });
+      await target.writeState();
 
       expect(await target.getValue()).toEqual({ name: "Updated Name", counter: 20 });
 
@@ -93,7 +100,11 @@ describe("Orleans.Journaling.Tests.DurableGrainTests", () => {
       const person = { id: 1, name: "John Doe", age: 30 };
       const items = ["Item1", "Item2", "Item3"];
       await target.setValue(person);
-      for (const item of items) await target.listAdd(item);
+      await target.writeState();
+      for (const item of items) {
+        await target.listAdd(item);
+        await target.writeState();
+      }
 
       expect(await target.getValue()).toEqual(person);
       expect(await target.listLength()).toBe(3);
@@ -114,13 +125,21 @@ describe("Orleans.Journaling.Tests.DurableGrainTests", () => {
       const target = cluster.getGrain(IDurableCollectionsGrain, freshKey());
 
       await target.dictSet("key1", 1);
+      await target.writeState();
       await target.dictSet("key2", 2);
+      await target.writeState();
       await target.listAdd("item1");
+      await target.writeState();
       await target.listAdd("item2");
+      await target.writeState();
       await target.queueEnqueue(100);
+      await target.writeState();
       await target.queueEnqueue(200);
+      await target.writeState();
       await target.setAdd("set1");
+      await target.writeState();
       await target.setAdd("set2");
+      await target.writeState();
 
       expect(await target.dictSize()).toBe(2);
       expect(await target.listLength()).toBe(2);
@@ -151,15 +170,24 @@ describe("Orleans.Journaling.Tests.DurableGrainTests", () => {
       const target = cluster.getGrain(IDurableCollectionsGrain, freshKey());
 
       await target.dictSet("key1", 1);
+      await target.writeState();
       await target.listAdd("item1");
+      await target.writeState();
       await target.queueEnqueue(100);
+      await target.writeState();
       await target.setAdd("set1");
+      await target.writeState();
 
       await target.dictSet("key2", 2);
+      await target.writeState();
       await target.dictSet("key1", 10); // Update via existing key.
+      await target.writeState();
       await target.listAdd("item2");
+      await target.writeState();
       await target.queueEnqueue(200);
+      await target.writeState();
       await target.setAdd("set2");
+      await target.writeState();
 
       expect(await target.dictSize()).toBe(2);
       expect(await target.dictGet("key1")).toBe(10);
@@ -178,9 +206,12 @@ describe("Orleans.Journaling.Tests.DurableGrainTests", () => {
       expect(await target.listGet(1)).toBe("item2");
 
       await target.dictDelete("key1");
+      await target.writeState();
       await target.listRemoveAt(0);
+      await target.writeState();
       await target.queueDequeue();
       await target.setDelete("set1");
+      await target.writeState();
 
       expect(await target.dictSize()).toBe(1);
       expect(await target.listLength()).toBe(1);
@@ -195,6 +226,7 @@ describe("Orleans.Journaling.Tests.DurableGrainTests", () => {
       const target = cluster.getGrain(IDurableCollectionsGrain, freshKey());
 
       await target.setValue({ name: "Test Name", counter: 42 });
+      await target.writeState();
       const initialState = await target.getValue();
 
       await deactivateOnIdleAndAssertFresh(target);
@@ -211,17 +243,26 @@ describe("Orleans.Journaling.Tests.DurableGrainTests", () => {
       const target = cluster.getGrain(IDurableCollectionsGrain, freshKey());
 
       await target.dictSet("key1", 1);
+      await target.writeState();
       await target.dictSet("key2", 2);
+      await target.writeState();
 
       await target.listAdd("item1");
+      await target.writeState();
       await target.listAdd("item2");
+      await target.writeState();
 
       await target.queueEnqueue(100);
+      await target.writeState();
       await target.queueEnqueue(200);
+      await target.writeState();
 
       await target.setAdd("set1");
+      await target.writeState();
       await target.setAdd("set2");
+      await target.writeState();
       await target.setAdd("set1"); // Duplicate, should be ignored.
+      await target.writeState();
 
       expect(await target.dictSize()).toBe(2);
       expect(await target.listLength()).toBe(2);
@@ -238,9 +279,12 @@ describe("Orleans.Journaling.Tests.DurableGrainTests", () => {
       expect(await target.setToArray()).toEqual(expect.arrayContaining(["set1", "set2"]));
 
       await target.dictDelete("key1");
+      await target.writeState();
       await target.listRemoveAt(0);
+      await target.writeState();
       await target.queueDequeue();
       await target.setDelete("set1");
+      await target.writeState();
 
       expect(await target.dictSize()).toBe(1);
       expect(await target.listLength()).toBe(1);
@@ -268,10 +312,14 @@ describe("Orleans.Journaling.Tests.DurableGrainTests", () => {
       const itemCount = 1000;
       for (let i = 0; i < itemCount; i++) {
         await target.dictSet(`key${i}`, i);
+        await target.writeState();
         if (i < 100) {
           await target.listAdd(`item${i}`);
+          await target.writeState();
           await target.queueEnqueue(i);
+          await target.writeState();
           await target.setAdd(`set${i}`);
+          await target.writeState();
         }
       }
 

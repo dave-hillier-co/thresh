@@ -11,6 +11,7 @@ import type { TransactionalStateStorage } from "@thresh/core/transactional-stora
 import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
 import { MemoryTransactionalStorage } from "@thresh/transactions/memory-transactional-storage";
 import { createSilo } from "@thresh/hosting/silo-builder";
+import { waitFor } from "@thresh/testing/wait";
 
 interface Balance {
   cents: number;
@@ -92,34 +93,63 @@ async function seedInDoubt(
   );
 }
 
-/** Seed the TM's ledger with a durable commit record (the transaction reached its commit point). */
+/**
+ * Seed the TM's ledger with a durable commit record naming `participant` as a
+ * write participant still to confirm (the transaction reached its commit point).
+ */
 async function seedCommitRecord(
   storage: TransactionalStateStorage,
   transactionId: string,
+  participant: string,
 ): Promise<void> {
   await storage.store(
     "ledger",
     ledgerId,
     undefined,
-    { timeStamp: 1, commitRecords: { [transactionId]: { timeStamp: 1, writeParticipants: [] } } },
+    {
+      timeStamp: 1,
+      commitRecords: {
+        [transactionId]: {
+          timeStamp: 1,
+          writeParticipants: [
+            { grainId: ledgerId, stateName: "ledger" },
+            { grainId: accountId(participant), stateName: "balance" },
+          ],
+        },
+      },
+    },
     [],
     undefined,
     undefined,
   );
 }
 
+/** The account's durable record, once nothing is left in doubt. */
+async function settled(storage: TransactionalStateStorage, key: string) {
+  await waitFor(
+    async () => (await storage.load("balance", accountId(key))).pendingStates.length === 0,
+  );
+  return storage.load("balance", accountId(key));
+}
+
 describe("transaction in-doubt recovery (Slice 4d)", () => {
   it("commits an in-doubt record when the TM recorded the commit", async () => {
     const storage = new MemoryTransactionalStorage();
     await seedInDoubt(storage, "committed", "T1", { cents: 100 });
-    await seedCommitRecord(storage, "T1");
+    await seedCommitRecord(storage, "T1", "committed");
 
     const silo = buildSilo(storage);
     await silo.start();
     try {
-      // Activating the account resolves its in-doubt record against the TM:
-      // the commit record exists, so the staged write is committed.
+      // Activating the account queues its prepared record again and pings the
+      // TM; the TM, activated, resumes confirming its commit record.
+      await silo.getGrain(Account, "committed").balance();
+      expect((await settled(storage, "committed")).committedState).toEqual({ cents: 100 });
       expect(await silo.getGrain(Account, "committed").balance()).toBe(100);
+      await waitFor(
+        async () =>
+          Object.keys((await storage.load("ledger", ledgerId)).metadata.commitRecords).length === 0,
+      );
     } finally {
       await silo.stop();
     }
@@ -133,7 +163,14 @@ describe("transaction in-doubt recovery (Slice 4d)", () => {
     const silo = buildSilo(storage);
     await silo.start();
     try {
-      // Recovery asks the TM, finds no commit record, and drops the staged write.
+      // The ping finds a TM that never heard of T2: presumed abort, and the
+      // staged write is dropped. A read made while it was still in doubt read
+      // its state and is aborted with it, so read once it has settled.
+      await silo
+        .getGrain(Account, "aborted")
+        .balance()
+        .catch(() => undefined);
+      expect((await settled(storage, "aborted")).committedSequenceId).toBe(0);
       expect(await silo.getGrain(Account, "aborted").balance()).toBe(0);
     } finally {
       await silo.stop();

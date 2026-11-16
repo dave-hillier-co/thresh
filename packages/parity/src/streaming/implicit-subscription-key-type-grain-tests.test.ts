@@ -31,7 +31,7 @@ interface IImplicitSubscriptionLongKeyGrain extends GrainKey<bigint> {
 }
 const IImplicitSubscriptionLongKeyGrain = defineGrainInterface<IImplicitSubscriptionLongKeyGrain>(
   "IImplicitSubscriptionLongKeyGrain",
-  { options: { getValue: { readOnly: true } } },
+  { key: "integer", options: { getValue: { readOnly: true } } },
 );
 
 @grain()

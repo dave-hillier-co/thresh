@@ -164,7 +164,33 @@ export function registerInterface<T, K extends GrainKeyKind>(
  * just built so the registry can reject a second, different implementation of the
  * same name. Hand-written interface modules leave it off.
  */
+/**
+ * What a definition must add for key kind `K`. A string key needs no statement (it is the
+ * fallback, and identity is the key text whatever is declared), but any other kind must be stated
+ * as a `key` value: a phantom `GrainKey<bigint>` marker is erased at runtime, so without the value
+ * a grain reached first through a string-built id (an implicit subscription, a wire id) could not
+ * be read as its declared kind.
+ */
+export type RequiredKeyStatement<K extends GrainKeyKind> = [K] extends ["string"]
+  ? unknown
+  : { key: K };
+
+/** The name argument of the overload that omits the definition: only a string-keyed interface may. */
+export type NameOfStringKeyedInterface<K extends GrainKeyKind> = [K] extends ["string"]
+  ? string
+  : "state the key kind as a value: defineGrainInterface(name, { key })";
+
 export function defineGrainInterface<T, K extends GrainKeyKind = KeyKindFromMarker<T>>(
+  name: NameOfStringKeyedInterface<K>,
+  def?: undefined,
+  grain?: new () => object,
+): GrainInterface<T, K>;
+export function defineGrainInterface<T, K extends GrainKeyKind = KeyKindFromMarker<T>>(
+  name: string,
+  def: GrainInterfaceDefinition<T, K> & RequiredKeyStatement<K>,
+  grain?: new () => object,
+): GrainInterface<T, K>;
+export function defineGrainInterface<T, K extends GrainKeyKind>(
   name: string,
   def: GrainInterfaceDefinition<T, K> = {},
   grain?: new () => object,

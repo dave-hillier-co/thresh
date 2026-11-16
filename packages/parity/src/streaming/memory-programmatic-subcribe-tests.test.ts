@@ -65,6 +65,7 @@ interface ISubscribeGrain extends GrainKey<Guid> {
   canGetSubscriptionManager(providerName: string): Promise<boolean>;
 }
 const ISubscribeGrain = defineGrainInterface<ISubscribeGrain>("ISubscribeGrain", {
+  key: "guid",
   options: { canGetSubscriptionManager: { readOnly: true } },
 });
 
@@ -80,6 +81,7 @@ interface IPassiveConsumerGrain extends GrainKey<Guid> {
   getNumberConsumed(): Promise<number>;
 }
 const IPassiveConsumerGrain = defineGrainInterface<IPassiveConsumerGrain>("IPassiveConsumerGrain", {
+  key: "guid",
   options: { getNumberConsumed: { readOnly: true } },
 });
 
@@ -102,7 +104,9 @@ class PassiveConsumerGrain extends Grain implements IPassiveConsumerGrain {
 }
 
 type IJerkConsumerGrain = GrainKey<Guid>;
-const IJerkConsumerGrain = defineGrainInterface<IJerkConsumerGrain>("IJerkConsumerGrain");
+const IJerkConsumerGrain = defineGrainInterface<IJerkConsumerGrain>("IJerkConsumerGrain", {
+  key: "guid",
+});
 
 /** Unsubscribes on any subscription added to it (Orleans `Jerk_ConsumerGrain`). */
 @grain()
@@ -124,6 +128,7 @@ interface ITypedProducerGrain extends GrainKey<Guid> {
 
 function typedProducerInterface(name: string) {
   return defineGrainInterface<ITypedProducerGrain>(name, {
+    key: "guid",
     options: { getNumberProduced: { readOnly: true } },
   });
 }

@@ -55,4 +55,46 @@ describe("ActivationCollector", () => {
       collector.stop();
     }
   });
+
+  // L7: Orleans' collection loop awaits each sweep before waiting for the next
+  // tick (`ActivationCollector.RunActivationCollectionLoop`), so sweeps never
+  // overlap.
+  it("does not start a second sweep for a tick that arrives while one is running", async () => {
+    const time = new FakeTimeProvider();
+    let calls = 0;
+    let finishSweep: () => void = () => undefined;
+    const catalog = {
+      collectIdle: () => {
+        calls++;
+        return new Promise<void>((resolve) => (finishSweep = resolve));
+      },
+    } as unknown as Catalog;
+
+    const collector = new ActivationCollector(catalog, time, 1000);
+    try {
+      collector.start();
+      time.advance(1000);
+      await flush();
+      expect(calls).toBe(1);
+
+      time.advance(1000); // the first sweep is still in flight
+      time.advance(1000);
+      await flush();
+      expect(calls).toBe(1);
+
+      // The ticks it missed coalesce into one sweep once it ends (Orleans'
+      // `PeriodicTimer`), which is again never overlapped.
+      finishSweep();
+      await flush();
+      expect(calls).toBe(2);
+      time.advance(1000);
+      await flush();
+      expect(calls).toBe(2);
+      finishSweep();
+      await flush();
+      expect(calls).toBe(3);
+    } finally {
+      collector.stop();
+    }
+  });
 });

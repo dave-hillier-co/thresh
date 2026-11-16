@@ -8,6 +8,11 @@ import { MemoryReminderTable } from "@thresh/reminders/memory-reminder-table";
 const WHOLE: HashRange = [0, 0x1_0000_0000];
 const billing = new GrainId("Billing", "acct-1");
 
+/** Let a tick's registration check (a table read) settle before its delivery is observed. */
+const flush = async () => {
+  for (let i = 0; i < 20; i++) await Promise.resolve();
+};
+
 interface Fired {
   grainId: GrainId;
   name: string;
@@ -59,6 +64,7 @@ describe("LocalReminderService", () => {
 
     await service.register(billing, "invoice", { ms: 1000 }, { ms: 1000 });
     time.advance(3000);
+    await flush();
     expect(fired).toHaveLength(3);
     expect(fired[0]!.name).toBe("invoice");
     expect(fired[0]!.status.currentTickAt.getTime()).toBe(1000);
@@ -74,9 +80,11 @@ describe("LocalReminderService", () => {
 
     await service.register(billing, "invoice", { ms: 1000 }, { ms: 1000 });
     time.advance(1000);
+    await flush();
     expect(fired).toHaveLength(1);
     await service.unregister(billing, "invoice");
     time.advance(5000);
+    await flush();
     expect(fired).toHaveLength(1);
     expect(await table.read(billing, "invoice")).toBeUndefined();
   });
@@ -117,6 +125,7 @@ describe("LocalReminderService", () => {
     await successor.refreshOwnership([WHOLE]);
 
     time.advance(1000);
+    await flush();
     expect(fired).toHaveLength(1);
     expect(fired[0]!.grainId.equals(billing)).toBe(true);
   });

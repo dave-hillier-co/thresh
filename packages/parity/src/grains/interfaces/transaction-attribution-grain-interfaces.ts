@@ -28,14 +28,17 @@ export interface AttributionTierEntry {
  * (or `undefined`) for its own tier, then — for each entry in `tiers[0]` —
  * calls the corresponding grain's `getNestedTransactionIds(tier + 1,
  * tiers.slice(1))` and merges the results. The returned array is indexed by
- * tier: `result[0]` is always this call's own `[id]`; deeper indices collect
- * every descendant's id at that depth, in call order.
+ * tier, of length `tier + 1 + tiers.length` as upstream's `List<string>[]`:
+ * `result[tier]` is this call's own `[id]`, deeper indices collect every
+ * descendant's id at that depth in call order, and the shallower slots are
+ * `null` (a .NET array's unset elements), which the wire carries where it
+ * refuses a sparse array.
  */
 export interface TransactionAttributionGrain extends GrainKey<string> {
   getNestedTransactionIds(
     tier: number,
     tiers: readonly AttributionTierEntry[][],
-  ): Promise<(string | undefined)[][]>;
+  ): Promise<((string | undefined)[] | null)[]>;
 }
 
 function attributionInterface(

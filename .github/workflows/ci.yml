@@ -15,10 +15,11 @@ jobs:
     services:
       # Matches the test suites' `reachable()` probes (packages/streams/src/*.test.ts and others),
       # which default to `redis://localhost:6379` / `postgres://localhost:5432/postgres` and skip
-      # themselves when nothing answers there. Kafka-backed tests have the same probe but no
-      # broker service is configured here — a single-container KRaft Kafka setup adds meaningful
-      # complexity for one provider's coverage, so those tests keep skipping in CI for now and run
-      # locally/against a real cluster instead.
+      # themselves when nothing answers there. The Postgres probe also needs a role that exists
+      # in the service, which the test step's `PG_URL` supplies. Kafka-backed tests have the same
+      # probe but no broker service is configured here — a single-container KRaft Kafka setup
+      # adds meaningful complexity for one provider's coverage, so those tests keep skipping in
+      # CI for now and run locally/against a real cluster instead.
       redis:
         image: redis:7
         ports: ["6379:6379"]
@@ -50,3 +51,8 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm test
+        env:
+          # The Postgres service's own superuser. Without it the tests' probe connects as the
+          # runner's operating-system user, which is not a role in the service, so the probe
+          # fails and every Postgres-backed test skips itself.
+          PG_URL: postgres://postgres:postgres@localhost:5432/postgres

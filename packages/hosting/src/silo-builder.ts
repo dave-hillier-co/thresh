@@ -1,5 +1,6 @@
 import { durationToMs, type Duration } from "@thresh/core/duration";
 import type { GrainClass } from "@thresh/core/grain-class";
+import type { DependencyToken } from "@thresh/core/grain-dependency";
 import type { GrainRegistrationSpec } from "@thresh/core/grain-registration-spec";
 import type {
   IncomingGrainCallFilter,
@@ -13,7 +14,7 @@ import {
   type Registrable,
 } from "@thresh/core/grain-registration";
 import type { KeyTypeOf } from "@thresh/core/key-kinds";
-import type { MembershipService } from "@thresh/core/membership";
+import { activeSilos, ringSilos, type MembershipService } from "@thresh/core/membership";
 import type { SiloAddress } from "@thresh/core/silo-address";
 import type { CompatibilityKind } from "@thresh/core/version-compatibility";
 import type { VersionSelectorKind } from "@thresh/core/version-selector";
@@ -43,6 +44,7 @@ import {
   GrainFacetRegistry,
   type GrainFacetFactory,
 } from "@thresh/persistence/grain-facet-registry";
+import type { LocalCallSemantics } from "@thresh/runtime/local-call-semantics-dispatcher";
 import { PlacementFilterRegistry } from "@thresh/runtime/placement/placement-filter-registry";
 import { PlacementStrategyRegistry } from "@thresh/runtime/placement/placement-strategy-registry";
 import type { PlacementStrategy } from "@thresh/runtime/placement/placement-strategy";
@@ -51,14 +53,17 @@ import {
   bindTransactionalStates,
   unbindTransactionalStates,
 } from "@thresh/transactions/transactional-state-activator";
-import type { Logger } from "@thresh/core/logger";
+import { defaultLogger, safeLogger, type Logger } from "@thresh/core/logger";
 import { setupTracePropagation, tracingFilters } from "@thresh/observability/tracing";
 import { metricsFilters } from "@thresh/observability/metrics";
+import type { MembershipWatchSource } from "@thresh/observability/membership-metrics";
+import { registerMembershipMetrics } from "@thresh/observability/membership-metrics";
 import { registerRuntimeMetrics } from "@thresh/observability/runtime-metrics";
 import { loggingFilter } from "@thresh/observability/logging";
 import { MemoryTransactionalStorage } from "@thresh/transactions/memory-transactional-storage";
 import { RedisTransactionalStorage } from "@thresh/transactions/redis-transactional-storage";
 import { TransactionalStorageRegistry } from "@thresh/transactions/transactional-storage-registry";
+import type { TransactionsOptions } from "@thresh/transactions/transactions-options";
 import type { TransactionalStateStorage } from "@thresh/core/transactional-storage";
 import type { JournalStorage } from "@thresh/core/journal-storage";
 import { MemoryJournalStorage } from "@thresh/journaling/memory-journal-storage";
@@ -74,7 +79,6 @@ import { bindJournalFacets } from "@thresh/journaling/journal-facets-binder";
 import type { BroadcastChannelOptions } from "@thresh/core/broadcast-channel";
 import type { StreamFilter, StreamProvider } from "@thresh/core/stream";
 import type { DurableJobsOptions } from "@thresh/core/durable-job";
-import { activeSilos } from "@thresh/core/membership";
 import {
   LocalDurableJobManager,
   resolveOptions as resolveDurableJobOptions,
@@ -117,9 +121,13 @@ import type { StreamCursorStore } from "@thresh/streams/stream-cursor-store";
 import { StreamProviderConfigurationError } from "@thresh/streams/stream-provider-config-error";
 import { ClusterNode } from "@thresh/runtime/cluster-node";
 import type { ActivationOptions } from "@thresh/runtime/activation";
-import type { GrainActivator } from "@thresh/runtime/catalog";
+import { composeGrainActivators, type GrainActivator } from "@thresh/runtime/catalog";
+import { ServiceLifecycleStage } from "@thresh/runtime/lifecycle-subject";
 import { GrainServiceRegistry, type GrainService } from "@thresh/runtime/grain-service";
-import type { LoadSheddingOptions } from "@thresh/runtime/load-shedding";
+import type {
+  EnvironmentStatisticsProvider,
+  LoadSheddingOptions,
+} from "@thresh/runtime/load-shedding";
 import { StaticMembershipService } from "@thresh/runtime/static-membership";
 import { ActivationRebalancerWorker } from "@thresh/runtime/placement/rebalancing/rebalancer-worker";
 import { ISiloProbe } from "@thresh/core/silo-probe-grain";
@@ -136,7 +144,11 @@ import {
 } from "@thresh/runtime/placement/rebalancing/rebalancer-model";
 import { HealthCheck } from "@thresh/hosting/health-check";
 import { HealthServer } from "@thresh/hosting/health-server";
-import { buildSiloHost, type SiloHost } from "@thresh/hosting/silo-host";
+import {
+  buildSiloHost,
+  type SiloHost,
+  type SiloLifecycleParticipant,
+} from "@thresh/hosting/silo-host";
 import { DEFAULT_SERVICE_ID } from "@thresh/core/default-service-id";
 
 export interface SiloConfig {
@@ -154,6 +166,13 @@ export interface SiloConfig {
    */
   serviceId?: string;
   local: SiloAddress;
+  /**
+   * THE silo's logger: handed to the node, both dispatchers, the reminder service, the
+   * Kubernetes endpoint watch, the self-probe worker and the host. Unset, the runtime writes
+   * `warn` and `error` to the console and discards `debug` and `info` (`defaultLogger`); pass
+   * `noopLogger` to silence it. `useLogging(logger)` additionally logs every incoming call.
+   */
+  logger?: Logger;
   /** Shared clock (defaults to the system clock); inject a fake for tests. */
   time?: TimeProvider;
   /** Idle-deactivation threshold for grains without their own `collectionAgeSeconds`. */
@@ -203,6 +222,15 @@ export interface SiloConfig {
    * minutes); see `ClusterNodeOptions.clientDirectoryRefreshMs`.
    */
   clientDirectoryRefreshMs?: number;
+  /**
+   * What a call to a grain on THIS silo does to its arguments, result and thrown error:
+   * `"copy"` (the default, and Orleans' behaviour) deep-copies arguments and results exactly as
+   * the codec round trip would deliver them, sharing only values marked `immutable`;
+   * `"reference"` shares the caller's objects; `"wire"` makes the full serializer round trip a
+   * message would. Under `"copy"` and `"wire"` a same-silo call sees no shared objects and class
+   * instances and error classes as the wire delivers them. See `LocalCallSemantics`.
+   */
+  localCallSemantics?: LocalCallSemantics;
   /** Injectable RNG for deterministic placement in examples/tests. */
   random?: () => number;
   /** How often each silo re-reads its reminder ranges from the table (defaults to 60s). */
@@ -212,10 +240,17 @@ export interface SiloConfig {
   /** Durable-journal snapshot threshold: snapshot + truncate past this many log entries (default 100). */
   snapshotThreshold?: number;
   /**
+   * Whether a `JournaledGrain` keeps its confirmed events across a journal snapshot (default
+   * `false`: a snapshot replaces the events below it, as Orleans' state-storage provider). `true`
+   * opts in to whole-log retention, as Orleans' log-storage provider; every compaction then
+   * rewrites the whole retained history.
+   */
+  retainJournaledEvents?: boolean;
+  /**
    * Silo-wide default per-method response timeout (Orleans `[ResponseTimeout]`
    * default), applied to any grain call whose interface doesn't set its own
-   * `responseTimeout`. Off by default: no call races a deadline unless one is
-   * configured here or on the method itself.
+   * `responseTimeout`, to a grain on this silo as to one on another. Defaults to
+   * `callTimeout` (30s): a call always has a deadline.
    */
   defaultResponseTimeout?: Duration;
   /**
@@ -227,10 +262,40 @@ export interface SiloConfig {
    */
   callTimeout?: Duration;
   /**
+   * How long the directory waits, when this silo gains a hash range it must rebuild from every
+   * member's activations, for members that do not answer. Unset (the default) the range stays
+   * locked for as long as such a member is listed in the membership view: lookups for grains
+   * in it wait rather than risk a second activation of a grain that silo may still be running.
+   * Set, the range unlocks once this has elapsed without their answers, the event is logged at
+   * error level and counted (`thresh.directory.recovery.patience_expired`), and a grain those
+   * members were hosting may be activated a second time. See `docs/guide/hosting.md`.
+   */
+  directoryRecoveryPatience?: Duration;
+  /**
    * Load-shedding config (Orleans `Configure<LoadSheddingOptions>`). Defaults
    * to shedding disabled; see `ClusterNodeOptions.loadShedding`.
    */
   loadShedding?: Partial<LoadSheddingOptions>;
+  /**
+   * The silo's CPU and memory source (Orleans `IEnvironmentStatisticsProvider`), read by load
+   * shedding, overloaded-silo exclusion and resource-optimized placement, and carried in the load
+   * snapshot sent to peers. Defaults to a Node provider (event-loop utilisation and process/OS
+   * memory); see `ClusterNodeOptions.environmentStatistics`.
+   */
+  environmentStatistics?: EnvironmentStatisticsProvider;
+  /**
+   * Enables the load-shedding test hooks (`GrainRuntime.latchCpuUsage` and friends, and
+   * `SiloHost.loadShedding`). Off by default, and a `TestCluster` turns it on: without it every
+   * latch method throws; see `ClusterNodeOptions.testHooks`.
+   */
+  testHooks?: boolean;
+  /**
+   * Transactions tunables (Orleans `TransactionalStateOptions`): `lockTimeoutMs`,
+   * `lockAcquireTimeoutMs`, `prepareTimeoutMs`, `remoteTransactionPingFrequencyMs`
+   * and `confirmationRetryDelayMs`. Any field left unset takes Orleans'
+   * default (see `defaultTransactionsOptions`).
+   */
+  transactionsOptions?: Partial<TransactionsOptions>;
   /**
    * Per-activation turn-scheduler back-pressure/watchdog config (Orleans
    * `SchedulingOptions`). Any field left unset falls back to this builder's
@@ -253,11 +318,18 @@ export interface SiloConfig {
   };
   /**
    * Orleans `CollectionOptions.DeactivationTimeout`: force deactivation to
-   * proceed once `onDeactivate` has run this long, even if the hook itself
-   * hasn't settled. Defaults to 30s; pass `false` to disable (wait
-   * indefinitely, the pre-existing behaviour).
+   * proceed once this long has passed since it was requested (Orleans arms it
+   * in `Deactivate`), even if `onDeactivate` hasn't settled. Defaults to 30s;
+   * pass `false` to disable (wait indefinitely, the pre-existing behaviour).
    */
   deactivationTimeout?: Duration | false;
+  /**
+   * Orleans `CollectionOptions.ActivationTimeout`: give up on an activation whose state load and
+   * `onActivate` have not finished this long after it began. Its waiting calls are rejected and
+   * it leaves the catalog, so a later call activates afresh. Defaults to 30s, as upstream; pass
+   * `false` to wait indefinitely.
+   */
+  activationTimeout?: Duration | false;
   /**
    * Dev-mode `@readOnly` mutation guard (`GAP-READONLY-ENFORCEMENT`): when
    * `true`, a grain's persistent, reducer, durable-journaling
@@ -281,6 +353,14 @@ export interface SiloConfig {
    * no external routing plane to wait for.
    */
   gracefulShutdownMs?: number;
+  /**
+   * How long start waits for the membership service to list this silo before it fails (Orleans
+   * `ClusterMembershipOptions.MaxJoinAttemptTime`; defaults to five minutes). Under Kubernetes
+   * membership a silo is not in its own view until the EndpointSlice controller lists its pod, and
+   * start-up tasks run only once it is; static membership lists it at once and never waits. On
+   * expiry start fails and rolls back, naming the Service selector and pod labels to check.
+   */
+  joinTimeout?: Duration;
   /**
    * `GracefulShutdown`'s overall stop budget — `gracefulShutdownMs` plus the
    * node's own deactivation sweep together fit inside this, so a slow
@@ -312,6 +392,15 @@ export interface SiloConfig {
     missedThreshold?: number;
     /** Set `false` to disable the worker entirely. Defaults to `true`. */
     enabled?: boolean;
+    /**
+     * Make LIVENESS fail once the probe has failed continuously for this many milliseconds, so
+     * the kubelet restarts a silo whose dispatcher is permanently wedged (readiness alone only
+     * pulls it from service). Off unless set, because a restart drops every activation and the
+     * right period depends on the deployment; choose one well above `intervalMs * missedThreshold`
+     * (a minute or more) so a silo that is merely slow to recover is not killed. Never depends
+     * on the Kubernetes API.
+     */
+    livenessFailureMs?: number;
   };
 }
 
@@ -333,6 +422,8 @@ const DEFAULT_MAX_ENQUEUED_REQUESTS_HARD_LIMIT = 10_000;
  */
 const DEFAULT_MAX_REQUEST_PROCESSING_TIME_MS = 2 * 60 * 60 * 1000;
 const DEFAULT_DEACTIVATION_TIMEOUT_MS = 30_000;
+/** Orleans `CollectionOptions.DEFAULT_ACTIVATION_TIMEOUT` (30s). */
+const DEFAULT_ACTIVATION_TIMEOUT_MS = 30_000;
 
 /**
  * One entry in this silo's grain-registration list. Exported (and aliased to
@@ -414,7 +505,8 @@ export class SiloBuilder {
   private readonly streamProviders = new Map<string, StreamProvider>();
   private readonly incomingCallFilters: IncomingGrainCallFilter[] = [];
   private readonly outgoingCallFilters: OutgoingGrainCallFilter[] = [];
-  private grainActivator: GrainActivator | undefined;
+  private readonly grainActivators: GrainActivator[] = [];
+  private readonly grainDependencies = new Map<DependencyToken<unknown>, unknown>();
   private metricsEnabled = false;
   private readonly registrations: Registration[] = [];
   private readonly grainExtensions = new Map<number, () => object>();
@@ -422,17 +514,17 @@ export class SiloBuilder {
   private versioning:
     | { compatibility?: CompatibilityKind; selector?: VersionSelectorKind }
     | undefined;
-  private readonly starters: Array<() => Promise<void>> = [];
-  private readonly closers: Array<() => Promise<void>> = [];
   /**
-   * Stops run BEFORE the node deactivates activations (`SiloHost.stop`'s
-   * `onBeforeDeactivate`) — stream providers and the durable-job manager,
-   * matching Orleans' own ordering (see that field's doc). Everything else
-   * still stops via `closers`, after deactivation.
+   * Every subsystem's start and stop, each at a named stage (`ServiceLifecycleStage`). The host
+   * starts the stages ascending and stops them descending, so a subsystem registered below the
+   * node (storage clients) is torn down after it and one registered above it (stream agents, the
+   * job manager, grain services) before it.
    */
-  private readonly preDeactivateClosers: Array<() => Promise<void>> = [];
+  private readonly lifecycle: SiloLifecycleParticipant[] = [];
   private readonly startupTasks: Array<(grains: GrainFactoryAccess) => Promise<void>> = [];
   private readonly pullingStreams: PullingStreamProviderHost[] = [];
+  /** Ownership services the host stops if this silo fences itself (`SiloHostParts.onFence`). */
+  private readonly fenceStops: Array<() => Promise<void>> = [];
   private readonly memoryStreams: Array<{
     provider: MemoryStreamProvider;
     options: { streamInactivityPeriodMs?: number } | undefined;
@@ -442,6 +534,7 @@ export class SiloBuilder {
   private readonly broadcastProviders = new Map<string, BroadcastChannelOptions>();
   private transactionsDisabled = false;
   private logger: Logger | undefined;
+  private endpointWatch: EndpointWatch | undefined;
   /**
    * Builder-time additions to `SiloConfig.classSpecificCollectionAgeSeconds` (#66). Held apart
    * from `config` — which is `readonly`, as is the map inside it — and composed at `build()`, so
@@ -449,7 +542,9 @@ export class SiloBuilder {
    */
   private readonly classSpecificCollectionAges = new Map<string, number>();
 
-  constructor(private readonly config: SiloConfig) {}
+  constructor(private readonly config: SiloConfig) {
+    this.logger = config.logger;
+  }
 
   /**
    * This silo's logical service identity (Orleans `ClusterOptions.ServiceId`),
@@ -473,13 +568,56 @@ export class SiloBuilder {
   private createManagedRedisClient(options: { url: string }): ReturnType<typeof createClient> {
     const client = createClient({ url: options.url });
     client.on("error", () => {});
-    this.starters.push(async () => {
-      await client.connect();
-    });
-    this.closers.push(async () => {
-      await client.close();
+    this.lifecycle.push({
+      name: "redis client",
+      stage: ServiceLifecycleStage.RuntimeInitialize,
+      start: async () => {
+        await client.connect();
+      },
+      stop: async () => {
+        if (client.isOpen) await client.close();
+      },
     });
     return client;
+  }
+
+  /**
+   * Stop a pulling stream provider's agents at `BecomeActive`, ahead of the node's deactivation of
+   * its activations (Orleans stops them at `Active`, `PersistentStreamProviderOptions.cs:58`).
+   */
+  private stopPullingAgents(name: string, provider: { stop(): Promise<void> }): void {
+    this.fenceStops.push(() => provider.stop());
+    this.lifecycle.push({
+      name: `stream agents ${name}`,
+      stage: ServiceLifecycleStage.BecomeActive,
+      stop: async () => {
+        await provider.stop();
+      },
+    });
+  }
+
+  /**
+   * Register a participant in the silo's lifecycle (Orleans
+   * `ISiloBuilder`/`ILifecycleParticipant<ISiloLifecycle>`): `start` runs when the host reaches
+   * `stage` on the way up, `stop` when it passes it on the way down, so a participant at a higher
+   * stage starts later and stops earlier. Use the `ServiceLifecycleStage` constants. Participants
+   * at one stage run concurrently. A `stop` that throws is logged and the remaining stops still
+   * run; a `start` that throws stops everything that had started and fails `SiloHost.start`.
+   *
+   * Thresh places its own subsystems as follows: `RuntimeInitialize` storage clients, the
+   * membership watch and everything that must outlive the node's deactivation of its activations;
+   * `RuntimeServices` the transport and node; `RuntimeStorageServices` stream providers;
+   * `RuntimeGrainServices` grain services; `ApplicationServices` startup tasks; `BecomeActive`
+   * the health listener and the stop of pulling agents and the job manager; `Active` the
+   * ownership reconcile, rebalancer, self-probe and reminders; `Last` readiness.
+   */
+  addLifecycleParticipant(
+    name: string,
+    stage: number,
+    hooks: { start?: () => Promise<void>; stop?: () => Promise<void> },
+  ): this {
+    this.lifecycle.push({ name, stage, ...hooks });
+    return this;
   }
 
   /**
@@ -533,11 +671,15 @@ export class SiloBuilder {
       ...toConfigOption("tableName", options.tableName),
       serviceId: this.serviceIdentity,
     });
-    this.starters.push(async () => {
-      await table.start();
-    });
-    this.closers.push(async () => {
-      await pool.end();
+    this.lifecycle.push({
+      name: "postgres reminders",
+      stage: ServiceLifecycleStage.RuntimeInitialize,
+      start: async () => {
+        await table.start();
+      },
+      stop: async () => {
+        await pool.end();
+      },
     });
     this.reminderTable = table;
     this.remindersRequested = true;
@@ -570,10 +712,10 @@ export class SiloBuilder {
     jobs?: DurableJobsOptions;
   }): this {
     const client = this.createManagedRedisClient(options);
-    this.jobShardStore = new RedisJobShardStore(
-      client,
-      toConfigOption("keyPrefix", options.keyPrefix),
-    );
+    this.jobShardStore = new RedisJobShardStore(client, {
+      ...toConfigOption("keyPrefix", options.keyPrefix),
+      serviceId: this.serviceIdentity,
+    });
     this.durableJobsOptions = options.jobs ?? {};
     return this;
   }
@@ -650,12 +792,55 @@ export class SiloBuilder {
    * Register a server-side stream filter (Orleans `ISiloBuilder.AddStreamFilter`)
    * on the named memory stream provider: suppresses delivery of an item to
    * every implicit subscriber before it reaches one, based on the item's
-   * content (see `StreamFilter`). Applies only to a provider registered via
-   * `useMemoryStreams` with a matching name.
+   * content (see `StreamFilter`). Repeatable: every filter registered for a
+   * provider must accept an item. Applies only to a provider registered via
+   * `useMemoryStreams` with a matching name; `build()` throws a
+   * `StreamProviderConfigurationError` for any other name rather than ignore it.
    */
   addStreamFilter(providerName: string, filter: StreamFilter): this {
     this.streamFilters.push({ providerName, filter });
     return this;
+  }
+
+  /**
+   * A stream filter only takes effect on a memory provider, so one registered
+   * for a name nothing answers to, or for a provider that cannot apply it,
+   * would be silently ignored: refuse it instead.
+   */
+  private assertStreamFiltersApply(): void {
+    for (const { providerName } of this.streamFilters) {
+      const registered = this.streamProviders.get(providerName);
+      if (registered === undefined) {
+        throw new StreamProviderConfigurationError(
+          providerName,
+          `a stream filter was added for a provider that is not registered (registered: ${[...this.streamProviders.keys()].join(", ")})`,
+        );
+      }
+      if (!this.memoryStreams.some(({ provider }) => provider === registered)) {
+        throw new StreamProviderConfigurationError(
+          providerName,
+          "a stream filter was added for a provider that cannot apply it: only a provider registered with useMemoryStreams filters its items",
+        );
+      }
+    }
+  }
+
+  /**
+   * The stream provider registered as `name` (`"default"` when omitted). A name
+   * that was never registered is a configuration error naming it and listing
+   * the registered ones, never a quiet fall back to the default provider.
+   */
+  private resolveStreamProvider(name: string | undefined): StreamProvider {
+    const wanted = name ?? "default";
+    const provider = this.streamProviders.get(wanted);
+    if (provider === undefined) {
+      const registered = [...this.streamProviders.keys()].join(", ");
+      throw new StreamProviderConfigurationError(
+        wanted,
+        `no stream provider is registered under this name (registered: ${registered})`,
+      );
+    }
+    return provider;
   }
 
   addStreamProvider(name: string, provider: StreamProvider): this {
@@ -730,18 +915,20 @@ export class SiloBuilder {
       serviceId: this.serviceIdentity,
     });
     this.pullingStreams.push(provider);
-    this.starters.push(async () => {
-      await client.connect();
+    this.lifecycle.push({
+      name: `redis stream client ${name}`,
+      stage: ServiceLifecycleStage.RuntimeInitialize,
+      start: async () => {
+        await client.connect();
+      },
+      stop: async () => {
+        if (client.isOpen) await client.close();
+      },
     });
     // Stop polling before deactivateAll, or it keeps delivering into
     // activations that are (or are about to be) deactivating; the client
-    // connection itself can close after.
-    this.preDeactivateClosers.push(async () => {
-      await provider.stop();
-    });
-    this.closers.push(async () => {
-      await client.close();
-    });
+    // connection itself closes after, one stage down.
+    this.stopPullingAgents(name, provider);
     return this.addStreamProvider(name, provider);
   }
 
@@ -796,16 +983,22 @@ export class SiloBuilder {
       serviceId: this.serviceIdentity,
     });
     this.pullingStreams.push(provider);
-    this.starters.push(async () => {
-      await provider.start();
+    this.lifecycle.push({
+      name: `postgres stream provider ${name}`,
+      stage: ServiceLifecycleStage.RuntimeStorageServices,
+      start: async () => {
+        await provider.start();
+      },
     });
     // Stop polling before deactivateAll (see `addRedisStreams`); the pool
-    // itself can close after.
-    this.preDeactivateClosers.push(async () => {
-      await provider.stop();
-    });
-    this.closers.push(async () => {
-      await pool.end();
+    // itself closes after, one stage down.
+    this.stopPullingAgents(name, provider);
+    this.lifecycle.push({
+      name: `postgres stream pool ${name}`,
+      stage: ServiceLifecycleStage.RuntimeInitialize,
+      stop: async () => {
+        await pool.end();
+      },
     });
     return this.addStreamProvider(name, provider);
   }
@@ -865,8 +1058,12 @@ export class SiloBuilder {
       pool.on("error", () => {}); // surfaced by start()/queries; don't crash the process
       registry = new PostgresSubscriptionRegistry(pool, prefix, name, this.serviceIdentity);
       cursorStore = new PostgresStreamCursorStore(pool, prefix, this.serviceIdentity);
-      this.closers.push(async () => {
-        await pool.end();
+      this.lifecycle.push({
+        name: `kafka metadata pool ${name}`,
+        stage: ServiceLifecycleStage.RuntimeInitialize,
+        stop: async () => {
+          await pool.end();
+        },
       });
     } else {
       const { url, keyPrefix } = options.metadata.redis;
@@ -875,11 +1072,15 @@ export class SiloBuilder {
       client.on("error", () => {});
       registry = new RedisSubscriptionRegistry(client, prefix, name, this.serviceIdentity);
       cursorStore = new RedisStreamCursorStore(client, prefix, this.serviceIdentity);
-      this.starters.push(async () => {
-        await client.connect();
-      });
-      this.closers.push(async () => {
-        await client.close();
+      this.lifecycle.push({
+        name: `kafka metadata redis client ${name}`,
+        stage: ServiceLifecycleStage.RuntimeInitialize,
+        start: async () => {
+          await client.connect();
+        },
+        stop: async () => {
+          if (client.isOpen) await client.close();
+        },
       });
     }
 
@@ -900,16 +1101,22 @@ export class SiloBuilder {
       ...toConfigOption("retryBackoffMs", options.retryBackoffMs),
     });
     this.pullingStreams.push(provider);
-    this.starters.push(async () => {
-      await provider.start();
+    this.lifecycle.push({
+      name: `kafka stream provider ${name}`,
+      stage: ServiceLifecycleStage.RuntimeStorageServices,
+      start: async () => {
+        await provider.start();
+      },
     });
     // Stop polling before deactivateAll (see `addRedisStreams`); the Kafka
-    // client can disconnect after.
-    this.preDeactivateClosers.push(async () => {
-      await provider.stop();
-    });
-    this.closers.push(async () => {
-      await provider.disconnect();
+    // client disconnects after, one stage down.
+    this.stopPullingAgents(name, provider);
+    this.lifecycle.push({
+      name: `kafka client ${name}`,
+      stage: ServiceLifecycleStage.RuntimeInitialize,
+      stop: async () => {
+        await provider.disconnect();
+      },
     });
     return this.addStreamProvider(name, provider);
   }
@@ -931,9 +1138,7 @@ export class SiloBuilder {
     const provider = new GeneratorPullingStreamProvider(name, config, options);
     this.pullingStreams.push(provider);
     // Stop before deactivateAll (see `addRedisStreams`).
-    this.preDeactivateClosers.push(async () => {
-      await provider.stop();
-    });
+    this.stopPullingAgents(name, provider);
     return this.addStreamProvider(name, provider);
   }
 
@@ -1009,13 +1214,17 @@ export class SiloBuilder {
           tableName: `${prefix}_reminders`,
           serviceId: this.serviceIdentity,
         });
-        this.starters.push(async () => {
-          await grainStorage.start();
-          await journalStorage.start();
-          await reminders.start();
-        });
-        this.closers.push(async () => {
-          await pool.end();
+        this.lifecycle.push({
+          name: "postgres storage backend",
+          stage: ServiceLifecycleStage.RuntimeInitialize,
+          start: async () => {
+            await grainStorage.start();
+            await journalStorage.start();
+            await reminders.start();
+          },
+          stop: async () => {
+            await pool.end();
+          },
         });
         storage = grainStorage;
         journal = journalStorage;
@@ -1139,9 +1348,32 @@ export class SiloBuilder {
    * Install a custom grain activator (Orleans `IGrainActivator`): a hook to
    * construct/dispose grain instances instead of `new ctor()`, e.g. object
    * pooling or non-DI construction.
+   *
+   * Callable more than once: an activator with a `claims` predicate builds only the classes it
+   * claims (the first claiming one, in registration order, wins), and a class nobody claims is
+   * constructed with `new ctor()`. An activator without `claims` claims every class, so it must
+   * come last: registering one behind it is refused rather than silently shadowed.
    */
   useGrainActivator(activator: GrainActivator): this {
-    this.grainActivator = activator;
+    if (this.grainActivators.some((a) => a.claims === undefined)) {
+      throw new Error(
+        "useGrainActivator: an earlier activator claims every grain class, so this one would " +
+          "never be used; register the activators that claim specific classes first",
+      );
+    }
+    this.grainActivators.push(activator);
+    return this;
+  }
+
+  /**
+   * Register a per-silo dependency for functional grains: a grain factory asks
+   * for it with `useDependency(token)`. The functional counterpart of handing a
+   * class grain its dependencies through the grain activator's constructor call;
+   * the value belongs to this silo only, so two silos built in one process may
+   * register different values under the same token.
+   */
+  addGrainDependency<T>(token: DependencyToken<T>, value: T): this {
+    this.grainDependencies.set(token, value);
     return this;
   }
 
@@ -1172,11 +1404,13 @@ export class SiloBuilder {
 
   /**
    * Log each incoming grain call (and its failures) with structured fields via
-   * the given {@link Logger}, on the call-filter seam.
+   * the given {@link Logger}, on the call-filter seam. The logger also becomes the silo's
+   * logger when `SiloConfig.logger` was not set; to log runtime diagnostics WITHOUT a line per
+   * call, set `SiloConfig.logger` instead.
    */
   useLogging(logger: Logger): this {
     this.incomingCallFilters.push(loggingFilter(logger));
-    this.logger = logger;
+    this.logger ??= logger;
     return this;
   }
 
@@ -1261,11 +1495,15 @@ export class SiloBuilder {
       ...toConfigOption("tableName", options.tableName),
       serviceId: this.serviceIdentity,
     });
-    this.starters.push(async () => {
-      await provider.start();
-    });
-    this.closers.push(async () => {
-      await pool.end();
+    this.lifecycle.push({
+      name: `postgres storage ${name}`,
+      stage: ServiceLifecycleStage.RuntimeInitialize,
+      start: async () => {
+        await provider.start();
+      },
+      stop: async () => {
+        await pool.end();
+      },
     });
     return this.addStorage(name, provider);
   }
@@ -1335,11 +1573,15 @@ export class SiloBuilder {
       ...toConfigOption("tablePrefix", options.tablePrefix),
       serviceId: this.serviceIdentity,
     });
-    this.starters.push(async () => {
-      await provider.start();
-    });
-    this.closers.push(async () => {
-      await pool.end();
+    this.lifecycle.push({
+      name: `postgres journal ${name}`,
+      stage: ServiceLifecycleStage.RuntimeInitialize,
+      start: async () => {
+        await provider.start();
+      },
+      stop: async () => {
+        await pool.end();
+      },
     });
     return this.addJournaling(name, provider);
   }
@@ -1385,16 +1627,31 @@ export class SiloBuilder {
    * `SiloMember.metadata`.
    */
   useKubernetesMembership(watch: EndpointWatch, options?: KubernetesMembershipOptions): this {
-    this.membership = new KubernetesMembership(this.config.local, watch, options);
+    // The refresh is bounded by the silo's call timeout and runs on its clock, unless the caller
+    // chose otherwise: a refresh outliving the call that awaits it holds a pending entry for nothing.
     this.singleSiloView = false;
     this.staticViewWithoutLiveness = false;
     const lifecycle = watch as Partial<{ start(): Promise<void>; stop(): void }>;
-    if (typeof lifecycle.start === "function") {
-      this.starters.push(() => lifecycle.start!());
-    }
-    if (typeof lifecycle.stop === "function") {
-      this.closers.push(async () => lifecycle.stop!());
-    }
+    const membership = new KubernetesMembership(this.config.local, watch, {
+      ...(this.config.callTimeout !== undefined
+        ? { refreshTimeoutMs: durationToMs(this.config.callTimeout) }
+        : {}),
+      ...(this.config.time !== undefined ? { time: this.config.time } : {}),
+      ...options,
+    });
+    this.membership = membership;
+    this.endpointWatch = watch;
+    // Always registered: stopping the silo settles every refresh still pending on the service,
+    // whether or not the watch has a lifecycle of its own.
+    this.lifecycle.push({
+      name: "membership watch",
+      stage: ServiceLifecycleStage.RuntimeInitialize,
+      ...(typeof lifecycle.start === "function" ? { start: () => lifecycle.start!() } : {}),
+      stop: async () => {
+        membership.stop();
+        lifecycle.stop?.();
+      },
+    });
     return this;
   }
 
@@ -1404,7 +1661,25 @@ export class SiloBuilder {
   }
 
   useWebSocketTransport(): this {
-    this.transport = new WebSocketTransport(this.config.clusterId);
+    // `useLogging` may come after this call, so the logger is read at log time; with none
+    // set it is the silo's default (warn and error to the console), never silence.
+    const current = (): Logger => safeLogger(this.logger ?? defaultLogger);
+    const logger: Logger = {
+      debug: (message, fields) => current().debug(message, fields),
+      info: (message, fields) => current().info(message, fields),
+      warn: (message, fields) => current().warn(message, fields),
+      error: (message, fields) => current().error(message, fields),
+    };
+    this.transport = new WebSocketTransport(this.config.clusterId, { logger });
+    return this;
+  }
+
+  /**
+   * Use a transport built elsewhere — typically one of the above wrapped in a decorator, such
+   * as `FaultInjectingTransport` for fault-injection tests.
+   */
+  useTransport(transport: Transport): this {
+    this.transport = transport;
     return this;
   }
 
@@ -1625,6 +1900,7 @@ export class SiloBuilder {
 
   build(): SiloHost {
     if (this.membership === undefined) throw new Error("silo: no membership configured");
+    const membership = this.membership;
     if (this.transport === undefined) throw new Error("silo: no transport configured");
     if (
       this.storageBackend?.kind === "memory" &&
@@ -1643,7 +1919,18 @@ export class SiloBuilder {
     this.refuseSingleSiloSettingsOnACluster();
     const classSpecificCollectionAgeSeconds = this.resolvedClassSpecificCollectionAges;
     validateClassSpecificCollectionAges(classSpecificCollectionAgeSeconds);
-    const health = new HealthCheck();
+    const logger = safeLogger(this.logger ?? defaultLogger);
+    const health = new HealthCheck({
+      ...(this.config.time !== undefined ? { time: this.config.time } : {}),
+      ...(this.config.selfProbe?.livenessFailureMs !== undefined
+        ? { livenessFailureMs: this.config.selfProbe.livenessFailureMs }
+        : {}),
+    });
+    // The Kubernetes watch is built by the caller before the silo exists; give it the silo's
+    // logger unless it was handed its own.
+    (this.endpointWatch as { adoptLogger?: (logger: Logger) => void } | undefined)?.adoptLogger?.(
+      logger,
+    );
     const storage = this.storage;
     // Transactional facets default to a per-silo in-memory provider
     // (non-durable across restarts) unless transactions were explicitly
@@ -1654,9 +1941,11 @@ export class SiloBuilder {
       ? undefined
       : (this.transactionalStorage ??
         new TransactionalStorageRegistry().add("default", new MemoryTransactionalStorage()));
+    const transactionsOptions = this.config.transactionsOptions;
     const journalStorage = this.journalStorage;
     const grainFacets = this.grainFacets;
     const snapshotThreshold = this.config.snapshotThreshold;
+    const retainJournaledEvents = this.config.retainJournaledEvents;
     const time = this.config.time;
     let reminderService: LocalReminderService | undefined;
     let jobManager: LocalDurableJobManager | undefined;
@@ -1666,17 +1955,20 @@ export class SiloBuilder {
     }
     if (this.grainServiceFactories.size > 0) {
       // `init`+`start` every registered service before the silo is marked
-      // ready (Orleans: grain services start as part of silo startup, before
-      // BecomeActive), and `stop` them on shutdown.
-      this.starters.push(async () => {
-        await grainServiceRegistry.start();
-      });
-      this.closers.push(async () => {
-        grainServiceRegistry.stop();
+      // ready (Orleans starts grain services at RuntimeGrainServices, before
+      // BecomeActive), and `stop` them on shutdown, ahead of the storage
+      // clients they may use, which sit a stage below.
+      this.lifecycle.push({
+        name: "grain services",
+        stage: ServiceLifecycleStage.RuntimeGrainServices,
+        start: async () => {
+          await grainServiceRegistry.start();
+        },
+        stop: async () => {
+          grainServiceRegistry.stop();
+        },
       });
     }
-    const membership = this.membership;
-
     const activationOptions: ActivationOptions = {
       maxEnqueuedRequestsSoftLimit:
         this.config.scheduling?.maxEnqueuedRequestsSoftLimit ??
@@ -1696,15 +1988,27 @@ export class SiloBuilder {
                 : DEFAULT_DEACTIVATION_TIMEOUT_MS,
           }
         : {}),
-      ...(this.logger !== undefined ? { logger: this.logger } : {}),
+      ...(this.config.activationTimeout !== false
+        ? {
+            activationTimeoutMs:
+              this.config.activationTimeout !== undefined
+                ? durationToMs(this.config.activationTimeout)
+                : DEFAULT_ACTIVATION_TIMEOUT_MS,
+          }
+        : {}),
+      logger,
     };
 
     const node = new ClusterNode({
+      logger,
       local: this.config.local,
       clusterId: this.config.clusterId,
       membership: this.membership,
       transport: this.transport,
       ...(time !== undefined ? { time } : {}),
+      ...(this.config.localCallSemantics !== undefined
+        ? { localCallSemantics: this.config.localCallSemantics }
+        : {}),
       ...(this.config.collectionAgeSeconds !== undefined
         ? { defaultCollectionAgeSeconds: this.config.collectionAgeSeconds }
         : {}),
@@ -1732,6 +2036,9 @@ export class SiloBuilder {
       ...(this.config.callTimeout !== undefined
         ? { callTimeoutMs: durationToMs(this.config.callTimeout) }
         : {}),
+      ...(this.config.directoryRecoveryPatience !== undefined
+        ? { directoryRecoveryPatienceMs: durationToMs(this.config.directoryRecoveryPatience) }
+        : {}),
       ...(this.config.random !== undefined ? { random: this.config.random } : {}),
       // Calling useVersioning() enables versioning with resolved defaults, so the
       // node activates version-aware placement even when no policy is overridden.
@@ -1743,6 +2050,10 @@ export class SiloBuilder {
         : {}),
       ...(this.config.metadata !== undefined ? { metadata: this.config.metadata } : {}),
       ...(this.config.loadShedding !== undefined ? { loadShedding: this.config.loadShedding } : {}),
+      ...(this.config.environmentStatistics !== undefined
+        ? { environmentStatistics: this.config.environmentStatistics }
+        : {}),
+      ...(this.config.testHooks === true ? { testHooks: true } : {}),
       ...(this.config.readOnlyStateGuard !== undefined
         ? { readOnlyStateGuard: this.config.readOnlyStateGuard }
         : {}),
@@ -1763,7 +2074,15 @@ export class SiloBuilder {
       ...(this.outgoingCallFilters.length > 0
         ? { outgoingCallFilters: this.outgoingCallFilters }
         : {}),
-      ...(this.grainActivator !== undefined ? { grainActivator: this.grainActivator } : {}),
+      ...(this.grainActivators.length > 0
+        ? {
+            grainActivator:
+              this.grainActivators.length === 1 && this.grainActivators[0]!.claims === undefined
+                ? this.grainActivators[0]!
+                : composeGrainActivators(this.grainActivators),
+          }
+        : {}),
+      ...(this.grainDependencies.size > 0 ? { grainDependencies: this.grainDependencies } : {}),
       ...(this.grainExtensions.size > 0 ? { grainExtensionFactories: this.grainExtensions } : {}),
       ...(this.placementFilters !== undefined
         ? { placementFilterRegistry: this.placementFilters }
@@ -1794,6 +2113,7 @@ export class SiloBuilder {
           await bindJournalFacets(instance, grainId, journalStorage, {
             replay: true,
             ...(snapshotThreshold !== undefined ? { snapshotThreshold } : {}),
+            ...(retainJournaledEvents !== undefined ? { retainEvents: retainJournaledEvents } : {}),
           });
         }
         if (transactionalStorage !== undefined) {
@@ -1801,8 +2121,12 @@ export class SiloBuilder {
             instance,
             grainId,
             transactionalStorage,
-            (manager, txId) => node.resolveTransactionStatus(manager, txId),
+            {
+              invoke: (target, method, args) =>
+                node.invokeTransactionResource(target, method, args),
+            },
             time,
+            transactionsOptions,
           );
         }
         if (grainFacets !== undefined) {
@@ -1823,8 +2147,7 @@ export class SiloBuilder {
         : {}),
       ...(this.streamProviders.size > 0
         ? {
-            streamProvider: (name?: string) =>
-              this.streamProviders.get(name ?? "default") ?? this.streamProviders.get("default"),
+            streamProvider: (name?: string) => this.resolveStreamProvider(name),
           }
         : {}),
     });
@@ -1836,7 +2159,27 @@ export class SiloBuilder {
         directoryCache: () => node.directoryCacheStats(),
         directoryRecovery: () => node.directoryRecoveryStats(),
       });
-      this.closers.push(async () => unregister());
+      this.lifecycle.push({
+        name: "runtime metrics",
+        stage: ServiceLifecycleStage.RuntimeInitialize,
+        stop: async () => unregister(),
+      });
+      const endpointWatch = this.endpointWatch as
+        | { status?: () => MembershipWatchSource }
+        | undefined;
+      const unregisterMembership = registerMembershipMetrics({
+        appliedViewVersion: () => node.appliedViewVersion,
+        memberCount: () => membership.current().silos.length,
+        activeMemberCount: () => activeSilos(membership.current()).length,
+        ...(typeof endpointWatch?.status === "function"
+          ? { watch: () => endpointWatch.status!() }
+          : {}),
+      });
+      this.lifecycle.push({
+        name: "membership metrics",
+        stage: ServiceLifecycleStage.RuntimeInitialize,
+        stop: async () => unregisterMembership(),
+      });
     }
 
     if (this.reminderTable !== undefined) {
@@ -1846,9 +2189,11 @@ export class SiloBuilder {
         (grainId, name, status) => node.deliverReminder(grainId, name, status),
         node.ownedHashRanges(),
         (this.config.reminderRefreshSeconds ?? 60) * 1000,
-        this.reminderServiceOptions ?? {},
+        { ...this.reminderServiceOptions, logger: this.reminderServiceOptions?.logger ?? logger },
       );
     }
+
+    health.followOverload(() => node.isOverloaded());
 
     // The rebalancer worker elects a single leader from membership and
     // drives the node's `runRebalanceCycle` on a timer; the host starts/stops it.
@@ -1867,16 +2212,18 @@ export class SiloBuilder {
 
     // Self-probe liveness (docs/design-notes-parity-gaps.md item 9, option
     // A): defaults to enabled, so this only skips construction when the
-    // caller opted out via `{ enabled: false }`. `node.getGrain(ISiloProbe,
-    // local.ringKey)` is what makes this a SELF-probe rather than an
-    // ordinary placed call — `local.ringKey` is this silo's own identity, so
-    // even though placement is `preferLocal` (which would land here anyway),
-    // the key itself pins the call to this silo's own activation.
+    // caller opted out via `{ enabled: false }`. The node serves `ISiloProbe`
+    // through its local system-activation path, which is what makes this a
+    // SELF-probe rather than an ordinary placed call: the activation is always
+    // this silo's own, created without placement or the directory, so it is
+    // available on a silo outside the ring, while the call still runs through
+    // the dispatcher and the activation's scheduler.
     let selfProbeWorker: SelfProbeWorker | undefined;
     if (this.config.selfProbe?.enabled !== false) {
       selfProbeWorker = new SelfProbeWorker({
         probe: () => node.getGrain(ISiloProbe, this.config.local.ringKey).ping(),
         health,
+        logger,
         time: time ?? systemTimeProvider,
         ...(this.config.selfProbe?.intervalMs !== undefined
           ? { intervalMs: this.config.selfProbe.intervalMs }
@@ -1908,17 +2255,21 @@ export class SiloBuilder {
         this.jobShardStore,
         time ?? systemTimeProvider,
         (job) => node.deliverDurableJob(job),
-        resolveDurableJobOptions(this.durableJobsOptions),
+        {
+          ...resolveDurableJobOptions(this.durableJobsOptions),
+          logger,
+        },
         {
           localRingKey: this.config.local.ringKey,
-          activeRingKeys: activeSilos(membership.current()).map((s) => s.ringKey),
+          activeRingKeys: node.appliedRingSilos().map((s) => s.ringKey),
         },
         undefined,
         // Cross-silo scheduling: forward a job this silo persisted but doesn't
         // own the shard for to whichever active silo the membership view says
-        // holds that ring key, so it still gets delivered.
+        // holds that ring key, so it still gets delivered. The node's APPLIED view,
+        // not `membership.current()`, which can be ahead of the ring it routes on.
         async (ownerRingKey, job) => {
-          const target = activeSilos(membership.current()).find((s) => s.ringKey === ownerRingKey);
+          const target = node.appliedRingSilos().find((s) => s.ringKey === ownerRingKey);
           if (target === undefined) return false;
           return node.forwardDurableJob(target, job);
         },
@@ -1927,47 +2278,68 @@ export class SiloBuilder {
       onOwnershipChange.push(async () => {
         await manager.refreshOwnership({
           localRingKey: this.config.local.ringKey,
-          activeRingKeys: activeSilos(membership.current()).map((s) => s.ringKey),
+          activeRingKeys: node.appliedRingSilos().map((s) => s.ringKey),
         });
       });
       // Graceful drain releases this silo's shards so a successor can claim
       // them — stopped before deactivateAll, or it keeps delivering jobs
       // into activations that are (or are about to be) deactivating.
-      this.preDeactivateClosers.push(async () => manager.stop());
+      this.lifecycle.push({
+        name: "durable job manager",
+        stage: ServiceLifecycleStage.BecomeActive,
+        stop: async () => manager.stop(),
+      });
+      this.fenceStops.push(() => manager.stop());
     }
     for (const provider of this.pullingStreams) {
       provider.setDeliver((grainId, streamKey, event, token) =>
         node.deliverStreamEvent(grainId, streamKey, event, token),
       );
-      provider.setImplicitSubscribers((namespace) => node.implicitGrainTypes(namespace));
+      provider.setImplicitSubscribers(
+        (namespace) => node.implicitGrainTypes(namespace),
+        (type) => node.grainKeyKind(type),
+      );
       onOwnershipChange.push(async (ranges) => provider.refreshOwnership(ranges));
     }
     // The memory provider delivers synchronously in-process on `publish` (no
     // pulling agent/queue ownership), but implicit subscribers still need the
     // same dispatcher-routed delivery pulling providers use — see
     // `MemoryStreamProvider`'s class doc.
+    this.assertStreamFiltersApply();
     for (const { provider, options } of this.memoryStreams) {
-      provider.setDeliver((grainId, streamKey, event, token) =>
-        node.deliverStreamEvent(grainId, streamKey, event, token),
-      );
-      provider.setImplicitSubscribers((namespace) => node.implicitGrainTypes(namespace));
-      provider.setConfirmSubscription((grainId, streamKey) =>
-        node.confirmStreamSubscription(grainId, streamKey),
-      );
       provider.setTimeProvider(time ?? systemTimeProvider);
       if (options?.streamInactivityPeriodMs !== undefined) {
         provider.setStreamInactivityPeriod(options.streamInactivityPeriodMs);
       }
-      const filter = this.streamFilters.find((f) => f.providerName === provider.name)?.filter;
-      if (filter !== undefined) provider.setStreamFilter(filter);
-      // Cancel every stream's inactivity timer on shutdown so none leak past
-      // this silo's lifetime (a leaked `setTimeout`/fake-clock timer would
-      // otherwise hang a test worker). Unlike the pulling providers this
-      // stays AFTER deactivation: `stop()` here only cancels timers (there is
-      // no agent to stop — delivery is a direct push on `publish`), and a
-      // publish from an `onDeactivate` hook re-arms one, so stopping earlier
-      // would leak exactly the timer this is here to cancel.
-      this.closers.push(async () => provider.stop());
+      for (const { providerName, filter } of this.streamFilters) {
+        if (providerName === provider.name) provider.addStreamFilter(filter);
+      }
+      // The provider may be shared by several silos (`TestCluster`), so this
+      // silo binds itself on start and removes only its own binding on stop;
+      // the provider cancels its streams' inactivity timers once the last live
+      // silo has unbound, so none leak past the cluster (a leaked
+      // `setTimeout`/fake-clock timer would otherwise hang a test worker).
+      // Unlike the pulling providers this stays AFTER deactivation: unbinding
+      // only cancels timers (no agent to stop — delivery is a direct push on
+      // `publish`), and a publish from an `onDeactivate` hook re-arms one, so
+      // stopping earlier would leak exactly the timer this is here to cancel.
+      let unbind: (() => void) | undefined;
+      this.lifecycle.push({
+        name: `memory stream binding ${provider.name}`,
+        stage: ServiceLifecycleStage.RuntimeInitialize,
+        start: async () => {
+          unbind = provider.bindSilo({
+            deliver: (grainId, streamKey, event, token) =>
+              node.deliverStreamEvent(grainId, streamKey, event, token),
+            implicitTypesFor: (namespace) => node.implicitGrainTypes(namespace),
+            implicitKeyKindFor: (type) => node.grainKeyKind(type),
+            confirm: (grainId, streamKey) => node.confirmStreamSubscription(grainId, streamKey),
+            isLive: () =>
+              ringSilos(membership.current()).some((s) => s.ringKey === this.config.local.ringKey),
+          });
+        },
+        stop: async () => unbind?.(),
+      });
     }
 
     // Backs `GrainFactoryAccess.createObjectReference` for startup tasks:
@@ -1980,7 +2352,6 @@ export class SiloBuilder {
     const registrations = this.registrations;
     // Non-null: `build()` already rejected an undefined transport above.
     const transport = this.transport as Transport;
-    const closers = this.closers;
     const incomingCallFilters = this.incomingCallFilters;
     const outgoingCallFilters = this.outgoingCallFilters;
     const ensureEmbeddedClient = async (): Promise<void> => {
@@ -2001,9 +2372,15 @@ export class SiloBuilder {
         ...(outgoingCallFilters.length > 0 ? { outgoingCallFilters } : {}),
       }).registerGrains(registrations);
       await client.connect();
-      closers.push(async () => client.close());
       embeddedClient = client;
     };
+    // Closed with the storage clients, after the node: the startup tasks that built it may have
+    // handed out object references the node's activations still call while they deactivate.
+    this.lifecycle.push({
+      name: "embedded client",
+      stage: ServiceLifecycleStage.RuntimeInitialize,
+      stop: async () => embeddedClient?.close(),
+    });
     const grainFactoryAccess: GrainFactoryAccess = {
       getGrain: (def, key) => node.getGrain(def, key),
       createObjectReference: (def, obj) => {
@@ -2031,15 +2408,18 @@ export class SiloBuilder {
         this.config.gracefulShutdownMs ??
         (this.membership instanceof KubernetesMembership ? DEFAULT_GRACE_MS : 0),
       ...(this.config.stopBudgetMs !== undefined ? { stopBudgetMs: this.config.stopBudgetMs } : {}),
+      ...(this.config.joinTimeout !== undefined
+        ? { joinTimeoutMs: durationToMs(this.config.joinTimeout) }
+        : {}),
+      ...(this.config.time !== undefined ? { time: this.config.time } : {}),
       membership: this.membership,
       reminderService,
       rebalancerWorker,
       selfProbeWorker,
-      onStart: this.starters,
+      lifecycle: this.lifecycle,
       onOwnershipChange,
-      onBeforeDeactivate: this.preDeactivateClosers,
-      onStop: this.closers,
-      ...(this.logger !== undefined ? { logger: this.logger } : {}),
+      onFence: this.fenceStops,
+      logger,
       startupTasks: this.startupTasks.map((fn) => async () => {
         await ensureEmbeddedClient(); // no-op without an in-process network
         await fn(grainFactoryAccess);

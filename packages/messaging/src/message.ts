@@ -3,6 +3,12 @@ import type { SiloAddress } from "@thresh/core/silo-address";
 import type { AccessCounter, ParticipantId } from "@thresh/core/transaction-info";
 
 export type Direction = "request" | "response" | "oneWay";
+/**
+ * How a request ended. `rejection` means the runtime refused the request before it ran (routing,
+ * admission, or the hold-and-reroute path) and is produced only there, as Orleans produces
+ * `ResponseTypes.Rejection` only in `MessageCenter.RejectMessage`; anything the request's own
+ * turn threw is an `error`, whatever its class — a `RejectionError` included.
+ */
 export type ResponseKind = "success" | "error" | "rejection";
 
 /** The serializable transaction context carried on a request (no participant set). */
@@ -31,6 +37,13 @@ export interface RequestContext {
 /** The envelope carrying one grain call or its result across the transport. */
 export interface Message {
   correlationId: bigint;
+  /**
+   * The epoch (`PROCESS_EPOCH`) of the process awaiting the reply, stamped on an awaited
+   * request and copied onto its response. With `correlationId` it is the call's identity: the
+   * id alone is a per-process counter from 1, so without the epoch a late reply meant for a
+   * restarted container's predecessor could complete an unrelated call in its successor.
+   */
+  correlationEpoch?: number | undefined;
   direction: Direction;
 
   targetGrain: GrainId;
@@ -124,6 +137,14 @@ export interface Message {
   body: Uint8Array;
 }
 
+/**
+ * This process's epoch: a random value fixed at load, carried in every connection preamble it
+ * dials and on every request it awaits (`Message.correlationEpoch`). Orleans carries a
+ * generation in `SiloAddress`; this runtime keeps `SiloAddress`'s identity unchanged and puts the
+ * epoch here instead (see `docs/deviations.md`).
+ */
+export const PROCESS_EPOCH: number = globalThis.crypto.getRandomValues(new Uint32Array(1))[0]! + 1;
+
 let counter = 0n;
 
 /** Monotonic correlation id for matching a response to its request. */
@@ -148,6 +169,7 @@ export function responseTo(
     responseKind,
     body,
   };
+  if (request.correlationEpoch !== undefined) response.correlationEpoch = request.correlationEpoch;
   if (request.interfaceVersion !== undefined) response.interfaceVersion = request.interfaceVersion;
   return response;
 }

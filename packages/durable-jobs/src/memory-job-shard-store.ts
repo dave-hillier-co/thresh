@@ -114,6 +114,11 @@ export class MemoryJobShardStore implements JobShardStore {
 
   async releaseShard(shardKey: number, owner: string): Promise<void> {
     const state = this.shards.get(shardKey);
-    if (state !== undefined && state.record.owner === owner) state.record.owner = undefined;
+    if (state !== undefined && state.record.owner === owner) {
+      state.record.owner = undefined;
+      // A graceful release is not a crash: reset the count (Orleans'
+      // `AzureStorageJobShardManager.ReleaseOwnership` removes `AdoptedCount`).
+      state.record.adoptedCount = 0;
+    }
   }
 }

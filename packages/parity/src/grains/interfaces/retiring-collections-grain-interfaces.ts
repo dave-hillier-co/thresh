@@ -22,6 +22,8 @@ import type { GrainKey } from "@thresh/core/key-kinds";
 export interface IRetiringCollectionsGrainPartial extends GrainKey<string> {
   keepSet(key: unknown, value: unknown): Promise<void>;
   keepGet(key: unknown): Promise<unknown>;
+  /** Orleans' `WriteStateAsync` on the grain's manager. */
+  writeState(): Promise<void>;
 }
 
 export const IRetiringCollectionsGrainPartial =

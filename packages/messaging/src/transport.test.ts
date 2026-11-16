@@ -4,18 +4,24 @@ import { GrainId } from "@thresh/core/grain-id";
 import { SiloAddress } from "@thresh/core/silo-address";
 import { CorrelationTable, type CorrelationTimer } from "@thresh/messaging/correlation-table";
 import { InProcessNetwork, InProcessTransport } from "@thresh/messaging/in-process-transport";
-import { nextCorrelationId, responseTo, type Message } from "@thresh/messaging/message";
+import {
+  PROCESS_EPOCH,
+  nextCorrelationId,
+  responseTo,
+  type Message,
+} from "@thresh/messaging/message";
 import { JsonSerializer } from "@thresh/messaging/json-serializer";
-import type { ConnectionPreamble } from "@thresh/messaging/transport";
+import { PROTOCOL_VERSION, type ConnectionPreamble } from "@thresh/messaging/transport";
 
 const CLUSTER = "c1";
 const A = new SiloAddress("silo-A", "ua", "a:1");
 const B = new SiloAddress("silo-B", "ub", "b:1");
 const ser = new JsonSerializer();
 const preamble = (self: SiloAddress, clusterId = CLUSTER): ConnectionPreamble => ({
-  protocolVersion: 2,
+  protocolVersion: PROTOCOL_VERSION,
   siloAddress: self,
   clusterId,
+  epoch: 1,
 });
 const request = (
   correlationId: bigint,
@@ -23,6 +29,7 @@ const request = (
   body: Uint8Array,
 ): Message => ({
   correlationId,
+  correlationEpoch: PROCESS_EPOCH,
   direction,
   targetGrain: new GrainId("Doubler", "x"),
   sendingSilo: A,
@@ -38,18 +45,15 @@ describe("in-process transport + correlation table", () => {
     const transportB = new InProcessTransport(net, CLUSTER);
     const table = new CorrelationTable();
 
-    // B doubles the argument and replies.
-    await transportB.listen(B, async (msg, from) => {
+    // B doubles the argument and replies down the connection the request arrived on.
+    await transportB.listen(B, (msg, _from, via) => {
       const arg = ser.deserialize<number>(msg.body);
-      const conn = await transportB.connect(from, preamble(B));
-      conn.send(responseTo(msg, "success", ser.serialize(arg * 2), B));
+      via?.send(responseTo(msg, "success", ser.serialize(arg * 2), B));
     });
-    // A completes pending calls from inbound responses.
-    await transportA.listen(A, (msg) => {
+    // A completes pending calls from responses arriving on the connection it dialled.
+    const connAB = await transportA.connect(B, preamble(A), (msg) => {
       table.complete(msg);
     });
-
-    const connAB = await transportA.connect(B, preamble(A));
     const corr = nextCorrelationId();
     const pending = table.register(corr);
     connAB.send(request(corr, "request", ser.serialize(21)));

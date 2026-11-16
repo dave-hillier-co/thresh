@@ -1,5 +1,6 @@
 import { InconsistentStateError } from "@thresh/core/errors";
 import type { GrainId } from "@thresh/core/grain-id";
+import { backingObjectId } from "@thresh/core/journal-storage";
 import type { JournalEntry, JournalSegment, JournalStorage } from "@thresh/core/journal-storage";
 
 interface Log {
@@ -14,7 +15,18 @@ interface Log {
  * provider (a stale writer loses the CAS and raises `InconsistentStateError`).
  */
 export class MemoryJournalStorage implements JournalStorage {
-  private readonly logs = new Map<string, Log>();
+  readonly backingKey: string;
+  private readonly logs: Map<string, Log>;
+
+  /**
+   * `sharing` makes this a second provider over the SAME backing store as another
+   * `MemoryJournalStorage`: a distinct provider object reading and writing the same logs, as two
+   * named Postgres providers over one pool and tables do.
+   */
+  constructor(options: { sharing?: MemoryJournalStorage } = {}) {
+    this.logs = options.sharing?.logs ?? new Map<string, Log>();
+    this.backingKey = `memory:${backingObjectId(this.logs)}`;
+  }
 
   async read(logName: string, grainId: GrainId): Promise<JournalSegment> {
     const log = this.logs.get(this.key(logName, grainId));

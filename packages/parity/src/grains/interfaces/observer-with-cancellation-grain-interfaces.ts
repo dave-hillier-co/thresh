@@ -61,6 +61,7 @@ export interface IObserverWithCancellationGrain extends GrainKey<Guid> {
 export const IObserverWithCancellationGrain = defineGrainInterface<IObserverWithCancellationGrain>(
   "UnitTests.GrainInterfaces.IObserverWithCancellationGrain",
   {
+    key: "guid",
     options: {
       notifyInterleavingLongWait: { alwaysInterleave: true },
       getProcessedCancellations: { alwaysInterleave: true },

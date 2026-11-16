@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { ReadOnlyStateViolationError } from "./errors";
-import { guardTransactionalStateForReadOnly } from "./transactional-state-readonly-guard";
+import {
+  guardTransactionalStateForReadOnly,
+  unguardedTransactionalState,
+} from "./transactional-state-readonly-guard";
 import type { TransactionalState } from "./transactional-state";
 
 interface Balance {
@@ -22,6 +25,13 @@ function fakeState(initial: Balance): TransactionalState<Balance> & { updates: n
 }
 
 describe("guardTransactionalStateForReadOnly", () => {
+  it("leads back to the real facet, which always-interleave protocol calls must reach", () => {
+    const inner = fakeState({ cents: 100 });
+    const guarded = guardTransactionalStateForReadOnly(inner, "balance");
+    expect(unguardedTransactionalState(guarded)).toBe(inner);
+    expect(unguardedTransactionalState(inner)).toBe(inner);
+  });
+
   it("passes performRead through unchanged", async () => {
     const inner = fakeState({ cents: 100 });
     const guarded = guardTransactionalStateForReadOnly(inner, "balance");

@@ -38,6 +38,7 @@ describe("Orleans.Journaling.Tests.DurableSetTests", () => {
       const added2 = await grain.setAdd("two");
       const added3 = await grain.setAdd("three");
       const duplicateAdded = await grain.setAdd("one");
+      await grain.writeState();
 
       expect(added1).toBe(true);
       expect(added2).toBe(true);
@@ -48,6 +49,7 @@ describe("Orleans.Journaling.Tests.DurableSetTests", () => {
 
       const removed = await grain.setDelete("two");
       const removedNonExisting = await grain.setDelete("four");
+      await grain.writeState();
 
       expect(removed).toBe(true);
       expect(removedNonExisting).toBe(false);
@@ -63,6 +65,7 @@ describe("Orleans.Journaling.Tests.DurableSetTests", () => {
     await grain.setAdd("one");
     await grain.setAdd("two");
     await grain.setAdd("three");
+    await grain.writeState();
 
     await cluster.restartSilo(cluster.primary);
     const grain2 = cluster.getGrain(IDurableCollectionsGrain, key);
@@ -86,6 +89,7 @@ describe("Orleans.Journaling.Tests.DurableSetTests", () => {
       const added1 = await grain.setAdd(person1);
       const added2 = await grain.setAdd(person2);
       const added3 = await grain.setAdd(person3);
+      await grain.writeState();
 
       expect(added1).toBe(true);
       expect(added2).toBe(true);
@@ -104,8 +108,10 @@ describe("Orleans.Journaling.Tests.DurableSetTests", () => {
     await grain.setAdd("one");
     await grain.setAdd("two");
     await grain.setAdd("three");
+    await grain.writeState();
 
     await grain.setClear();
+    await grain.writeState();
 
     expect(await grain.setSize()).toBe(0);
   });
@@ -115,6 +121,7 @@ describe("Orleans.Journaling.Tests.DurableSetTests", () => {
 
     const expectedItems = new Set(["one", "two", "three"]);
     for (const item of expectedItems) await grain.setAdd(item);
+    await grain.writeState();
 
     const actualItems = new Set(await grain.setToArray());
 
@@ -131,6 +138,7 @@ describe("Orleans.Journaling.Tests.DurableSetTests", () => {
       for (let i = 0; i < itemCount; i++) await grain.setAdd(i);
       // Duplicates, which should be ignored.
       for (let i = 0; i < 100; i++) await grain.setAdd(i);
+      await grain.writeState();
 
       expect(await grain.setSize()).toBe(itemCount);
 
@@ -152,6 +160,9 @@ describe("Orleans.Journaling.Tests.DurableSetTests", () => {
 
       for (let i = 0; i <= 10; i += 2) await grain1.setAdd(i);
       for (let i = 5; i <= 15; i++) await grain2.setAdd(i);
+      // Upstream holds both sets on one manager and writes once; here each grain has its own.
+      await grain1.writeState();
+      await grain2.writeState();
 
       const set1 = new Set(await grain1.setToArray());
       const set2 = new Set(await grain2.setToArray());
@@ -171,10 +182,12 @@ describe("Orleans.Journaling.Tests.DurableSetTests", () => {
     const grain = cluster.getGrain(IDurableCollectionsGrain, freshKey());
 
     for (let i = 0; i < 10; i++) await grain.setAdd(i);
+    await grain.writeState();
 
     const evens: number[] = [];
     for (let i = 0; i < 10; i += 2) evens.push(i);
     for (const even of evens) await grain.setDelete(even);
+    await grain.writeState();
 
     expect(await grain.setSize()).toBe(5);
     for (let i = 1; i < 10; i += 2) expect(await grain.setToArray()).toContain(i);

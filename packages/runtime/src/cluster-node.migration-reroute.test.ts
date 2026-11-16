@@ -30,6 +30,8 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
 }
 
 let onDeactivateGate: Promise<void>;
+/** Called when the source activation's `onDeactivate` starts: the migration is then mid-flight. */
+let deactivationStarted: () => void = () => undefined;
 
 @grain()
 class SlowMigrateGrain extends Grain implements IWorker {
@@ -38,6 +40,7 @@ class SlowMigrateGrain extends Grain implements IWorker {
   }
 
   override async onDeactivate(): Promise<void> {
+    deactivationStarted();
     await onDeactivateGate;
   }
 }
@@ -65,6 +68,8 @@ describe("a remote caller reaching an activation mid-migration is held and rerou
   it("serves the remote call from the new host once the migration settles, instead of failing it", async () => {
     const gate = deferred();
     onDeactivateGate = gate.promise;
+    const started = deferred();
+    deactivationStarted = started.resolve;
     const { nodes, addresses } = buildCluster();
     await Promise.all(nodes.map((n) => n.start()));
     try {
@@ -80,10 +85,13 @@ describe("a remote caller reaching an activation mid-migration is held and rerou
       // calls `deactivate()`, whose `onDeactivate` is gated open) without
       // awaiting it yet.
       const migrating = nodes[0]!.migrateRandomActivations(addresses[1]!, 1);
+      // Target selection runs through the placement pipeline first, and the pipeline runs
+      // `onDeactivate` before it dehydrates, so wait until the hook has started: the
+      // migration is then mid-flight.
+      await started.promise;
 
       // A remote call from silo-1, issued while the migration is in flight,
-      // must be held rather than rejected — regardless of whether it lands
-      // before or after the hand-off completes.
+      // must be held rather than rejected.
       const remoteCall = nodes[1]!.getGrain(IWorker, "g").ping();
       let settled = false;
       void remoteCall.then(() => (settled = true));

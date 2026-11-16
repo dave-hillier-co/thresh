@@ -16,6 +16,18 @@ export interface DurableStateMachine {
    * reconstructs current state in full. Used for compaction.
    */
   snapshot(): unknown;
+  /**
+   * Payloads this machine wants kept across a compaction in addition to its snapshot -- a
+   * `JournaledGrain`'s confirmed events, whose history is not state a snapshot can rebuild. The
+   * manager writes them ahead of the snapshot frames, and on replay hands them back through
+   * {@link applyHistory}, never `apply`: they restore history without folding it into state again.
+   * Absent or empty for a machine whose snapshot is the whole truth.
+   */
+  retainedHistory?(): unknown[];
+  /** Restores retained history on replay (see {@link retainedHistory}); must not alter state. */
+  applyHistory?(payloads: readonly unknown[]): void;
+  /** Called once a compaction has been written durably; a machine drops anything it will not retain. */
+  compacted?(): void;
 }
 
 /**
@@ -34,6 +46,26 @@ export interface StateMachineManager {
    * crosses the configured threshold.
    */
   append(machineName: string, payload: unknown): Promise<void>;
+  /**
+   * Buffer one mutation for `machineName` without touching storage, mirroring how an Orleans
+   * durable structure writes its command into the manager's journal writer. The caller (the
+   * machine) has already applied the payload to its own memory; the entry is framed and
+   * serialised now, so later changes to a mutated object do not alter what is persisted. It
+   * becomes durable on the next {@link writeState}.
+   */
+  buffer(machineName: string, payload: unknown): void;
+  /**
+   * Orleans' `IJournaledStateManager.WriteStateAsync`: append everything buffered across ALL the
+   * grain's structures in ONE storage write, under one version CAS. That write is the unit of
+   * durability: the buffered entries land together or not at all. A no-op when nothing is
+   * buffered. Overlapping calls run one after another; a later one writes whatever was buffered
+   * by the time it runs.
+   *
+   * A failed write surfaces its error, rolls nothing back and keeps the entries buffered for the
+   * next write; a lost-writer conflict (`InconsistentStateError`) additionally makes the NEXT
+   * write begin by re-reading the log, discarding in-memory state and buffered entries.
+   */
+  writeState(): Promise<void>;
   /**
    * Append several mutations for `machineName`, in order, as ONE storage write: they land together
    * under one version CAS or not at all.

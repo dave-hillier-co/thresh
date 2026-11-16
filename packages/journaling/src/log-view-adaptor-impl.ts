@@ -20,6 +20,29 @@ type Frame<TState, TEvent> = { t: "event"; e: TEvent } | { t: "snap"; s: TState;
 const MAX_APPEND_ATTEMPTS = 5;
 
 /**
+ * One raised-but-not-yet-confirmed event, mirroring Orleans' `SubmissionEntry`:
+ * `conditionalPosition` is the version the entry must land at (`undefined` for an unconditional
+ * submit) and `resolve` settles a `tryAppend` caller's promise.
+ */
+interface PendingEntry<TEvent> {
+  readonly event: TEvent;
+  readonly conditionalPosition: number | undefined;
+  readonly resolve: ((appended: boolean) => void) | undefined;
+}
+
+export interface LogViewAdaptorOptions {
+  /**
+   * Keep the confirmed event history across compaction (default `false`). The default is
+   * snapshot-plus-tail, as Orleans' state-storage provider: a compaction truncates the log and the
+   * activation holds only the events since the snapshot, so `retrieveLogSegment` throws for a range
+   * that starts below the snapshot's version. `true` is the opt-in to whole-log retention, as
+   * Orleans' log-storage provider; until the storage seam can snapshot without truncating, every
+   * compaction then rewrites the whole retained history and the activation holds it in memory.
+   */
+  retainEvents?: boolean;
+}
+
+/**
  * The `LogViewAdaptor` implementation, mirroring Orleans' state-storage /
  * log-storage adaptors collapsed into one: it maintains the confirmed view (by
  * folding confirmed events through `transitionState`, starting from
@@ -43,7 +66,9 @@ export class LogViewAdaptorImpl<TState, TEvent>
    * replay (see `apply`).
    */
   private version = 0;
-  private pending: TEvent[] = [];
+  private pending: PendingEntry<TEvent>[] = [];
+  /** Entries taken off `pending` for a write that has not yet been applied to `confirmed`. */
+  private inFlight = 0;
   /**
    * Count of raised-but-not-yet-confirmed events. Tracked separately from
    * `pending.length` (the event being appended is taken off `pending` before
@@ -56,12 +81,15 @@ export class LogViewAdaptorImpl<TState, TEvent>
   private unconfirmedCount = 0;
   /** The single in-flight `confirmSubmittedEntries` loop, if any (see below). */
   private confirmLoop: Promise<void> | undefined;
+  private readonly retainEvents: boolean;
 
   constructor(
     private readonly initial: () => TState,
     private readonly transition: (state: TState, event: TEvent) => TState,
     private readonly manager: StateMachineManager,
+    options: LogViewAdaptorOptions = {},
   ) {
+    this.retainEvents = options.retainEvents ?? false;
     this.confirmed = initial();
     this.tentative = this.confirmed;
   }
@@ -83,7 +111,7 @@ export class LogViewAdaptorImpl<TState, TEvent>
   }
 
   submit(event: TEvent): void {
-    this.pending.push(event);
+    this.pending.push({ event, conditionalPosition: undefined, resolve: undefined });
     this.unconfirmedCount += 1;
     this.tentative = this.transition(this.tentative, event);
   }
@@ -93,56 +121,69 @@ export class LogViewAdaptorImpl<TState, TEvent>
   }
 
   /**
-   * Orleans' `TryAppend` over the journal substrate. This adaptor's grain is the log's single
-   * writer through its `StateMachineManager`, so the raise cannot lose a race to another log
-   * writer the way the custom-storage adaptor's version CAS can; the one conflict left is the
-   * substrate's own storage CAS (a duplicate activation), which surfaces as an
-   * `InconsistentStateError` from the append. That conflict reports `false` -- and `runConfirmLoop`
-   * does not requeue the conflicting event, so it is dropped (from the tentative view too), never
-   * applied by a later confirm. Any other failure is a failed write: the log is re-read, which
-   * decides whether the write landed after all (then `true`), and the append is retried up to
-   * {@link MAX_APPEND_ATTEMPTS} times before the event is dropped and `false` reported. A log that
-   * cannot even be re-read rethrows. In every unsuccessful outcome the event leaves the pending
-   * queue, so no later confirm can apply a write its caller was told failed.
+   * Orleans' `TryAppend` over the journal substrate: the event is submitted CONDITIONAL on the
+   * position it was raised at (the confirmed version plus everything queued or in flight ahead of
+   * it). When the confirm pass finds that position moved -- another writer got in first, surfacing
+   * as the substrate's storage CAS (`InconsistentStateError`) -- the adaptor re-reads the log and
+   * `removeStaleConditionalUpdates` drops the conditional entries, answering them `false`, while
+   * unconditional entries stay pending and are written on top of the refreshed view. So after a
+   * `false` the confirmed view and version equal storage and a retry computed from them can
+   * succeed, and an unconditional event raised just before is neither lost nor stuck.
+   *
+   * Any other failure is a failed write: the log is re-read, which decides whether the write landed
+   * after all (then `true`), and the append is retried up to {@link MAX_APPEND_ATTEMPTS} times
+   * before the entries are dropped and `false` reported. A log that cannot even be re-read
+   * rethrows. In every unsuccessful outcome the conditional entries leave the pending queue, so no
+   * later confirm can apply a write its caller was told failed.
    */
   tryAppend(event: TEvent): Promise<boolean> {
     return this.tryAppendRange([event]);
   }
 
   /**
-   * {@link tryAppend} for several events: they are submitted together and written by one confirm
-   * pass (one storage append), so they land together or not at all, and every outcome above holds
-   * for the whole range.
+   * {@link tryAppend} for several events: they take consecutive conditional positions and are
+   * written by one confirm pass (one storage append) with unconditional events queued ahead, so
+   * they land together or not at all.
    */
   async tryAppendRange(events: readonly TEvent[]): Promise<boolean> {
     if (events.length === 0) return true;
-    this.submitRange(events);
+    let settle!: (appended: boolean) => void;
+    const outcome = new Promise<boolean>((resolve) => (settle = resolve));
+    const entries: PendingEntry<TEvent>[] = events.map((event, i) => ({
+      event,
+      conditionalPosition: this.version + this.inFlight + this.pending.length + i,
+      resolve: settle,
+    }));
     // The confirmed version once these events are appended: everything already pending lands first.
-    const landsAt = this.version + this.pending.length;
+    const landsAt = this.version + this.inFlight + this.pending.length + entries.length;
+    this.pending.push(...entries);
+    this.unconfirmedCount += entries.length;
+    for (const event of events) this.tentative = this.transition(this.tentative, event);
     for (let attempt = 1; ; attempt++) {
       try {
         await this.confirmSubmittedEntries();
-        return true;
+        return await outcome;
       } catch (error) {
-        if (error instanceof InconsistentStateError) return false;
+        if (error instanceof InconsistentStateError) {
+          // The loop's conflict budget ran out: it has already dropped the conditional entries
+          // and answered them false.
+          return await outcome;
+        }
         // A failed write, as the custom-storage adaptor and Orleans treat it: re-read storage,
-        // which decides whether the write landed after all, and retry on top of it. The events
-        // must never stay pending past a `false` or a throw: their caller is told the append
-        // failed, and a later confirm silently applying them would land a write the caller was
-        // told failed.
+        // which decides whether the write landed after all, and retry on top of it.
         try {
           await this.resync();
         } catch {
           // Storage cannot even be read: whether the write landed is unknowable here.
-          this.withdraw(events);
+          this.withdraw(entries);
           throw error;
         }
         if (this.version >= landsAt) {
-          this.withdraw(events);
+          this.withdraw(entries);
           return true;
         }
         if (attempt >= MAX_APPEND_ATTEMPTS) {
-          this.withdraw(events);
+          this.withdraw(entries);
           return false;
         }
       }
@@ -156,20 +197,58 @@ export class LogViewAdaptorImpl<TState, TEvent>
   private async resync(): Promise<void> {
     const pending = this.pending;
     await this.manager.replay();
-    this.pending = pending;
-    this.unconfirmedCount = pending.length;
-    this.tentative = this.pending.reduce(this.transition, this.confirmed);
+    // Anything raised while the log was being read landed in the reset queue; it stays behind.
+    this.pending = [...pending, ...this.pending];
+    this.unconfirmedCount = this.pending.length;
+    this.recomputeTentative();
   }
 
-  /** Takes `events` back out of the pending queue and the tentative view. */
-  private withdraw(events: readonly TEvent[]): void {
-    for (const event of events) {
-      const index = this.pending.lastIndexOf(event);
+  /** Takes `entries` back out of the pending queue and the tentative view. */
+  private withdraw(entries: readonly PendingEntry<TEvent>[]): void {
+    for (const entry of entries) {
+      const index = this.pending.indexOf(entry);
       if (index < 0) continue;
       this.pending.splice(index, 1);
       this.unconfirmedCount -= 1;
     }
-    this.tentative = this.pending.reduce(this.transition, this.confirmed);
+    this.recomputeTentative();
+  }
+
+  private recomputeTentative(): void {
+    this.tentative = this.pending.reduce(
+      (state, entry) => this.transition(state, entry.event),
+      this.confirmed,
+    );
+  }
+
+  /**
+   * Orleans' `RemoveStaleConditionalUpdates`: when any conditional entry's position no longer
+   * equals `confirmed version + its place in the queue`, every conditional entry is removed and
+   * answered `false`; unconditional entries stay pending, in order, to be written on top of the
+   * refreshed view.
+   */
+  private removeStaleConditionalUpdates(): void {
+    const stale = this.pending.some(
+      (entry, pos) =>
+        entry.conditionalPosition !== undefined &&
+        entry.conditionalPosition !== this.version + this.inFlight + pos,
+    );
+    if (!stale) return;
+    this.dropConditionalEntries();
+  }
+
+  private dropConditionalEntries(): void {
+    const kept: PendingEntry<TEvent>[] = [];
+    for (const entry of this.pending) {
+      if (entry.conditionalPosition === undefined) {
+        kept.push(entry);
+      } else {
+        entry.resolve?.(false);
+        this.unconfirmedCount -= 1;
+      }
+    }
+    this.pending = kept;
+    this.recomputeTentative();
   }
 
   /**
@@ -194,41 +273,48 @@ export class LogViewAdaptorImpl<TState, TEvent>
     //
     // Each pass writes EVERYTHING pending as one storage append (group
     // commit: N raised events cost one write, not N). Mirrors Orleans
-    // (`LogViewAdaptor.cs`), which also writes its pending batch together: a
-    // batch leaves `pending` only once it is actually persisted, so a failed
-    // append leaves it (and everything queued after it) in place for a later
-    // `confirmSubmittedEntries` to re-read and retry -- never silently
-    // dropped. The one documented exception is `InconsistentStateError` (the
-    // substrate's version CAS): that is `tryAppend`'s conditional-conflict
-    // signal, which Orleans drops rather than retries on the moved base --
-    // see its doc comment above. The conflicting write is the whole batch,
-    // so the whole batch is dropped.
-    while (this.pending.length > 0) {
+    // (`PrimaryBasedLogViewAdaptor.UpdatePrimary`): a batch leaves `pending` only once it is
+    // actually persisted, so a failed append leaves it (and everything queued after it) in place
+    // for a retry, never silently dropped. A lost storage CAS (`InconsistentStateError`) re-reads
+    // the log and goes round again: conditional entries are then stale and answered false,
+    // unconditional ones are written on top of the refreshed view.
+    let conflicts = 0;
+    for (;;) {
+      this.removeStaleConditionalUpdates();
+      if (this.pending.length === 0) return;
       // Removed up front, not after: `manager.appendRange` calls this
       // machine's own `apply` synchronously on success, which recomputes
       // `tentative` by folding `pending` over `confirmed` -- it must no longer
       // see these events there, or they would be applied twice (once via
       // `confirmed`, once via the recompute).
       const batch = this.pending.splice(0);
+      this.inFlight = batch.length;
       try {
         await this.manager.appendRange(
           this.name,
-          batch.map((event) => ({ t: "event", e: event }) satisfies Frame<TState, TEvent>),
+          batch.map((entry) => ({ t: "event", e: entry.event }) satisfies Frame<TState, TEvent>),
         );
       } catch (error) {
-        if (!(error instanceof InconsistentStateError)) {
-          // Put it back at the front, ahead of anything concurrently raised,
-          // for a later `confirmSubmittedEntries` to re-read and retry.
-          this.pending.unshift(...batch);
+        this.inFlight = 0;
+        // Back at the front, ahead of anything concurrently raised.
+        this.pending.unshift(...batch);
+        this.recomputeTentative();
+        if (!(error instanceof InconsistentStateError)) throw error;
+        conflicts += 1;
+        if (conflicts >= MAX_APPEND_ATTEMPTS) {
+          // Out of budget: conditional entries must not stay (their callers are told false); the
+          // unconditional ones stay pending for a later confirm, as in the custom-storage adaptor.
+          this.dropConditionalEntries();
           throw error;
         }
-        // Dropped for good: take it out of the tentative view as well, or
-        // `tentativeView` would keep showing events nothing will apply.
-        this.unconfirmedCount -= batch.length;
-        this.tentative = this.pending.reduce(this.transition, this.confirmed);
-        throw error;
+        // Another writer moved the log: re-read, so the confirmed view and version equal storage.
+        await this.resync();
+        continue;
       }
+      this.inFlight = 0;
+      conflicts = 0;
       this.unconfirmedCount -= batch.length;
+      for (const entry of batch) entry.resolve?.(true);
     }
   }
 
@@ -238,6 +324,12 @@ export class LogViewAdaptorImpl<TState, TEvent>
     // a requested range is translated into an offset into it.
     const baseVersion = this.version - this.confirmedEvents.length;
     if (fromVersion < baseVersion || toVersion < fromVersion || toVersion > this.version) {
+      if (fromVersion < baseVersion && toVersion >= fromVersion && toVersion <= this.version) {
+        throw new Error(
+          `events below version ${baseVersion} were truncated by compaction; ` +
+            `enable the retainEvents option (silo config retainJournaledEvents) to keep the whole history`,
+        );
+      }
       throw new Error(`invalid range [${fromVersion}, ${toVersion}]`);
     }
     return this.confirmedEvents.slice(fromVersion - baseVersion, toVersion - baseVersion);
@@ -254,6 +346,7 @@ export class LogViewAdaptorImpl<TState, TEvent>
     this.confirmedEvents = [];
     this.version = 0;
     this.pending = [];
+    this.inFlight = 0;
     this.unconfirmedCount = 0;
     this.tentative = this.confirmed;
   }
@@ -264,9 +357,12 @@ export class LogViewAdaptorImpl<TState, TEvent>
       this.confirmed = this.transition(this.confirmed, frame.e);
       this.confirmedEvents.push(frame.e);
       this.version += 1;
+      if (this.inFlight > 0) this.inFlight -= 1;
     } else {
       this.confirmed = frame.s;
-      this.confirmedEvents = [];
+      // Retained history (restored through `applyHistory`, ahead of this frame) stays; otherwise
+      // the snapshot replaces the events below it.
+      if (!this.retainEvents) this.confirmedEvents = [];
       // A snapshot written before the version travelled with it has no `v`;
       // fall back to what such a log always reported (a count from zero at the
       // snapshot) rather than poisoning the version with `undefined`.
@@ -274,7 +370,19 @@ export class LogViewAdaptorImpl<TState, TEvent>
     }
     // Recompute (don't just mirror confirmed): events may have been raised
     // concurrently with the append that triggered this `apply`.
-    this.tentative = this.pending.reduce(this.transition, this.confirmed);
+    this.recomputeTentative();
+  }
+
+  retainedHistory(): unknown[] {
+    return this.retainEvents ? [...this.confirmedEvents] : [];
+  }
+
+  applyHistory(payloads: readonly unknown[]): void {
+    this.confirmedEvents.push(...(payloads as TEvent[]));
+  }
+
+  compacted(): void {
+    if (!this.retainEvents) this.confirmedEvents = [];
   }
 
   snapshot(): unknown {

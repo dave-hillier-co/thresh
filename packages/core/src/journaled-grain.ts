@@ -1,4 +1,5 @@
 import { Grain } from "./grain";
+import { markFrameworkGrainBase } from "./remote-method-surface";
 
 /**
  * The log-consistency protocol surface a `JournaledGrain` delegates to,
@@ -23,7 +24,9 @@ export interface LogViewAdaptor<TState, TEvent> {
    * Conditionally append one event, mirroring Orleans' `ILogViewAdaptor.TryAppend`: the entry is
    * conditional on the version it was raised at. Resolves `true` once the event is confirmed, or
    * `false` when the confirmed version moved under it - in which case the event is DROPPED on the
-   * first conflict (never retried on the moved base, never left pending).
+   * first conflict (never retried on the moved base, never left pending). Contract after `false`:
+   * the confirmed view and version have been refreshed from storage, so they reflect what beat the
+   * event, and a retry computed from them can succeed.
    */
   tryAppend(event: TEvent): Promise<boolean>;
   /**
@@ -138,7 +141,8 @@ export abstract class JournaledGrain<TState, TEvent> extends Grain {
    * only if no other event was confirmed concurrently (the adaptor's version check at the position
    * the event was raised at). Returns whether it was appended and confirmed; on `false` the event
    * has been dropped - it is NOT retried and will never be persisted, so the caller decides what a
-   * lost race means. Unlike `raiseEvent`, no separate `confirmEvents` call is needed.
+   * lost race means. After `false` the confirmed state and version reflect storage, so a retry
+   * computed from them can succeed. Unlike `raiseEvent`, no separate `confirmEvents` call is needed.
    */
   protected raiseConditionalEvent(event: TEvent): Promise<boolean> {
     return this.logViewAdaptor.tryAppend(event);
@@ -189,3 +193,5 @@ export abstract class JournaledGrain<TState, TEvent> extends Grain {
     return this.logViewAdaptor.confirmedVersion + this.logViewAdaptor.pendingCount;
   }
 }
+
+markFrameworkGrainBase(JournaledGrain, ["initialState", "transitionState"]);

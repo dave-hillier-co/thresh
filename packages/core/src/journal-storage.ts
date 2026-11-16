@@ -27,6 +27,15 @@ export interface JournalSegment {
  * call (`@thresh/core/abort`'s `raceSignal`), or ignore it entirely.
  */
 export interface JournalStorage {
+  /**
+   * Identifies the backing store this provider reads and writes, so two providers registered under
+   * different names over the SAME store are recognised as one. Providers with equal keys address
+   * the same logs for the same `(logName, grainId)`; the provider NAME is never part of a storage
+   * key. Omit it for a provider that cannot share its backing: it is then distinct from every
+   * other provider object.
+   */
+  readonly backingKey?: string;
+
   /** Read the whole log for `(logName, grainId)`. */
   read(logName: string, grainId: GrainId, signal?: AbortSignal): Promise<JournalSegment>;
 
@@ -58,4 +67,27 @@ export interface JournalStorage {
 
   /** Delete the log entirely. */
   clear(logName: string, grainId: GrainId, signal?: AbortSignal): Promise<void>;
+}
+
+/**
+ * Whether two providers address the same logs: the same object, or equal `backingKey`s. Two
+ * state-machine managers over one log corrupt it (each sees the other's entries as an unregistered
+ * machine and their version counters invalidate each other), so sharing is decided here, by
+ * backing-store identity, never by the name a provider was registered under.
+ */
+export function sharesJournalBacking(a: JournalStorage, b: JournalStorage): boolean {
+  return a === b || (a.backingKey !== undefined && a.backingKey === b.backingKey);
+}
+
+const objectIds = new WeakMap<object, number>();
+let nextObjectId = 0;
+
+/** A stable per-process identifier for a backing resource (a pool, a client) to build a `backingKey` from. */
+export function backingObjectId(resource: object): number {
+  let id = objectIds.get(resource);
+  if (id === undefined) {
+    id = nextObjectId++;
+    objectIds.set(resource, id);
+  }
+  return id;
 }

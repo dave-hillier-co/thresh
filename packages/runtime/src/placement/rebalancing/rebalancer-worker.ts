@@ -17,7 +17,7 @@
  * so this stays off `ClusterNode` (which already exposes `runRebalanceCycle`).
  */
 import type { MembershipService } from "@thresh/core/membership";
-import { activeSilos } from "@thresh/core/membership";
+import { ringSilos } from "@thresh/core/membership";
 import type { SiloAddress } from "@thresh/core/silo-address";
 import type { TimeProvider, TimerHandle } from "@thresh/core/time-provider";
 import type {
@@ -101,13 +101,14 @@ export class ActivationRebalancerWorker {
     this.scheduleNext(this.options.sessionCyclePeriodMs);
   }
 
-  /** Stop the loop and cancel any pending tick. */
+  /** Stop the loop and cancel any pending tick, and a timed suspension's auto-resume. */
   stop(): void {
     this.stopped = true;
     if (this.handle !== undefined) {
       this.options.time.clearTimer(this.handle);
       this.handle = undefined;
     }
+    this.clearSuspendTimer();
   }
 
   /**
@@ -195,7 +196,7 @@ export class ActivationRebalancerWorker {
 
   /** The deterministically elected leader: the lowest active ring key. */
   private leader(): SiloAddress | undefined {
-    const active = activeSilos(this.options.membership.current());
+    const active = ringSilos(this.options.membership.current());
     if (active.length === 0) return undefined;
     return active.reduce((lowest, silo) => (silo.ringKey < lowest.ringKey ? silo : lowest));
   }

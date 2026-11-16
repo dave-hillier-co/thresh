@@ -11,7 +11,10 @@ import {
   RejectionError,
   ThreshCancellationError,
   ThreshRuntimeError,
+  ThreshTransactionError,
   TransactionAbortedError,
+  TransactionAlreadyResolvedError,
+  TransactionBrokenLockError,
   TransactionCascadingAbortError,
   TransactionInDoubtError,
   TransactionLockUpgradeError,
@@ -22,6 +25,7 @@ import {
   type RejectionKind,
 } from "./errors";
 import { CancellationTokenPlaceholder, GrainCancellationToken } from "./grain-cancellation-token";
+import type { ResolvedStatus } from "./transaction-info";
 import { GrainId } from "./grain-id";
 import { keyToString, type GrainKeyKind } from "./grain-key";
 import { grainReferenceIdentity, type GrainReferenceIdentity } from "./grain-reference";
@@ -65,7 +69,16 @@ const builtInTags = new Set([
   "grainRef",
   "typedArray",
   "negZero",
+  "plainObject",
+  "nonFinite",
+  "surrogateFields",
 ]);
+
+/**
+ * The built-in tags, read-only: what `value-copier.ts` must mirror case for case, and what its
+ * equivalence test derives its coverage from.
+ */
+export const BUILT_IN_TAGS: ReadonlySet<string> = builtInTags;
 
 /**
  * Every `ArrayBuffer`-backed view this build round-trips through the
@@ -77,22 +90,31 @@ const builtInTags = new Set([
  * silently misread as one of these.
  */
 type TypedArrayCtor = new (values: readonly (number | bigint)[]) => object;
-const TYPED_ARRAY_CTORS: Record<string, TypedArrayCtor> = {
-  Int8Array: Int8Array as unknown as TypedArrayCtor,
-  Uint8Array: Uint8Array as unknown as TypedArrayCtor,
-  Uint8ClampedArray: Uint8ClampedArray as unknown as TypedArrayCtor,
-  Int16Array: Int16Array as unknown as TypedArrayCtor,
-  Uint16Array: Uint16Array as unknown as TypedArrayCtor,
-  Int32Array: Int32Array as unknown as TypedArrayCtor,
-  Uint32Array: Uint32Array as unknown as TypedArrayCtor,
-  Float32Array: Float32Array as unknown as TypedArrayCtor,
-  Float64Array: Float64Array as unknown as TypedArrayCtor,
-  BigInt64Array: BigInt64Array as unknown as TypedArrayCtor,
-  BigUint64Array: BigUint64Array as unknown as TypedArrayCtor,
-};
+// A `Map`, not an object literal: the kind is a string taken from the payload, and indexing a
+// literal with it reaches `Object.prototype` (`constructor`, `toString`, `__proto__`), whose
+// entries are functions that are not typed-array constructors. A `Map` has only its own entries.
+const TYPED_ARRAY_CTORS = new Map<string, TypedArrayCtor>([
+  ["Int8Array", Int8Array as unknown as TypedArrayCtor],
+  ["Uint8Array", Uint8Array as unknown as TypedArrayCtor],
+  ["Uint8ClampedArray", Uint8ClampedArray as unknown as TypedArrayCtor],
+  ["Int16Array", Int16Array as unknown as TypedArrayCtor],
+  ["Uint16Array", Uint16Array as unknown as TypedArrayCtor],
+  ["Int32Array", Int32Array as unknown as TypedArrayCtor],
+  ["Uint32Array", Uint32Array as unknown as TypedArrayCtor],
+  ["Float32Array", Float32Array as unknown as TypedArrayCtor],
+  ["Float64Array", Float64Array as unknown as TypedArrayCtor],
+  ["BigInt64Array", BigInt64Array as unknown as TypedArrayCtor],
+  ["BigUint64Array", BigUint64Array as unknown as TypedArrayCtor],
+]);
 
-function typedArrayKind(view: ArrayBufferView): string {
-  for (const [kind, ctor] of Object.entries(TYPED_ARRAY_CTORS)) {
+/** The constructor a `typedArray` envelope of `kind` decodes with (the same lookup `decodeValue` makes). */
+export function typedArrayConstructor(kind: unknown): TypedArrayCtor | undefined {
+  return typeof kind === "string" ? TYPED_ARRAY_CTORS.get(kind) : undefined;
+}
+
+/** The built-in base kind a typed array is tagged with. */
+export function typedArrayKind(view: ArrayBufferView): string {
+  for (const [kind, ctor] of TYPED_ARRAY_CTORS) {
     if (view instanceof (ctor as unknown as abstract new (...args: never[]) => object)) return kind;
   }
   // Unreachable for a same-realm typed array; a foreign-realm one falls back to its own name.
@@ -236,114 +258,150 @@ function isKnownThreshError(value: Error, name: string): boolean {
   return ctor !== undefined && value instanceof ctor;
 }
 
-registerKnownError("ThreshRuntimeError", ThreshRuntimeError, (m) => new ThreshRuntimeError(m));
-registerKnownError("GrainCallError", GrainCallError, (m) => new GrainCallError(m));
-registerKnownError(
-  "GrainCallTimeoutError",
-  GrainCallTimeoutError,
-  (m) => new GrainCallTimeoutError(m),
-);
-registerKnownError(
-  "GrainExtensionNotInstalledException",
-  GrainExtensionNotInstalledException,
-  (m) => new GrainExtensionNotInstalledException(m),
-);
-registerKnownError(
-  "GatewayTooBusyException",
-  GatewayTooBusyException,
-  (m) => new GatewayTooBusyException(m),
-);
-registerKnownError(
-  "RejectionError",
-  RejectionError,
-  (m, p) => new RejectionError(m, p.kind as RejectionKind),
-);
-registerKnownError("LimitExceededException", LimitExceededException, (m, p) =>
-  withMessage(
-    new LimitExceededException(
-      p.limitName as string,
-      p.currentValue as number,
-      p.maxValue as number,
-    ),
-    m,
-  ),
-);
-registerKnownError(
-  "ThreshCancellationError",
-  ThreshCancellationError,
-  (m) => new ThreshCancellationError(m),
-);
-registerKnownError(
-  "ReadOnlyStateViolationError",
-  ReadOnlyStateViolationError,
-  (m) => new ReadOnlyStateViolationError(m),
-);
-registerKnownError("TransactionsDisabledError", TransactionsDisabledError, (m) =>
-  withMessage(new TransactionsDisabledError(), m),
-);
-registerKnownError("InconsistentStateError", InconsistentStateError, (m, p) => {
-  const error = new InconsistentStateError(
-    m,
-    p.expectedEtag as string | undefined,
-    p.storedEtag as string | undefined,
-  );
-  // Absent (an older sender) reads as the constructor default, `true`.
-  if (p.isSourceActivation === false) error.isSourceActivation = false;
-  return error;
-});
-registerKnownError("TransactionAbortedError", TransactionAbortedError, (m, p) =>
-  withMessage(new TransactionAbortedError(p.transactionId as string, ""), m),
-);
-registerKnownError("TransactionReadOnlyViolatedError", TransactionReadOnlyViolatedError, (m, p) =>
-  withMessage(new TransactionReadOnlyViolatedError(p.transactionId as string), m),
-);
-registerKnownError("TransactionLockUpgradeError", TransactionLockUpgradeError, (m, p) =>
-  withMessage(new TransactionLockUpgradeError(p.transactionId as string), m),
-);
-registerKnownError("TransactionOrphanCallError", TransactionOrphanCallError, (m, p) =>
-  withMessage(
-    new TransactionOrphanCallError(p.transactionId as string, p.pendingCalls as number),
-    m,
-  ),
-);
-registerKnownError("TransactionCascadingAbortError", TransactionCascadingAbortError, (m, p) =>
-  withMessage(new TransactionCascadingAbortError(p.transactionId as string), m),
-);
-registerKnownError("TransactionInDoubtError", TransactionInDoubtError, (m, p) =>
-  withMessage(new TransactionInDoubtError(p.transactionId as string), m),
-);
-registerKnownError("CircularReferenceError", CircularReferenceError, (m, p) =>
-  withMessage(new CircularReferenceError(p.path as string), m),
-);
-registerKnownError(
-  "UnsupportedValueError",
-  UnsupportedValueError,
-  (m, p) => new UnsupportedValueError(p.path as string, p.reason as string),
-);
+/**
+ * The ONE table of error classes that cross the wire as themselves: the wire name, the class that
+ * must really be the sender's error, and how to rebuild it. Registration derives from it, so a
+ * class is either listed here or it degrades to the fallback; `errors.taxonomy.test.ts` enumerates
+ * every class `errors.ts` exports and fails when one is missing.
+ */
+interface KnownErrorEntry {
+  readonly name: string;
+  readonly ctor: abstract new (...args: never[]) => Error;
+  readonly build: (message: string, props: Record<string, unknown>) => Error;
+}
 
-// JavaScript's built-in error classes, the analogue of Orleans rebuilding the `System.*` namespace
-// with no registration (`ExceptionSerializationOptions.SupportedNamespacePrefixes` defaults to
-// `{ "Microsoft", "System", "Azure" }`). Upstream depends on it: `GrainCallFilterTests` catches
-// `ArgumentOutOfRangeException` BY TYPE inside an outgoing filter on a cross-silo call. Without
-// these a grain throwing `new RangeError(...)` reaches its caller as the fallback and
-// `instanceof RangeError` is false, so the ported filter tests can only assert `.rejects.toThrow()`
-// where upstream pins the type. Safe for the same reason as the Thresh classes above: the table is
-// closed, and the `thresh` marker still requires the sender to have passed `instanceof`.
-// `Error` itself is deliberately NOT here. It would swallow the diagnostic: a subclass that never
-// sets `this.name` inherits "Error", so it would rebuild as a plain `Error` and the caller would
-// lose the `instanceof UnavailableExceptionFallbackException` signal that says "your type was not
-// reconstructed". The fallback is an `Error` anyway, so nothing is gained by claiming the base.
-registerKnownError("TypeError", TypeError, (m) => new TypeError(m));
-registerKnownError("RangeError", RangeError, (m) => new RangeError(m));
-registerKnownError("ReferenceError", ReferenceError, (m) => new ReferenceError(m));
-registerKnownError("SyntaxError", SyntaxError, (m) => new SyntaxError(m));
-registerKnownError("URIError", URIError, (m) => new URIError(m));
-registerKnownError("EvalError", EvalError, (m) => new EvalError(m));
-registerKnownError(
-  "AggregateError",
-  AggregateError,
-  (m, p) => new AggregateError((p.errors as unknown[]) ?? [], m),
-);
+function knownError(
+  name: string,
+  ctor: abstract new (...args: never[]) => Error,
+  build: (message: string, props: Record<string, unknown>) => Error,
+): KnownErrorEntry {
+  return { name, ctor, build };
+}
+
+const KNOWN_ERRORS: readonly KnownErrorEntry[] = [
+  knownError("ThreshRuntimeError", ThreshRuntimeError, (m) => new ThreshRuntimeError(m)),
+  knownError(
+    "ThreshTransactionError",
+    ThreshTransactionError,
+    (m) => new ThreshTransactionError(m),
+  ),
+  knownError("GrainCallError", GrainCallError, (m) => new GrainCallError(m)),
+  knownError("GrainCallTimeoutError", GrainCallTimeoutError, (m) => new GrainCallTimeoutError(m)),
+  knownError(
+    "GrainExtensionNotInstalledException",
+    GrainExtensionNotInstalledException,
+    (m) => new GrainExtensionNotInstalledException(m),
+  ),
+  knownError(
+    "GatewayTooBusyException",
+    GatewayTooBusyException,
+    (m) => new GatewayTooBusyException(m),
+  ),
+  knownError(
+    "RejectionError",
+    RejectionError,
+    (m, p) => new RejectionError(m, p.kind as RejectionKind),
+  ),
+  knownError("LimitExceededException", LimitExceededException, (m, p) =>
+    withMessage(
+      new LimitExceededException(
+        p.limitName as string,
+        p.currentValue as number,
+        p.maxValue as number,
+      ),
+      m,
+    ),
+  ),
+  knownError(
+    "ThreshCancellationError",
+    ThreshCancellationError,
+    (m) => new ThreshCancellationError(m),
+  ),
+  knownError(
+    "ReadOnlyStateViolationError",
+    ReadOnlyStateViolationError,
+    (m) => new ReadOnlyStateViolationError(m),
+  ),
+  knownError("TransactionsDisabledError", TransactionsDisabledError, (m) =>
+    withMessage(new TransactionsDisabledError(), m),
+  ),
+  knownError("InconsistentStateError", InconsistentStateError, (m, p) => {
+    const error = new InconsistentStateError(
+      m,
+      p.expectedEtag as string | undefined,
+      p.storedEtag as string | undefined,
+    );
+    // Absent (an older sender) reads as the constructor default, `true`.
+    if (p.isSourceActivation === false) error.isSourceActivation = false;
+    return error;
+  }),
+  knownError("TransactionAbortedError", TransactionAbortedError, (m, p) =>
+    withMessage(new TransactionAbortedError(p.transactionId as string, ""), m),
+  ),
+  knownError("TransactionAlreadyResolvedError", TransactionAlreadyResolvedError, (m, p) =>
+    withMessage(
+      new TransactionAlreadyResolvedError(p.transactionId as string, p.status as ResolvedStatus),
+      m,
+    ),
+  ),
+  knownError("TransactionReadOnlyViolatedError", TransactionReadOnlyViolatedError, (m, p) =>
+    withMessage(new TransactionReadOnlyViolatedError(p.transactionId as string), m),
+  ),
+  knownError("TransactionLockUpgradeError", TransactionLockUpgradeError, (m, p) =>
+    withMessage(new TransactionLockUpgradeError(p.transactionId as string), m),
+  ),
+  knownError("TransactionBrokenLockError", TransactionBrokenLockError, (m, p) =>
+    withMessage(new TransactionBrokenLockError(p.transactionId as string, ""), m),
+  ),
+  knownError("TransactionOrphanCallError", TransactionOrphanCallError, (m, p) =>
+    withMessage(
+      new TransactionOrphanCallError(p.transactionId as string, p.pendingCalls as number),
+      m,
+    ),
+  ),
+  knownError("TransactionCascadingAbortError", TransactionCascadingAbortError, (m, p) =>
+    withMessage(new TransactionCascadingAbortError(p.transactionId as string), m),
+  ),
+  knownError("TransactionInDoubtError", TransactionInDoubtError, (m, p) =>
+    withMessage(new TransactionInDoubtError(p.transactionId as string), m),
+  ),
+  knownError("CircularReferenceError", CircularReferenceError, (m, p) =>
+    withMessage(new CircularReferenceError(p.path as string), m),
+  ),
+  knownError(
+    "UnsupportedValueError",
+    UnsupportedValueError,
+    (m, p) => new UnsupportedValueError(p.path as string, p.reason as string),
+  ),
+  // GrainCallAbortedError and GrainTaskCanceledError travel under their own `callAborted` and
+  // `taskCanceled` tags, so they are not listed here.
+
+  // JavaScript's built-in error classes, the analogue of Orleans rebuilding the `System.*` namespace
+  // with no registration (`ExceptionSerializationOptions.SupportedNamespacePrefixes` defaults to
+  // `{ "Microsoft", "System", "Azure" }`). Upstream depends on it: `GrainCallFilterTests` catches
+  // `ArgumentOutOfRangeException` BY TYPE inside an outgoing filter on a cross-silo call. Without
+  // these a grain throwing `new RangeError(...)` reaches its caller as the fallback and
+  // `instanceof RangeError` is false, so the ported filter tests can only assert `.rejects.toThrow()`
+  // where upstream pins the type. Safe for the same reason as the Thresh classes above: the table is
+  // closed, and the `thresh` marker still requires the sender to have passed `instanceof`.
+  // `Error` itself is deliberately NOT here. It would swallow the diagnostic: a subclass that never
+  // sets `this.name` inherits "Error", so it would rebuild as a plain `Error` and the caller would
+  // lose the `instanceof UnavailableExceptionFallbackException` signal that says "your type was not
+  // reconstructed". The fallback is an `Error` anyway, so nothing is gained by claiming the base.
+  knownError("TypeError", TypeError, (m) => new TypeError(m)),
+  knownError("RangeError", RangeError, (m) => new RangeError(m)),
+  knownError("ReferenceError", ReferenceError, (m) => new ReferenceError(m)),
+  knownError("SyntaxError", SyntaxError, (m) => new SyntaxError(m)),
+  knownError("URIError", URIError, (m) => new URIError(m)),
+  knownError("EvalError", EvalError, (m) => new EvalError(m)),
+  knownError(
+    "AggregateError",
+    AggregateError,
+    (m, p) => new AggregateError((p.errors as unknown[]) ?? [], m),
+  ),
+];
+
+for (const { name, ctor, build } of KNOWN_ERRORS) registerKnownError(name, ctor, build);
 
 /**
  * Cap on the plain-string `stack` an error carries across the wire — proportionate to the
@@ -424,14 +482,38 @@ function findSurrogate(value: unknown): SurrogateDescriptor | undefined {
   return surrogateOrder.find((d) => d.test(value));
 }
 
+/** Whether any surrogate is registered. */
+export function hasSurrogates(): boolean {
+  return surrogateOrder.length > 0;
+}
+
+/** The surrogate `encodeValue` would choose for `value`, if any (the copier asks the same question). */
+export function surrogateFor(value: unknown): SurrogateDescriptor | undefined {
+  return surrogateOrder.length === 0 ? undefined : findSurrogate(value);
+}
+
 function grainIdFields(id: GrainId): Record<string, unknown> {
   return { grainType: id.type, keyKind: id.keyKind, key: keyToString(id.key) };
 }
 
+const KEY_KINDS: ReadonlySet<unknown> = new Set<GrainKeyKind>([
+  "string",
+  "integer",
+  "guid",
+  "guid-compound",
+  "integer-compound",
+]);
+
 function grainIdFrom(obj: Record<string, unknown>): GrainId {
+  // The kind is payload data and selects how the key text is read; an unknown one would otherwise
+  // build an id whose key is `undefined`.
+  if (obj.keyKind !== undefined && !KEY_KINDS.has(obj.keyKind)) {
+    throw new Error(`decodeValue: unknown grain key kind "${String(obj.keyKind)}"`);
+  }
   return GrainId.parse(
     `${obj.grainType as string}/${obj.key as string}`,
-    obj.keyKind as GrainKeyKind,
+    // A wire id from before the kind left identity may carry none; the text alone identifies.
+    obj.keyKind as GrainKeyKind | undefined,
   );
 }
 
@@ -447,10 +529,110 @@ function tagged(tag: string, fields: Record<string, unknown>): Record<string, un
 // one property hop away (`out.constructor.prototype.x = y` reaches every object of that
 // constructor). Every decode branch that copies wire keys onto a plain object literal must skip
 // these three rather than assign them.
+//
+// The keys are DATA, though, and a codec that drops them is not injective: `{ constructor: 1 }`
+// would come back as `{}`. So they are carried and rebuilt faithfully, never by assignment — see
+// `setOwn` for the decode side and the `plainObject` envelope for the encode side.
 const DANGEROUS_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
 function isDangerousKey(key: string): boolean {
   return DANGEROUS_KEYS.has(key);
+}
+
+/**
+ * Install `key` as an own, enumerable, writable data property by `[[DefineOwnProperty]]`, which —
+ * unlike assignment — never consults the inherited `__proto__` setter, so no key can replace or
+ * mutate a prototype.
+ */
+function setOwn(target: object, key: string, value: unknown): void {
+  Object.defineProperty(target, key, {
+    value,
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  });
+}
+
+/**
+ * Whether a plain object cannot travel as its own keys: it owns the tag key (a decoder would take
+ * it for an envelope of another type) or one of the dangerous keys (a consumer assigning decoded
+ * keys onto a fresh object would hit the `__proto__` setter). Such an object goes through the
+ * `plainObject` envelope instead, which carries its entries as data; every other object keeps the
+ * bare shape.
+ */
+function needsEscape(keys: readonly string[]): boolean {
+  return keys.some((k) => k === T || isDangerousKey(k));
+}
+
+/** True for a key that cannot be a surrogate's own flat field: it is the envelope's, or dangerous. */
+function collidesWithEnvelope(key: string): boolean {
+  return key === T || key === V || isDangerousKey(key);
+}
+
+// `\p{Surrogate}` under the `u` flag matches only a LONE UTF-16 surrogate: a well-formed pair is
+// read as one astral code point and does not match.
+const LONE_SURROGATE = /\p{Surrogate}/u;
+
+/**
+ * The engine's own well-formedness test (ES2024 `String.prototype.isWellFormed`, present on every
+ * Node this runtime supports). It runs on every string a call carries, so it has to be cheap, and
+ * it is about three times cheaper than the regular expression. Typed here because the compiler's
+ * library target predates it.
+ */
+const isWellFormed = (text: string): boolean =>
+  (text as unknown as { isWellFormed(): boolean }).isWellFormed();
+const LONE_SURROGATES = /\p{Surrogate}/gu;
+
+/**
+ * A lone UTF-16 surrogate has no UTF-8 form, so no transport can carry it faithfully: JSON keeps
+ * it as an escape, but MessagePack's two string routines disagree by length (one writes the three
+ * bytes of the lone code unit, the other substitutes U+FFFD). This codec's stated policy for a
+ * value it cannot represent is to refuse it (see `UnsupportedValueError`), so the string is
+ * refused here, once, for every length and every transport, rather than preserved on one and
+ * corrupted on the other.
+ */
+export function assertWellFormed(text: string, path: string, what: string): void {
+  if (!isWellFormed(text)) {
+    throw new UnsupportedValueError(path, `${what} with a lone UTF-16 surrogate`);
+  }
+}
+
+/**
+ * Refuse, at `path`, a structural envelope's text field (a grain id's type and key, a silo's
+ * names, a token id) that is not well-formed UTF-16: MessagePack would rewrite a long one with
+ * U+FFFD, so the id would decode as a different identity.
+ */
+export function assertWellFormedFields(
+  path: string,
+  what: string,
+  ...texts: readonly string[]
+): void {
+  for (const t of texts) assertWellFormed(t, path, what);
+}
+
+/** Refuse, at the container's `path`, any of `keys` that is not well-formed UTF-16. */
+export function assertWellFormedKeys(keys: readonly string[], path: string): void {
+  for (const k of keys) assertWellFormed(k, path, "an object key");
+}
+
+/**
+ * Diagnostic text (an error's name, message and stack) is made well formed rather than refused:
+ * failing to report a failure because its text was truncated mid-pair would be worse than the
+ * replacement character.
+ */
+export function wellFormedText(text: string): string {
+  return LONE_SURROGATE.test(text) ? text.replace(LONE_SURROGATES, "\uFFFD") : text;
+}
+
+const NON_FINITE_VALUES = new Map<string, number>([
+  ["NaN", Number.NaN],
+  ["Infinity", Infinity],
+  ["-Infinity", -Infinity],
+]);
+
+/** The tagged form of a non-finite number, which JSON would turn into `null`. */
+function nonFinite(value: number): Record<string, unknown> {
+  return tagged("nonFinite", { value: String(value) });
 }
 
 /**
@@ -501,12 +683,23 @@ function encodeElement(
   return value === undefined ? tagged("undefined", {}) : encodeInner(value, seen, path, options);
 }
 
+/**
+ * Encode `value` as a nested member at `path`, sharing the caller's cycle-detection set. For
+ * `value-copier.ts`, which hands the rare cases (an `Error` above all) to the codec mid-walk and
+ * must refuse a cycle, and name its path, exactly as one whole `encodeValue` would.
+ */
+export function encodeNested(value: unknown, seen: Set<unknown>, path: string): unknown {
+  return encodeInner(value, seen, path, {});
+}
+
 function encodeInner(
   value: unknown,
   seen: Set<unknown>,
   path: string,
   options: EncodeValueOptions,
 ): unknown {
+  // Checked first but not returned early: a surrogate may still claim a string.
+  if (typeof value === "string") assertWellFormed(value, path, "a string");
   if (value instanceof Uint8Array) {
     // Binary (e.g. a Message body) passes through unless the caller's transport cannot carry it.
     return options.binaryAsBase64 ? tagged("bytes", { value: bytesToBase64(value) }) : value;
@@ -531,11 +724,21 @@ function encodeInner(
   // exactly. Nested occurrences (inside an object, an array, a typed array) hit this same check via
   // the `encodeInner`/`encodeElement` recursion, so they are covered without a branch of their own.
   if (typeof value === "number" && Object.is(value, -0)) return tagged("negZero", {});
-  if (value instanceof Date) return tagged("date", { value: value.getTime() });
+  // NaN and the infinities become `null` on JSON (MessagePack keeps them), so they are tagged for
+  // the same reason negative zero is, wherever a number appears.
+  if (typeof value === "number" && !Number.isFinite(value)) return nonFinite(value);
+  if (value instanceof Date) {
+    const time = value.getTime();
+    return tagged("date", { value: Number.isFinite(time) ? time : nonFinite(time) });
+  }
   if (typeof value === "bigint") return tagged("bigint", { value: value.toString() });
   if (value instanceof Guid) return tagged("guid", { value: value.toString() });
-  if (value instanceof GrainId) return tagged("grainId", grainIdFields(value));
+  if (value instanceof GrainId) {
+    assertWellFormedFields(path, "a grain id", value.type, keyToString(value.key));
+    return tagged("grainId", grainIdFields(value));
+  }
   if (value instanceof GrainCancellationToken) {
+    assertWellFormedFields(path, "a cancellation token id", value.tokenId);
     return tagged("cancellationToken", {
       tokenId: value.tokenId,
       cancelled: value.isCancellationRequested,
@@ -550,6 +753,7 @@ function encodeInner(
   // next hop's `decodeValue` can no longer recognise it as a cancellation
   // token, leaving the eventual callee with a signal-less plain object.
   if (value instanceof CancellationTokenPlaceholder) {
+    assertWellFormedFields(path, "a cancellation token id", value.tokenId);
     return tagged("cancellationToken", {
       tokenId: value.tokenId,
       cancelled: value.cancelled,
@@ -562,7 +766,10 @@ function encodeInner(
   // reach the caller AS a cancellation, not as a generic call failure whose only
   // remaining evidence is the message text.
   if (value instanceof DOMException) {
-    return tagged("domException", { name: value.name, message: value.message });
+    return tagged("domException", {
+      name: wellFormedText(value.name),
+      message: wellFormedText(value.message),
+    });
   }
   // The cancellation family, carried for exactly the reason `DOMException` is: a callee that
   // stopped because its signal fired must reach the caller AS a cancellation. These have no
@@ -570,12 +777,13 @@ function encodeInner(
   // the caller would see a bare `GrainCallError` - making `isCancellationError` false and a
   // deliberate abort indistinguishable from a retriable call failure.
   if (value instanceof GrainCallAbortedError) {
-    return tagged("callAborted", { message: value.message });
+    return tagged("callAborted", { message: wellFormedText(value.message) });
   }
   if (value instanceof GrainTaskCanceledError) {
-    return tagged("taskCanceled", { message: value.message });
+    return tagged("taskCanceled", { message: wellFormedText(value.message) });
   }
   if (value instanceof SiloAddress) {
+    assertWellFormedFields(path, "a silo address", value.podName, value.podUid, value.endpoint);
     return tagged("silo", {
       podName: value.podName,
       podUid: value.podUid,
@@ -584,6 +792,7 @@ function encodeInner(
   }
   const ref = grainReferenceIdentity(value);
   if (ref !== undefined) {
+    assertWellFormedFields(path, "a grain id", ref.grainId.type, keyToString(ref.grainId.key));
     return tagged("grainRef", { interfaceId: ref.interfaceId, ...grainIdFields(ref.grainId) });
   }
 
@@ -593,9 +802,21 @@ function encodeInner(
     seen.add(value);
     try {
       const fields = surrogate.encode(value);
+      const keys = Object.keys(fields);
+      assertWellFormedKeys(keys, path);
+      if (keys.some(collidesWithEnvelope)) {
+        // A field named like the envelope's own keys would overwrite its tag or version, and
+        // `__proto__` would set a prototype instead of adding a key. Such a surrogate's fields
+        // travel as data, like the `plainObject` escape's entries; a surrogate with no such
+        // field keeps the flat shape (and so does every payload already written).
+        const entries = keys.map((k) => [
+          k,
+          encodeElement(fields[k], seen, `${path}.${k}`, options),
+        ]);
+        return tagged("surrogateFields", { surrogate: surrogate.tag, entries });
+      }
       const out: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(fields))
-        out[k] = encodeInner(v, seen, `${path}.${k}`, options);
+      for (const k of keys) out[k] = encodeInner(fields[k], seen, `${path}.${k}`, options);
       return tagged(surrogate.tag, out);
     } finally {
       seen.delete(value);
@@ -654,7 +875,11 @@ function encodeInner(
     }
     seen.add(value);
     try {
-      return value.map((v, i) => encodeElement(v, seen, `${path}[${i}]`, options));
+      // `Array.from`, not `value.map`: `map` follows `Symbol.species`, so a subclass would keep
+      // its class here and be flattened only by a transport.
+      return Array.from(value as unknown[], (v, i) =>
+        encodeElement(v, seen, `${path}[${i}]`, options),
+      );
     } finally {
       seen.delete(value);
     }
@@ -673,6 +898,7 @@ function encodeInner(
     try {
       const properties: Record<string, unknown> = {};
       for (const [k, v] of Object.entries(value)) {
+        assertWellFormed(k, path, "an object key");
         // `name` and `message` travel as dedicated fields; `stack` travels as its own dedicated
         // field below (not as a generic property); `cause` is a spec-defined NON-enumerable own
         // property normally, so this loop never sees it — but a caller can still assign one
@@ -684,11 +910,10 @@ function encodeInner(
         // silently. Let it travel as an ordinary property instead.
         if (k === "name" || k === "message" || k === "stack" || k === "cause") continue;
         if (k === "errors" && value instanceof AggregateError) continue;
-        if (isDangerousKey(k)) continue;
-        properties[k] = encodeInner(v, seen, `${path}.${k}`, options);
+        setOwn(properties, k, encodeInner(v, seen, `${path}.${k}`, options));
       }
-      const name = typeof value.name === "string" ? value.name : "Error";
-      const fields: Record<string, unknown> = { name, message: value.message };
+      const name = typeof value.name === "string" ? wellFormedText(value.name) : "Error";
+      const fields: Record<string, unknown> = { name, message: wellFormedText(value.message) };
       // Only a value that genuinely IS the Thresh class of that name may claim it; see
       // `knownErrorClasses`. An application error that merely shares the name goes unmarked and
       // rebuilds as the fallback, never as a `ThreshRuntimeError`.
@@ -703,9 +928,9 @@ function encodeInner(
       // `CircularReferenceError` a cycle anywhere else in the graph gets.
       if ("cause" in value)
         fields.cause = encodeElement(value.cause, seen, `${path}.cause`, options);
-      if (typeof value.stack === "string") fields.stack = capStack(value.stack);
+      if (typeof value.stack === "string") fields.stack = wellFormedText(capStack(value.stack));
       if (value instanceof AggregateError) {
-        fields.errors = value.errors.map((e, i) =>
+        fields.errors = Array.from(value.errors as unknown[], (e, i) =>
           encodeElement(e, seen, `${path}.errors[${i}]`, options),
         );
       }
@@ -718,9 +943,20 @@ function encodeInner(
     if (seen.has(value)) throw new CircularReferenceError(path);
     seen.add(value);
     try {
+      const keys = Object.keys(value);
+      assertWellFormedKeys(keys, path);
+      if (needsEscape(keys)) {
+        const source = value as Record<string, unknown>;
+        // `encodeElement`: an `undefined` member is a PRESENT key here, and the pair array has no
+        // way to omit it, so it is tagged like any other positional undefined.
+        const entries = keys.map((k) => [
+          k,
+          encodeElement(source[k], seen, `${path}.${k}`, options),
+        ]);
+        return tagged("plainObject", { entries });
+      }
       const out: Record<string, unknown> = {};
       for (const [k, v] of Object.entries(value)) {
-        if (isDangerousKey(k)) continue;
         out[k] = encodeInner(v, seen, `${path}.${k}`, options);
       }
       return out;
@@ -733,8 +969,10 @@ function encodeInner(
 
 /** Reverse `encodeValue`, rehydrating value types (and, optionally, grain refs). */
 export function decodeValue(value: unknown, ctx: CodecContext = {}): unknown {
-  if (value instanceof Uint8Array) return value;
-  if (Array.isArray(value)) return value.map((v) => decodeValue(v, ctx));
+  // A fresh, exact-length copy: msgpack hands back a view into the whole message buffer, which
+  // would keep it alive and expose its neighbouring bytes through `.buffer`.
+  if (value instanceof Uint8Array) return new Uint8Array(value);
+  if (Array.isArray(value)) return Array.from(value as unknown[], (v) => decodeValue(v, ctx));
   if (value === null || typeof value !== "object") return value;
 
   const obj = value as Record<string, unknown>;
@@ -753,7 +991,15 @@ export function decodeValue(value: unknown, ctx: CodecContext = {}): unknown {
       case "bigint":
         return BigInt(obj.value as string);
       case "date":
-        return new Date(obj.value as number);
+        // A non-finite time travels as a `nonFinite` envelope; a finite one is the bare number.
+        return new Date(decodeValue(obj.value, ctx) as number);
+      case "nonFinite": {
+        const n = typeof obj.value === "string" ? NON_FINITE_VALUES.get(obj.value) : undefined;
+        if (n === undefined) {
+          throw new Error(`decodeValue: malformed nonFinite envelope (${String(obj.value)})`);
+        }
+        return n;
+      }
       case "bytes":
         return base64ToBytes(obj.value as string);
       case "guid":
@@ -772,15 +1018,15 @@ export function decodeValue(value: unknown, ctx: CodecContext = {}): unknown {
       case "negZero":
         return -0;
       case "typedArray": {
-        const kind = obj.kind as string;
-        const ctor = TYPED_ARRAY_CTORS[kind];
+        const kind = obj.kind;
+        const ctor = typedArrayConstructor(kind);
         if (ctor === undefined) {
-          throw new Error(`decodeValue: unknown typed array kind "${kind}"`);
+          throw new Error(`decodeValue: unknown typed array kind "${String(kind)}"`);
         }
         if (!Array.isArray(obj.values)) {
-          throw new Error(`decodeValue: malformed typed array envelope (kind "${kind}")`);
+          throw new Error(`decodeValue: malformed typed array envelope (kind "${String(kind)}")`);
         }
-        const values = obj.values.map((v) => decodeValue(v, ctx));
+        const values = Array.from(obj.values as unknown[], (v) => decodeValue(v, ctx));
         return new ctor(values as (number | bigint)[]);
       }
       case "domException":
@@ -796,8 +1042,7 @@ export function decodeValue(value: unknown, ctx: CodecContext = {}): unknown {
         const properties: Record<string, unknown> = {};
         if (raw !== null && typeof raw === "object") {
           for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
-            if (isDangerousKey(k)) continue;
-            properties[k] = decodeValue(v, ctx);
+            setOwn(properties, k, decodeValue(v, ctx));
           }
         }
         const errors = Array.isArray(obj.errors)
@@ -836,6 +1081,19 @@ export function decodeValue(value: unknown, ctx: CodecContext = {}): unknown {
         const entries = obj.entries as [unknown, unknown][];
         return new Map(entries.map(([k, v]) => [decodeValue(k, ctx), decodeValue(v, ctx)]));
       }
+      case "plainObject": {
+        if (!Array.isArray(obj.entries)) {
+          throw new Error("decodeValue: malformed plainObject envelope (entries is not an array)");
+        }
+        const out: Record<string, unknown> = {};
+        for (const entry of obj.entries as unknown[]) {
+          if (!Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== "string") {
+            throw new Error("decodeValue: malformed plainObject envelope (entry is not a pair)");
+          }
+          setOwn(out, entry[0], decodeValue(entry[1], ctx));
+        }
+        return out;
+      }
       case "set": {
         const values = obj.values as unknown[];
         return new Set(values.map((v) => decodeValue(v, ctx)));
@@ -847,13 +1105,33 @@ export function decodeValue(value: unknown, ctx: CodecContext = {}): unknown {
         };
         return ctx.resolveGrainReference ? ctx.resolveGrainReference(identity) : identity;
       }
+      case "surrogateFields": {
+        if (!Array.isArray(obj.entries)) {
+          throw new Error(
+            "decodeValue: malformed surrogateFields envelope (entries is not an array)",
+          );
+        }
+        const fields: Record<string, unknown> = {};
+        for (const entry of obj.entries as unknown[]) {
+          if (!Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== "string") {
+            throw new Error(
+              "decodeValue: malformed surrogateFields envelope (entry is not a pair)",
+            );
+          }
+          setOwn(fields, entry[0], decodeValue(entry[1], ctx));
+        }
+        const surrogate =
+          typeof obj.surrogate === "string" ? surrogates.get(obj.surrogate) : undefined;
+        // An unregistered surrogate degrades to its fields, as an unknown flat tag does.
+        return surrogate === undefined ? fields : surrogate.decode(fields, ctx);
+      }
       default: {
         const surrogate = surrogates.get(tag);
         if (surrogate !== undefined) {
           const fields: Record<string, unknown> = {};
           for (const [k, v] of Object.entries(obj)) {
-            if (k === T || k === V || isDangerousKey(k)) continue;
-            fields[k] = decodeValue(v, ctx);
+            if (k === T || k === V) continue;
+            setOwn(fields, k, decodeValue(v, ctx));
           }
           return surrogate.decode(fields, ctx);
         }
@@ -867,10 +1145,7 @@ export function decodeValue(value: unknown, ctx: CodecContext = {}): unknown {
   }
 
   const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(obj)) {
-    if (isDangerousKey(k)) continue;
-    out[k] = decodeValue(v, ctx);
-  }
+  for (const [k, v] of Object.entries(obj)) setOwn(out, k, decodeValue(v, ctx));
   return out;
 }
 

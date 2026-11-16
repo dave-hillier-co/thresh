@@ -1,6 +1,7 @@
 import type { GrainId } from "@thresh/core/grain-id";
 import { stableHash32 } from "@thresh/core/hash";
 import { SiloAddress } from "@thresh/core/silo-address";
+import { RingRange } from "@thresh/directory/ring-range";
 
 interface RingNode {
   hash: number;
@@ -59,21 +60,31 @@ export class ConsistentHashRing {
   }
 
   /**
-   * The half-open `[begin, end)` hash arcs this silo owns. Each arc runs from one
-   * vnode to the next; arcs for all silos tile `[0, 2^32)` exactly once, so every
-   * silo computing the ring from the same view agrees on a single owner per hash.
-   * Used to distribute reminder ownership across the cluster (a silo fires only
-   * the reminders whose grain hashes into one of its arcs).
+   * The arcs this silo owns: each of its virtual nodes owns `(previous vnode, this vnode]`, the
+   * points `owner` resolves to it (the first vnode at or above a hash). The arcs of every silo
+   * tile the circle exactly once, so every silo computing the ring from the same view agrees on
+   * a single owner per hash. An arc between two vnodes at the same hash is empty and left out.
    */
-  rangesFor(silo: SiloAddress): Array<[number, number]> {
-    const ranges: Array<[number, number]> = [];
+  arcsOf(silo: SiloAddress): RingRange[] {
+    if (this.nodes.length === 1) return this.nodes[0]!.silo.equals(silo) ? [RingRange.full] : [];
+    const arcs: RingRange[] = [];
     for (let i = 0; i < this.nodes.length; i++) {
       if (!this.nodes[i]!.silo.equals(silo)) continue;
-      const begin = this.nodes[i]!.hash;
-      const end = this.nodes[(i + 1) % this.nodes.length]!.hash;
-      ranges.push([begin, end]);
+      const previous = this.nodes[(i - 1 + this.nodes.length) % this.nodes.length]!.hash;
+      const arc = RingRange.of(previous, this.nodes[i]!.hash);
+      if (!arc.isEmpty) arcs.push(arc);
     }
-    return ranges;
+    return arcs;
+  }
+
+  /**
+   * The arcs of `arcsOf` as half-open `[begin, end)` tuples, the shape reminder ownership and
+   * stream queue ownership take (`isHashInRanges`, `ReminderTable.readRange`): the same points,
+   * so a silo fires the reminders and pulls the queues of exactly the hashes it owns in the
+   * directory.
+   */
+  rangesFor(silo: SiloAddress): Array<[number, number]> {
+    return this.arcsOf(silo).map((arc) => [...arc.toHashRange()] as [number, number]);
   }
 
   /** Index of the first node whose hash is >= `hash`, wrapping to 0 at the end. */

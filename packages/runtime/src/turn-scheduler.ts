@@ -2,7 +2,7 @@ import { GrainCallAbortedError } from "@thresh/core/errors";
 import type { InvokeMethodOptions } from "@thresh/core/invoke-options";
 import type { MayInterleavePredicate } from "@thresh/core/grain-metadata";
 import { LimitExceededException } from "@thresh/core/errors";
-import { type Logger, noopLogger } from "@thresh/core/logger";
+import { type Logger, defaultLogger } from "@thresh/core/logger";
 import {
   systemTimeProvider,
   type TimeProvider,
@@ -50,15 +50,23 @@ export interface TurnSchedulerOptions {
    */
   mayInterleave?: MayInterleavePredicate;
   /**
-   * Nothing — not even a reentrant/alwaysInterleave/matching-reentrancy-id
-   * turn — may run concurrently with the very first turn scheduled, until it
-   * settles. Orleans guarantees `OnActivateAsync` (here: the activation turn,
-   * which also runs state binding) fully completes before any request is
-   * dispatched, even for a fully reentrant grain; the generic admission rules
-   * below are otherwise unaware that a "first turn" is special, so the
-   * activation layer opts into this explicitly.
+   * The owner's admission gate, consulted before every other rule (Orleans
+   * `ProcessPendingRequests` checks `State` before `MayInvokeRequest`): while
+   * it returns `false` no turn starts — not even a reentrant,
+   * `alwaysInterleave` or matching-reentrancy-id one — and arrivals wait in
+   * the queue. The owner calls `reevaluate()` once it may have opened. The
+   * activation closes it while it is not valid and while a lifecycle
+   * operation is pending or running, so requests never interleave with one.
    */
-  barrierFirstTurn?: boolean;
+  admissionGate?: () => boolean;
+  /**
+   * Called each time the last running turn settles, so nothing is executing
+   * (Orleans' message loop reaching `ProcessOperationsAsync` once
+   * `!IsCurrentlyExecuting`). Runs before the queue is reconsidered, so an
+   * owner that starts a lifecycle operation here (closing `admissionGate`)
+   * keeps every queued turn waiting behind it.
+   */
+  onDrained?: () => void;
   /**
    * Warn (via `logger`) once the queue reaches this many WAITING turns
    * (running turns don't count) — Orleans `WorkItemGroup`
@@ -131,8 +139,11 @@ interface RunningTurn {
 
 /**
  * Per-activation scheduler enforcing single-threaded turns with Orleans-style
- * reentrancy admission (mirrors `ActivationData.MayInvokeRequest`):
+ * reentrancy admission (mirrors `ActivationData.MayInvokeRequest`), behind the
+ * owner's `admissionGate`:
  *
+ * - admission gate closed    -> queue (the activation is not valid, or a
+ *   lifecycle operation is pending or running)
  * - nothing running          -> admit
  * - fully reentrant grain     -> admit
  * - `alwaysInterleave`        -> admit
@@ -156,7 +167,7 @@ export class TurnScheduler {
   private readonly reentrant: boolean;
   private mayInterleavePredicate: MayInterleavePredicate | undefined;
   private readonly queue: QueuedTurn[] = [];
-  /** Queued `alwaysInterleave` turns (they wait only behind the first-turn barrier). */
+  /** Queued `alwaysInterleave` turns (they wait only behind a closed admission gate). */
   private queuedAlwaysInterleave = 0;
   /** Queued `readOnly` turns (admissible alongside a read-only blocking turn). */
   private queuedReadOnly = 0;
@@ -164,9 +175,8 @@ export class TurnScheduler {
   /** Orleans' `_blockingRequest`: the one running turn that isn't `alwaysInterleave`. */
   private blockingTurn: RunningTurn | undefined;
   private readonly reentrantSections = new Map<string, number>();
-  private readonly barrierFirstTurn: boolean;
-  private firstTurnSeen = false;
-  private firstTurnSettled = false;
+  private readonly admissionGate: (() => boolean) | undefined;
+  private readonly onDrained: (() => void) | undefined;
   private readonly softLimit: number | undefined;
   private readonly hardLimit: number | undefined;
   private readonly maxRequestProcessingTimeMs: number | undefined;
@@ -185,13 +195,14 @@ export class TurnScheduler {
   constructor(options: TurnSchedulerOptions = {}) {
     this.reentrant = options.reentrant ?? false;
     this.mayInterleavePredicate = options.mayInterleave;
-    this.barrierFirstTurn = options.barrierFirstTurn ?? false;
+    this.admissionGate = options.admissionGate;
+    this.onDrained = options.onDrained;
     this.softLimit = options.maxEnqueuedRequestsSoftLimit;
     this.hardLimit = options.maxEnqueuedRequestsHardLimit;
     this.maxRequestProcessingTimeMs = options.maxRequestProcessingTimeMs;
     this.onStuck = options.onStuck;
     this.time = options.time ?? systemTimeProvider;
-    this.logger = options.logger ?? noopLogger;
+    this.logger = options.logger ?? defaultLogger;
     this.grainId = options.grainId;
   }
 
@@ -203,6 +214,33 @@ export class TurnScheduler {
   setMayInterleave(predicate: MayInterleavePredicate | undefined): void {
     this.mayInterleavePredicate = predicate;
     this.pump();
+  }
+
+  /**
+   * Reconsider every queued turn — the owner's `admissionGate` may have
+   * opened (Orleans signals its message loop after a state change).
+   */
+  reevaluate(): void {
+    this.pump();
+  }
+
+  /** True while any turn is running (Orleans `IsCurrentlyExecuting`). */
+  get isExecuting(): boolean {
+    return this.running.size > 0;
+  }
+
+  /**
+   * Remove every queued (not yet running) turn and reject each with
+   * `reasonFor(turn)` — the owner stopped being able to admit them (Orleans:
+   * an activation that is no longer valid takes its waiting requests out to
+   * reroute or reject them, `ProcessRequestsToInvalidActivation`). Running
+   * turns are untouched.
+   */
+  evictQueued(reasonFor: (turn: Turn<unknown>) => unknown): void {
+    const queued = this.queue.splice(0, this.queue.length);
+    this.queuedAlwaysInterleave = 0;
+    this.queuedReadOnly = 0;
+    for (const item of queued) item.reject(reasonFor(item.turn));
   }
 
   /** True while any turn is running or queued. */
@@ -302,8 +340,8 @@ export class TurnScheduler {
    * `false` only means the scan must go on.
    */
   private noQueuedTurnAdmissible(): boolean {
+    if (this.admissionGate !== undefined && !this.admissionGate()) return true;
     if (this.running.size === 0) return false;
-    if (this.barrierFirstTurn && !this.firstTurnSettled) return true;
     if (this.reentrant || this.blockingTurn === undefined) return false;
     if (this.queuedAlwaysInterleave > 0) return false;
     if (this.blockingTurn.options.readOnly && this.queuedReadOnly > 0) return false;
@@ -311,8 +349,8 @@ export class TurnScheduler {
   }
 
   private mayAdmit(turn: Turn<unknown>): boolean {
+    if (this.admissionGate !== undefined && !this.admissionGate()) return false;
     if (this.running.size === 0) return true;
-    if (this.barrierFirstTurn && !this.firstTurnSettled) return false;
     if (this.reentrant) return true;
     if (turn.options.alwaysInterleave) return true;
     // No blocking turn running (only `alwaysInterleave` turns, if any) -> admit.
@@ -348,7 +386,7 @@ export class TurnScheduler {
   private start(item: QueuedTurn): void {
     // Admission-time-only cancellation check (see `Turn.signal`'s doc): a
     // turn that never got to run is simply rejected here, never added to
-    // `running` and never counted as the "first turn" for `barrierFirstTurn`.
+    // `running`.
     if (item.turn.signal?.aborted === true) {
       item.reject(new GrainCallAbortedError());
       return;
@@ -360,8 +398,6 @@ export class TurnScheduler {
       turn: item.turn,
       overdue: false,
     };
-    const isFirstTurn = !this.firstTurnSeen;
-    this.firstTurnSeen = true;
     this.running.add(running);
     // Orleans' RecordRunning: the first non-`alwaysInterleave` turn to start
     // while none is blocking becomes `_blockingRequest`, and stays so until it
@@ -378,7 +414,7 @@ export class TurnScheduler {
         if (watchdog !== undefined) this.time.clearTimer(watchdog);
         this.running.delete(running);
         if (this.blockingTurn === running) this.blockingTurn = undefined;
-        if (isFirstTurn) this.firstTurnSettled = true;
+        if (this.running.size === 0) this.onDrained?.();
         this.pump();
       });
   }

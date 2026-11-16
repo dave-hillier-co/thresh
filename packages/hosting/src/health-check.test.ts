@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
 import { HealthCheck } from "@thresh/hosting/health-check";
 
 const healthy = {
@@ -27,6 +28,16 @@ describe("HealthCheck", () => {
     expect(health.ready().ok).toBe(false);
     health.update(healthy);
     expect(health.ready().ok).toBe(true);
+  });
+
+  it("fails liveness and readiness once the silo has fenced itself, draining or not", () => {
+    const health = new HealthCheck();
+    health.update({ ...healthy, fenced: true });
+    expect(health.live().ok).toBe(false);
+    expect(health.live().checks.notFenced).toBe(false);
+    expect(health.ready().ok).toBe(false);
+    health.update({ draining: true });
+    expect(health.live().ok).toBe(false);
   });
 
   it("is not ready while draining (so K8s pulls it from endpoints)", () => {
@@ -68,5 +79,58 @@ describe("HealthCheck", () => {
     expect(health.isDraining()).toBe(false);
     health.update({ draining: true });
     expect(health.isDraining()).toBe(true);
+  });
+
+  it("follows a live overload source instead of a flag nothing sets", () => {
+    let overloaded = false;
+    const health = new HealthCheck();
+    health.update(healthy);
+    health.followOverload(() => overloaded);
+    expect(health.ready().ok).toBe(true);
+    overloaded = true;
+    expect(health.ready().ok).toBe(false);
+    expect(health.ready().checks.notOverloaded).toBe(false);
+    overloaded = false;
+    expect(health.ready().ok).toBe(true);
+  });
+
+  describe("liveness on a dispatcher that stays unresponsive", () => {
+    it("stays live however long the probe fails when no period is configured", () => {
+      const time = new FakeTimeProvider();
+      const health = new HealthCheck({ time });
+      health.update({ probeFailingSinceMs: time.now() });
+      time.advance(24 * 3600_000);
+      expect(health.live().ok).toBe(true);
+    });
+
+    it("fails once the probe has failed continuously for the configured period", () => {
+      const time = new FakeTimeProvider();
+      const health = new HealthCheck({ time, livenessFailureMs: 60_000 });
+      health.update({ probeFailingSinceMs: time.now() });
+      time.advance(59_999);
+      expect(health.live().ok).toBe(true);
+      time.advance(1);
+      const probe = health.live();
+      expect(probe.ok).toBe(false);
+      expect(probe.checks.dispatcherResponsive).toBe(false);
+    });
+
+    it("recovers when the probe succeeds again", () => {
+      const time = new FakeTimeProvider();
+      const health = new HealthCheck({ time, livenessFailureMs: 1000 });
+      health.update({ probeFailingSinceMs: time.now() });
+      time.advance(5000);
+      expect(health.live().ok).toBe(false);
+      health.update({ probeFailingSinceMs: undefined });
+      expect(health.live().ok).toBe(true);
+    });
+
+    it("does not blame a draining silo for probe misses", () => {
+      const time = new FakeTimeProvider();
+      const health = new HealthCheck({ time, livenessFailureMs: 1000 });
+      health.update({ probeFailingSinceMs: time.now(), draining: true });
+      time.advance(5000);
+      expect(health.live().ok).toBe(true);
+    });
   });
 });

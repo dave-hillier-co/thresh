@@ -3,6 +3,7 @@ import { GrainId } from "@thresh/core/grain-id";
 import type { Logger } from "@thresh/core/logger";
 import type { ReminderEntry, ReminderTable } from "@thresh/core/reminder";
 import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
+import { PendingTimerTracker } from "@thresh/core/test-support/pending-timer-tracker";
 import { LocalReminderService, type HashRange } from "@thresh/reminders/local-reminder-service";
 import { MemoryReminderTable } from "@thresh/reminders/memory-reminder-table";
 
@@ -188,10 +189,12 @@ describe("LocalReminderService — GetReminder(s)", () => {
 });
 
 describe("LocalReminderService — catch-up after downtime (initial due time)", () => {
-  it("skips missed ticks and resumes on the startAt + n*period grid instead of firing immediately", async () => {
-    // Orleans' CalculateInitialDueTime: a reminder whose first tick is long
-    // past does not fire at once — it waits for the next startAt + n*period
-    // boundary, and later ticks stay on that grid.
+  it("fires a reminder that never fired promptly when its first tick was missed, then stays on the grid", async () => {
+    // Orleans' CalculateInitialDueTime would skip to the next boundary, but here a
+    // registration made on a silo that does not own the range is only discovered
+    // at the owner's next refresh, so "never fired and already due" must fire
+    // promptly instead of losing a whole period (review finding B4). Later ticks
+    // stay on the startAt + n*period grid.
     const time = new FakeTimeProvider();
     const table = new MemoryReminderTable();
     const fires: number[] = [];
@@ -214,16 +217,17 @@ describe("LocalReminderService — catch-up after downtime (initial due time)", 
       minimumPeriod: { ms: 0 },
     });
     await serviceB.refreshOwnership([WHOLE]);
+    time.advance(0);
     await flush();
-    expect(fires).toEqual([]); // no catch-up fire for the missed ticks at 2000 and 3000
+    expect(fires).toEqual([3400]); // one prompt tick, not one per missed boundary
 
     time.advance(600); // grid boundary startAt + 3*period = 4000
     await flush();
-    expect(fires).toEqual([4000]);
+    expect(fires).toEqual([3400, 4000]);
 
     time.advance(1000); // next tick stays on the grid: 5000, not 4000 + drift
     await flush();
-    expect(fires).toEqual([4000, 5000]);
+    expect(fires).toEqual([3400, 4000, 5000]);
 
     serviceB.stop();
   });
@@ -492,5 +496,44 @@ describe("LocalReminderService — a fresh registration keeps its first tick", (
     await flush();
     expect(fires).toEqual([5, 1000]);
     service.stop();
+  });
+});
+
+describe("LocalReminderService — a stopped service arms nothing", () => {
+  const due = { grainId: billing, name: "r", startAt: new Date(30_000), period: { minutes: 1 } };
+
+  it("ignores an ownership refresh that arrives after stop", async () => {
+    const time = new PendingTimerTracker(new FakeTimeProvider());
+    const table = new MemoryReminderTable();
+    await table.upsert(due);
+    const service = new LocalReminderService(table, time, async () => undefined, [WHOLE], 60_000);
+    await service.refreshOwnership([WHOLE]);
+    expect(time.pendingTimers()).toHaveLength(2); // the refresh and the reminder's tick
+
+    service.stop();
+    await service.refreshOwnership([WHOLE]);
+
+    expect(time.pendingTimers()).toEqual([]);
+  });
+
+  it("schedules nothing from a reconcile whose table read was in flight when it stopped", async () => {
+    const time = new PendingTimerTracker(new FakeTimeProvider());
+    const table = new MemoryReminderTable();
+    await table.upsert(due);
+    let releaseRead!: () => void;
+    const readRange = table.readRange.bind(table);
+    table.readRange = async (begin, end) => {
+      await new Promise<void>((resolve) => (releaseRead = resolve));
+      return readRange(begin, end);
+    };
+    const service = new LocalReminderService(table, time, async () => undefined, [WHOLE], 60_000);
+    const refreshing = service.refreshOwnership([WHOLE]);
+    await flush();
+
+    service.stop();
+    releaseRead();
+    await refreshing;
+
+    expect(time.pendingTimers()).toEqual([]);
   });
 });

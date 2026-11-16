@@ -5,6 +5,7 @@ import type { GrainKeyKind } from "@thresh/core/grain-key";
 import { getGrainMetadata } from "@thresh/core/grain-metadata";
 import {
   type GrainRegistration,
+  declaredKeyKind,
   normalizeRegistration,
   type Registrable,
 } from "@thresh/core/grain-registration";
@@ -12,6 +13,7 @@ import type { GrainType } from "@thresh/core/grain-type";
 import type { KeyTypeOf } from "@thresh/core/key-kinds";
 import { ActivationCollector } from "@thresh/runtime/activation-collector";
 import { Catalog, type RegisteredGrain } from "@thresh/runtime/catalog";
+import { defaultLogger, type Logger } from "@thresh/core/logger";
 import { GrainFactory } from "@thresh/runtime/grain-factory";
 import { LocalDispatcher } from "@thresh/runtime/local-dispatcher";
 import { systemTimeProvider, type TimeProvider } from "@thresh/runtime/time-provider";
@@ -21,6 +23,12 @@ export interface SiloOptions {
   time?: TimeProvider;
   defaultCollectionAgeSeconds?: number;
   collectionIntervalSeconds?: number;
+  /**
+   * Where the silo reports a failure nothing else can: a detached `oneWay` call that threw, a
+   * failed idle-collection sweep, a stuck activation. Unset, warnings and errors reach the
+   * console (`defaultLogger`).
+   */
+  logger?: Logger;
 }
 
 /** Re-exported so hosts that register against a `Silo` need only one import. */
@@ -36,14 +44,16 @@ export class Silo {
 
   constructor(options: SiloOptions = {}) {
     const time = options.time ?? systemTimeProvider;
+    const logger = options.logger ?? defaultLogger;
     this.factory = new GrainFactory((interfaceId) => this.resolveGrainType(interfaceId), time);
     this.catalog = new Catalog({
       grainTypes: this.grainTypes,
       factory: this.factory,
       time,
       defaultCollectionAgeSeconds: options.defaultCollectionAgeSeconds ?? 900,
+      activationOptions: { logger },
     });
-    const dispatcher = new LocalDispatcher(this.catalog);
+    const dispatcher = new LocalDispatcher(this.catalog, logger);
     this.factory.setDispatcher(dispatcher);
     const agent = new TransactionAgent(time);
     agent.setDispatcher(dispatcher);
@@ -52,6 +62,7 @@ export class Silo {
       this.catalog,
       time,
       (options.collectionIntervalSeconds ?? 60) * 1000,
+      logger,
     );
   }
 
@@ -68,7 +79,12 @@ export class Silo {
     const { ctor, interfaces } = normalizeRegistration(definition, registration);
     const metadata = getGrainMetadata(ctor);
     if (metadata === undefined) throw new Error(`${ctor.name} is not decorated with @grain()`);
-    this.grainTypes.set(metadata.grainType, { ctor, metadata });
+    const keyKind = declaredKeyKind(ctor.name, interfaces);
+    this.grainTypes.set(metadata.grainType, {
+      ctor,
+      metadata,
+      ...(keyKind !== undefined ? { keyKind } : {}),
+    });
     for (const iface of interfaces) {
       this.interfaceToGrainType.set(iface.id, metadata.grainType);
     }

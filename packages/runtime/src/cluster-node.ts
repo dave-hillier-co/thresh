@@ -4,6 +4,7 @@ import { clientIdOf, isClient } from "@thresh/core/client-grain-id";
 import { GrainCallError, RejectionError } from "@thresh/core/errors";
 import type { Grain } from "@thresh/core/grain";
 import type { GrainClass } from "@thresh/core/grain-class";
+import type { DependencyToken } from "@thresh/core/grain-dependency";
 import { grainAddressEquals, type GrainAddress } from "@thresh/core/grain-address";
 import { GrainId } from "@thresh/core/grain-id";
 import type { GrainInterface } from "@thresh/core/grain-interface";
@@ -13,6 +14,7 @@ import type { InterfaceVersionEntry, SiloManifest } from "@thresh/core/grain-man
 import { getGrainMetadata } from "@thresh/core/grain-metadata";
 import {
   type GrainRegistration,
+  declaredKeyKind,
   normalizeRegistration,
   type Registrable,
 } from "@thresh/core/grain-registration";
@@ -28,12 +30,13 @@ import {
   type VersionSelectorStrategy,
 } from "@thresh/core/version-selector";
 import type { KeyTypeOf } from "@thresh/core/key-kinds";
-import { activeSilos, memberSilos, type MembershipService } from "@thresh/core/membership";
+import { memberSilos, ringSilos, type MembershipService } from "@thresh/core/membership";
 import type {
   IncomingGrainCallFilter,
   OutgoingGrainCallFilter,
 } from "@thresh/core/grain-call-filter";
-import { type Logger, noopLogger } from "@thresh/core/logger";
+import { type Logger, defaultLogger } from "@thresh/core/logger";
+import { recordHandlerFailure } from "@thresh/observability/messaging-metrics";
 import type { GrainReferenceIdentity } from "@thresh/core/grain-reference";
 import { RemindableInterface, type ReminderRegistry, type TickStatus } from "@thresh/core/reminder";
 import {
@@ -74,15 +77,34 @@ import {
   type ParticipantId,
   type TransactionInfo,
 } from "@thresh/core/transaction-info";
-import { TransactionResourceInterface } from "@thresh/core/transaction-resource";
-import { ConsistentHashRing } from "@thresh/directory/consistent-hash-ring";
+import {
+  TransactionResourceInterface,
+  type TransactionResourceMethod,
+} from "@thresh/core/transaction-resource";
 import type { DirectoryPeer } from "@thresh/directory/directory-peer";
+import { DirectoryView } from "@thresh/directory/directory-view";
 import { DistributedGrainDirectory } from "@thresh/directory/distributed-grain-directory";
 import type { GrainDirectory } from "@thresh/directory/grain-directory";
-import { LocalDirectoryPartition } from "@thresh/directory/local-directory-partition";
+import {
+  GrainDirectoryPartition,
+  type ActivationsRequest,
+  type DirectoryResult,
+  type IntegrityViolation,
+  type PartitionPeers,
+} from "@thresh/directory/grain-directory-partition";
+import {
+  decodeRanges,
+  encodeRanges,
+  rangesContain,
+  type RingRange,
+  type WireRange,
+} from "@thresh/directory/ring-range";
 import { LocationCache } from "@thresh/directory/location-cache";
 import { ConnectionManager } from "@thresh/messaging/connection-manager";
 import { CorrelationTable } from "@thresh/messaging/correlation-table";
+import { requestEnvelope } from "@thresh/messaging/request-envelope";
+import { didNotExecute, neverLeft, refusedBeforeExecution } from "@thresh/messaging/resend-policy";
+import { sendReply } from "@thresh/messaging/send-reply";
 import {
   nextCorrelationId,
   responseTo,
@@ -91,28 +113,34 @@ import {
 } from "@thresh/messaging/message";
 import { MessagePackSerializer } from "@thresh/messaging/msgpack-serializer";
 import type { Serializer } from "@thresh/messaging/serializer";
-import type {
-  Connection,
-  ConnectionPreamble,
-  Listener,
-  Transport,
+import {
+  ConnectFailure,
+  type Connection,
+  type ConnectionPreamble,
+  type Listener,
+  type Transport,
 } from "@thresh/messaging/transport";
 import { ActivationCollector } from "@thresh/runtime/activation-collector";
 import { ICancellationSourcesExtension } from "@thresh/runtime/cancellation-extension";
 import { Catalog, type GrainActivator, type RegisteredGrain } from "@thresh/runtime/catalog";
-import {
-  withFilterPlacementCandidatesSpan,
-  withPlaceGrainSpan,
-} from "@thresh/observability/activation-tracing";
+import { withPlaceGrainSpan } from "@thresh/observability/activation-tracing";
 import { ClientDirectory } from "@thresh/runtime/client-directory";
 import type { ActivationData, ActivationOptions } from "@thresh/runtime/activation";
+import { copyValue } from "@thresh/core/value-copier";
+import {
+  LocalCallSemanticsDispatcher,
+  type LocalCallSemantics,
+} from "@thresh/runtime/local-call-semantics-dispatcher";
+import type { Dispatcher } from "@thresh/runtime/dispatcher";
 import { DistributedDispatcher } from "@thresh/runtime/distributed-dispatcher";
+import { logOneWayFailure } from "@thresh/runtime/one-way-dispatch";
 import { BroadcastChannelProviderImpl } from "@thresh/runtime/broadcast-channel-provider";
 import { GrainFactory } from "@thresh/runtime/grain-factory";
 import type { GrainServiceRegistry } from "@thresh/runtime/grain-service";
 import { createManagementGrainType } from "@thresh/runtime/management-grain";
 import { createSiloProbeGrainType } from "@thresh/runtime/silo-probe-grain";
-import { chooseMigrationTarget } from "@thresh/runtime/placement/choose-migration-target";
+import { isMigratable } from "@thresh/runtime/placement/grain-migratability";
+import { selectPlacementTarget } from "@thresh/runtime/placement/select-placement-target";
 import {
   placementFiltersFor,
   placementStrategyFor,
@@ -125,6 +153,7 @@ import { RandomPlacement } from "@thresh/runtime/placement/random-placement";
 import type {
   PlacementContext,
   PlacementStrategy,
+  SiloResourceStats,
 } from "@thresh/runtime/placement/placement-strategy";
 import { filterByVersion } from "@thresh/runtime/placement/version-placement-filter";
 import {
@@ -151,32 +180,15 @@ import {
 import { TransactionAgent } from "@thresh/runtime/transaction-agent";
 import {
   DEFAULT_LOAD_SHEDDING_OPTIONS,
+  NodeEnvironmentStatisticsProvider,
   OverloadDetector,
   TestHooksEnvironmentStatisticsProvider,
+  type EnvironmentStatisticsProvider,
   type LoadSheddingOptions,
   type SiloLoadSheddingTestHooks,
 } from "@thresh/runtime/load-shedding";
 import { GatewayTooBusyException } from "@thresh/core/errors";
-import { executeWithRetries, fixedBackoff } from "@thresh/core/async-executor-with-retries";
 
-/**
- * Recovery-pull tuning (Orleans' directory partition recovery has no direct
- * equivalent knob; these are this port's own bounds). `maxAttempts` bounds
- * `executeWithRetries` per source silo; `retentionMs` bounds how long a
- * handed-off entry is retained for a successor that never pulls it (its
- * host silo crashed mid-handoff, or the puller crashed after pulling but
- * before ACKing) — past that it is dropped so the source's memory does not
- * grow unbounded and a very late, stale pull is not served.
- */
-const DEFAULT_RECOVERY_MAX_ATTEMPTS = 3;
-const DEFAULT_RECOVERY_BACKOFF_MS = 200;
-const DEFAULT_RECOVERY_RETENTION_MS = 60_000;
-/**
- * First delay before re-arming a source whose pull exhausted its budget (it
- * doubles per attempt, capped at the retention window — see
- * `scheduleRecoveryReArm`).
- */
-const DEFAULT_RECOVERY_RETRY_MS = 2_000;
 /**
  * Default period between `DeploymentLoadPublisher`-style load pushes (Orleans
  * `DeploymentLoadPublisherOptions.DEFAULT_DEPLOYMENT_LOAD_PUBLISHER_REFRESH_TIME`,
@@ -203,8 +215,6 @@ export interface ClusterNodeOptions {
   clusterId: string;
   membership: MembershipService;
   transport: Transport;
-  /** Reaches peer directory partitions; defaults to routing over the transport. */
-  directoryPeer?: DirectoryPeer;
   serializer?: Serializer;
   time?: TimeProvider;
   /**
@@ -214,21 +224,22 @@ export interface ClusterNodeOptions {
    * has stopped waiting (issue #90).
    */
   callTimeoutMs?: number;
-  /** Tuning for join/handoff directory-range recovery pulls; see the module-level defaults. */
-  recovery?: {
-    maxAttempts?: number;
-    backoffMs?: number;
-    retentionMs?: number;
-    /** First delay before re-arming a source whose pull exhausted its budget (doubles per attempt). */
-    retryMs?: number;
-  };
+  /**
+   * How long a directory range recovery waits for members that do not answer before it unlocks
+   * the range without them (`SiloConfig.directoryRecoveryPatience`). Unset, the default, the
+   * range stays locked for as long as such a member is listed: the directory fails closed.
+   */
+  directoryRecoveryPatienceMs?: number;
   /**
    * Silo-wide default per-method response timeout (ms), applied to any call
    * whose interface doesn't set its own `options.responseTimeout` (Orleans
-   * `[ResponseTimeout]`). Off by default (`undefined`): no deadline races the
-   * call unless one is explicitly configured, here or per-method.
+   * `[ResponseTimeout]`). Defaults to `callTimeoutMs`, so no call goes without a deadline.
    */
   defaultResponseTimeoutMs?: number;
+  /**
+   * See `SiloConfig.localCallSemantics`. `"copy"` by default (`TestCluster` uses `"wire"`).
+   */
+  localCallSemantics?: LocalCallSemantics;
   defaultCollectionAgeSeconds?: number;
   /**
    * Per-silo idle-deactivation ages keyed by grain type (Orleans'
@@ -283,6 +294,8 @@ export interface ClusterNodeOptions {
   durableJobScheduler?: () => DurableJobScheduler | undefined;
   /** Resolves this silo's grain-service registry, for a grain's `runtime.getGrainService()`. */
   grainServiceRegistry?: () => GrainServiceRegistry | undefined;
+  /** This silo's per-silo grain dependencies, for a functional grain's `useDependency`. */
+  grainDependencies?: ReadonlyMap<DependencyToken<unknown>, unknown>;
   /** Resolves the stream provider a grain's `getStreamProvider` returns. */
   streamProvider?: (name?: string) => StreamProvider | undefined;
   /**
@@ -360,6 +373,19 @@ export interface ClusterNodeOptions {
    */
   loadShedding?: Partial<LoadSheddingOptions>;
   /**
+   * This silo's environment-statistics source (Orleans `IEnvironmentStatisticsProvider`): the
+   * CPU and memory readings load shedding, overloaded-silo exclusion and resource-optimized
+   * placement act on, and that the load snapshot sent to peers carries. Defaults to
+   * `NodeEnvironmentStatisticsProvider`.
+   */
+  environmentStatistics?: EnvironmentStatisticsProvider;
+  /**
+   * Enables the load-shedding test hooks (`siloTestHooks()`, and through them
+   * `GrainRuntime.latchCpuUsage` and friends). Off by default: on a silo built without it every
+   * latch method throws, so an application grain cannot force its silo into load shedding.
+   */
+  testHooks?: boolean;
+  /**
    * Enables the activation repartitioner (Orleans `AddActivationRepartitioner`):
    * a communication-graph-driven protocol that moves grain activations near
    * their most frequent communication partners. Only when set does the
@@ -380,6 +406,12 @@ export interface ClusterNodeOptions {
    * `SiloBuilder`, which turns these on with Orleans-like defaults.
    */
   activationOptions?: ActivationOptions;
+  /**
+   * THE node's logger: the node itself, its dispatcher and (unless `activationOptions.logger`
+   * names another) every activation report through it. Unset, `activationOptions.logger` is
+   * used, then `defaultLogger` (warnings and errors reach the console).
+   */
+  logger?: Logger;
 }
 
 interface RejectionPayload {
@@ -388,69 +420,71 @@ interface RejectionPayload {
 }
 
 /**
- * A directory partition operation routed to the owning silo over the transport.
- * Every op carries the sender's applied membership view `version` so the owner
- * can linearise it against its own view (catch up if behind, redirect a stale
- * caller). `recover` pulls a previous owner's handed-off entries whenever this
- * silo acquires one of its ranges (on a join, and on a view change that hands it
- * a range a peer gave up).
+ * A directory partition operation carried to another silo over the transport. Every op carries
+ * the sender's applied view `version`. `lookup`, `register` and `unregister` reach the owner's
+ * partition, which answers with a `DirectoryResult` (the value, or "refresh required");
+ * `snapshot` and `snapshotAck` are a new owner taking a previous owner's snapshot for one view
+ * change; `recover` and `registered` ask a member for the activations it hosts in some ranges,
+ * for a recovery or for an integrity check.
  */
 type DirectoryOp =
   | { kind: "lookup"; grainId: GrainId; version: number }
   | { kind: "register"; addr: GrainAddress; previous?: GrainAddress | undefined; version: number }
   | { kind: "unregister"; addr: GrainAddress; version: number }
-  /**
-   * A successor's recovery pull. `requester` lets the source also report its own live activations
-   * in the requester's ranges: a crashed owner hands nothing off, so those reports are the only
-   * record of where its ranges' grains are running.
-   */
-  | { kind: "recover"; version: number; requester: SiloAddress }
-  /**
-   * Puller's ACK that it applied a recovery batch: the source deletes exactly
-   * those served entries. Carries the full `GrainAddress` of each, not just the
-   * grain id — the source deletes by identity, so a late ACK cannot destroy an
-   * entry registered under the same id since (see `ackServedRecovery`).
-   */
-  | { kind: "recoverAck"; addrs: GrainAddress[]; version: number };
+  | { kind: "snapshot"; previousVersion: number; version: number; ranges: WireRange[] }
+  | { kind: "snapshotAck"; previousVersion: number; version: number }
+  | { kind: "recover"; version: number; ranges: WireRange[] }
+  | { kind: "registered"; version: number; ranges: WireRange[] };
 
 /** Stand-in target grain for batch ops with no single grain (fills the envelope only). */
+/**
+ * The load snapshot a silo pushes to its peers (Orleans `SiloRuntimeStatistics`). The readings
+ * are optional on the wire so a snapshot from a silo that predates them still decodes.
+ */
+interface LoadSnapshot {
+  activationCount: number;
+  isOverloaded: boolean;
+  cpuUsagePercentage?: number;
+  memoryUsageBytes?: number;
+  availableMemoryBytes?: number;
+  maximumAvailableMemoryBytes?: number;
+}
+
 const DIRECTORY_OP_TARGET = new GrainId("$directory", "op");
 
-/** Where a grain's directory entry lived before a recovery pass: the source that can serve it. */
-type PreviousOwnerLookup = (grainId: GrainId) => SiloAddress | undefined;
-
-/**
- * One in-flight range recovery: a pull per source, plus where each grain's entry
- * lived before it, so an operation waits only for the pull that could bring ITS
- * entry (`awaitRecovered`) rather than for whichever source is slowest.
- */
-interface RecoveryPass {
-  /** This silo's applied view when the pass was issued (carried on each pull). */
-  version: number;
-  /** Settled-or-pending pulls, keyed by the source's ring key. */
-  pulls: Map<string, Promise<void>>;
-  /** Pulls not yet settled; the pass clears once this reaches zero. */
-  outstanding: number;
-  previousOwner: PreviousOwnerLookup;
+function resourceStatsOf(snapshot: LoadSnapshot): SiloResourceStats {
+  return {
+    activationCount: snapshot.activationCount,
+    isOverloaded: snapshot.isOverloaded,
+    ...(snapshot.cpuUsagePercentage !== undefined
+      ? { cpuUsagePercentage: snapshot.cpuUsagePercentage }
+      : {}),
+    ...(snapshot.memoryUsageBytes !== undefined
+      ? { memoryUsageBytes: snapshot.memoryUsageBytes }
+      : {}),
+    ...(snapshot.availableMemoryBytes !== undefined
+      ? { availableMemoryBytes: snapshot.availableMemoryBytes }
+      : {}),
+    ...(snapshot.maximumAvailableMemoryBytes !== undefined
+      ? { maximumAvailableMemoryBytes: snapshot.maximumAvailableMemoryBytes }
+      : {}),
+  };
 }
 
 /**
- * A source whose pull exhausted its budget, waiting to be re-armed. `since` dates
- * the first exhaustion, so the re-arms stop once the source can no longer be
- * holding anything (`recoveryRetentionMs`); `attempts` drives the backoff.
+ * Whether a dial was refused outright: no process is serving at the address
+ * (`ConnectFailure` cause `refused`). Only then does a recovery read the member as hosting
+ * nothing. A dial timeout or a handshake close says nothing about a live silo behind the
+ * address, so those fail closed and are asked again for as long as the member is listed.
  */
-interface RecoveryReArm {
-  source: SiloAddress;
-  previousOwner: PreviousOwnerLookup;
-  attempts: number;
-  since: number;
-  timer: TimerHandle | undefined;
+function isNothingListening(err: unknown): boolean {
+  return err instanceof ConnectFailure && err.cause === "refused";
 }
 
 function directoryOpGrainId(op: DirectoryOp): GrainId {
   if (op.kind === "lookup") return op.grainId;
-  if (op.kind === "recover" || op.kind === "recoverAck") return DIRECTORY_OP_TARGET;
-  return op.addr.grainId;
+  if (op.kind === "register" || op.kind === "unregister") return op.addr.grainId;
+  return DIRECTORY_OP_TARGET;
 }
 
 /** Carries a migrating activation's identity and dehydrated state to its new host. */
@@ -482,7 +516,8 @@ const randomPlacement = new RandomPlacement();
  * response messages with peers over the transport.
  */
 export class ClusterNode {
-  readonly partition: LocalDirectoryPartition;
+  /** This silo's directory partition (Orleans `GrainDirectoryPartition`); it holds the applied view. */
+  readonly partition: GrainDirectoryPartition;
 
   /** This silo's activation-repartitioner protocol object; `undefined` unless `repartitioning` was configured. */
   private readonly repartitioner?: ActivationRepartitioner;
@@ -536,14 +571,11 @@ export class ClusterNode {
   /** Connections held open to clients accepted on this silo, keyed by `clientId.toString()`. */
   private readonly clientConnections = new Map<string, Connection>();
   /**
-   * The same held connections, keyed by the client's synthetic identity
-   * endpoint (`preamble.siloAddress.endpoint`) instead of its `clientId`. This
-   * is what `reply()` consults: a client's `SiloAddress` is never dialable
-   * (issue #65 — the client leg no longer listens), so answering one means
-   * writing back down the accepted connection it is already holding open,
-   * found by the address it stamped as `sendingSilo`.
+   * The connection each inbound request arrived on, which is where its reply
+   * goes (see `reply`). Keyed by the request object itself, so an entry lives
+   * exactly as long as some handler still holds the request.
    */
-  private readonly clientConnectionsByEndpoint = new Map<string, Connection>();
+  private readonly arrivedOn = new WeakMap<Message, Connection>();
   /**
    * Every client this silo currently claims to host, keyed by `clientId.toString()`
    * — both connected (present in `clientConnections`) and disconnected-but-not-
@@ -553,17 +585,13 @@ export class ClusterNode {
    */
   private readonly localClientIds = new Map<string, GrainId>();
   /** When a locally held client connection closed, keyed like `localClientIds` (Orleans `ClientState.DisconnectedSince`). */
-  /**
-   * The correlation-table peer tag of each accepted client connection: every
-   * call forwarded down that socket is registered under it, so the socket
-   * closing can fail exactly those calls (`recordClosedClientConnection`)
-   * instead of leaving each to its full call timeout.
-   */
-  private readonly clientConnectionTags = new WeakMap<Connection, string>();
-  private nextClientConnectionTag = 0;
   private readonly clientDisconnectedSince = new Map<string, number>();
-  /** This silo's (test-hooks-latched) CPU-usage source (Orleans `TestHooksEnvironmentStatisticsProvider`). */
-  private readonly environmentStatistics = new TestHooksEnvironmentStatisticsProvider();
+  /**
+   * This silo's environment-statistics source (Orleans `IEnvironmentStatisticsProvider`),
+   * wrapped so a silo built with test hooks can latch the CPU reading
+   * (`TestHooksEnvironmentStatisticsProvider`).
+   */
+  private readonly environmentStatistics: TestHooksEnvironmentStatisticsProvider;
   /** Decides whether this silo is currently shedding load (Orleans `OverloadDetector`). */
   private readonly overloadDetector: OverloadDetector;
   /**
@@ -575,10 +603,7 @@ export class ClusterNode {
    * test-only `PropagateStatisticsToCluster`/`ForceRuntimeStatisticsCollection`)
    * so tests see a change without waiting for the next interval.
    */
-  private readonly remoteLoadStats = new Map<
-    string,
-    { activationCount: number; isOverloaded: boolean }
-  >();
+  private readonly remoteLoadStats = new Map<string, LoadSnapshot>();
   /**
    * In-flight durable-job deliveries keyed by RunId (Orleans
    * `DurableJobReceiverExtension._runningJobs`): coalesces concurrent
@@ -587,38 +612,23 @@ export class ClusterNode {
    * delivery settles.
    */
   private readonly inFlightDurableJobs = new Map<string, Promise<DurableJobRunResult>>();
-  private ring: ConsistentHashRing;
   private listener: Listener | undefined;
 
-  /** The membership view version `this.ring` was built from. */
-  private appliedVersion: number;
+  /** Set by `fence`: this silo was removed from the view and serves nothing again. */
+  private fenced = false;
   /**
-   * Entries this silo handed off, retained for a successor to pull, keyed by
-   * grain id. Populated (merged, not replaced — a later unrelated view change
-   * must not silently lose an as-yet-unpulled entry) on `updateView`; an entry
-   * is removed the moment its puller ACKs it, or once it expires (`retentionMs`
-   * past `producedAt`, or its silo falls out of the live view) — see `pruneHandoffSnapshot`.
+   * Every silo in the last applied view, whatever its status. Departure cleanup is
+   * the diff of this against the next view, not of the previous RING: a silo that
+   * went not-ready (leaving the ring) in one view and is removed in a later one is
+   * still a departure to clean up.
    */
-  private readonly handoffSnapshot = new Map<string, { entry: GrainAddress; producedAt: number }>();
-  /**
-   * In-flight range recovery: an operation for a grain a source owed before the
-   * pass waits on that source's pull so it never sees a transient miss, and the
-   * pass clears once every pull has settled.
-   */
-  private recovery: RecoveryPass | undefined;
-  /** Exhausted sources awaiting a re-armed pull, keyed by ring key (see `scheduleRecoveryReArm`). */
-  private readonly recoveryReArms = new Map<string, RecoveryReArm>();
-  /** Callers awaiting `this.appliedVersion` to reach a given version. */
+  private appliedMembers: SiloAddress[] = [];
+  /** Notified after every view application, whichever caller drove it (see `onViewApplied`). */
+  private readonly viewAppliedListeners = new Set<() => void>();
+  /** Callers awaiting the applied view to reach a given version. */
   private viewWaiters: Array<{ version: number; resolve: () => void }> = [];
   private readonly time: TimeProvider;
   private readonly logger: Logger;
-  private readonly recoveryMaxAttempts: number;
-  private readonly recoveryBackoffMs: number;
-  private readonly recoveryRetentionMs: number;
-  private readonly recoveryRetryMs: number;
-  /** Entries adopted by recovery passes, and source pull budgets exhausted (for metrics). */
-  private recoveryAdopted = 0;
-  private recoveryExhausted = 0;
   private readonly loadPublishIntervalMs: number;
   /** The pending `scheduleLoadPublish` re-arm, cleared on `stop()`. */
   private loadPublishTimer: TimerHandle | undefined;
@@ -629,40 +639,68 @@ export class ClusterNode {
   /** The pending `scheduleClientDirectoryRefresh` re-arm, cleared on `stop()`. */
   private clientDirectoryRefreshTimer: TimerHandle | undefined;
 
-  /** Routes directory operations to the owning silo's partition over the transport. */
+  /** Carries directory requests to the owning silo's partition over the transport. */
   private readonly transportPeer: DirectoryPeer = {
-    lookup: async (owner, grainId) => {
-      const r = await this.sendDirectory(owner, {
-        kind: "lookup",
-        grainId,
-        version: this.appliedVersion,
-      });
-      return r == null ? undefined : (r as GrainAddress);
-    },
-    register: async (owner, addr, previous) =>
+    lookup: async (owner, version, grainId) =>
+      (await this.sendDirectory(owner, { kind: "lookup", grainId, version })) as DirectoryResult<
+        GrainAddress | undefined
+      >,
+    register: async (owner, version, addr, previous) =>
       (await this.sendDirectory(owner, {
         kind: "register",
         addr,
         previous,
-        version: this.appliedVersion,
-      })) as GrainAddress,
-    unregister: async (owner, addr) => {
-      await this.sendDirectory(owner, { kind: "unregister", addr, version: this.appliedVersion });
+        version,
+      })) as DirectoryResult<GrainAddress>,
+    unregister: async (owner, version, addr) =>
+      (await this.sendDirectory(owner, {
+        kind: "unregister",
+        addr,
+        version,
+      })) as DirectoryResult<undefined>,
+  };
+
+  /**
+   * How the partition reaches the other silos' partitions and directories: over the transport,
+   * or straight to this silo's own partition when the member is this silo. A member with no
+   * process at its address (the dial refused) hosts nothing and answers a recovery with nothing.
+   */
+  private readonly partitionPeers: PartitionPeers = {
+    getSnapshot: async (owner, request) =>
+      owner.equals(this.options.local)
+        ? this.partition.serveSnapshot(request)
+        : (((await this.sendDirectory(owner, {
+            kind: "snapshot",
+            previousVersion: request.previousVersion,
+            version: request.version,
+            ranges: encodeRanges(request.ranges),
+          })) as GrainAddress[] | null | undefined) ?? undefined),
+    acknowledgeSnapshot: async (owner, pair) => {
+      if (owner.equals(this.options.local)) {
+        this.partition.acknowledgeSnapshot(owner, pair);
+        return;
+      }
+      await this.sendDirectory(owner, { kind: "snapshotAck", ...pair });
     },
+    recoverActivations: (member, request) =>
+      this.askMember(member, request, "recover", () =>
+        this.partition.answerRecovery(this.options.local, request),
+      ),
+    registeredActivations: (member, request) =>
+      this.askMember(member, request, "registered", () => this.partition.answerRegistered(request)),
   };
 
   constructor(private readonly options: ClusterNodeOptions) {
     const time = options.time ?? systemTimeProvider;
     this.time = time;
-    this.logger = options.activationOptions?.logger ?? noopLogger;
-    this.recoveryMaxAttempts = options.recovery?.maxAttempts ?? DEFAULT_RECOVERY_MAX_ATTEMPTS;
-    this.recoveryBackoffMs = options.recovery?.backoffMs ?? DEFAULT_RECOVERY_BACKOFF_MS;
-    this.recoveryRetentionMs = options.recovery?.retentionMs ?? DEFAULT_RECOVERY_RETENTION_MS;
-    this.recoveryRetryMs = options.recovery?.retryMs ?? DEFAULT_RECOVERY_RETRY_MS;
+    this.logger = options.logger ?? options.activationOptions?.logger ?? defaultLogger;
     this.loadPublishIntervalMs = options.loadPublishIntervalMs ?? DEFAULT_LOAD_PUBLISH_INTERVAL_MS;
     this.clientDropTimeoutMs = options.clientDropTimeoutMs ?? DEFAULT_CLIENT_DROP_TIMEOUT_MS;
     this.clientDirectoryRefreshMs =
       options.clientDirectoryRefreshMs ?? DEFAULT_CLIENT_DIRECTORY_REFRESH_MS;
+    this.environmentStatistics = new TestHooksEnvironmentStatisticsProvider(
+      options.environmentStatistics ?? new NodeEnvironmentStatisticsProvider(),
+    );
     this.overloadDetector = new OverloadDetector(this.environmentStatistics, {
       ...DEFAULT_LOAD_SHEDDING_OPTIONS,
       ...options.loadShedding,
@@ -686,53 +724,55 @@ export class ClusterNode {
       options.versionCompatibility !== undefined || options.versionSelector !== undefined;
     this.director = compatibilityDirector(options.versionCompatibility ?? "backwardCompatible");
     this.selector = versionSelector(options.versionSelector ?? "latest");
-    this.ring = this.buildRing();
-    this.appliedVersion = options.membership.current().version;
-    // Orleans IsSiloDead: a directory entry whose host has fallen out of the
-    // membership view entirely is treated as a miss on lookup, not returned as a
-    // stale pointer. Membership PRESENCE, not readiness, is the test: a silo that
-    // is merely draining or not-ready is still serving the activations it hosts
-    // (see `memberSilos`), and returning its entry is what keeps a call from
-    // building a duplicate activation during a drain. The partition consults the
-    // snapshot each call so it tracks membership changes without needing explicit
-    // reconciliation just for reads.
-    this.partition = new LocalDirectoryPartition((silo) =>
-      memberSilos(options.membership.current()).some((s) => s.equals(silo)),
-    );
+    // The partition holds no view until `start()` applies the current one: a view taken here
+    // would be whatever membership held at construction, which under Kubernetes is the empty
+    // view before the watch's first list. It judges an entry by its host's membership (Orleans
+    // `IsSiloDead`), not readiness: a draining or not-ready silo still serves what it hosts.
+    this.partition = new GrainDirectoryPartition({
+      local: options.local,
+      peers: this.partitionPeers,
+      activations: { registeredIn: (ranges) => this.registeredActivationsIn(ranges) },
+      refreshView: (version) => this.awaitView(version),
+      time,
+      logger: this.logger,
+      ...(options.directoryRecoveryPatienceMs !== undefined
+        ? { recoveryPatienceMs: options.directoryRecoveryPatienceMs }
+        : {}),
+    });
     this.connections = new ConnectionManager(
       options.transport,
       options.local,
       options.clusterId,
       undefined,
-      (m) => this.onMessage(m),
+      (m, _from, connection) => this.onMessage(m, connection),
       // A pooled connection dying underneath a pending call would otherwise
-      // hang it until the call timeout; fail just that peer's calls fast.
+      // hang it until the call timeout; fail exactly the calls sent on it, fast.
       // "siloUnavailable", not "unknownTarget": the callee may already be
       // mid-turn when the connection drops, so this must NOT be treated as a
       // stale, safe-to-resend rejection (Orleans `CallbackData.OnTargetSiloFail`
       // -> `SiloUnavailableException`; see the doc on `RejectionKind`).
-      (peer) =>
+      (peer, _err, connection) =>
         this.correlation.rejectFor(
-          peer.toString(),
+          connection,
           new RejectionError(`connection to ${peer.toString()} was lost`, "siloUnavailable"),
         ),
     );
     this.factory = new GrainFactory(
       (interfaceId) => this.resolveGrainType(interfaceId),
       time,
-      options.defaultResponseTimeoutMs,
+      // Orleans applies `ResponseTimeout` to a call whether its target is local or remote.
+      options.defaultResponseTimeoutMs ?? this.callTimeoutMs,
     );
     this.serializer =
       options.serializer ??
       new MessagePackSerializer({ resolveGrainReference: (id) => this.rehydrate(id) });
-    this.directory = new DistributedGrainDirectory(
-      options.local,
-      this.partition,
-      () => this.ring,
-      options.directoryPeer ?? this.transportPeer,
-      () => this.updateView(), // refresh on a stale-view rejection, then re-resolve
-      (grainId) => this.awaitRecovered(grainId), // gate owned reads on range recovery
-    );
+    this.directory = new DistributedGrainDirectory({
+      local: options.local,
+      partition: this.partition,
+      peer: this.transportPeer,
+      refresh: (version) => this.awaitView(version),
+      time,
+    });
     this.catalog = new Catalog({
       grainTypes: this.grainTypes,
       factory: this.factory,
@@ -742,7 +782,8 @@ export class ClusterNode {
         ? { classSpecificCollectionAgeSeconds: options.classSpecificCollectionAgeSeconds }
         : {}),
       onDeactivated: (a) => this.onDeactivated(a),
-      migrate: (a) => this.migrateActivation(a),
+      migrate: (a, target) =>
+        target === undefined ? this.migrateActivation(a) : this.migrateActivationTo(a, target),
       localSilo: () => this.options.local,
       // Cascade a cancellation to a token's forwarded target wherever it
       // lives, cluster-wide, via the same extension-reference substrate
@@ -762,6 +803,9 @@ export class ClusterNode {
       ...(options.grainServiceRegistry !== undefined
         ? { grainServiceRegistry: options.grainServiceRegistry }
         : {}),
+      ...(options.grainDependencies !== undefined
+        ? { grainDependencies: options.grainDependencies }
+        : {}),
       ...(options.streamProvider !== undefined ? { streamProvider: options.streamProvider } : {}),
       ...(this.broadcastProviderNames.length > 0
         ? { broadcastProvider: (name?: string) => this.broadcastChannelProvider(name) }
@@ -776,8 +820,13 @@ export class ClusterNode {
       ...(options.grainExtensionFactories !== undefined
         ? { grainExtensionFactories: options.grainExtensionFactories }
         : {}),
-      ...(options.activationOptions !== undefined
-        ? { activationOptions: options.activationOptions }
+      ...(options.activationOptions !== undefined || options.logger !== undefined
+        ? {
+            activationOptions: {
+              ...options.activationOptions,
+              logger: options.activationOptions?.logger ?? this.logger,
+            },
+          }
         : {}),
       loadShedding: () => this.siloTestHooks(),
       siloPing: (target, message) => this.pingSilo(target, message),
@@ -788,7 +837,12 @@ export class ClusterNode {
       cache: this.cache,
       catalog: this.catalog,
       remote: { send: (silo, req) => this.sendRemote(silo, req) },
-      activeSilos: () => activeSilos(this.options.membership.current()),
+      activeSilos: () => ringSilos(this.options.membership.current()),
+      mayActivate: () => this.mayActivate(),
+      time,
+      recoveryVersion: () => this.partition.recoveryVersion,
+      refusal: () => (this.fenced ? this.fencedRefusal() : undefined),
+      isLocalSystemType: (type) => this.isLocalSystemType(type),
       placementFor: (grainType) => this.placementFor(grainType),
       filtersFor: (grainType) => this.filtersFor(grainType),
       placementContext: () => this.placementContext(),
@@ -797,9 +851,7 @@ export class ClusterNode {
       // it is logged instead (see `dispatchDetachingOneWay`); reuse whatever
       // logger the host configured for activations rather than inventing a
       // second knob for it.
-      ...(options.activationOptions?.logger !== undefined
-        ? { logger: options.activationOptions.logger }
-        : {}),
+      logger: this.logger,
       clientRouter: {
         isClientTarget: (t) => isClient(t),
         route: (req) => this.routeToClient(req),
@@ -811,7 +863,7 @@ export class ClusterNode {
           }
         : {}),
     });
-    this.factory.setDispatcher(this.dispatcher);
+    this.factory.setDispatcher(this.localCallDispatcher(options.localCallSemantics ?? "copy"));
     if (options.repartitioning !== undefined) {
       const repartitioning = options.repartitioning;
       this.repartitioner = new ActivationRepartitioner({
@@ -839,6 +891,7 @@ export class ClusterNode {
       this.catalog,
       time,
       (options.collectionIntervalSeconds ?? 60) * 1000,
+      this.logger,
     );
     // Built-in system grain (Orleans `IManagementGrain`), registered on every
     // silo so `getGrain(IManagementGrain, 0n)` resolves wherever placement
@@ -865,10 +918,11 @@ export class ClusterNode {
     // A): a no-op self-probe every silo registers on itself so
     // `SelfProbeWorker` (`@thresh/hosting`) can call `getGrain(ISiloProbe,
     // local.ringKey).ping()` and time a real round trip through this silo's
-    // OWN dispatcher. `preferLocal` placement (set on the class itself, see
-    // `createSiloProbeGrainType`) is what makes "on itself" true — without
-    // it, placement could land the activation on any candidate silo and the
-    // probe would say nothing about whether THIS silo's dispatcher is stuck.
+    // OWN dispatcher. Whatever type serves `ISiloProbe` is activated through
+    // the local system-activation path (`isLocalSystemType`): never placed,
+    // never in the directory, always answered by the silo that asked — so it
+    // measures only this silo's dispatcher and scheduler, and works on a silo
+    // that is not a placement candidate (a joining or draining one).
     this.registerGrain(createSiloProbeGrainType(), { interfaces: [ISiloProbe] });
   }
 
@@ -885,7 +939,12 @@ export class ClusterNode {
     const { ctor, interfaces } = normalizeRegistration(definition, registration);
     const metadata = getGrainMetadata(ctor);
     if (metadata === undefined) throw new Error(`${ctor.name} is not decorated with @grain()`);
-    this.grainTypes.set(metadata.grainType, { ctor, metadata });
+    const keyKind = declaredKeyKind(ctor.name, interfaces);
+    this.grainTypes.set(metadata.grainType, {
+      ctor,
+      metadata,
+      ...(keyKind !== undefined ? { keyKind } : {}),
+    });
     // The version manifest is driven off the RESOLVED list, so per-silo version
     // registration (`registerGrain(ctor, { interfaces: [ICounterAt(v)] })`) keeps
     // declaring exactly the versions the caller named.
@@ -929,15 +988,28 @@ export class ClusterNode {
    * (via `GrainRuntime`, see `grain-runtime-impl.ts`).
    */
   siloTestHooks(): SiloLoadSheddingTestHooks {
+    // Test-only: a silo not built with `testHooks` refuses every latch, so an application
+    // grain reaching these through `GrainRuntime` cannot take its silo out of client traffic.
+    const requireTestHooks = (): void => {
+      if (this.options.testHooks !== true) {
+        throw new Error(
+          "load-shedding test hooks are not enabled on this silo: build it with test hooks " +
+            "enabled (`testHooks` on the silo config, as a TestCluster does) to latch statistics",
+        );
+      }
+    };
     return {
       enableOverloadDetection: (enabled) => {
+        requireTestHooks();
         this.overloadDetector.enabled = enabled;
       },
       latchCpuUsage: (value) => {
+        requireTestHooks();
         this.environmentStatistics.latchCpuUsage(value);
         return this.publishLoadStats();
       },
       unlatchCpuUsage: () => {
+        requireTestHooks();
         this.environmentStatistics.unlatchHardwareStatistics();
         return this.publishLoadStats();
       },
@@ -945,18 +1017,43 @@ export class ClusterNode {
       // there is no separate boolean the detector consults (Orleans mirrors
       // this: `LatchOverloaded` also just latches CPU to `cpuThreshold + 1`).
       latchOverloaded: () => {
+        requireTestHooks();
         this.environmentStatistics.latchCpuUsage(this.loadSheddingCpuThreshold() + 1);
         return this.publishLoadStats();
       },
       unlatchOverloaded: () => {
+        requireTestHooks();
         this.environmentStatistics.unlatchHardwareStatistics();
         return this.publishLoadStats();
       },
     };
   }
 
+  /** Whether this silo is currently shedding load (Orleans `IOverloadDetector.IsOverloaded`). */
+  isOverloaded(): boolean {
+    return this.overloadDetector.isOverloaded;
+  }
+
+  /** A peer's last-pushed resource readings, or `undefined` if it has pushed none. */
+  peerResourceStats(silo: SiloAddress): SiloResourceStats | undefined {
+    const snapshot = this.remoteLoadStats.get(silo.ringKey);
+    return snapshot === undefined ? undefined : resourceStatsOf(snapshot);
+  }
+
   private loadSheddingCpuThreshold(): number {
     return this.options.loadShedding?.cpuThreshold ?? DEFAULT_LOAD_SHEDDING_OPTIONS.cpuThreshold;
+  }
+
+  /** The key kind a registered grain type declares, if it declares one as a value. */
+  grainKeyKind(type: GrainType): GrainKeyKind | undefined {
+    return this.grainTypes.get(type)?.keyKind;
+  }
+
+  /** An implicit subscriber's id: the key text read as the kind its grain type declares. */
+  private implicitTargetId(type: GrainType, keyText: string): GrainId {
+    const id = new GrainId(type, keyText);
+    const kind = this.grainKeyKind(type);
+    return kind === undefined ? id : id.asKind(kind);
   }
 
   /** Grain types implicitly subscribed to a stream namespace (drives stream fan-out). */
@@ -1034,7 +1131,7 @@ export class ClusterNode {
     const deliver = (type: GrainType): Promise<void> =>
       this.dispatcher
         .invoke({
-          target: new GrainId(type, channel.key),
+          target: this.implicitTargetId(type, channel.key),
           interfaceId: BroadcastConsumerInterface.id,
           method: "onPublished",
           args: [key, item],
@@ -1101,9 +1198,13 @@ export class ClusterNode {
     return this.localVersions.get(interfaceId)?.version;
   }
 
-  /** The hash ranges this silo owns on the current ring (drives reminder ownership). */
+  /**
+   * The hash ranges this silo owns in the view it has applied, as half-open tuples: the same
+   * arcs the directory partition owns, so reminder, stream-queue and durable-job ownership follow
+   * the directory exactly.
+   */
   ownedHashRanges(): Array<[number, number]> {
-    return this.ring.rangesFor(this.options.local);
+    return this.partition.view.ring.rangesFor(this.options.local);
   }
 
   /**
@@ -1195,18 +1296,22 @@ export class ClusterNode {
   }
 
   /**
-   * Ask the elected TM whether a transaction committed, routed to its grain over
-   * the dispatcher. Used by a recovering transactional resource to resolve an
-   * in-doubt pending record left by a mid-commit failure.
+   * Send a commit-protocol message to the transactional resource `target`
+   * names, routed to its grain over the dispatcher: how the resources on this
+   * silo reach a TM or, as TM, their participants.
    */
-  async resolveTransactionStatus(manager: ParticipantId, transactionId: string): Promise<boolean> {
-    return (await this.dispatcher.invoke({
-      target: manager.grainId,
+  invokeTransactionResource(
+    target: ParticipantId,
+    method: TransactionResourceMethod,
+    args: readonly unknown[],
+  ): Promise<unknown> {
+    return this.dispatcher.invoke({
+      target: target.grainId,
       interfaceId: TransactionResourceInterface.id,
-      method: "status",
-      args: [manager.stateName, transactionId],
-      options: {},
-    })) as boolean;
+      method,
+      args: [target.stateName, ...args],
+      options: TransactionResourceInterface.options[method] ?? {},
+    });
   }
 
   /** Number of live grain activations hosted on this silo (for runtime metrics). */
@@ -1231,41 +1336,98 @@ export class ClusterNode {
     return this.directory;
   }
 
-  /** Handed-off directory entries still retained for a successor to pull (introspection/metrics/tests). */
-  pendingHandoffCount(): number {
-    return this.handoffSnapshot.size;
+  /** Snapshots of given-up ranges this silo still holds for their new owners (introspection). */
+  pendingSnapshotCount(): number {
+    return this.partition.snapshotCount;
   }
 
   /**
-   * Range-recovery outcomes (introspection/metrics): entries adopted by recovery
-   * passes, and source pulls whose retry budget ran out and were re-armed. A
-   * non-zero `exhausted` means some ranges are running on lazy reactivation for
-   * now — the state that used to be invisible.
+   * Directory view-change outcomes (introspection/metrics): entries taken into this partition by
+   * snapshot transfer or recovery, and recoveries abandoned because `directoryRecoveryPatienceMs`
+   * elapsed before every member answered.
    */
   directoryRecoveryStats(): { recovered: number; exhausted: number } {
-    return { recovered: this.recoveryAdopted, exhausted: this.recoveryExhausted };
+    const { transferred, recovered, patienceExpired } = this.partition.stats;
+    return { recovered: transferred + recovered, exhausted: patienceExpired };
+  }
+
+  /** The membership view version this node last applied (`updateView`); `-1` before `start`. */
+  get appliedViewVersion(): number {
+    return this.partition.view.version;
+  }
+
+  /**
+   * Resolves once every directory view change applied so far has finished: each gained range
+   * transferred or recovered, each lost range moved into its snapshot. The host awaits it after
+   * `start()` so the first view's recovery finishes before startup tasks and readiness.
+   */
+  async recoverySettled(): Promise<void> {
+    await this.partition.settled();
+  }
+
+  /**
+   * The silos in the ring of the view this node has APPLIED, which `membership.current()` can
+   * run ahead of. Ownership decisions outside the directory (durable-job shards) follow this.
+   */
+  appliedRingSilos(): SiloAddress[] {
+    return [...this.partition.view.ringSilos];
+  }
+
+  /** Whether the applied view has any silo to own ranges (an empty ring routes nothing). */
+  hasAppliedView(): boolean {
+    return !this.partition.view.ring.isEmpty;
+  }
+
+  /**
+   * The directory integrity check (Orleans `IGrainDirectoryTestHooks.CheckIntegrityAsync`), a
+   * test hook: no entry in this silo's partition lies outside its ranges, and every registered
+   * live activation any member hosts in them has exactly its own entry here. Returns the
+   * violations found.
+   */
+  checkDirectoryIntegrity(): Promise<IntegrityViolation[]> {
+    return this.partition.checkIntegrity();
+  }
+
+  /**
+   * Run `listener` after every view application, whichever path drove it: the host's
+   * membership loop, the directory's stale-view refresh, or `awaitView` catching up
+   * to a peer's version. The host hangs its ownership hooks here so they follow the
+   * ring the node actually has. Returns an unsubscribe function.
+   */
+  onViewApplied(listener: () => void): () => void {
+    this.viewAppliedListeners.add(listener);
+    return () => {
+      this.viewAppliedListeners.delete(listener);
+    };
+  }
+
+  /** Location-cache entries pointing at `silo` (introspection: a departed silo should have none). */
+  locationCacheEntriesFor(silo: SiloAddress): number {
+    return this.cache.entriesFor(silo);
+  }
+
+  /**
+   * Run `callback` once if the transport's listener stops accepting connections, whether this
+   * node closed it (`stop`) or the transport lost it. A transport whose listener cannot report
+   * this is assumed to stay up. Call after `start()`.
+   */
+  onListenerClosed(callback: () => void): void {
+    this.listener?.onClose?.(callback);
   }
 
   async start(): Promise<void> {
     this.listener = await this.options.transport.listen(
       this.options.local,
-      (message) => this.onMessage(message),
+      (message, _from, connection) => this.onMessage(message, connection),
       (preamble, connection) => this.onClientAccept(preamble, connection),
     );
     this.collector.start();
-    // Join recovery: when joining an already-running cluster, pull the live entries
-    // for the ranges we now own from the incumbents instead of letting their grains
-    // lazily reactivate. Only past the initial formation (version 1): at cold start
-    // the peers in the view may still be coming up, there is nothing to recover yet,
-    // and connecting to a not-yet-listening peer would just churn the connection pool.
-    const others = this.recoverySources();
-    if (others.length > 0 && this.isLocalActive() && this.appliedVersion > 1) {
-      // Where each grain's entry lived before this silo joined: the ring without it.
-      const ringBeforeJoin = this.buildRingWithoutLocal();
-      this.beginRecovery(others, this.appliedVersion, (grainId) =>
-        ringBeforeJoin.isEmpty ? undefined : ringBeforeJoin.ownerOf(grainId),
-      );
-    }
+    // Apply the view current now — after the listener is up, so the requests it starts can be
+    // answered. This is the first view this node applies, so it moved from no view at all: no
+    // previous owner can hold a snapshot for that pair, and every range it owns is recovered from
+    // every member, locked until each has answered (Orleans treats a silo's first view as
+    // non-contiguous and recovers).
+    this.updateView();
     // Orleans `DeploymentLoadPublisher.StartAsync` also publishes once immediately
     // on top of the recurring interval. Deliberately not mirrored here: at the
     // moment this silo starts, a peer already in `membership`'s active set may not
@@ -1282,11 +1444,71 @@ export class ClusterNode {
   }
 
   /**
-   * `deadlineMs`, when given, bounds `Catalog.deactivateAll`'s whole sweep
-   * (see its doc) — the host's overall stop budget minus whatever grace
-   * period it already spent, so the combined wait fits inside the process's
-   * own termination grace period instead of risking a SIGKILL mid-stop
-   * (issue #108).
+   * Fence this silo: a view omitted it after it had been listed, so its peers have already
+   * dropped its directory entries and reassigned its ranges (Orleans
+   * `MembershipTableManager.KillMyselfLocally`). From here every call — inbound over the wire or
+   * made on this silo — is refused before it runs, as one its caller may resend elsewhere, and
+   * every activation is abandoned without running its deactivation hooks or unregistering it
+   * (`Catalog.abandonAll`). Its periodic work stops. The host fails liveness alongside, and
+   * Kubernetes restarts the pod. Idempotent; never undone.
+   */
+  fence(): void {
+    if (this.fenced) return;
+    this.fenced = true;
+    if (this.loadPublishTimer !== undefined) this.time.clearTimer(this.loadPublishTimer);
+    this.loadPublishTimer = undefined;
+    if (this.clientMaintenanceTimer !== undefined)
+      this.time.clearTimer(this.clientMaintenanceTimer);
+    this.clientMaintenanceTimer = undefined;
+    if (this.clientDirectoryRefreshTimer !== undefined)
+      this.time.clearTimer(this.clientDirectoryRefreshTimer);
+    this.clientDirectoryRefreshTimer = undefined;
+    this.partition.stop();
+    this.collector.stop();
+    this.catalog.abandonAll();
+  }
+
+  /** Whether `fence` has run. */
+  get isFenced(): boolean {
+    return this.fenced;
+  }
+
+  private fencedRefusal(): RejectionError {
+    return refusedBeforeExecution(
+      new RejectionError(
+        `${this.options.local.toString()} was removed from the membership view and is fenced`,
+        "staleView",
+      ),
+    );
+  }
+
+  /**
+   * Stop the node: hand over the directory ranges it gave up, deactivate every activation, then
+   * stop the partition and close the transport.
+   *
+   * `deadlineMs`, when given, bounds the whole of it — the host's overall stop budget minus
+   * whatever grace period it already spent, so the combined wait fits inside the process's own
+   * termination grace period instead of risking a SIGKILL mid-stop (issue #108). It is shared in
+   * this order:
+   *
+   * 1. **The handover.** If this silo has applied a view in which it is out of the ring (it is
+   *    leaving) and its partition holds snapshots of ranges it gave up, it waits until
+   *    every one is collected (each partner has acknowledged it, left the view, or started a
+   *    recovery at or above its version), for at most HALF of `deadlineMs`. It waits only for
+   *    partners that are `active` in the view it has applied
+   *    (`GrainDirectoryPartition.handedOver`): a partner that is not ready owns a range only
+   *    because no silo is ready, and nothing says its process is running — a dead pod still
+   *    listed would otherwise hold every leaver of a cluster stopping together for the whole
+   *    bound. A silo that holds no snapshot a ready partner is owed (it never saw itself leave,
+   *    it owned nothing, or nobody ready remains to take its ranges) waits for nothing. It goes on
+   *    serving its activations meanwhile, and logs a warning naming the partners still awaited
+   *    when the bound elapses first.
+   * 2. **Deactivation.** `Catalog.deactivateAll` gets whatever is left of `deadlineMs`, so it
+   *    always keeps at least half of it. Its unregistrations resolve the owner in the view this
+   *    node has applied, so after a handover they go to the new owners.
+   *
+   * Without `deadlineMs` nothing is bounded and nothing waits for the handover: a node stopped
+   * outside a host has no budget to share.
    */
   async stop(deadlineMs?: number): Promise<void> {
     if (this.loadPublishTimer !== undefined) this.time.clearTimer(this.loadPublishTimer);
@@ -1297,19 +1519,17 @@ export class ClusterNode {
     if (this.clientDirectoryRefreshTimer !== undefined)
       this.time.clearTimer(this.clientDirectoryRefreshTimer);
     this.clientDirectoryRefreshTimer = undefined;
-    // Nothing will consume a re-armed pull from here on.
-    for (const reArm of this.recoveryReArms.values()) {
-      if (reArm.timer !== undefined) this.time.clearTimer(reArm.timer);
-    }
-    this.recoveryReArms.clear();
     this.collector.stop();
+    const remainingMs = await this.handOver(deadlineMs);
     // Deactivate before tearing down transport: onDeactivate hooks may make cross-silo
     // calls (e.g. notifying a watcher grain on another silo), which need the listener and
     // outbound connections still up. Only close them once every activation has drained.
     await this.catalog.deactivateAll(
       { code: "shutting-down", description: "node stopping" },
-      deadlineMs,
+      remainingMs,
     );
+    // Its unregistrations have gone to the owners; nothing more is served from this partition.
+    this.partition.stop();
     await this.listener?.close();
     await this.connections.closeAll();
     // Only now is nothing left that could answer a call: the listener is closed and every pooled
@@ -1323,163 +1543,116 @@ export class ClusterNode {
   }
 
   /**
-   * Reconcile the directory with a membership view change (versioned, lossless).
-   * Drop cache/connections/client registrations for silos that have left the
-   * view; in one partition pass drop entries whose host silo has left the view
-   * (the grain is gone) and set aside entries whose range the new ring assigns to
-   * another live silo (retained for that successor to pull). A silo that is only
-   * `draining` has left the RING — it takes no new placements — but it is still in
-   * the view and still serving, so its entries are kept rather than dropped.
-   * A silo that has just joined the active set, or that stayed active while a peer
-   * left the ring, recovers the ranges it now owns from whoever is holding their
-   * entries (see the gate at the end of this method) so their grains are not
-   * needlessly reactivated.
+   * Step 1 of `stop`: wait, for at most half of `deadlineMs`, until the partition has handed
+   * over every range this silo gave up to the partners that are ready for it, and return what is
+   * left of `deadlineMs`. Only a leaving
+   * silo waits: one whose applied view has it out of the ring. A silo stopped while it is still
+   * in the ring (nobody marked it leaving) is not handing anything over, whatever snapshot an
+   * earlier view change left behind. A fenced silo's peers have already dropped its entries, so
+   * it has nothing to hand over.
+   */
+  private async handOver(deadlineMs: number | undefined): Promise<number | undefined> {
+    if (deadlineMs === undefined || this.fenced) return deadlineMs;
+    if (this.partition.view.inRing(this.options.local)) return deadlineMs;
+    const startedAt = this.time.now();
+    const completed = await this.partition.handedOver(deadlineMs / 2);
+    if (!completed) {
+      this.logger.warn("directory handover incomplete when half the stop budget was spent", {
+        silo: this.options.local.toString(),
+        waitedMs: this.time.now() - startedAt,
+        awaiting: this.partition.awaitedPartners.map(String),
+      });
+    }
+    return Math.max(0, deadlineMs - (this.time.now() - startedAt));
+  }
+
+  /**
+   * Apply the membership view current now, if it is newer than the one applied. Silos that have
+   * left the view lose their cached routes, pooled connections and client registrations; silos
+   * newly in the ring are sent this silo's clients; and the view goes to the directory
+   * partition, which locks the ranges this silo gained or lost before this returns and then
+   * transfers or recovers them (`GrainDirectoryPartition.applyView`). A silo that is only
+   * `draining` has left the ring but is still a member: its activations keep their entries.
    */
   updateView(): void {
     const snapshot = this.options.membership.current();
+    const previous = this.partition.view;
+    if (snapshot.version <= previous.version) return;
     const local = this.options.local;
-    const oldRing = this.ring;
-    const newRing = this.buildRing();
-    const live = new Set(activeSilos(snapshot).map((s) => s.ringKey));
-    const present = new Set(memberSilos(snapshot).map((s) => s.ringKey));
-    // Silos newly active in this view: they never received this silo's
-    // `broadcastClientGossip` from before they joined, so republish this
-    // silo's clients to them now instead of leaving them to learn of it only
-    // from `clientDirectoryRefreshMs`'s next tick (Orleans' `ClientDirectory`
+    const next = DirectoryView.of(snapshot);
+    const present = new Set(next.members.map((s) => s.ringKey));
+    for (const key of this.remoteLoadStats.keys()) {
+      if (!present.has(key)) this.remoteLoadStats.delete(key);
+    }
+    // Silos newly in the ring never received this silo's `broadcastClientGossip` from before
+    // they joined, so republish this silo's clients to them now instead of leaving them to learn
+    // of it only from `clientDirectoryRefreshMs`'s next tick (Orleans' `ClientDirectory`
     // republishing its table on every membership change).
-    const oldLive = new Set(oldRing.silos().map((s) => s.ringKey));
-    const newlyActive = activeSilos(snapshot).filter(
-      (s) => !oldLive.has(s.ringKey) && !s.equals(local),
-    );
+    const newlyActive = next.ringSilos.filter((s) => !previous.inRing(s) && !s.equals(local));
 
-    for (const member of oldRing.silos()) {
+    // Departures are the member-set diff against the last applied view, whatever the
+    // departed silo's status was: Kubernetes reports ready -> not ready -> removed, so
+    // by the removal the silo has long since left the ring, and diffing the previous
+    // ring would never visit it.
+    for (const member of this.appliedMembers) {
       if (!present.has(member.ringKey)) {
         this.cache.invalidateSilo(member);
         void this.connections.drop(member);
         this.clientDirectory.unregisterSilo(member);
       }
     }
+    this.appliedMembers = [...next.members];
     this.republishClientDirectory(newlyActive);
     // Peer manifests may have shifted with the view (a silo upgraded/left);
     // drop them all and re-fetch lazily on the next version-aware placement.
     this.manifestCache.clear();
     this.manifestInflight.clear();
 
-    const handedOff = this.partition.drain((entry) => {
-      // Only the host's endpoint going away means the grain is gone and
-      // reactivates elsewhere; a host that is merely not ready is still running
-      // it, so its entry follows the range like any other.
-      if (!present.has(entry.silo.ringKey)) return "drop";
-      return newRing.ownerOf(entry.grainId).equals(local) ? "keep" : "handoff";
-    });
-    // Merge, don't replace: an entry already retained from a PRIOR handoff whose
-    // successor hasn't pulled it yet must survive an unrelated view change (some
-    // other silo joining/leaving) — only an ACK or expiry removes it.
-    const producedAt = this.time.now();
-    for (const entry of handedOff) {
-      this.handoffSnapshot.set(entry.grainId.toString(), { entry, producedAt });
-    }
-    this.pruneHandoffSnapshot(present);
-
-    const wasActive = oldRing.silos().some((s) => s.equals(local));
-    this.ring = newRing;
-    this.appliedVersion = snapshot.version;
+    this.partition.applyView(next);
     this.resolveViewWaiters();
-
-    // Done against the ring just installed, and synchronously, so no lookup can
-    // slip between the ring change and the entries coming back.
-    const peerLeftRing = oldRing.silos().some((s) => !live.has(s.ringKey));
-    if (live.has(local.ringKey)) {
-      this.reclaimOwnedHandoffs();
-      if (peerLeftRing) this.reclaimOwnActivations();
-    }
-
-    // Recovery runs for a silo that has just joined the active set AND for one
-    // that stayed in it while a peer left the ring — the incumbent that inherits
-    // a departed peer's ranges is in exactly the same position (it owns entries
-    // it has never seen, and the previous owner is holding them for it), and
-    // gating on the join transition alone left it never asking: the retained
-    // entries expired out from under a range that had already moved. Orleans
-    // acquires the added ranges on every partition on every view change.
-    if (live.has(local.ringKey) && (!wasActive || peerLeftRing)) {
-      this.beginRecovery(this.recoverySources(), snapshot.version, (grainId) =>
-        oldRing.isEmpty ? undefined : oldRing.ownerOf(grainId),
-      );
-    }
+    for (const listener of this.viewAppliedListeners) listener();
   }
 
   /**
-   * Take back the handed-off entries the current ring assigns to this silo again.
-   *
-   * A range that leaves this partition and later comes back — the successor
-   * crashed mid-join, or a joiner left again — would otherwise stay stranded in
-   * this silo's own `handoffSnapshot`: there is no successor left to pull it, the
-   * live partition no longer holds it, so a lookup misses and builds a second
-   * activation of a grain that never stopped running, and the retained copy is
-   * deleted for good once the retention window passes. This silo is the owner
-   * again, so it is the one that has to take it back.
-   *
-   * The registration is the same CAS as any handoff adoption: it never
-   * overwrites a fresher entry a concurrent reactivation put there.
+   * Whether this silo may create an application-grain activation: it is in the ring of the view
+   * it has APPLIED. A joining silo while a peer is active, and a draining one, are members that
+   * keep serving what they host but create nothing new, so a joiner and its peers never each
+   * own a range at once and a draining silo stops placing on itself (Orleans
+   * `Catalog.GetOrCreateActivation`, which creates only while the silo is active).
    */
-  private reclaimOwnedHandoffs(): void {
-    if (this.ring.isEmpty) return;
-    const reclaimed = [...this.handoffSnapshot.values()].filter(({ entry }) =>
-      this.ownsNow(entry.grainId),
-    );
-    if (reclaimed.length === 0) return;
-    this.partition.acceptHandoff(
-      reclaimed.map(({ entry }) => entry),
-      (entry) => this.ownsNow(entry.grainId),
-    );
-    for (const { entry } of reclaimed) this.handoffSnapshot.delete(entry.grainId.toString());
+  private mayActivate(): boolean {
+    if (this.fenced) return false;
+    return this.partition.view.inRing(this.options.local);
   }
 
-  private buildRing(): ConsistentHashRing {
-    return new ConsistentHashRing(activeSilos(this.options.membership.current()));
-  }
-
-  /** The ring as it stands without this silo — where a joiner's ranges lived before it arrived. */
-  private buildRingWithoutLocal(): ConsistentHashRing {
-    return new ConsistentHashRing(
-      activeSilos(this.options.membership.current()).filter((s) => !s.equals(this.options.local)),
-    );
-  }
-
-  private ownsNow(grainId: GrainId): boolean {
-    return this.ring.ownerOf(grainId).equals(this.options.local);
-  }
-
-  private isLocalActive(): boolean {
-    return activeSilos(this.options.membership.current()).some((s) => s.equals(this.options.local));
-  }
-
-  private otherActiveSilos(): SiloAddress[] {
-    return activeSilos(this.options.membership.current()).filter(
+  private otherRingSilos(): SiloAddress[] {
+    return ringSilos(this.options.membership.current()).filter(
       (s) => !s.equals(this.options.local),
     );
   }
 
   /**
-   * The silos to pull recovered ranges from: every other silo still in the view,
-   * `active` or not. A draining peer is deliberately included — it is exactly
-   * where a rolling update's entries are parked: it has left the ring, so it
-   * handed its ranges off, but it is still up long enough to serve a pull, and
-   * the successor's only copy of those entries is the one it is holding.
-   * Excluding it would leave the entries unclaimed until they expire.
+   * Resolve `appliedVersion` reaching `version`; self-advance if our view already shows it.
+   * Otherwise a peer has shown that this silo's view is behind: ask the membership service to
+   * catch up (`MembershipService.refresh`, Orleans `ClusterMembershipService.Refresh`) and apply
+   * what it brings, rather than waiting for this silo's own watch to deliver some unrelated
+   * change. Bounded by the call timeout either way.
    */
-  private recoverySources(): SiloAddress[] {
-    return memberSilos(this.options.membership.current()).filter(
-      (s) => !s.equals(this.options.local),
-    );
-  }
-
-  /** Resolve `appliedVersion` reaching `version`; self-advance if our view already shows it. */
   private async awaitView(version: number): Promise<void> {
-    if (this.appliedVersion >= version) return;
-    if (this.options.membership.current().version >= version) {
+    if (this.appliedViewVersion >= version) return;
+    const membership = this.options.membership;
+    if (membership.current().version >= version) {
       this.updateView();
-      if (this.appliedVersion >= version) return;
+      if (this.appliedViewVersion >= version) return;
+    } else {
+      void membership.refresh(version).then(
+        () => {
+          if (this.appliedViewVersion < version && membership.current().version >= version) {
+            this.updateView();
+          }
+        },
+        () => undefined,
+      );
     }
     await new Promise<void>((resolve, reject) => {
       const onResolve = (): void => {
@@ -1497,302 +1670,52 @@ export class ClusterNode {
   private resolveViewWaiters(): void {
     const remaining: typeof this.viewWaiters = [];
     for (const w of this.viewWaiters) {
-      if (this.appliedVersion >= w.version) w.resolve();
+      if (this.appliedViewVersion >= w.version) w.resolve();
       else remaining.push(w);
     }
     this.viewWaiters = remaining;
   }
 
   /**
-   * An owned read waits on the pull that could bring ITS entry — the source that
-   * owned its range before the change — and on nothing else.
-   *
-   * Waiting on the whole multi-source pass instead made one slow-but-present peer
-   * stop every owned directory operation on this silo, locally and over the wire:
-   * each attempt is bounded by the call timeout and the pass by the retry budget,
-   * so a single flaky source could block all of this silo's directory traffic for
-   * a minute or more while the ranges it did not owe were ready to serve. A grain
-   * whose range had no previous owner waits for nothing. A grain whose previous
-   * owner crashed is the exception: no handoff exists, only the survivor hosting
-   * it can report it, so it waits on every survivor's pull.
+   * Ask `member` for the activations it hosts in `request.ranges`: over the transport, or this
+   * silo's own answer when the member is this silo. A dial refused outright means no process is
+   * serving there, so it hosts nothing: an empty answer, not a failure to retry.
    */
-  private async awaitRecovered(grainId: GrainId): Promise<void> {
-    const pass = this.recovery;
-    if (pass === undefined) return;
-    const previousOwner = pass.previousOwner(grainId);
-    if (previousOwner === undefined) return;
-    const pull = pass.pulls.get(previousOwner.ringKey);
-    if (pull !== undefined) {
-      await pull;
-      return;
-    }
-    // The previous owner is not among the sources: it left the view without handing off (a crash).
-    // Its entry, if the grain still runs, comes back only from the survivor hosting it, so wait for
-    // every survivor's report rather than letting the operation miss and place a second activation.
-    await Promise.all(pass.pulls.values());
-  }
-
-  /**
-   * Pull the ranges we now own from the given previous owners and merge them in.
-   * Each source is retried (bounded, backed off) independently, so one slow or
-   * flaky peer doesn't stall recovery from the others; a source that exhausts its
-   * budget is re-armed on a backoff rather than abandoned (see
-   * `scheduleRecoveryReArm`). Every directory operation for a range a source owed
-   * waits on that source's pull (see `awaitRecovered`), so no concurrent register
-   * can reach the partition ahead of the entry it was going to be served.
-   *
-   * `previousOwner` says where a grain's entry lived before this pass: the ring in
-   * force before the change for a view change, and the ring without this silo for
-   * a join. That is the source to wait for, and the only one waited on. A source
-   * can also return an entry it did not own then — `serveRecover` serves whatever
-   * it retains, from an older handoff — and nothing waits for that one, which
-   * costs the operation a miss that lazy activation rebuilds rather than holding
-   * every range this pass covers behind one slow peer.
-   *
-   * Ownership is decided against the LIVE `this.ring`, read inside the adopt
-   * pass rather than captured when the pull was issued: `updateView` replaces
-   * the ring wholesale and `acceptHandoff`'s loop is synchronous, so a live
-   * read makes the whole pass atomic with respect to any view change. A pull
-   * whose response lands after a further membership change therefore cannot
-   * register an entry the current ring assigns elsewhere — which would leave
-   * an orphan in this partition, on the far side of the `drain()` pass that
-   * already decided the range had moved on.
-   *
-   * Only the entries actually adopted are ACKed. The source's `serveRecover`
-   * is unfiltered by requester, so ACKing the whole served batch would delete
-   * entries this silo declined — stranding the range's true owner, whose own
-   * pull then comes back empty and degrades a live grain to lazy rebuild.
-   * Orleans scopes acknowledgement the same way, per transfer partner and
-   * range version (`RemoveSnapshotTransferPartner`); declining to ACK leaves
-   * the entry retained at the source for the real owner's pull, bounded by
-   * `recoveryRetentionMs`.
-   */
-  private beginRecovery(
-    sources: readonly SiloAddress[],
-    version: number,
-    previousOwner: PreviousOwnerLookup,
-  ): void {
-    if (sources.length === 0) return;
-    const pass = this.openRecovery(version, previousOwner);
-    for (const source of sources) this.addPull(pass, source);
-  }
-
-  /** Start a recovery pass and install it as the one directory operations wait on. */
-  private openRecovery(version: number, previousOwner: PreviousOwnerLookup): RecoveryPass {
-    const pass: RecoveryPass = { version, previousOwner, pulls: new Map(), outstanding: 0 };
-    this.recovery = pass;
-    return pass;
-  }
-
-  /** Issue one source's pull inside `pass`, keeping `pass.outstanding` current as it settles. */
-  private addPull(pass: RecoveryPass, source: SiloAddress): void {
-    pass.outstanding++;
-    const settled = (): void => {
-      pass.outstanding--;
-      if (pass.outstanding === 0 && this.recovery === pass) this.recovery = undefined;
-    };
-    pass.pulls.set(source.ringKey, this.pullFrom(source, pass).then(settled, settled));
-  }
-
-  /**
-   * Pull one source's handed-off entries: retry it (bounded, backed off), adopt
-   * what this silo owns under the live ring, and ACK exactly that. A source whose
-   * budget runs out leaves its ranges to lazy reactivation for now — logged,
-   * counted, and re-armed, never silently abandoned.
-   */
-  private async pullFrom(source: SiloAddress, pass: RecoveryPass): Promise<void> {
+  private async askMember(
+    member: SiloAddress,
+    request: ActivationsRequest,
+    kind: "recover" | "registered",
+    here: () => GrainAddress[],
+  ): Promise<GrainAddress[]> {
+    if (member.equals(this.options.local)) return here();
     try {
-      const entries = await executeWithRetries<GrainAddress[] | undefined>(
-        async () =>
-          (await this.sendDirectory(source, {
-            kind: "recover",
-            version: pass.version,
-            requester: this.options.local,
-          })) as GrainAddress[] | undefined,
-        {
-          maxRetries: this.recoveryMaxAttempts,
-          shouldRetry: (_attempt, outcome) => outcome.kind === "error",
-          backoff: fixedBackoff(this.recoveryBackoffMs),
-          timeProvider: this.time,
-        },
-      );
-      // It answered: whatever it was holding that we wanted, we have (or it had
-      // nothing to give). Either way there is nothing to re-arm for.
-      this.recoveryReArms.delete(source.ringKey);
-      if (entries !== undefined && entries.length > 0) {
-        // The predicate doubles as the record of what was taken: it runs
-        // once per entry, synchronously, immediately before `register`, so
-        // `adopted` is exactly the set this partition took custody of —
-        // including an entry whose CAS lost to a concurrent reactivation,
-        // which is resolved here and must not linger at the source to be
-        // re-served later as a stale pointer.
-        const adopted: GrainAddress[] = [];
-        this.partition.acceptHandoff(entries, (e) => {
-          if (this.ring.isEmpty || !this.ownsNow(e.grainId)) return false;
-          adopted.push(e);
-          return true;
-        });
-        // ACK-delete: tell the source it can drop exactly what we adopted.
-        // Best-effort — a lost ACK just means the entries expire there instead.
-        if (adopted.length > 0) {
-          this.recoveryAdopted += adopted.length;
-          void this.sendDirectory(source, {
-            kind: "recoverAck",
-            addrs: adopted,
-            version: pass.version,
-          }).catch(() => undefined);
-        }
-      }
+      return (await this.sendDirectory(member, {
+        kind,
+        version: request.version,
+        ranges: encodeRanges(request.ranges),
+      })) as GrainAddress[];
     } catch (err) {
-      this.onRecoveryExhausted(source, pass, err);
+      if (isNothingListening(err)) return [];
+      // A pooled connection whose far end is gone can fail every send without ever reporting
+      // itself closed; drop it, so the member is dialled afresh when it is asked again.
+      if (err instanceof RejectionError && err.kind === "unknownTarget") {
+        void this.connections.drop(member);
+      }
+      throw err;
     }
   }
 
   /**
-   * A source's retry budget ran out. Its ranges degrade to lazy reactivation for
-   * now, which must be visible — the alternative is a cluster that silently
-   * rebuilds grains it could have kept, with nothing to point at — and must not be
-   * permanent: the peer may simply have been slow to accept connections (the case
-   * `start()` warns about), so the pull is re-armed.
+   * The directory entries this silo's activations in `ranges` stand for: every activation that
+   * has registered (it holds the address its registration returned) and is not deactivating or
+   * finished. Stateless workers and local system activations never register, so never appear.
    */
-  private onRecoveryExhausted(source: SiloAddress, pass: RecoveryPass, err: unknown): void {
-    this.recoveryExhausted++;
-    this.logger.warn(
-      "directory range recovery exhausted; those ranges fall back to lazy activation",
-      {
-        source: source.toString(),
-        attempts: this.recoveryMaxAttempts,
-        version: pass.version,
-        error: err instanceof Error ? err.message : String(err),
-      },
-    );
-    this.scheduleRecoveryReArm(source, pass.previousOwner);
-  }
-
-  /**
-   * Re-arm an exhausted source's pull on a backoff: a peer that is merely slow to
-   * accept connections at join time must not cost this silo its ranges for the
-   * rest of the process's life. The delay doubles per attempt (from `retryMs`,
-   * capped at the retention window) and is jittered, so a cluster whose peers all
-   * failed at once does not re-arm them in lockstep. Re-arms stop once the source
-   * has left the view or the retention window has passed: past that the source has
-   * pruned what it was holding, so there is nothing left to collect.
-   */
-  private scheduleRecoveryReArm(source: SiloAddress, previousOwner: PreviousOwnerLookup): void {
-    const reArm: RecoveryReArm = this.recoveryReArms.get(source.ringKey) ?? {
-      source,
-      previousOwner,
-      attempts: 0,
-      since: this.time.now(),
-      timer: undefined,
-    };
-    reArm.previousOwner = previousOwner;
-    reArm.attempts++;
-    if (reArm.timer !== undefined) this.time.clearTimer(reArm.timer);
-    reArm.timer = this.time.setTimer(() => {
-      reArm.timer = undefined;
-      this.retryRecovery(reArm);
-    }, this.reArmDelay(reArm.attempts));
-    this.recoveryReArms.set(source.ringKey, reArm);
-  }
-
-  /** One re-armed attempt: re-pull the source into the pass in flight, or a fresh one. */
-  private retryRecovery(reArm: RecoveryReArm): void {
-    const stillPresent = memberSilos(this.options.membership.current()).some((s) =>
-      s.equals(reArm.source),
-    );
-    if (!stillPresent || this.time.now() - reArm.since > this.recoveryRetentionMs) {
-      this.recoveryReArms.delete(reArm.source.ringKey);
-      return;
-    }
-    const pass = this.recovery ?? this.openRecovery(this.appliedVersion, reArm.previousOwner);
-    this.addPull(pass, reArm.source);
-  }
-
-  /** Half the delay fixed, half jittered — see `scheduleRecoveryReArm`. */
-  private reArmDelay(attempts: number): number {
-    const capped = Math.min(this.recoveryRetryMs * 2 ** (attempts - 1), this.recoveryRetentionMs);
-    const random = this.options.random ?? Math.random;
-    return Math.round(capped / 2 + random() * (capped / 2));
-  }
-
-  /**
-   * Serve a successor's recovery pull: the entries we handed off whose host is still live, and
-   * this silo's own live activations whose range `requester` owns. The second half is what
-   * recovers a crashed owner's ranges (Orleans rebuilds them from every survivor's activations):
-   * the crash took its entries with it, and the hosts are the only ones who still know where
-   * those grains run. Adoption is a CAS that never overwrites a fresher entry, so reporting an
-   * activation the requester already has costs nothing.
-   */
-  private serveRecover(requester: SiloAddress): GrainAddress[] {
-    const present = new Set(memberSilos(this.options.membership.current()).map((s) => s.ringKey));
-    this.pruneHandoffSnapshot(present);
-    const handedOff = [...this.handoffSnapshot.values()].map((v) => v.entry);
-    if (this.ring.isEmpty) return handedOff;
-    const hosted = this.localDirectoryAddresses().filter((addr) =>
-      this.ring.ownerOf(addr.grainId).equals(requester),
-    );
-    return [...handedOff, ...hosted];
-  }
-
-  /** The directory entries this silo's live, directory-registered activations stand for. */
-  private localDirectoryAddresses(): GrainAddress[] {
+  private registeredActivationsIn(ranges: readonly RingRange[]): GrainAddress[] {
+    if (this.fenced) return [];
     return this.catalog
-      .liveActivations()
-      .filter((a) => !this.catalog.isStatelessWorkerType(a.id.type))
-      .map((a) => ({ grainId: a.id, silo: this.options.local, activationId: a.activationId }));
-  }
-
-  /**
-   * Re-register this silo's own live activations in the ranges it now owns. When an owner
-   * crashes, the silo inheriting a range may itself host grains in it, and no pull reaches
-   * them: recovery only asks the other silos. Synchronous, against the ring just installed, and
-   * the same never-overwrite CAS as any adoption.
-   */
-  private reclaimOwnActivations(): void {
-    if (this.ring.isEmpty) return;
-    const owned = this.localDirectoryAddresses().filter((addr) => this.ownsNow(addr.grainId));
-    if (owned.length === 0) return;
-    this.partition.acceptHandoff(owned, (addr) => this.ownsNow(addr.grainId));
-  }
-
-  /**
-   * A puller's ACK for a completed pull: drop exactly the entries it confirmed
-   * applying — the ones it names, by identity. Deleting by grain id alone is not
-   * enough: the entry under that key can have been replaced since the pull was
-   * served (the range came back and departed again, or a fresh activation
-   * registered and was handed off), and a delayed ACK would then delete the newer
-   * entry, which the puller never saw and which may be the only copy left.
-   */
-  private ackServedRecovery(addrs: readonly GrainAddress[]): void {
-    for (const addr of addrs) {
-      const key = addr.grainId.toString();
-      const held = this.handoffSnapshot.get(key);
-      if (held !== undefined && grainAddressEquals(held.entry, addr)) {
-        this.handoffSnapshot.delete(key);
-      }
-    }
-  }
-
-  /**
-   * Drop handed-off entries that can no longer be usefully served: the host
-   * they point at left the membership view (the grain reactivates elsewhere
-   * regardless), or they've sat unpulled past `recoveryRetentionMs` — a
-   * successor that will never pull them (crashed, or never existed) must not
-   * pin this memory forever.
-   *
-   * `present` is the set of silos still *in* the view, not the `active` ring
-   * set: an entry whose host is draining is still the only pointer to a live
-   * activation, and dropping it here is exactly the loss this retention exists
-   * to prevent.
-   */
-  private pruneHandoffSnapshot(present: ReadonlySet<string>): void {
-    const now = this.time.now();
-    for (const [key, { entry, producedAt }] of this.handoffSnapshot) {
-      if (!present.has(entry.silo.ringKey) || now - producedAt > this.recoveryRetentionMs) {
-        this.handoffSnapshot.delete(key);
-      }
-    }
+      .registeredActivations()
+      .filter((a) => rangesContain(ranges, a.id.getUniformHashCode()))
+      .map((a) => a.registration!);
   }
 
   private placementFor(grainType: GrainType): PlacementStrategy {
@@ -1872,9 +1795,9 @@ export class ClusterNode {
    * peer which has never pushed one still reports zero activations — the
    * pre-existing "unknown load" default, not a claim that it is idle. Peers
    * push it every `loadPublishIntervalMs` (`scheduleLoadPublish`), and the
-   * load-shedding test hooks force an immediate push. `resourceStats` stays
-   * local-only: it carries nothing the activation count does not already
-   * (there is no CPU or memory signal in the snapshot yet).
+   * load-shedding test hooks force an immediate push. `resourceStats` adds the
+   * snapshot's CPU and memory readings (live for the local silo) for
+   * `ResourceOptimizedPlacement`; a peer that has pushed nothing has none.
    */
   private placementContext(): Omit<PlacementContext, "localSilo"> {
     const snapshot = this.options.membership.current();
@@ -1887,8 +1810,13 @@ export class ClusterNode {
           ? this.catalog.count()
           : (this.remoteLoadStats.get(silo.ringKey)?.activationCount ?? 0),
       siloMetadata: (silo) => (isLocal(silo) ? localMeta : byKey.get(silo.ringKey)?.metadata),
-      resourceStats: (silo) =>
-        isLocal(silo) ? { activationCount: this.catalog.count() } : undefined,
+      resourceStats: (silo) => {
+        if (!isLocal(silo)) {
+          const pushed = this.remoteLoadStats.get(silo.ringKey);
+          return pushed === undefined ? undefined : resourceStatsOf(pushed);
+        }
+        return resourceStatsOf(this.loadSnapshot());
+      },
       isOverloaded: (silo) =>
         isLocal(silo)
           ? this.overloadDetector.isOverloaded
@@ -1914,7 +1842,43 @@ export class ClusterNode {
     return this.factory.getReference(iface, id.grainId);
   }
 
+  /** The dispatcher grain references call through, for `ClusterNodeOptions.localCallSemantics`. */
+  private localCallDispatcher(semantics: LocalCallSemantics): Dispatcher {
+    if (semantics === "reference") return this.dispatcher;
+    // The callee's reply envelope, read back the way the caller reads a remote reply.
+    const error = (thrown: unknown): unknown => {
+      const { kind, body } = this.serializeError(thrown);
+      try {
+        return this.interpretResponse({ responseKind: kind, body } as Message);
+      } catch (rebuilt) {
+        return rebuilt;
+      }
+    };
+    if (semantics === "copy") {
+      const ctx = { resolveGrainReference: (id: GrainReferenceIdentity) => this.rehydrate(id) };
+      return new LocalCallSemanticsDispatcher(this.dispatcher, {
+        value: (value) => copyValue(value, ctx),
+        error,
+      });
+    }
+    return new LocalCallSemanticsDispatcher(this.dispatcher, {
+      value: (value) => this.serializer.deserialize(this.serializer.serialize(value)),
+      error,
+    });
+  }
+
+  /**
+   * Whether `type` is served by the local system-activation path (see
+   * `DistributedDispatcherDeps.isLocalSystemType`): the type currently registered for
+   * `ISiloProbe`, so an override registered after the built-in one is served the same way.
+   */
+  private isLocalSystemType(type: GrainType): boolean {
+    return this.interfaceToGrainType.get(ISiloProbe.id) === type;
+  }
+
   private onDeactivated(activation: ActivationData): void {
+    // A local system activation was never registered: there is nothing to unregister.
+    if (this.isLocalSystemType(activation.id.type)) return;
     void this.directory
       .unregister({
         grainId: activation.id,
@@ -1935,43 +1899,68 @@ export class ClusterNode {
    */
   private async migrateActivation(activation: ActivationData): Promise<boolean> {
     try {
-      // Mirrors `DistributedDispatcher.placeAndInvoke`: the whole target
-      // decision (filtering + strategy/directed choice) runs inside a "place
-      // grain" span (Orleans `PlaceGrainAsync`, invoked from the migration
-      // path as well as fresh activation), with one `FilterPlacementCandidates`
-      // child span per stacked filter.
-      return await withPlaceGrainSpan(async () => {
-        const context: PlacementContext = {
-          localSilo: this.options.local,
-          activationCount: (silo) => (silo.equals(this.options.local) ? this.catalog.count() : 0),
-          random: this.options.random ?? Math.random,
-        };
-        let candidates: readonly SiloAddress[] = activeSilos(this.options.membership.current());
-        for (const filter of this.filtersFor(activation.id.type)) {
-          candidates = withFilterPlacementCandidatesSpan(
-            { filterType: filter.constructor.name },
-            () => filter.filter(activation.id.type, candidates, context),
-          );
-        }
-        // An explicit `migrationTarget` (set via `migrateOnIdle(target)`) wins;
-        // otherwise fall back to the caller's ambient placement hint captured
-        // at `requestMigration` time, resolved against the live candidates now.
-        const directed =
-          activation.migrationTarget ??
-          resolvePlacementHintValue(activation.migrationHint, candidates);
-        const target = chooseMigrationTarget(
-          activation.id.type,
-          directed,
-          candidates,
-          this.placementFor(activation.id.type),
-          context,
-        );
-        if (target === undefined) return false;
-        return this.migrateActivationTo(activation, target);
-      });
+      // An explicit `migrationTarget` (set via `migrateOnIdle(target)`) wins;
+      // otherwise fall back to the caller's ambient placement hint captured
+      // at `requestMigration` time, resolved against the live candidates now.
+      const target = await this.selectMigrationTarget(activation.id, (candidates) =>
+        activation.migrationTarget !== undefined
+          ? candidates.find((c) => c.equals(activation.migrationTarget!))
+          : resolvePlacementHintValue(activation.migrationHint, candidates),
+      );
+      if (target === undefined) return false;
+      return await this.migrateActivationTo(activation, target);
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Choose where a migrating activation goes through the same pipeline a new activation is
+   * placed by (`selectPlacementTarget`, Orleans `PlacementService`): the same context, filters,
+   * version filter and hint handling, with this silo excluded. A `hint` (the mover's chosen
+   * target) is honoured only if it survives the filters; otherwise the grain's strategy chooses.
+   * `undefined` means nowhere to go.
+   */
+  private selectMigrationTarget(
+    grainId: GrainId,
+    hint: (candidates: readonly SiloAddress[]) => SiloAddress | undefined,
+  ): Promise<SiloAddress | undefined> {
+    const grainType = grainId.type;
+    return withPlaceGrainSpan(() =>
+      selectPlacementTarget({
+        grainType,
+        candidates: ringSilos(this.options.membership.current()),
+        exclude: [this.options.local],
+        filters: this.filtersFor(grainType),
+        strategy: this.placementFor(grainType),
+        context: { localSilo: this.options.local, ...this.placementContext(), grainId },
+        versionFilter: (candidates) => this.migrationVersionFilter(grainType, candidates),
+        hint,
+      }),
+    );
+  }
+
+  /**
+   * The version-aware pre-filter for a migration, which has no request to read an interface
+   * from: narrow by each interface of the grain's type in turn, keeping the previous set when an
+   * interface leaves none (best-effort, as for a call).
+   */
+  private async migrationVersionFilter(
+    grainType: GrainType,
+    candidates: readonly SiloAddress[],
+  ): Promise<readonly SiloAddress[]> {
+    if (!this.versioningActive()) return candidates;
+    let narrowed = candidates;
+    for (const [interfaceId, v] of this.localVersions) {
+      if (v.grainType !== grainType) continue;
+      const compatible = await filterByVersion(interfaceId, v.version, narrowed, {
+        director: this.director,
+        selector: this.selector,
+        getManifest: (silo) => this.getManifest(silo),
+      });
+      if (compatible.length > 0) narrowed = compatible;
+    }
+    return narrowed;
   }
 
   /**
@@ -2023,12 +2012,13 @@ export class ClusterNode {
       method: "",
       body,
     };
-    const pending = this.sendAndAwait(conn, message, target.toString());
+    const pending = this.sendAndAwait(conn, message);
     return this.interpretResponse(await pending);
   }
 
   /**
-   * Register the call's correlation entry, put the request on the wire, and hand
+   * Register the call's correlation entry, bound to the connection it is sent
+   * on, put the request on the wire, and hand
    * back the promise its reply will complete — the one shape every awaitable send
    * in this node takes, so no site can arm an entry a failed send would strand.
    *
@@ -2038,12 +2028,17 @@ export class ClusterNode {
    * entry is released here, failing the call with the send's own error, rather
    * than left in the table to fire its deadline on nobody's call.
    */
-  private sendAndAwait(conn: Connection, message: Message, peer?: string): Promise<Message> {
-    const pending = this.correlation.register(message.correlationId, this.callTimeoutMs, peer);
+  private sendAndAwait(conn: Connection, message: Message): Promise<Message> {
+    // The call's identity: its id, this process's epoch (the reply carries it
+    // back) and the connection it goes out on (only a reply arriving there
+    // completes it, and losing that connection fails it).
+    message.correlationEpoch = this.correlation.epoch;
+    const pending = this.correlation.register(message.correlationId, this.callTimeoutMs, conn);
     try {
       conn.send(message);
     } catch (err) {
-      this.correlation.fail(message.correlationId, err);
+      // The request never left, so it cannot have run.
+      this.correlation.fail(message.correlationId, neverLeft(err));
       throw err;
     }
     return pending;
@@ -2083,14 +2078,14 @@ export class ClusterNode {
           ? await scheduler.receiveForwardedJob(job)
           : false;
       await this.reply(
-        replyTo,
+        message,
         responseTo(message, "success", this.serializer.serialize(accepted), this.options.local),
       );
     } catch (err) {
       const body = this.serializer.serialize({
         message: err instanceof Error ? err.message : String(err),
       });
-      await this.reply(replyTo, responseTo(message, "error", body, this.options.local));
+      await this.reply(message, responseTo(message, "error", body, this.options.local));
     }
   }
 
@@ -2101,19 +2096,23 @@ export class ClusterNode {
       const payload = this.serializer.deserialize<MigrationPayload>(message.body);
       const accepted = await this.acceptMigration(payload);
       await this.reply(
-        replyTo,
+        message,
         responseTo(message, "success", this.serializer.serialize(accepted), this.options.local),
       );
     } catch (err) {
       const body = this.serializer.serialize({
         message: err instanceof Error ? err.message : String(err),
       });
-      await this.reply(replyTo, responseTo(message, "error", body, this.options.local));
+      await this.reply(message, responseTo(message, "error", body, this.options.local));
     }
   }
 
-  /** Take over a migrating activation here, rehydrating its state and claiming the directory entry. */
+  /**
+   * Take over a migrating activation here, rehydrating its state and claiming the directory
+   * entry. Declined by a silo outside its ring, which creates no activation (`mayActivate`).
+   */
   private async acceptMigration(payload: MigrationPayload): Promise<boolean> {
+    if (!this.mayActivate()) return false;
     const activation = await this.catalog.activateMigrated(
       payload.grainId,
       newActivationId(),
@@ -2125,13 +2124,29 @@ export class ClusterNode {
       silo: this.options.local,
       activationId: activation.activationId,
     };
-    const winner = await this.directory.register(newAddr, payload.sourceAddr);
-    this.cache.put(winner);
+    let winner = await this.directory.register(newAddr, payload.sourceAddr);
+    // The recovery-version rule, as for a claimed activation (see
+    // `DistributedDispatcherDeps.recoveryVersion`): a win stamped below this silo's recovery
+    // version is confirmed again before the activation holds it, and from the moment it does,
+    // with no await in between, a recovery answered here reports it.
+    let verified = -1;
+    while (grainAddressEquals(winner, newAddr)) {
+      const recoveryVersion = this.partition.recoveryVersion;
+      if (recoveryVersion <= verified || recoveryVersion <= (winner.version ?? -1)) break;
+      verified = recoveryVersion;
+      winner = await this.directory.register(newAddr, winner);
+    }
+    if (grainAddressEquals(winner, newAddr)) activation.registration = winner;
     if (!grainAddressEquals(winner, newAddr)) {
-      // Another silo moved or activated the grain first: discard our activation.
+      // Another silo moved or activated the grain first: discard our activation
+      // through its pipeline (removed, unregistered and disposed once), then
+      // cache the winner — the pipeline's unregister step drops this grain's
+      // cache entry.
       await activation.deactivate({ code: "runtime-requested", description: "migration lost CAS" });
+      this.cache.put(winner);
       return false;
     }
+    this.cache.put(winner);
     return true;
   }
 
@@ -2139,11 +2154,10 @@ export class ClusterNode {
 
   /**
    * Fires when the transport accepts an inbound connection. A plain silo peer
-   * carries no `clientId` in its preamble — ignore it (silo-to-silo traffic
-   * uses `onMessage` directly, not this hook). A client connection is held —
-   * by `clientId` AND by its synthetic identity endpoint, since `reply()`
-   * only has the latter to look up — so this silo can answer it and push to
-   * its client-hosted observers down the SAME socket the client dialled
+   * carries no `clientId` in its preamble — nothing to hold: its requests are
+   * answered down the connection each arrived on (`reply`). A client connection
+   * is held by `clientId`, so this silo can push to its client-hosted
+   * observers down the SAME socket the client dialled
    * (Orleans' duplex gateway model), recorded in the local `ClientDirectory`,
    * and gossiped to every other active silo so the whole cluster learns which
    * gateway the client is on. A reconnect (the client's socket to this same
@@ -2156,24 +2170,17 @@ export class ClusterNode {
     if (clientId === undefined) return;
     const key = clientId.toString();
     this.clientConnections.set(key, connection);
-    this.clientConnectionsByEndpoint.set(preamble.siloAddress.endpoint, connection);
     this.clientDisconnectedSince.delete(key);
     this.localClientIds.set(key, clientId);
-    this.clientConnectionTags.set(
-      connection,
-      `client-connection:${key}#${(this.nextClientConnectionTag += 1)}`,
-    );
     this.clientDirectory.register(clientId, this.options.local);
     this.broadcastClientGossip({ op: "register", clientId, gateway: this.options.local });
-    connection.onClose?.(() =>
-      this.recordClosedClientConnection(clientId, preamble.siloAddress.endpoint, connection),
-    );
+    connection.onClose?.(() => this.recordClosedClientConnection(clientId, connection));
   }
 
   /**
    * The transport dropped this connection on its own (Orleans
    * `Gateway.RecordClosedConnection`). Fail every call already written to this
-   * socket (tagged by `clientConnectionTags`) and free the local send path, so
+   * socket (each is bound to it in the correlation table) and free the local send path, so
    * a later call fails fast with "client not connected" instead of writing to a
    * dead socket and waiting out the caller's full response timeout. This
    * deliberately differs from Orleans, which queues messages for a
@@ -2185,24 +2192,16 @@ export class ClusterNode {
    * reconnect may already have replaced this entry before the old socket's
    * close callback runs.
    */
-  private recordClosedClientConnection(
-    clientId: GrainId,
-    endpoint: string,
-    connection: Connection,
-  ): void {
+  private recordClosedClientConnection(clientId: GrainId, connection: Connection): void {
     const key = clientId.toString();
     // Calls already written to this socket can never be answered over it:
     // fail them now, whether or not a reconnect has already replaced it.
-    const tag = this.clientConnectionTags.get(connection);
-    if (tag !== undefined) {
-      this.correlation.rejectFor(
-        tag,
-        new RejectionError(`connection to client ${key} was lost`, "unknownTarget"),
-      );
-    }
+    this.correlation.rejectFor(
+      connection,
+      new RejectionError(`connection to client ${key} was lost`, "unknownTarget"),
+    );
     if (this.clientConnections.get(key) !== connection) return;
     this.clientConnections.delete(key);
-    this.clientConnectionsByEndpoint.delete(endpoint);
     this.clientDisconnectedSince.set(key, this.time.now());
   }
 
@@ -2263,7 +2262,7 @@ export class ClusterNode {
 
   /** Fire-and-forget a `system: "client"` gossip message to every other active silo. */
   private broadcastClientGossip(gossip: ClientGossip): void {
-    for (const peer of this.otherActiveSilos()) this.sendClientGossip(peer, gossip);
+    for (const peer of this.otherRingSilos()) this.sendClientGossip(peer, gossip);
   }
 
   /**
@@ -2290,7 +2289,7 @@ export class ClusterNode {
   private scheduleClientDirectoryRefresh(): void {
     this.clientDirectoryRefreshTimer = this.time.setTimer(() => {
       this.scheduleClientDirectoryRefresh();
-      this.republishClientDirectory(this.otherActiveSilos());
+      this.republishClientDirectory(this.otherRingSilos());
     }, this.clientDirectoryRefreshMs);
   }
 
@@ -2314,7 +2313,9 @@ export class ClusterNode {
     const client = clientIdOf(req.target);
     const gateway = this.clientDirectory.lookup(client, this.options.local);
     if (gateway === undefined) {
-      throw new RejectionError(`no gateway for client ${client.toString()}`, "unknownTarget");
+      throw refusedBeforeExecution(
+        new RejectionError(`no gateway for client ${client.toString()}`, "unknownTarget"),
+      );
     }
     if (gateway.equals(this.options.local)) return this.deliverToProxy(req);
     return this.sendRemote(gateway, req);
@@ -2324,34 +2325,19 @@ export class ClusterNode {
   private async deliverToProxy(req: InvocationRequest): Promise<unknown> {
     const conn = this.clientConnections.get(clientIdOf(req.target).toString());
     if (conn === undefined) {
-      throw new RejectionError(
-        `client not connected here: ${clientIdOf(req.target).toString()}`,
-        "unknownTarget",
+      throw refusedBeforeExecution(
+        new RejectionError(
+          `client not connected here: ${clientIdOf(req.target).toString()}`,
+          "unknownTarget",
+        ),
       );
     }
-    const correlationId = nextCorrelationId();
-    const message: Message = {
-      correlationId,
-      direction: req.options.oneWay ? "oneWay" : "request",
-      targetGrain: req.target,
-      sendingSilo: this.options.local,
-      sendingGrain: req.sender,
-      ...(req.callingGrain !== undefined ? { callingGrain: req.callingGrain } : {}),
-      interfaceId: req.interfaceId,
-      ...(req.interfaceVersion !== undefined ? { interfaceVersion: req.interfaceVersion } : {}),
-      method: req.method,
-      ...this.wireExpiry(req),
-      requestContext: {
-        reentrancyId: req.reentrancyId,
-        ...(req.headers !== undefined ? { headers: req.headers } : {}),
-      },
-      body: this.serializer.serialize(req.args),
-    };
+    const message = this.requestEnvelope(req);
     if (req.options.oneWay) {
       conn.send(message);
       return undefined;
     }
-    const pending = this.sendAndAwait(conn, message, this.clientConnectionTags.get(conn));
+    const pending = this.sendAndAwait(conn, message);
     return this.interpretResponse(await pending);
   }
 
@@ -2366,7 +2352,7 @@ export class ClusterNode {
     if (conn === undefined) {
       if (message.direction === "oneWay" || replyTo === undefined) return;
       await this.reply(
-        replyTo,
+        message,
         responseTo(
           message,
           "rejection",
@@ -2389,7 +2375,7 @@ export class ClusterNode {
       return;
     }
     try {
-      const pending = this.sendAndAwait(conn, forward, this.clientConnectionTags.get(conn));
+      const pending = this.sendAndAwait(conn, forward);
       const clientResponse = await pending;
       if (replyTo === undefined) return;
       const relayed = responseTo(
@@ -2398,70 +2384,44 @@ export class ClusterNode {
         clientResponse.body,
         this.options.local,
       );
-      await this.reply(replyTo, relayed);
+      await this.reply(message, relayed);
     } catch (err) {
       if (replyTo === undefined) return;
       const { kind, body } = this.serializeError(err);
-      await this.reply(replyTo, responseTo(message, kind, body, this.options.local));
+      await this.reply(message, responseTo(message, kind, body, this.options.local));
     }
   }
 
   // --- transport ---
 
   /**
-   * The request's ambient deadline and time-to-live as wire fields, both
-   * RELATIVE to this silo's clock (Orleans writes `TimeToLive` as remaining
-   * ms), so the receiver re-bases them on its own clock in `toRequest` and
-   * never compares two silos' wall clocks. The time-to-live is this node's
-   * own call timeout -- the point at which `sendAndAwait` stops waiting --
-   * or whatever is left of one the request already carried from an earlier
-   * hop (a forward), if shorter; a one-way request, which nobody waits for,
-   * gets none (Orleans `Message.IsExpirableMessage`). Issue #90.
+   * The request as a wire envelope (`requestEnvelope`, the one builder every sender uses). Its
+   * deadline and time-to-live are RELATIVE to this silo's clock (Orleans writes `TimeToLive` as
+   * remaining ms), so the receiver re-bases them on its own clock in `toRequest` and never
+   * compares two silos' wall clocks. The time-to-live is this node's own call timeout -- the
+   * point at which `sendAndAwait` stops waiting -- or whatever is left of one the request
+   * already carried from an earlier hop (a forward), if shorter. Issue #90.
    */
-  private wireExpiry(req: InvocationRequest): Pick<Message, "deadlineInMs" | "timeToLiveMs"> {
+  private requestEnvelope(req: InvocationRequest): Message {
     const now = this.time.now();
     const inherited = req.expiresAt === undefined ? Infinity : req.expiresAt - now;
-    return {
-      ...(req.deadline !== undefined ? { deadlineInMs: req.deadline - now } : {}),
-      ...(req.options.oneWay ? {} : { timeToLiveMs: Math.min(this.callTimeoutMs, inherited) }),
-    };
+    return requestEnvelope(req, {
+      correlationId: nextCorrelationId(),
+      sendingSilo: this.options.local,
+      body: this.serializer.serialize(req.args),
+      now,
+      timeToLiveMs: Math.min(this.callTimeoutMs, inherited),
+    });
   }
 
   private async sendRemote(silo: SiloAddress, req: InvocationRequest): Promise<unknown> {
     const conn = await this.connections.get(silo);
-    const correlationId = nextCorrelationId();
-    const message: Message = {
-      correlationId,
-      direction: req.options.oneWay ? "oneWay" : "request",
-      targetGrain: req.target,
-      sendingSilo: this.options.local,
-      sendingGrain: req.sender,
-      ...(req.callingGrain !== undefined ? { callingGrain: req.callingGrain } : {}),
-      interfaceId: req.interfaceId,
-      ...(req.interfaceVersion !== undefined ? { interfaceVersion: req.interfaceVersion } : {}),
-      method: req.method,
-      ...this.wireExpiry(req),
-      ...(req.forwardCount !== undefined ? { forwardCount: req.forwardCount } : {}),
-      requestContext: {
-        reentrancyId: req.reentrancyId,
-        ...(req.transaction !== undefined
-          ? {
-              transaction: {
-                id: req.transaction.id,
-                timeStamp: req.transaction.timeStamp,
-                readOnly: req.transaction.readOnly,
-              },
-            }
-          : {}),
-        ...(req.headers !== undefined ? { headers: req.headers } : {}),
-      },
-      body: this.serializer.serialize(req.args),
-    };
+    const message = this.requestEnvelope(req);
     if (req.options.oneWay) {
       conn.send(message);
       return undefined;
     }
-    const pending = this.sendAndAwait(conn, message, silo.toString());
+    const pending = this.sendAndAwait(conn, message);
     const response = await pending;
     // The callee had to forward this call on to its own CAS winner: `silo` is
     // a stale address for `req.target`, so evict it here rather than routing
@@ -2504,15 +2464,19 @@ export class ClusterNode {
     if (message.system !== undefined) return false;
     const from = message.sendingSilo;
     if (from === undefined) return false;
-    return !activeSilos(this.options.membership.current()).some((s) => s.equals(from));
+    return !memberSilos(this.options.membership.current()).some((s) => s.equals(from));
   }
 
   private interpretResponse(response: Message): unknown {
     if (response.responseKind === "success") return this.serializer.deserialize(response.body);
     if (response.responseKind === "rejection") {
+      // Only a refusal before execution travels as a rejection (see `serializeError`); the
+      // error rebuilt from one carries that fact, which is what decides a resend (`mayResend`).
       const payload = this.serializer.deserialize<RejectionPayload>(response.body);
-      if (payload.kind === "overloaded") throw new GatewayTooBusyException(payload.message);
-      throw new RejectionError(payload.message, payload.kind);
+      if (payload.kind === "overloaded") {
+        throw refusedBeforeExecution(new GatewayTooBusyException(payload.message));
+      }
+      throw refusedBeforeExecution(new RejectionError(payload.message, payload.kind));
     }
     const payload = this.serializer.deserialize<{
       message: string;
@@ -2538,72 +2502,98 @@ export class ClusterNode {
     throw new GrainCallError(payload.message);
   }
 
-  private onMessage(message: Message): void {
+  /**
+   * Every inbound message, with the connection it arrived on. A response
+   * completes only the call that went out on that connection (see
+   * `CorrelationTable.complete`); a request remembers the connection, which is
+   * where `reply` answers it.
+   */
+  private onMessage(message: Message, connection: Connection | undefined): void {
     if (message.direction === "response") {
-      this.correlation.complete(message);
+      this.correlation.complete(message, connection);
       return;
     }
-    if (message.system === "directory") {
-      void this.handleDirectoryRequest(message);
+    if (connection !== undefined) this.arrivedOn.set(message, connection);
+    if (this.fenced) {
+      // Every request, grain call or system message alike, is refused before it runs.
+      if (message.direction === "request") {
+        const { kind, body } = this.serializeError(this.fencedRefusal());
+        void this.reply(message, responseTo(message, kind, body, this.options.local));
+      }
       return;
     }
-    if (message.system === "migration") {
-      void this.handleMigration(message);
-      return;
+    this.runInbound(message, this.inboundHandlerFor(message));
+  }
+
+  /** The handler an inbound request or one-way message is dispatched to. */
+  private inboundHandlerFor(message: Message): () => void | Promise<void> {
+    switch (message.system) {
+      case "directory":
+        return () => this.handleDirectoryRequest(message);
+      case "migration":
+        return () => this.handleMigration(message);
+      case "durablejob":
+        return () => this.handleDurableJobForward(message);
+      case "manifest":
+        return () => this.handleManifestRequest(message);
+      case "load":
+        return () => this.handleLoadRequest(message);
+      case "loadstats":
+        return () => this.handleLoadStatsRequest(message);
+      case "stats":
+        return () => this.handleStatsRequest(message);
+      case "detailedstats":
+        return () => this.handleDetailedStatsRequest(message);
+      case "actcount":
+        return () => this.handleActivationCountRequest(message);
+      case "forcecollect":
+        return () => this.handleForceCollectRequest(message);
+      case "siloping":
+        return () => this.handleSiloPingRequest(message);
+      case "provctl":
+        return () => this.handleProviderControlRequest(message);
+      case "rebalance":
+        return () => this.handleRebalanceRequest(message);
+      case "repartition":
+        return () => this.handleRepartitionRequest(message);
+      case "client":
+        return () => this.handleClientGossip(message);
+      default:
+        return () => this.receiveRequest(message);
     }
-    if (message.system === "durablejob") {
-      void this.handleDurableJobForward(message);
-      return;
+  }
+
+  /**
+   * The ONE failure policy for inbound dispatch: a handler that throws or
+   * rejects is never a process fault. The failure is logged and counted and,
+   * when a peer silo is waiting on the request, it is answered with an error
+   * response so its pending call fails now instead of at its deadline. (Orleans
+   * does the same in `SystemTarget` dispatch: a failed request becomes an error
+   * response to the caller, never an unobserved exception.)
+   */
+  private runInbound(message: Message, handler: () => void | Promise<void>): void {
+    const failed = (err: unknown) => {
+      const system = message.system ?? "grain";
+      recordHandlerFailure({ "thresh.message.system": system });
+      this.logger.error(`inbound ${system} message handler failed`, {
+        system,
+        correlationId: String(message.correlationId),
+        error: String(err),
+      });
+      const replyTo = message.sendingSilo;
+      if (message.direction !== "request" || replyTo === undefined) return;
+      try {
+        const { kind, body } = this.serializeError(err);
+        void this.reply(message, responseTo(message, kind, body, this.options.local));
+      } catch {
+        // The error itself could not be encoded; the caller's deadline is the backstop.
+      }
+    };
+    try {
+      void Promise.resolve(handler()).catch(failed);
+    } catch (err) {
+      failed(err);
     }
-    if (message.system === "manifest") {
-      void this.handleManifestRequest(message);
-      return;
-    }
-    if (message.system === "load") {
-      void this.handleLoadRequest(message);
-      return;
-    }
-    if (message.system === "loadstats") {
-      void this.handleLoadStatsRequest(message);
-      return;
-    }
-    if (message.system === "stats") {
-      void this.handleStatsRequest(message);
-      return;
-    }
-    if (message.system === "detailedstats") {
-      void this.handleDetailedStatsRequest(message);
-      return;
-    }
-    if (message.system === "actcount") {
-      void this.handleActivationCountRequest(message);
-      return;
-    }
-    if (message.system === "forcecollect") {
-      void this.handleForceCollectRequest(message);
-      return;
-    }
-    if (message.system === "siloping") {
-      void this.handleSiloPingRequest(message);
-      return;
-    }
-    if (message.system === "provctl") {
-      void this.handleProviderControlRequest(message);
-      return;
-    }
-    if (message.system === "rebalance") {
-      void this.handleRebalanceRequest(message);
-      return;
-    }
-    if (message.system === "repartition") {
-      void this.handleRepartitionRequest(message);
-      return;
-    }
-    if (message.system === "client") {
-      this.handleClientGossip(message);
-      return;
-    }
-    void this.receiveRequest(message);
   }
 
   private async sendDirectory(owner: SiloAddress, op: DirectoryOp): Promise<unknown> {
@@ -2620,14 +2610,14 @@ export class ClusterNode {
     if (replyTo === undefined) return;
     try {
       const op = this.serializer.deserialize<DirectoryOp>(message.body);
-      const result = await this.applyDirectoryOp(op);
+      const result = await this.applyDirectoryOp(op, replyTo);
       await this.reply(
-        replyTo,
+        message,
         responseTo(message, "success", this.serializer.serialize(result), this.options.local),
       );
     } catch (err) {
       const { kind, body } = this.serializeError(err);
-      await this.reply(replyTo, responseTo(message, kind, body, this.options.local));
+      await this.reply(message, responseTo(message, kind, body, this.options.local));
     }
   }
 
@@ -2647,7 +2637,11 @@ export class ClusterNode {
    * `ClusterNode` and `ClientNode`) prefers it and ignores `aggregateMessages` entirely.
    */
   private serializeError(err: unknown): { kind: ResponseKind; body: Uint8Array } {
-    if (err instanceof RejectionError) {
+    // A rejection says the request was refused before it ran, so only a refusal the runtime
+    // marked at one of its refusal points travels as one (Orleans: only
+    // `MessageCenter.RejectMessage` produces `ResponseTypes.Rejection`). A `RejectionError` a
+    // turn threw is an error like any other and keeps its class and kind through the codec.
+    if (err instanceof RejectionError && didNotExecute(err)) {
       return {
         kind: "rejection",
         body: this.serializer.serialize({ message: err.message, kind: err.kind }),
@@ -2708,7 +2702,7 @@ export class ClusterNode {
     const replyTo = message.sendingSilo;
     if (replyTo === undefined) return;
     await this.reply(
-      replyTo,
+      message,
       responseTo(
         message,
         "success",
@@ -2734,7 +2728,7 @@ export class ClusterNode {
   }
 
   /**
-   * Push this silo's current load snapshot (activation count + overloaded flag)
+   * Push this silo's current load snapshot (activation count, overloaded flag, CPU and memory readings)
    * to every other active silo, as `system: "loadstats"` requests, and wait for
    * all of them to land — Orleans' `DeploymentLoadPublisher.PublishStatistics`.
    * Called periodically by `scheduleLoadPublish` and, in tests, forced
@@ -2746,22 +2740,29 @@ export class ClusterNode {
    * Best-effort: an unreachable peer is skipped rather than failing the call.
    */
   async publishLoadStats(): Promise<void> {
-    const peers = activeSilos(this.options.membership.current()).filter(
+    const peers = ringSilos(this.options.membership.current()).filter(
       (s) => !s.equals(this.options.local),
     );
-    const stats = {
-      activationCount: this.catalog.count(),
-      isOverloaded: this.overloadDetector.isOverloaded,
-    };
+    const stats = this.loadSnapshot();
     await Promise.all(
       peers.map((peer) => this.sendLoadStatsPush(peer, stats).catch(() => undefined)),
     );
   }
 
-  private async sendLoadStatsPush(
-    silo: SiloAddress,
-    stats: { activationCount: number; isOverloaded: boolean },
-  ): Promise<void> {
+  /** This silo's current load snapshot: activation count, overload flag and environment readings. */
+  private loadSnapshot(): LoadSnapshot {
+    const environment = this.environmentStatistics.getEnvironmentStatistics();
+    return {
+      activationCount: this.catalog.count(),
+      isOverloaded: this.overloadDetector.isOverloaded,
+      cpuUsagePercentage: environment.cpuUsagePercentage,
+      memoryUsageBytes: environment.memoryUsageBytes,
+      availableMemoryBytes: environment.availableMemoryBytes,
+      maximumAvailableMemoryBytes: environment.maximumAvailableMemoryBytes,
+    };
+  }
+
+  private async sendLoadStatsPush(silo: SiloAddress, stats: LoadSnapshot): Promise<void> {
     await this.sendSystemMessage(
       silo,
       "loadstats",
@@ -2773,12 +2774,10 @@ export class ClusterNode {
   private async handleLoadStatsRequest(message: Message): Promise<void> {
     const replyTo = message.sendingSilo;
     if (replyTo === undefined) return;
-    const stats = this.serializer.deserialize<{ activationCount: number; isOverloaded: boolean }>(
-      message.body,
-    );
+    const stats = this.serializer.deserialize<LoadSnapshot>(message.body);
     this.remoteLoadStats.set(replyTo.ringKey, stats);
     await this.reply(
-      replyTo,
+      message,
       responseTo(message, "success", this.serializer.serialize(null), this.options.local),
     );
   }
@@ -2799,7 +2798,7 @@ export class ClusterNode {
     const replyTo = message.sendingSilo;
     if (replyTo === undefined) return;
     await this.reply(
-      replyTo,
+      message,
       responseTo(
         message,
         "success",
@@ -2818,7 +2817,7 @@ export class ClusterNode {
     counts: Map<string, number>;
     silos: Map<string, SiloAddress>;
   }> {
-    const active = activeSilos(this.options.membership.current());
+    const active = ringSilos(this.options.membership.current());
     const counts = new Map<string, number>();
     const silos = new Map<string, SiloAddress>();
     await Promise.all(
@@ -2848,7 +2847,7 @@ export class ClusterNode {
     const replyTo = message.sendingSilo;
     if (replyTo === undefined) return;
     await this.reply(
-      replyTo,
+      message,
       responseTo(
         message,
         "success",
@@ -2865,7 +2864,7 @@ export class ClusterNode {
    * query (an unreachable peer contributes nothing, same as `gatherClusterLoad`).
    */
   async gatherClusterGrainStats(): Promise<SimpleGrainStatistic[]> {
-    const active = activeSilos(this.options.membership.current());
+    const active = ringSilos(this.options.membership.current());
     const results: SimpleGrainStatistic[] = [];
     await Promise.all(
       active.map(async (silo) => {
@@ -2899,7 +2898,7 @@ export class ClusterNode {
     const types = this.serializer.deserialize<string[] | null>(message.body);
     const ids = this.localDetailedGrainIds(types ?? undefined);
     await this.reply(
-      replyTo,
+      message,
       responseTo(message, "success", this.serializer.serialize(ids), this.options.local),
     );
   }
@@ -2919,7 +2918,7 @@ export class ClusterNode {
    * count.
    */
   async gatherClusterDetailedGrainStatistics(types?: string[]): Promise<DetailedGrainStatistic[]> {
-    const active = activeSilos(this.options.membership.current());
+    const active = ringSilos(this.options.membership.current());
     const results: DetailedGrainStatistic[] = [];
     await Promise.all(
       active.map(async (silo) => {
@@ -2949,7 +2948,7 @@ export class ClusterNode {
     if (replyTo === undefined) return;
     const id = this.serializer.deserialize<GrainId>(message.body);
     await this.reply(
-      replyTo,
+      message,
       responseTo(
         message,
         "success",
@@ -2966,7 +2965,7 @@ export class ClusterNode {
    * silo's local count instead of resolving a single address.
    */
   async gatherGrainActivationCount(id: GrainId): Promise<number> {
-    const active = activeSilos(this.options.membership.current());
+    const active = ringSilos(this.options.membership.current());
     const counts = await Promise.all(
       active.map((silo) =>
         silo.equals(this.options.local)
@@ -2993,7 +2992,7 @@ export class ClusterNode {
     const ageLimitMs = this.serializer.deserialize<number>(message.body);
     await this.catalog.collectIdle(ageLimitMs);
     await this.reply(
-      replyTo,
+      message,
       responseTo(message, "success", this.serializer.serialize(null), this.options.local),
     );
   }
@@ -3004,7 +3003,7 @@ export class ClusterNode {
    * (Orleans `IManagementGrain.ForceActivationCollection(TimeSpan)`).
    */
   async forceActivationCollectionCluster(ageLimitMs: number): Promise<void> {
-    const active = activeSilos(this.options.membership.current());
+    const active = ringSilos(this.options.membership.current());
     await Promise.all(
       active.map((silo) =>
         silo.equals(this.options.local)
@@ -3040,12 +3039,12 @@ export class ClusterNode {
     if (replyTo === undefined) return;
     try {
       await this.reply(
-        replyTo,
+        message,
         responseTo(message, "success", this.serializer.serialize(null), this.options.local),
       );
     } catch (err) {
       const { kind, body } = this.serializeError(err);
-      await this.reply(replyTo, responseTo(message, kind, body, this.options.local));
+      await this.reply(message, responseTo(message, kind, body, this.options.local));
     }
   }
 
@@ -3094,12 +3093,12 @@ export class ClusterNode {
       }>(message.body);
       const result = await this.executeProviderCommand(providerName, command, arg);
       await this.reply(
-        replyTo,
+        message,
         responseTo(message, "success", this.serializer.serialize(result), this.options.local),
       );
     } catch (err) {
       const { kind, body } = this.serializeError(err);
-      await this.reply(replyTo, responseTo(message, kind, body, this.options.local));
+      await this.reply(message, responseTo(message, kind, body, this.options.local));
     }
   }
 
@@ -3113,7 +3112,7 @@ export class ClusterNode {
     command: number,
     arg?: unknown,
   ): Promise<unknown[]> {
-    const active = activeSilos(this.options.membership.current());
+    const active = ringSilos(this.options.membership.current());
     return Promise.all(
       active.map((silo) =>
         silo.equals(this.options.local)
@@ -3175,7 +3174,7 @@ export class ClusterNode {
     );
     const moved = await this.migrateRandomActivations(target, count);
     await this.reply(
-      replyTo,
+      message,
       responseTo(message, "success", this.serializer.serialize(moved), this.options.local),
     );
   }
@@ -3212,8 +3211,7 @@ export class ClusterNode {
 
   /** Whether `grainId`'s type may be moved by `kind` (Orleans `GrainMigratabilityChecker`). */
   private isMigratableBy(grainId: GrainId, kind: "rebalancer" | "repartitioner"): boolean {
-    const immovable = this.grainTypes.get(grainId.type)?.metadata.options.immovable;
-    return immovable !== "any" && immovable !== kind;
+    return isMigratable(grainId.type, kind, this.grainTypes.get(grainId.type)?.metadata);
   }
 
   /**
@@ -3235,26 +3233,36 @@ export class ClusterNode {
   }
 
   /**
-   * Hand `activation` to `target` and deactivate it here whether or not the
-   * target accepted. `migrateActivationTo` dehydrates before attempting the
-   * send, which poisons every later call on this activation with "activation
-   * migrated" (`ActivationData.dehydrate`) whatever the outcome; Orleans'
-   * `StartMigrationAsync` returning false likewise still continues into
-   * deactivation (`ActivationData.FinishDeactivating`) rather than leaving the
-   * activation live but rejecting forever (issue #93). Returns whether the
-   * target accepted.
+   * Migrate `activation` to `target` through its deactivation pipeline — the
+   * same one idle migration runs, in Orleans' `FinishDeactivating` order:
+   * timers disposed, `onDeactivate`, then the dehydrate and hand-off
+   * (`migrateActivationTo`, with `target` as Orleans' `ForwardingAddress`),
+   * then finalization. A hand-off the target refuses still continues into
+   * deactivation rather than leaving the activation live but rejecting
+   * forever (issue #93). Returns whether the target accepted.
    */
   private async migrateThenDeactivate(
     activation: ActivationData,
     target: SiloAddress,
     description: string,
   ): Promise<boolean> {
-    const accepted = await this.migrateActivationTo(activation, target);
-    await activation.deactivate({
-      code: "migrating",
-      description: accepted ? description : `failed migration (${description})`,
-    });
-    return accepted;
+    // `target` is the mover's choice, passed to the shared pipeline as a hint (Orleans
+    // `Migrate(..., hint)`): the filters can still refuse it, and then placement chooses. With
+    // nowhere to go the activation is left running, untouched.
+    let chosen: SiloAddress | undefined;
+    try {
+      chosen = await this.selectMigrationTarget(activation.id, (candidates) =>
+        candidates.find((c) => c.equals(target)),
+      );
+    } catch {
+      return false;
+    }
+    if (chosen === undefined) return false;
+    const { migrated } = await activation.deactivate(
+      { code: "migrating", description },
+      { migrateTo: chosen },
+    );
+    return migrated;
   }
 
   /** Send an `AcceptExchangeRequest` to a peer's repartitioner, as a `system: "repartition"` request. */
@@ -3280,12 +3288,12 @@ export class ClusterNode {
           ? { type: "exchangedRecently", acceptedGrainIds: [], givenGrainIds: [] }
           : await this.repartitioner.acceptExchangeRequest(request);
       await this.reply(
-        replyTo,
+        message,
         responseTo(message, "success", this.serializer.serialize(response), this.options.local),
       );
     } catch (err) {
       const { kind, body } = this.serializeError(err);
-      await this.reply(replyTo, responseTo(message, kind, body, this.options.local));
+      await this.reply(message, responseTo(message, kind, body, this.options.local));
     }
   }
 
@@ -3314,60 +3322,37 @@ export class ClusterNode {
     await this.repartitioner?.flushBuffers();
   }
 
-  private async applyDirectoryOp(
-    op: DirectoryOp,
-  ): Promise<GrainAddress | GrainAddress[] | undefined> {
-    // Linearise against our view: catch up if the caller is ahead of us; redirect
-    // the caller if it is behind and we no longer own the target (a `staleView`
-    // rejection it re-resolves), so we never serve under two ring topologies.
-    if (op.version > this.appliedVersion) await this.awaitView(op.version);
-    if (op.kind !== "recover" && op.kind !== "recoverAck" && op.version < this.appliedVersion) {
-      this.requireOwned(op.kind === "lookup" ? op.grainId : op.addr.grainId);
-    }
+  /** Hand a directory op from `from` to this silo's partition; the reply carries its answer. */
+  private async applyDirectoryOp(op: DirectoryOp, from: SiloAddress): Promise<unknown> {
     switch (op.kind) {
       case "lookup":
-        await this.awaitRecovered(op.grainId);
-        // The version check above is not enough on its own: it is decided before
-        // this wait, and a view change landing IN the wait moves the range out
-        // from under a caller whose version never looked stale. Re-check against
-        // the ring in force now, and reject so the caller re-resolves — rather
-        // than serving, or worse registering, an entry in a partition the ring no
-        // longer assigns (which nothing re-drains until the next view change).
-        this.requireOwnedAfterWait(op.grainId, op.version);
-        return this.partition.lookup(op.grainId);
+        return this.partition.lookup(op.version, op.grainId);
       case "register":
-        await this.awaitRecovered(op.addr.grainId);
-        this.requireOwnedAfterWait(op.addr.grainId, op.version);
-        return this.partition.register(op.addr, op.previous);
+        return this.partition.register(op.version, op.addr, op.previous);
       case "unregister":
-        await this.awaitRecovered(op.addr.grainId);
-        this.requireOwnedAfterWait(op.addr.grainId, op.version);
-        this.partition.unregister(op.addr);
-        return undefined;
+        return this.partition.unregister(op.version, op.addr);
+      case "snapshot":
+        return (
+          (await this.partition.serveSnapshot({
+            previousVersion: op.previousVersion,
+            version: op.version,
+            ranges: decodeRanges(op.ranges),
+          })) ?? null
+        );
+      case "snapshotAck":
+        this.partition.acknowledgeSnapshot(from, op);
+        return null;
       case "recover":
-        return this.serveRecover(op.requester);
-      case "recoverAck":
-        this.ackServedRecovery(op.addrs);
-        return undefined;
+        return this.partition.answerRecovery(from, {
+          version: op.version,
+          ranges: decodeRanges(op.ranges),
+        });
+      case "registered":
+        return this.partition.answerRegistered({
+          version: op.version,
+          ranges: decodeRanges(op.ranges),
+        });
     }
-  }
-
-  /** Reject a directory op whose grain this silo does not own (an empty ring owns nothing). */
-  private requireOwned(grainId: GrainId): void {
-    if (this.ring.isEmpty || !this.ownsNow(grainId)) {
-      throw new RejectionError("stale directory view", "staleView");
-    }
-  }
-
-  /**
-   * The same check, made after the op has waited: ownership is only meaningful
-   * against the view in force when the partition is touched. Skipped when our view
-   * has not moved since the check above decided it (the common case, and the only
-   * case where the earlier decision can still be trusted).
-   */
-  private requireOwnedAfterWait(grainId: GrainId, opVersion: number): void {
-    if (opVersion >= this.appliedVersion) return;
-    this.requireOwned(grainId);
   }
 
   private async receiveRequest(message: Message): Promise<void> {
@@ -3400,7 +3385,7 @@ export class ClusterNode {
       if (message.direction === "oneWay" || replyTo === undefined) return;
       const rejection: RejectionPayload = { message: "Gateway too busy", kind: "overloaded" };
       await this.reply(
-        replyTo,
+        message,
         responseTo(message, "rejection", this.serializer.serialize(rejection), this.options.local),
       );
       return;
@@ -3465,14 +3450,20 @@ export class ClusterNode {
       );
       if (forwardedTo !== undefined) response.staleCacheEntry = true;
       this.attachParticipants(response, transaction);
-      await this.reply(replyTo, response);
+      await this.reply(message, response);
     } catch (err) {
-      if (message.direction === "oneWay" || replyTo === undefined) return;
+      if (message.direction === "oneWay" || replyTo === undefined) {
+        // No reply channel to carry it back on: report it the way a detached one-way dispatch does.
+        if (message.direction === "oneWay") {
+          logOneWayFailure(this.logger, message.targetGrain.toString(), message.method, err);
+        }
+        return;
+      }
       const { kind, body } = this.serializeError(err);
       const response = responseTo(message, kind, body, this.options.local);
       if (forwardedTo !== undefined) response.staleCacheEntry = true;
       this.attachParticipants(response, transaction);
-      await this.reply(replyTo, response);
+      await this.reply(message, response);
     }
   }
 
@@ -3526,24 +3517,21 @@ export class ClusterNode {
   }
 
   /**
-   * Answer `to`, preferring a held accepted connection over dialling. A
-   * client's address is never dialable (issue #65) so a reply to one always
-   * takes this path, resolved by `clientConnectionsByEndpoint`; a silo peer's
-   * address IS dialable, so a miss here just falls through to the normal
-   * dial-and-pool path unchanged.
+   * Answer `request` down the connection it arrived on — to a silo as to a
+   * client, never down a second connection dialled back to `sendingSilo`
+   * (Orleans answers on the connection a message came in on). A reply that
+   * cannot be sent is logged and counted: the request has already run, and
+   * its caller will see the connection loss or its own timeout, so there is
+   * nothing to retry here, but it is never dropped silently.
    */
-  private async reply(to: SiloAddress, message: Message): Promise<void> {
-    try {
-      const held = this.clientConnectionsByEndpoint.get(to.endpoint);
-      if (held !== undefined) {
-        held.send(message);
-        return;
-      }
-      const conn = await this.connections.get(to);
-      conn.send(message);
-    } catch {
-      // The caller has gone (e.g. drained mid-call); dropping the reply is fine —
-      // it will re-resolve on retry.
-    }
+  private async reply(request: Message, response: Message): Promise<void> {
+    const failed = sendReply(this.arrivedOn.get(request), request, response);
+    if (failed === undefined) return;
+    this.logger.warn("could not send a reply down the connection its request arrived on", {
+      to: request.sendingSilo?.toString() ?? "unknown",
+      system: request.system ?? "grain",
+      correlationId: String(request.correlationId),
+      error: String(failed.failure),
+    });
   }
 }

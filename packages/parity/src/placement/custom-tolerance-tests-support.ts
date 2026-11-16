@@ -14,6 +14,7 @@ export interface IE extends GrainKey<bigint> {
 }
 export const IE = defineGrainInterface<IE>(
   "UnitTests.ActivationRepartitioningTests.CustomToleranceTests.IE",
+  { key: "integer" },
 );
 
 export interface IF extends GrainKey<bigint> {
@@ -22,6 +23,7 @@ export interface IF extends GrainKey<bigint> {
 }
 export const IF = defineGrainInterface<IF>(
   "UnitTests.ActivationRepartitioningTests.CustomToleranceTests.IF",
+  { key: "integer" },
 );
 
 export interface IX extends GrainKey<bigint> {
@@ -30,6 +32,7 @@ export interface IX extends GrainKey<bigint> {
 }
 export const IX = defineGrainInterface<IX>(
   "UnitTests.ActivationRepartitioningTests.CustomToleranceTests.IX",
+  { key: "integer" },
 );
 
 @grain({ name: "UnitTests.ActivationRepartitioningTests.CustomToleranceTests.E" })

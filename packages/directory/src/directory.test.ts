@@ -3,7 +3,6 @@ import { newActivationId } from "@thresh/core/activation-id";
 import type { GrainAddress } from "@thresh/core/grain-address";
 import { GrainId } from "@thresh/core/grain-id";
 import { SiloAddress } from "@thresh/core/silo-address";
-import { LocalDirectoryPartition } from "@thresh/directory/local-directory-partition";
 import { LocationCache } from "@thresh/directory/location-cache";
 
 const siloA = new SiloAddress("silo-A", "ua", "a:1");
@@ -14,162 +13,20 @@ const addr = (key: string, silo: SiloAddress, activationId = newActivationId()):
   activationId,
 });
 
-describe("LocalDirectoryPartition", () => {
-  it("registers a new grain and looks it up", () => {
-    const dir = new LocalDirectoryPartition();
-    const a = addr("x", siloA);
-    expect(dir.register(a)).toBe(a);
-    expect(dir.lookup(a.grainId)).toEqual(a);
-  });
-
-  it("is compare-and-set: a racing second registration returns the first winner", () => {
-    const dir = new LocalDirectoryPartition();
-    const first = addr("x", siloA);
-    const second = addr("x", siloB);
-    expect(dir.register(first)).toBe(first);
-    // Loser observes the winner and must forward to it.
-    expect(dir.register(second)).toBe(first);
-    expect(dir.lookup(first.grainId)).toEqual(first);
-  });
-
-  it("replaces an entry only when the expected previous is supplied", () => {
-    const dir = new LocalDirectoryPartition();
-    const stale = addr("x", siloA);
-    const moved = addr("x", siloB);
-    dir.register(stale);
-    expect(dir.register(moved, stale)).toBe(moved);
-    expect(dir.lookup(moved.grainId)).toEqual(moved);
-  });
-
-  it("ignores a replace whose expected previous does not match", () => {
-    const dir = new LocalDirectoryPartition();
-    const current = addr("x", siloA);
-    const wrongPrevious = addr("x", siloB);
-    const attempt = addr("x", siloB);
-    dir.register(current);
-    expect(dir.register(attempt, wrongPrevious)).toBe(current);
-  });
-
-  it("treats an entry owned by a dead silo as overwritable, without needing the exact previous (Orleans RegisterCore)", () => {
-    const dir = new LocalDirectoryPartition((silo) => !silo.equals(siloA));
-    const dead = addr("x", siloA);
-    const fresh = addr("x", siloB);
-    dir.register(dead);
-    expect(dir.register(fresh)).toBe(fresh);
-    expect(dir.lookup(fresh.grainId)).toEqual(fresh);
-  });
-
-  it("still applies the CAS rule when the existing entry's silo is live", () => {
-    const dir = new LocalDirectoryPartition(() => true);
-    const first = addr("x", siloA);
-    const second = addr("x", siloB);
-    dir.register(first);
-    expect(dir.register(second)).toBe(first);
-  });
-
-  it("unregisters only the matching activation", () => {
-    const dir = new LocalDirectoryPartition();
-    const a = addr("x", siloA);
-    dir.register(a);
-    dir.unregister({ ...a, activationId: "different" });
-    expect(dir.lookup(a.grainId)).toEqual(a);
-    dir.unregister(a);
-    expect(dir.lookup(a.grainId)).toBeUndefined();
-  });
-
-  it("bulk-unregisters every entry pointing at a departed silo", () => {
-    const dir = new LocalDirectoryPartition();
-    dir.register(addr("x", siloA));
-    dir.register(addr("y", siloB));
-    dir.register(addr("z", siloA));
-    dir.unregisterSilo(siloA);
-    expect(dir.size).toBe(1);
-    expect(dir.lookup(new GrainId("Counter", "y"))).toBeDefined();
-  });
-
-  it("drain classifies every entry in one pass, removing drops and handoffs", () => {
-    const dir = new LocalDirectoryPartition();
-    const x = addr("x", siloA);
-    const y = addr("y", siloB);
-    const z = addr("z", siloA);
-    dir.register(x);
-    dir.register(y);
-    dir.register(z);
-
-    // Drop the siloB host, hand off x, keep z.
-    const handed = dir.drain((e) =>
-      e.silo.equals(siloB) ? "drop" : e.grainId.equals(x.grainId) ? "handoff" : "keep",
-    );
-
-    expect(handed).toEqual([x]);
-    expect(dir.size).toBe(1);
-    expect(dir.lookup(z.grainId)).toEqual(z);
-    expect(dir.lookup(x.grainId)).toBeUndefined();
-    expect(dir.lookup(y.grainId)).toBeUndefined();
-  });
-
-  it("acceptHandoff registers entries it still owns", () => {
-    const dir = new LocalDirectoryPartition();
-    const a = addr("x", siloA);
-    dir.acceptHandoff([a], () => true);
-    expect(dir.lookup(a.grainId)).toEqual(a);
-  });
-
-  it("acceptHandoff never overwrites a fresher entry (a concurrent reactivation wins)", () => {
-    const dir = new LocalDirectoryPartition();
-    const fresh = addr("x", siloB);
-    const stale = addr("x", siloA, "stale-activation");
-    dir.register(fresh);
-    dir.acceptHandoff([stale], () => true);
-    expect(dir.lookup(fresh.grainId)).toEqual(fresh);
-  });
-
-  it("acceptHandoff ignores entries whose range has moved away (the versioned guard)", () => {
-    const dir = new LocalDirectoryPartition();
-    const a = addr("x", siloA);
-    dir.acceptHandoff([a], () => false); // no longer owned here
-    expect(dir.lookup(a.grainId)).toBeUndefined();
-    expect(dir.size).toBe(0);
-  });
-
-  it("treats a lookup whose host silo is no longer live as a miss (Orleans IsSiloDead)", () => {
-    // Sociable test: register a grain owned by siloA, then shift the membership
-    // view so siloA is no longer live and assert the partition returns undefined
-    // rather than the stale pointer.
-    const live = new Set<string>([siloA.ringKey, siloB.ringKey]);
-    const dir = new LocalDirectoryPartition((silo) => live.has(silo.ringKey));
-    const a = addr("x", siloA);
-    dir.register(a);
-    expect(dir.lookup(a.grainId)).toEqual(a);
-
-    live.delete(siloA.ringKey); // siloA falls out of membership
-
-    expect(dir.lookup(a.grainId)).toBeUndefined();
-  });
-
-  it("entriesIn returns the live entries matching a predicate", () => {
-    const dir = new LocalDirectoryPartition();
-    const x = addr("x", siloA);
-    const y = addr("y", siloB);
-    dir.register(x);
-    dir.register(y);
-    expect(dir.entriesIn((e) => e.silo.equals(siloA))).toEqual([x]);
-  });
-});
-
 describe("LocationCache", () => {
   it("serves a cached hit without a directory round-trip, and re-resolves after invalidation", () => {
     const cache = new LocationCache();
-    const dir = new LocalDirectoryPartition();
+    // The directory behind the cache, reduced to what this test reads of it.
+    const dir = new Map<string, GrainAddress>();
     const a = addr("x", siloA);
-    dir.register(a);
+    dir.set(a.grainId.toString(), a);
 
     let lookups = 0;
     const resolve = (grainId: GrainId): GrainAddress | undefined => {
       const hit = cache.get(grainId);
       if (hit !== undefined) return hit;
       lookups++;
-      const found = dir.lookup(grainId);
+      const found = dir.get(grainId.toString());
       if (found !== undefined) cache.put(found);
       return found;
     };

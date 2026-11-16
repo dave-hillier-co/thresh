@@ -3,7 +3,6 @@ import { grain, transactionalState } from "@thresh/core/decorators";
 import { Grain } from "@thresh/core/grain";
 import { GrainId } from "@thresh/core/grain-id";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
-import { IManagementGrain } from "@thresh/core/management-grain";
 import type { GrainType } from "@thresh/core/grain-type";
 import type { GrainKey } from "@thresh/core/key-kinds";
 import { SiloAddress } from "@thresh/core/silo-address";
@@ -76,7 +75,7 @@ function buildSilo(storage: MemoryTransactionalStorage, time: FakeTimeProvider) 
 }
 
 describe("transactional keepalive lifecycle on grain deactivation (#23 follow-up)", () => {
-  it("stops the confirmation-worker timer once the activation deactivates", async () => {
+  it("stops the prepared record's ping timer once the activation deactivates", async () => {
     const time = new FakeTimeProvider();
     const storage = new MemoryTransactionalStorage();
     await seedInDoubt(storage, "a");
@@ -89,32 +88,44 @@ describe("transactional keepalive lifecycle on grain deactivation (#23 follow-up
     try {
       // `start()` itself arms a couple of periodic silo-wide timers (e.g. the
       // cross-silo load publisher) that also use a 1s period, so only look for
-      // the confirmation worker's timer among calls made from here on.
+      // the ping timer among calls made from here on.
       const callsBeforeActivation = setTimerSpy.mock.calls.length;
 
-      // Activating resolves the in-doubt record's TM, which is unreachable:
-      // the record stays in-doubt and the confirmation worker is scheduled
-      // against the silo's clock, at the default 1s initial backoff — distinct
-      // from the silo's other periodic timers (collector sweep, membership
-      // heartbeat, ...), which use much longer intervals.
+      // Activating queues the prepared record again and pings its TM, which
+      // is unreachable: the record stays in doubt and the next ping is
+      // scheduled against the silo's clock at Orleans' 60 s
+      // RemoteTransactionPingFrequency.
       await silo.getGrain(Account, "a").ping();
+      for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 0));
 
-      const confirmationCallIndex = setTimerSpy.mock.calls.findIndex(
-        ([, delay], index) => index >= callsBeforeActivation && delay === 1_000,
+      const pingTimerIndex = setTimerSpy.mock.calls.findIndex(
+        ([, delay], index) => index >= callsBeforeActivation && delay === 60_000,
       );
-      expect(confirmationCallIndex).toBeGreaterThanOrEqual(0);
-      const confirmationHandle = setTimerSpy.mock.results[confirmationCallIndex]!.value as unknown;
+      expect(pingTimerIndex).toBeGreaterThanOrEqual(0);
 
-      // Force-deactivate the (single, always-idle) activation — the hosting
-      // wiring under test must stop its facet's confirmation worker here.
-      const management = silo.getGrain(IManagementGrain, 0n);
-      await management.forceActivationCollection({ ms: 0 });
+      // An unresolved prepared record delays deactivation by at most five
+      // seconds (T6, Orleans `ActivationLifetime.OnStopAsync`): shutting the
+      // silo down waits out the bound on the silo's clock, then deactivates
+      // the activation — and the hosting wiring under test must stop its
+      // facet's workers there.
+      let stopped = false;
+      const stopping = silo.stop().then(() => (stopped = true));
+      for (let i = 0; i < 200 && !stopped; i++) {
+        time.advance(100);
+        await new Promise((r) => setTimeout(r, 0));
+      }
+      await stopping;
+      expect(silo.isActive(accountId("a"))).toBe(false);
 
-      // The confirmation worker's own timer handle was cleared: it can never
-      // fire again, however far the clock moves.
-      expect(clearTimerSpy).toHaveBeenCalledWith(confirmationHandle);
+      // The ping timer can never fire again, however far the clock
+      // moves: nothing re-arms a timer from here on.
+      const armedAfterStop = setTimerSpy.mock.calls.length;
+      time.advance(600_000);
+      await new Promise((r) => setTimeout(r, 0));
+      expect(setTimerSpy.mock.calls.length).toBe(armedAfterStop);
+      expect(clearTimerSpy).toHaveBeenCalled();
     } finally {
-      await silo.stop();
+      if (silo.isActive(accountId("a"))) await silo.stop();
     }
   });
 });

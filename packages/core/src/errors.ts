@@ -25,6 +25,20 @@ export class ThreshRuntimeError extends Error {
 }
 
 /**
+ * The common base of the transaction failures — Orleans' `OrleansTransactionException`
+ * (`Orleans.Transactions/OrleansTransactionException.cs`), itself an `OrleansException`, and the
+ * base of `OrleansTransactionAbortedException`, `OrleansTransactionInDoubtException` and
+ * `OrleansTransactionsDisabledException`. Beneath {@link ThreshRuntimeError} for the same reason:
+ * a transliterated `catch (OrleansException)` must see them.
+ */
+export class ThreshTransactionError extends ThreshRuntimeError {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "ThreshTransactionError";
+  }
+}
+
+/**
  * Whether `error` is any Thresh grain-call failure — the one predicate that
  * stands in for a C# `catch (OrleansException)`.
  *
@@ -90,7 +104,13 @@ export class UnavailableExceptionFallbackException extends Error {
       // Never let a carried property overwrite the identity fields above. `cause`/`errors` are
       // deliberately NOT reserved — see the `errors` field doc above.
       if (RESERVED_FALLBACK_KEYS.has(key)) continue;
-      (this as unknown as Record<string, unknown>)[key] = value;
+      // Defined, not assigned: a carried `__proto__` key must stay data and never reach the setter.
+      Object.defineProperty(this, key, {
+        value,
+        writable: true,
+        enumerable: true,
+        configurable: true,
+      });
     }
   }
 }
@@ -188,7 +208,7 @@ export class GrainExtensionNotInstalledException extends ThreshRuntimeError {
  * the stored etag no longer matches the one the grain last read, so another
  * incarnation has written in between.
  */
-export class InconsistentStateError extends Error {
+export class InconsistentStateError extends ThreshRuntimeError {
   /**
    * Whether this error is still in the activation it originated in (Orleans'
    * `InconsistentStateException.IsSourceActivation`). The runtime deactivates
@@ -216,7 +236,7 @@ export class InconsistentStateError extends Error {
  * must configure transactional storage (e.g. `useMemoryTransactionalStorage`)
  * for `[Transaction]` calls to work.
  */
-export class TransactionsDisabledError extends Error {
+export class TransactionsDisabledError extends ThreshTransactionError {
   constructor() {
     super(
       "Orleans transactions have not been enabled. Transactions are disabled by default and must be configured to be used.",
@@ -333,7 +353,7 @@ export class GrainCallAbortedError extends ThreshCancellationError {
  * Propagates to
  * the originating call so the caller may retry.
  */
-export class TransactionAbortedError extends Error {
+export class TransactionAbortedError extends ThreshTransactionError {
   constructor(
     readonly transactionId: string,
     reason: string,
@@ -407,6 +427,22 @@ export class TransactionLockUpgradeError extends TransactionAbortedError {
 }
 
 /**
+ * Raised when a transaction finds it no longer holds a lock it is supposed to
+ * hold on a transactional resource (Orleans
+ * `OrleansBrokenTransactionLockException`): the lock was broken — its hold
+ * bound expired, or the activation that held it was replaced — so the reads and
+ * writes it made there are gone. Thrown by `ReaderWriterLock.enter`
+ * (`@thresh/transactions`) when a transaction that has already accessed the
+ * resource re-enters and finds no record of itself.
+ */
+export class TransactionBrokenLockError extends TransactionAbortedError {
+  constructor(transactionId: string, situation: string) {
+    super(transactionId, `the transaction lock was broken ${situation}`);
+    this.name = "TransactionBrokenLockError";
+  }
+}
+
+/**
  * Raised when a transaction's root call attempts to resolve while it still has
  * outstanding "orphaned" calls it forked but never awaited to completion
  * (Orleans `OrleansOrphanCallException`, a subtype of
@@ -463,20 +499,19 @@ export class TransactionCascadingAbortError extends TransactionAbortedError {
 }
 
 /**
- * Raised when a transaction's outcome cannot be determined after the commit
- * decision was already durably recorded (Orleans `OrleansTransactionInDoubtException`).
- * Unlike {@link TransactionAbortedError} and its subtypes, this is **not** an
- * abort: by the time it can happen the elected transaction manager has already
- * recorded the commit (`TransactionAgent.resolve`'s `recordCommit` step), so
- * every participant's write *will* eventually be applied — this error means
- * only that one participant's own commit step failed or threw while applying
- * it, so the caller cannot tell from this call alone whether that participant
- * (or others still in flight) finished applying it yet. Deliberately not a
+ * Raised when the caller cannot tell whether a transaction committed (Orleans
+ * `OrleansTransactionInDoubtException`). Unlike {@link TransactionAbortedError}
+ * and its subtypes, this is **not** an abort: the transaction manager's answer
+ * was lost or was not a definite abort (`TransactionAgent.resolve` maps every
+ * such status here, as Orleans' `ConvertToUserException` does), or the commit
+ * was durable and a resource the agent completes itself failed while applying
+ * it. The transaction manager and the participants still converge on one
+ * outcome; only this call cannot report it. Deliberately not a
  * subtype of `TransactionAbortedError`, mirroring upstream's
  * `OrleansTransactionInDoubtException : OrleansTransactionException` (a
  * sibling of `OrleansTransactionAbortedException`, not a child of it).
  */
-export class TransactionInDoubtError extends Error {
+export class TransactionInDoubtError extends ThreshTransactionError {
   constructor(
     readonly transactionId: string,
     options?: { cause?: unknown },

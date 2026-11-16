@@ -11,6 +11,7 @@ import {
 } from "@thresh/core/errors";
 import { createClientId, createObserverId, isObserverGrainId } from "@thresh/core/client-grain-id";
 import type { GrainClass } from "@thresh/core/grain-class";
+import { isObserverMethod } from "@thresh/core/remote-method-surface";
 import type { GrainRegistrationSpec } from "@thresh/core/grain-registration-spec";
 import {
   mapCancellationValues,
@@ -51,6 +52,9 @@ import {
 import { SiloAddress } from "@thresh/core/silo-address";
 import { ConnectionManager } from "@thresh/messaging/connection-manager";
 import { CorrelationTable } from "@thresh/messaging/correlation-table";
+import { requestEnvelope } from "@thresh/messaging/request-envelope";
+import { mayResend, neverLeft, refusedBeforeExecution } from "@thresh/messaging/resend-policy";
+import { sendReply } from "@thresh/messaging/send-reply";
 import {
   nextCorrelationId,
   responseTo,
@@ -125,6 +129,12 @@ export interface ClientConfig {
 /** Orleans `ClientMessageCenter.MINIMUM_INTERCONNECT_DELAY`. */
 const MINIMUM_INTERCONNECT_DELAY_MS = 100;
 const MAX_INTERCONNECT_DELAY_MS = 2_000;
+/**
+ * How many times one call is resent after a gateway refused it before it ran: once, against a
+ * fresh resolution of its target, as a silo resends a refused call once against a fresh directory
+ * lookup (`DistributedDispatcher.lookupAndInvoke`).
+ */
+const MAX_REFUSED_RESENDS = 1;
 
 const defaultDelay = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
@@ -160,6 +170,8 @@ export class ClientNode implements Dispatcher {
   private readonly now: () => number;
   private readonly clientId: GrainId;
   private readonly localObjects = new Map<string, LocalObjectEntry>();
+  /** The connection each inbound hosted-object request arrived on, where its reply goes. */
+  private readonly arrivedOn = new WeakMap<Message, Connection>();
   /**
    * Per-client store of `AbortController`s for cancellation tokens bound on
    * this client's hosted-object dispatch path, keyed by `tokenId` — the
@@ -192,7 +204,14 @@ export class ClientNode implements Dispatcher {
       this.localAddress,
       config.clusterId,
       this.clientId,
-      (m) => this.onMessage(m),
+      (m, _from, connection) => this.onMessage(m, connection),
+      // A gateway connection lost under a pending call fails exactly the calls
+      // sent on it, now, rather than at their timeout.
+      (gateway, _err, connection) =>
+        this.correlation.rejectFor(
+          connection,
+          new RejectionError(`connection to ${gateway.toString()} was lost`, "siloUnavailable"),
+        ),
     );
     this.serializer =
       config.serializer ??
@@ -344,12 +363,14 @@ export class ClientNode implements Dispatcher {
 
   /**
    * Forward a grain call to a gateway and await its response, failing over to
-   * another gateway when one is unreachable. A transport failure (a gateway we
-   * cannot connect to or send through, or a reply that never arrives) drops that
-   * gateway from rotation and retries the next; once all are exhausted we refresh
-   * the gateway list once and retry. An error *carried in a response* (a grain
-   * throw, or a rejection from the gateway's routing) is the call's real outcome
-   * and propagates — failover would not change it.
+   * another gateway when one is unreachable. A call is sent again only when it
+   * did not run (`mayResend`, the rule every dispatcher uses): a gateway we
+   * cannot connect to or send through is dropped from rotation and the next one
+   * tried, and once all are exhausted the gateway list is refreshed once; a
+   * gateway that refused the call before it ran because its target moved gets it
+   * resent once to the next gateway. A reply that never arrives, a connection
+   * lost mid-call, and an error *carried in a response* (a grain throw, a
+   * rejection the call's own turn raised) may follow a run, so they propagate.
    *
    * `callTimeoutMs` is a cumulative wall-clock budget for the whole call, not a
    * per-attempt allowance (Orleans deadline propagation): elapsed time is
@@ -366,6 +387,7 @@ export class ClientNode implements Dispatcher {
     let backoffMs = MINIMUM_INTERCONNECT_DELAY_MS;
     let hadFailure = false;
     let attempts = 0;
+    let refusedResends = 0;
     const timeoutError = (): GrainCallTimeoutError =>
       new GrainCallTimeoutError(
         `grain call timed out after ${this.callTimeoutMs}ms (${attempts} attempt${attempts === 1 ? "" : "s"} made)`,
@@ -397,31 +419,25 @@ export class ClientNode implements Dispatcher {
       attempts++;
       try {
         const conn = await this.connections.get(gateway);
-        const correlationId = nextCorrelationId();
-        const message: Message = {
-          correlationId,
-          direction: req.options.oneWay ? "oneWay" : "request",
-          targetGrain: req.target,
+        // Both RELATIVE to this client's clock, like Orleans' wire `TimeToLive`: the gateway
+        // re-bases them on its own clock. The time-to-live is what is left of this call's
+        // budget -- the point this client stops waiting -- so the gateway does not run a
+        // request nobody is waiting for any more (Orleans `OutsideRuntimeClient.SendRequest`;
+        // issue #90).
+        const now = this.now();
+        const message = requestEnvelope(req, {
+          correlationId: nextCorrelationId(),
           sendingSilo: this.localAddress,
-          sendingGrain: req.sender,
-          interfaceId: req.interfaceId,
-          method: req.method,
-          // Both RELATIVE to this client's clock, like Orleans' wire
-          // `TimeToLive`: the gateway re-bases them on its own clock. The
-          // time-to-live is what is left of this call's budget -- the point
-          // this client stops waiting -- so the gateway does not run a request
-          // nobody is waiting for any more (Orleans
-          // `OutsideRuntimeClient.SendRequest`; issue #90).
-          ...(req.deadline !== undefined ? { deadlineInMs: req.deadline - this.now() } : {}),
-          ...(req.options.oneWay ? {} : { timeToLiveMs: deadline - this.now() }),
-          requestContext: {
-            ...(req.reentrancyId !== undefined ? { reentrancyId: req.reentrancyId } : {}),
-            ...(req.headers !== undefined ? { headers: req.headers } : {}),
-          },
           body: this.serializer.serialize(req.args),
-        };
+          now,
+          timeToLiveMs: deadline - now,
+        });
         if (req.options.oneWay) {
-          conn.send(message);
+          try {
+            conn.send(message);
+          } catch (err) {
+            throw neverLeft(err);
+          }
           return undefined;
         }
         const perAttemptTimeout = deadline - this.now();
@@ -430,16 +446,28 @@ export class ClientNode implements Dispatcher {
         response = await pending;
       } catch (err) {
         if (this.now() >= deadline) throw timeoutError();
-        // The gateway is unreachable (connect/send threw, or the reply timed out):
-        // drop it and try another.
+        // Resent only if the request never left (`mayResend`): a reply that timed out, or a
+        // connection lost mid-call, may have run, and sending it again could run it twice.
+        if (!mayResend(err)) throw err;
+        // The gateway is unreachable (the dial or the send failed): drop it and try another.
         this.gateways.markAsDead(gateway);
         await this.connections.drop(gateway);
         lastError = err;
         hadFailure = true;
         continue;
       }
-      // We have a response: its kind decides success or an application error.
-      return this.interpretResponse(response);
+      // We have a response: its kind decides success or an error.
+      try {
+        return this.interpretResponse(response);
+      } catch (err) {
+        // The gateway refused the call before it ran, its target having moved
+        // (`mayResend`): send it once more, to the next gateway in rotation, which
+        // re-resolves the target. The gateway itself is alive, so it stays in rotation.
+        if (!mayResend(err) || refusedResends >= MAX_REFUSED_RESENDS) throw err;
+        refusedResends++;
+        lastError = err;
+        hadFailure = true;
+      }
     }
   }
 
@@ -451,24 +479,30 @@ export class ClientNode implements Dispatcher {
    * another gateway, and a request that never left can never be answered.
    */
   private sendAndAwait(conn: Connection, message: Message, timeoutMs: number): Promise<Message> {
-    const pending = this.correlation.register(message.correlationId, timeoutMs);
+    // The call's identity: its id, this process's epoch and the connection it
+    // goes out on (see `CorrelationTable`).
+    message.correlationEpoch = this.correlation.epoch;
+    const pending = this.correlation.register(message.correlationId, timeoutMs, conn);
     try {
       conn.send(message);
     } catch (err) {
-      this.correlation.fail(message.correlationId, err);
+      // The request never left, so it cannot have run.
+      this.correlation.fail(message.correlationId, neverLeft(err));
       throw err;
     }
     return pending;
   }
 
-  private onMessage(message: Message): void {
+  /** Every message a gateway sends back down a connection this client dialled, with that connection. */
+  private onMessage(message: Message, connection: Connection | undefined): void {
     if (message.direction === "response") {
-      this.correlation.complete(message);
+      this.correlation.complete(message, connection);
       return;
     }
     // The only other traffic a client receives is a grain calling back into
     // one of its hosted observer objects (`createObjectReference`).
     if (isObserverGrainId(message.targetGrain)) {
+      if (connection !== undefined) this.arrivedOn.set(message, connection);
       void this.dispatchToLocalObject(message);
     }
     // Any other inbound request/oneWay targets a real grain — a client hosts
@@ -490,13 +524,21 @@ export class ClientNode implements Dispatcher {
     // `localObjects` lookup below, which would otherwise reject it as
     // "no object hosted".
     if (message.interfaceId === ICancellationSourcesExtension.id) {
-      const [tokenId] = this.serializer.deserialize<[string]>(message.body);
-      this.getOrCreateCancellationController(tokenId).abort();
-      if (message.direction === "oneWay") return;
-      await this.replyToCaller(
-        message,
-        responseTo(message, "success", this.serializer.serialize(undefined), this.localAddress),
-      );
+      try {
+        const [tokenId] = this.serializer.deserialize<[string]>(message.body);
+        this.getOrCreateCancellationController(tokenId).abort();
+        if (message.direction === "oneWay") return;
+        await this.replyToCaller(
+          message,
+          responseTo(message, "success", this.serializer.serialize(undefined), this.localAddress),
+        );
+      } catch (err) {
+        // An undecodable body is a fault of this one message, never an
+        // unhandled rejection: the caller gets an error response instead.
+        if (message.direction === "oneWay") return;
+        const { kind, body } = this.serializeError(err);
+        await this.replyToCaller(message, responseTo(message, kind, body, this.localAddress));
+      }
       return;
     }
     const entry = this.localObjects.get(message.targetGrain.toString());
@@ -522,7 +564,9 @@ export class ClientNode implements Dispatcher {
       // controlled by this client, BEFORE the hosted object's method runs
       // (mirrors `ActivationData.bindCancellationTokens` on the grain side).
       this.bindCancellationTokens(args);
-      const method = entry.object[message.method];
+      const method = isObserverMethod(entry.object, message.method)
+        ? entry.object[message.method]
+        : undefined;
       if (typeof method !== "function") {
         throw new GrainCallError(`hosted object has no method ${message.method}`);
       }
@@ -630,16 +674,13 @@ export class ClientNode implements Dispatcher {
     return new GrainCancellationToken({ tokenId: found.tokenId, signal: controller.signal });
   }
 
-  /** Send a reply for a hosted-object dispatch back to the calling silo. */
+  /**
+   * Send a reply for a hosted-object dispatch down the connection its request
+   * arrived on. A reply that cannot be sent is counted: the hosted object has
+   * already run, and the calling silo sees the connection loss or its timeout.
+   */
   private async replyToCaller(request: Message, response: Message): Promise<void> {
-    if (request.sendingSilo === undefined) return;
-    try {
-      const conn = await this.connections.get(request.sendingSilo);
-      conn.send(response);
-    } catch {
-      // The caller has gone; dropping the reply is fine, matching the silo's
-      // own best-effort reply behaviour.
-    }
+    sendReply(this.arrivedOn.get(request), request, response);
   }
 
   /**
@@ -653,12 +694,10 @@ export class ClientNode implements Dispatcher {
    * because there was nothing on the wire for it to rebuild from.
    */
   private serializeError(err: unknown): { kind: ResponseKind; body: Uint8Array } {
-    if (err instanceof RejectionError) {
-      return {
-        kind: "rejection",
-        body: this.serializer.serialize({ message: err.message, kind: err.kind }),
-      };
-    }
+    // Never a rejection: that says "refused before it ran", and every error reaching here came
+    // out of a hosted object's dispatch (or its undecodable body) — a `RejectionError` included,
+    // even one a nested call was refused with, which keeps its class and kind through the codec.
+    // This client's only refusal, no object hosted for the target, is answered where it is found.
     const message = err instanceof Error ? err.message : String(err);
     if (err instanceof Error) {
       try {
@@ -679,8 +718,11 @@ export class ClientNode implements Dispatcher {
       // (Orleans parity), not the generic `RejectionError` every other
       // rejection kind uses — it's the one kind ORIGINATED specifically to
       // signal "retry me, possibly against a different gateway".
-      if (payload.kind === "overloaded") throw new GatewayTooBusyException(payload.message);
-      throw new RejectionError(payload.message, payload.kind);
+      // Only a refusal before execution travels as a rejection; the rebuilt error carries that.
+      if (payload.kind === "overloaded") {
+        throw refusedBeforeExecution(new GatewayTooBusyException(payload.message));
+      }
+      throw refusedBeforeExecution(new RejectionError(payload.message, payload.kind));
     }
     const payload = this.serializer.deserialize<{
       message: string;

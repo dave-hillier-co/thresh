@@ -16,28 +16,29 @@ function makeSet<T>(storage: MemoryJournalStorage) {
 describe("DurableSetImpl", () => {
   it("tracks add/has/delete/clear in memory", async () => {
     const { set } = makeSet<string>(new MemoryJournalStorage());
-    expect(await set.add("a")).toBe(true);
-    expect(await set.add("b")).toBe(true);
-    expect(await set.add("a")).toBe(false); // already present
+    expect(set.add("a")).toBe(true);
+    expect(set.add("b")).toBe(true);
+    expect(set.add("a")).toBe(false); // already present
     expect(set.size).toBe(2);
     expect(set.has("a")).toBe(true);
     expect([...set].sort()).toEqual(["a", "b"]);
 
-    expect(await set.delete("a")).toBe(true);
-    expect(await set.delete("a")).toBe(false); // already gone
+    expect(set.delete("a")).toBe(true);
+    expect(set.delete("a")).toBe(false); // already gone
     expect(set.has("a")).toBe(false);
     expect(set.size).toBe(1);
 
-    await set.clear();
+    set.clear();
     expect(set.size).toBe(0);
   });
 
   it("does not journal a redundant add or a missing delete", async () => {
     const storage = new MemoryJournalStorage();
     const a = makeSet<number>(storage);
-    await a.set.add(1);
-    await a.set.add(1); // redundant
-    await a.set.delete(2); // missing
+    a.set.add(1);
+    a.set.add(1); // redundant
+    a.set.delete(2); // missing
+    await a.manager.writeState();
 
     const b = makeSet<number>(storage);
     await b.manager.replay();
@@ -47,10 +48,11 @@ describe("DurableSetImpl", () => {
   it("rebuilds from the log on a fresh activation", async () => {
     const storage = new MemoryJournalStorage();
     const a = makeSet<number>(storage);
-    await a.set.add(1);
-    await a.set.add(2);
-    await a.set.add(3);
-    await a.set.delete(2);
+    a.set.add(1);
+    a.set.add(2);
+    a.set.add(3);
+    a.set.delete(2);
+    await a.manager.writeState();
 
     const b = makeSet<number>(storage);
     await b.manager.replay();

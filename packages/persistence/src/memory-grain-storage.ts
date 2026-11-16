@@ -1,15 +1,19 @@
 import { InconsistentStateError } from "@thresh/core/errors";
 import type { GrainId } from "@thresh/core/grain-id";
+import { deserializeValue, serializeValue } from "@thresh/core/value-codec";
 import type { GrainStorage, StateHolder } from "@thresh/core/grain-storage";
 
 interface Record {
-  value: unknown;
+  /** The state as the durable stores hold it: the value codec's JSON text. */
+  data: string;
   etag: string;
 }
 
 /**
  * In-memory storage provider for development and tests. Not durable and not
- * shared across silos; mirrors Orleans `MemoryGrainStorage`. Etag is a per-store
+ * shared across silos; mirrors Orleans `MemoryGrainStorage`. State round-trips through the value
+ * codec exactly as the Redis and Postgres stores do, so a test against this store sees the same
+ * values (a `GrainId` stays a `GrainId`) and the same failures (`UnsupportedValueError`) as production. Etag is a per-store
  * counter, giving the same optimistic-concurrency behaviour as a real provider.
  */
 export class MemoryGrainStorage implements GrainStorage {
@@ -23,7 +27,7 @@ export class MemoryGrainStorage implements GrainStorage {
       state.etag = undefined;
       return;
     }
-    state.value = structuredClone(record.value) as T;
+    state.value = deserializeValue<T>(record.data);
     state.etag = record.etag;
     state.exists = true;
   }
@@ -38,8 +42,10 @@ export class MemoryGrainStorage implements GrainStorage {
         stored?.etag,
       );
     }
+    // Encode before taking an etag, so a value the codec refuses leaves the store untouched.
+    const data = serializeValue(state.value);
     const etag = String(++this.etagCounter);
-    this.records.set(key, { value: structuredClone(state.value), etag });
+    this.records.set(key, { data, etag });
     state.etag = etag;
     state.exists = true;
   }

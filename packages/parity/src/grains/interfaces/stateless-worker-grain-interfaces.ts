@@ -13,6 +13,7 @@ export interface IStatelessWorkerGrain extends GrainKey<bigint> {
 
 export const IStatelessWorkerGrain = defineGrainInterface<IStatelessWorkerGrain>(
   "UnitTests.GrainInterfaces.IStatelessWorkerGrain",
+  { key: "integer" },
 );
 
 /** Upstream `IStatelessWorkerScalingGrain`: `[StatelessWorker(maxLocalWorkers: 4)]`, exercised for scale-up behaviour. */
@@ -25,4 +26,5 @@ export interface IStatelessWorkerScalingGrain extends GrainKey<bigint> {
 
 export const IStatelessWorkerScalingGrain = defineGrainInterface<IStatelessWorkerScalingGrain>(
   "UnitTests.GrainInterfaces.IStatelessWorkerScalingGrain",
+  { key: "integer" },
 );

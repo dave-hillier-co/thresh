@@ -25,6 +25,16 @@ describe("StaticMembershipService", () => {
     expect(activeSilos(value).map((s) => s.ringKey)).toContain("silo-2");
   });
 
+  it("yields the latest view to an iterator that was not waiting when it was published", async () => {
+    const m = new StaticMembershipService(silo(0), [silo(0)]);
+    const iterator = m.updates()[Symbol.asyncIterator]();
+    m.addSilo(silo(1));
+    m.addSilo(silo(2));
+    const { value } = await iterator.next();
+    expect(value.version).toBe(3);
+    expect(activeSilos(value).map((s) => s.ringKey)).toEqual(["silo-0", "silo-1", "silo-2"]);
+  });
+
   it("removes a silo from the view", () => {
     const m = new StaticMembershipService(silo(0), [silo(0), silo(1), silo(2)]);
     m.removeSilo(silo(1));

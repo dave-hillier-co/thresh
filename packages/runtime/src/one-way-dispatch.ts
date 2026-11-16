@@ -1,4 +1,4 @@
-import type { Logger } from "@thresh/core/logger";
+import { safeLogger, type Logger } from "@thresh/core/logger";
 import type { InvocationRequest } from "@thresh/core/request";
 
 /**
@@ -67,12 +67,23 @@ export function dispatchDetachingOneWay(
 ): Promise<unknown> {
   const delivery = deliver();
   if (req.options.oneWay !== true) return delivery;
-  delivery.catch((error: unknown) => {
-    logger.warn("one-way grain call failed", {
-      grainId: req.target.toString(),
-      method: req.method,
-      error,
-    });
-  });
+  delivery.catch((error: unknown) =>
+    logOneWayFailure(logger, req.target.toString(), req.method, error),
+  );
   return Promise.resolve(undefined);
+}
+
+/**
+ * The one catch-and-log for a `oneWay` call whose delivery failed: a one-way call has no response
+ * channel, so the failure is reported here instead. Shared by the detached dispatch above and by
+ * `ClusterNode.receiveRequest`, which awaits delivery of an inbound one-way request and would
+ * otherwise drop its failure silently.
+ */
+export function logOneWayFailure(
+  logger: Logger,
+  grainId: string,
+  method: string,
+  error: unknown,
+): void {
+  safeLogger(logger).warn("one-way grain call failed", { grainId, method, error });
 }

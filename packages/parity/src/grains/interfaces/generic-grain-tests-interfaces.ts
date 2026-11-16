@@ -11,6 +11,7 @@ export interface IGrainWithNoProperties extends GrainKey<bigint> {
 
 export const IGrainWithNoProperties = defineGrainInterface<IGrainWithNoProperties>(
   "UnitTests.GrainInterfaces.IGrainWithNoProperties",
+  { key: "integer" },
 );
 
 export interface IGrainWithListFields extends GrainKey<bigint> {
@@ -20,4 +21,5 @@ export interface IGrainWithListFields extends GrainKey<bigint> {
 
 export const IGrainWithListFields = defineGrainInterface<IGrainWithListFields>(
   "UnitTests.GrainInterfaces.IGrainWithListFields",
+  { key: "integer" },
 );

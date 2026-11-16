@@ -40,9 +40,11 @@ describe("Orleans.Journaling.Tests.DurableValueTests", () => {
       const grain = cluster.getGrain(IDurableCollectionsGrain, freshKey());
 
       await grain.setValue("Hello World");
+      await grain.writeState();
       expect(await grain.getValue()).toBe("Hello World");
 
       await grain.setValue("Updated Value");
+      await grain.writeState();
       expect(await grain.getValue()).toBe("Updated Value");
     },
   );
@@ -54,6 +56,7 @@ describe("Orleans.Journaling.Tests.DurableValueTests", () => {
       const grain = cluster.getGrain(IDurableCollectionsGrain, key);
 
       await grain.setValue(42);
+      await grain.writeState();
 
       // Recreate the manager from the same storage: restart the silo, then
       // fetch a fresh activation of the same grain key.
@@ -70,12 +73,15 @@ describe("Orleans.Journaling.Tests.DurableValueTests", () => {
       const grain = cluster.getGrain(IDurableCollectionsGrain, freshKey());
 
       await grain.setValue(null);
+      await grain.writeState();
       expect(await grain.getValue()).toBeNull();
 
       await grain.setValue("Not null anymore");
+      await grain.writeState();
       expect(await grain.getValue()).toBe("Not null anymore");
 
       await grain.setValue(null);
+      await grain.writeState();
       expect(await grain.getValue()).toBeNull();
     },
   );
@@ -87,6 +93,7 @@ describe("Orleans.Journaling.Tests.DurableValueTests", () => {
 
       const person = { id: 1, name: "John Doe", age: 30 };
       await grain.setValue(person);
+      await grain.writeState();
 
       const stored = (await grain.getValue()) as typeof person;
       expect(stored).not.toBeNull();
@@ -94,11 +101,11 @@ describe("Orleans.Journaling.Tests.DurableValueTests", () => {
       expect(stored.name).toBe("John Doe");
       expect(stored.age).toBe(30);
 
-      // In-process transport passes objects by reference (no serialization
-      // boundary), so mutating the returned object mutates the grain's live
-      // in-memory value directly, matching upstream's `durableValue.Value.Age = 31`
-      // without a further explicit Set call.
+      // Upstream: `durableValue.Value.Age = 31` then `WriteStateAsync`. A returned value is a
+      // copy, so the update is written back through the grain, as a cross-silo caller would.
       stored.age = 31;
+      await grain.setValue(stored);
+      await grain.writeState();
       expect(((await grain.getValue()) as typeof person).age).toBe(31);
     },
   );
