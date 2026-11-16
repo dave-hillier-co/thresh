@@ -47,6 +47,31 @@ class LeavingCounter extends Grain implements ILeavingCounter {
     const silo = this.runtime.localSiloAddress().podName;
     deactivations.push({ silo, key: String(this.id.key), at: performance.now() });
     if (slow?.silo === silo) await sleep(slow.ms);
+    if (witness !== undefined && witness.silo !== silo) {
+      try {
+        await this.getGrain(ILeavingWitness, "witness").saw(String(this.id.key));
+      } catch (error) {
+        witness.failures.push(`${String(this.id.key)} on ${silo}: ${String(error)}`);
+      }
+    }
+  }
+}
+
+/**
+ * When set, every deactivation hook on a silo other than `silo` reports to the witness grain,
+ * which lives on `silo`: what reached it, and every report that failed.
+ */
+let witness: { silo: string; seen: string[]; failures: string[] } | undefined;
+
+interface ILeavingWitness extends GrainKey<string> {
+  saw(key: string): Promise<void>;
+}
+const ILeavingWitness = defineGrainInterface<ILeavingWitness>("ILeavingWitness");
+
+@grain({ name: "LeavingWitness" })
+class LeavingWitness extends Grain implements ILeavingWitness {
+  async saw(key: string): Promise<void> {
+    witness?.seen.push(key);
   }
 }
 
@@ -58,6 +83,7 @@ afterEach(async () => {
   slow = undefined;
   for (const c of clusters.splice(0)) await c.dispose();
   deactivations = [];
+  witness = undefined;
 });
 
 async function start(options: Partial<TestClusterOptions> = {}): Promise<TestCluster> {
@@ -216,6 +242,24 @@ function entriesNaming(
   return keys.filter((key) =>
     survivors.some((s) => partitionOf(s).entryFor(id(key))?.silo.equals(leaver.address) === true),
   );
+}
+
+/** The warnings every silo logged: a stop whose handover bound elapsed logs one. */
+class WarningLogger implements Logger {
+  readonly warnings: Array<{ message: string; fields?: LogFields }> = [];
+  debug(): void {}
+  info(): void {}
+  warn(message: string, fields?: LogFields): void {
+    this.warnings.push({ message, ...(fields ? { fields } : {}) });
+  }
+  error(): void {}
+
+  /** The stops that spent their whole handover bound, and who they were still waiting for. */
+  handoversIncomplete(): unknown[] {
+    return this.warnings
+      .filter((w) => w.message.startsWith("directory handover incomplete"))
+      .map((w) => w.fields);
+  }
 }
 
 /** Three silos, each hosting `perSilo` counters called once through it. */
@@ -429,26 +473,47 @@ describe("a silo with nobody to hand over to", () => {
   }, 60_000);
 
   for (const membership of ["static", "kubernetes"] as const) {
-    it(`is a cluster stopping together: dispose() marks every silo leaving first (${membership})`, async () => {
+    it(`is the last silo of a disposed cluster: dispose() stops the silos one at a time, each handing over to the rest (${membership})`, async () => {
+      const logger = new WarningLogger();
       const cluster = await TestCluster.start({
         initialSilos: 3,
         membership,
-        grains: [{ ctor: LeavingCounter, interfaces: [ILeavingCounter] }],
+        grains: [
+          { ctor: LeavingCounter, interfaces: [ILeavingCounter] },
+          { ctor: LeavingWitness, interfaces: [ILeavingWitness] },
+        ],
         reminders: false,
         stopBudgetMs: 10_000,
+        logger,
+        ...preferLocal,
       });
       const silos = [...cluster.silos];
+      const last = silos[2]!;
       const results = new Results();
-      for (const [i, key] of keysFor("together", 30).entries()) {
-        await call(results, silos[i % 3]!, key);
-      }
+      const keys = keysFor("together", 30);
+      for (const [i, key] of keys.entries()) await call(results, silos[i % 3]!, key);
+      // The witness lives on the last silo; no other silo has called it, so none holds its route.
+      await last.host.getGrain(ILeavingWitness, "witness").saw("seed");
+      witness = { silo: last.address.podName, seen: [], failures: [] };
       await cluster.checkIntegrity();
       const before = statsOf(silos);
-      const startedAt = performance.now();
+
       await cluster.dispose();
-      expect(performance.now() - startedAt).toBeLessThan(1000);
-      expect(statsOf(silos).transfers).toBe(before.transfers);
+
+      // Every hook ran, and every hook on a silo that stopped before the last reached the
+      // witness on it, which had not stopped yet.
+      expect(deactivations.map((d) => d.key)).toEqual(expect.arrayContaining(keys));
+      const reporting = deactivations.filter((d) => d.silo !== last.address.podName);
+      expect(reporting.length).toBeGreaterThan(0);
+      expect(witness.failures).toEqual([]);
+      expect([...witness.seen].sort()).toEqual(reporting.map((d) => d.key).sort());
+      // The silos that stopped first handed their ranges to the rest by snapshot.
+      expect(statsOf(silos).transfers).toBeGreaterThan(before.transfers);
+      expect(statsOf(silos).recoveries).toBe(before.recoveries);
+      // No stop spent its bound; the last silo had nobody to hand over to and held nothing.
+      expect(logger.handoversIncomplete()).toEqual([]);
       for (const silo of silos) expect(partitionOf(silo).snapshotCount).toBe(0);
+      expect(cluster.silos).toEqual([]);
       expect(results.errors).toEqual([]);
     }, 60_000);
   }
@@ -464,24 +529,6 @@ describe("a silo with nobody to hand over to", () => {
     expect(run.stdout).toContain("disposed static and kubernetes clusters");
   }, 60_000);
 });
-
-/** The warnings every silo logged: a stop whose handover bound elapsed logs one. */
-class WarningLogger implements Logger {
-  readonly warnings: Array<{ message: string; fields?: LogFields }> = [];
-  debug(): void {}
-  info(): void {}
-  warn(message: string, fields?: LogFields): void {
-    this.warnings.push({ message, ...(fields ? { fields } : {}) });
-  }
-  error(): void {}
-
-  /** The stops that spent their whole handover bound, and who they were still waiting for. */
-  handoversIncomplete(): unknown[] {
-    return this.warnings
-      .filter((w) => w.message.startsWith("directory handover incomplete"))
-      .map((w) => w.fields);
-  }
-}
 
 describe("a cluster stopping while a dead pod is still listed not ready", () => {
   // Half of it is the handover bound: far longer than any of these stops may take.
