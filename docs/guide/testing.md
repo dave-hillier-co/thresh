@@ -86,6 +86,24 @@ calls fail.
 The static membership stays the default because the existing suites were written against its
 instant, cluster-wide views.
 
+## Checking the directory
+
+`await cluster.checkIntegrity()` asks every live silo's directory partition (Orleans
+`IGrainDirectoryTestHooks.CheckIntegrityAsync`) whether it holds an entry outside the hash ranges it
+owns, and whether every registered, live activation in the cluster has exactly its own entry at its
+owner. An activation with no entry, or an entry naming a different activation, is how a grain ends up
+active in two places. It throws an `Error` listing every violation, one line each, prefixed with the
+pod name of the silo that found it, and returns nothing when the directory is sound.
+
+Call it after each step that moves ranges or activations, once the calls you issued have finished:
+after a join, a `stopSilo`, a `killSilo` followed by `kubernetes.depart`, a readiness flap, or a
+batch of calls made while any of those ran. Under Kubernetes membership it first runs
+`cluster.kubernetes.settle()`, so every silo has applied the view its own watch holds; under static
+membership there is nothing to settle. While a silo checks, it locks its whole range at the view it
+has applied, so other requests to it wait for the check. A member that does not answer the
+partition's question (a fault cut the link, as opposed to a refused connection, which means the
+process is gone and it hosts nothing) is asked four times and then reported as a violation.
+
 ## Network faults
 
 Every silo's transport sits behind a `FaultInjectingTransport`
@@ -108,8 +126,15 @@ calls. `sever` closes the connections already open on a link at the accepting en
 would: the dialler sees each one lost and fails exactly the calls pending on it. Each fault holds until
 healed, or for the given `count` of messages. A schedule decides the next messages on a link one at
 a time, then the link goes back to the standing rules. Nothing is random. Connections are pooled, so
-a refused connect only bites a link that has not connected yet; arm one before the cluster starts by
-passing `faults` in the options. Links not named by any fault are untouched. A partition also cuts
+a refused connect only bites a link that has not connected yet: `sever` the link's open connections
+first, then arm the fault. Arm a connect fault after the cluster has started, never before. A silo's
+first view recovers the ranges it gains by asking every listed member for its activations, an
+injected connect failure reports as a timeout (not as a refused connection, which would mean the
+member has no process and hosts nothing), and a member that does not answer is asked again for as
+long as it is listed, with the range locked. A fault armed before start therefore blocks that
+recovery, the silo's start does not finish, and it does not report ready. Passing `faults` in the
+options is for sharing a `NetworkFaults` you built; arm nothing on it until `start` has returned.
+Links not named by any fault are untouched. A partition also cuts
 grain-directory traffic, so an uncached call can fail even between two silos on the same side.
 `useTransport` installs the decorator on a silo built by hand.
 

@@ -266,7 +266,7 @@ describe("GrainDirectoryPartition: requests", () => {
     expect(await p0.unregister(1, addr(g, S1))).toEqual({ kind: "refresh", version: 1 });
   });
 
-  it("hides an entry whose host is no longer a member, and lets a registration replace it", async () => {
+  it("answers a lookup with nothing once the view that dropped the host is applied", async () => {
     const h = new Harness();
     const p0 = h.add(S0).partition;
     h.add(S1);
@@ -283,6 +283,24 @@ describe("GrainDirectoryPartition: requests", () => {
     expect(ok(await p0.lookup(2, g))).toBeUndefined();
     expect(p0.entryFor(g)).toBeUndefined();
   });
+  it("hides a held entry whose host is not a member from a lookup, without removing it (Orleans IsSiloDead)", async () => {
+    const h = new Harness();
+    const p0 = h.add(S0).partition;
+    const v1 = view(1, [[S0, "active"]]);
+    h.publish(v1);
+    await p0.settled();
+    const g = grainOwnedBy(v1, S0);
+    // An entry for a host this view does not list: applyView never saw it as a member, so it
+    // did not delete it, and only the lookup stands between the entry and the caller.
+    ok(await p0.register(1, addr(g, silo(9), "on-a-stranger")));
+    expect(p0.entryFor(g)?.silo.equals(silo(9))).toBe(true);
+    expect(ok(await p0.lookup(1, g))).toBeUndefined();
+    // A host that is a member is returned.
+    const other = grainOwnedBy(v1, S0, 10_000);
+    ok(await p0.register(1, addr(other, S0, "here")));
+    expect(ok(await p0.lookup(1, other))?.activationId).toBe("here");
+  });
+
   it("lets a registration replace an entry whose host is not a member (Orleans RegisterCore)", async () => {
     const h = new Harness();
     const p0 = h.add(S0).partition;
@@ -331,7 +349,94 @@ describe("GrainDirectoryPartition: view changes", () => {
     expect(n0.recoveryRequests.filter((r) => r.version === 2)).toEqual([]);
   });
 
-  it("recovers instead when the new owner moved between a different pair of views", async () => {
+  it("serves a snapshot only to a silo that moved between the same two views", async () => {
+    const h = new Harness();
+    const n0 = h.add(S0);
+    const n1 = h.add(S1);
+    const v1 = view(1, [
+      [S0, "active"],
+      [S1, "joining"],
+    ]);
+    h.publish(v1);
+    await n0.partition.settled();
+    await n1.partition.settled();
+    // S0 gives the range to S1 at v2 and holds the snapshot for (1, 2).
+    const v2 = view(2, [
+      [S0, "active"],
+      [S1, "active"],
+    ]);
+    const g = grainMoving([
+      { view: v1, owner: S0 },
+      { view: v2, owner: S1 },
+    ]);
+    ok(await n0.partition.register(1, addr(g, S0, "stale")));
+    h.publish(v2, [S0]);
+    await n0.partition.settled();
+    expect(n0.partition.snapshotCount).toBe(1);
+
+    const ranges = v2.rangesOf(S1);
+    const served = await n0.partition.serveSnapshot({ previousVersion: 1, version: 2, ranges });
+    expect(served?.map((e) => e.grainId.toString())).toEqual([g.toString()]);
+    // The same ranges at the same version, from a view S0 did not move from: nothing is served.
+    expect(
+      await n0.partition.serveSnapshot({ previousVersion: 0, version: 2, ranges }),
+    ).toBeUndefined();
+    // The right view to a view S0 did not move to: nothing is served.
+    h.publish(
+      view(3, [
+        [S0, "active"],
+        [S1, "active"],
+      ]),
+      [S0],
+    );
+    expect(
+      await n0.partition.serveSnapshot({ previousVersion: 1, version: 3, ranges }),
+    ).toBeUndefined();
+  });
+
+  it("recovers, and ignores the snapshot it was not owed, when the new owner skipped a view", async () => {
+    const h = new Harness();
+    const n0 = h.add(S0);
+    const n1 = h.add(S1);
+    const v1 = view(1, [
+      [S0, "active"],
+      [S1, "joining"],
+    ]);
+    h.publish(v1);
+    await n0.partition.settled();
+    await n1.partition.settled();
+    const v2 = view(2, [
+      [S0, "active"],
+      [S1, "active"],
+    ]);
+    const g = grainMoving([
+      { view: v1, owner: S0 },
+      { view: v2, owner: S1 },
+    ]);
+    // The snapshot S0 takes at v2 holds an entry that is no longer true: the grain lives on S1.
+    ok(await n0.partition.register(1, addr(g, S0, "stale")));
+    h.publish(v2, [S0]);
+    await n0.partition.settled();
+    expect(n0.partition.snapshotCount).toBe(1);
+    n1.activations = [{ ...addr(g, S1, "live"), version: 1 }];
+
+    // S1 skips v2 and applies v3, an identical membership: it moves from v1 to v3, a pair S0
+    // holds no snapshot for, although S0's snapshot for (1, 2) covers the same range.
+    const v3 = view(3, [
+      [S0, "active"],
+      [S1, "active"],
+    ]);
+    h.publish(v3, [S1]);
+    await n1.partition.settled();
+    await n0.partition.settled();
+    await flush();
+
+    expect(ok(await n1.partition.lookup(3, g))?.activationId).toBe("live");
+    expect(n1.partition.stats.transferred).toBe(0);
+    expect(n0.recoveryRequests.filter((r) => r.from.equals(S1)).map((r) => r.version)).toEqual([3]);
+  });
+
+  it("recovers when the new owner's first view leaves no pair it shares with the previous owner", async () => {
     const h = new Harness();
     const n0 = h.add(S0);
     const n1 = h.add(S1);

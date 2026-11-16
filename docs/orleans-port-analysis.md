@@ -7,7 +7,7 @@ A faithfulness review of every `@thresh/*` package against its corresponding sub
 > checking the current status board in [`EPICS.md`](../EPICS.md) and the issue index in
 > [`todo.md`](../todo.md). The 2026-07-24 issue burn-down closed the high-impact gaps around
 > cancellation/deadlines, scheduler back-pressure, observability breadth, serializer versioning,
-> stream failure handling, directory handoff hardening, transaction keepalive/deadlines, and
+> stream failure handling, directory hardening, transaction keepalive/deadlines, and
 > durable-job `RunId`/claim-ramp behavior.
 
 ## Current status delta (updated 2026-08-04)
@@ -27,7 +27,7 @@ encountered later in this file:
   reference protection.
 - Stream failure handling, producer registration, durable poison storage, typed stream provider
   configuration errors, and cluster-shared memory streams in `TestCluster`.
-- Directory handoff ACK-delete, recovery retry/backoff, and registration gated on silo liveness.
+- A range-locked directory partition: snapshot transfer by pair of view versions, recovery from every member with retry/backoff, versioned requests, and registration and lookup gated on membership.
 - Transaction lock deadlines and TM confirmation-worker keepalive.
 - Durable-job cross-silo forwarding, in-grain `RunId` deduplication, and claim ramp-up budget.
 
@@ -50,7 +50,7 @@ The gap list below is retained for provenance, but many entries are now closed a
 | `@thresh/core` | mostly-faithful | Identity, lifecycle, facets, reentrancy, references faithful. Missing observers, stateless workers, extensions, `@readOnly` runtime checks. |
 | `@thresh/runtime` | mostly-faithful | Activation, catalog, turn semantics match. No cancellation, no queue limits, no stuck-turn or deactivation timeouts. |
 | `@thresh/messaging` | mostly-faithful | Envelope, correlation, preamble, WebSocket sound. No TTL/retry/forward counts or cache-invalidation piggyback. |
-| `@thresh/directory` | mostly-faithful | CAS single-activation and ring ownership correct. Missing versioned range locks, ACK'd snapshot handoff, dead-silo lookup checks. |
+| `@thresh/directory` | mostly-faithful | CAS single-activation and ring ownership correct. Range-locked partition with snapshot transfer, recovery from the hosts and a recovery version; membership-gated lookups. |
 | `@thresh/clustering-k8s` | mostly-faithful | EndpointSlice watch as membership SSOT is faithful. Readiness probes are the only failure detector; no `TryKill`/`TrySuspect` or active probing. |
 | `@thresh/client` | mostly-faithful | Gateway selection and failover correct. Missing observer callbacks, retry backoff, per-grain gateway pinning; races in the gateway counter. |
 | `@thresh/persistence` | mostly-faithful | `IPersistentState`/ETag semantics faithful across memory/Redis/Postgres. No wildcard etag, no cancellation. |
@@ -71,7 +71,7 @@ The gap list below is retained for provenance, but many entries are now closed a
 6. **Transaction lock deadlines and TM confirmation-worker keepalive.** Stalled transactions hold locks forever; in-doubt prepared records on remote participants are only resolved once on activation, leaving durability gaps after TM crashes.
 7. **Grain observers / client callbacks and grain extensions.** No typed observer surface and no `IGrainExtension` mechanism means push notifications, cancellation tokens, and management/system-target APIs cannot be expressed.
 8. **`StatelessWorker` enforcement.** The option is parsed but never honored. Multi-activation-per-key placement (a major Orleans throughput pattern) is effectively absent.
-9. **Directory hardening.** Missing versioned range locks, ACK'd snapshot handoff, dead-silo lookup checks, and crash-broadcast recovery. Best-effort one-shot recovery can lose entries or return stale pointers under rapid view changes.
+9. **Directory hardening.** Closed: the directory is a range-locked partition that fails closed (see [design-membership-and-directory.md](design-membership-and-directory.md)). In May 2026 it lacked range locks, snapshot transfer and recovery from the hosts, so best-effort one-shot recovery could lose entries or return stale pointers under rapid view changes.
 10. **Reminders robustness.** No minimum-period validation, no initial-load retry, no `GetReminder(s)` API, no boot gating. Silent `.catch(()=>undefined)` in reconcile/fire hides operational issues.
 
 ## Top correctness risks (specific to the TS implementation)
@@ -85,7 +85,7 @@ The gap list below is retained for provenance, but many entries are now closed a
 | In-doubt 2PC records on remote participants are resolved only once at activation — no keepalive if TM is unreachable later | `packages/transactions/src/transactional-state-impl.ts` `recover` | high |
 | Single `callTimeoutMs` covers entire client failover loop; second gateway attempt can spuriously time out, and all-dead-gateways state spins without backoff | `packages/client/src/client-node.ts` invoke loop; `gateway-manager.ts` unprotected counter | high |
 | Value codec loses type identity for unknown/polymorphic types and has no circular-ref guard; rolling upgrades with schema changes are unsafe | `packages/core/src/value-codec.ts` `encodeValue`/`decodeValue` | high |
-| Directory lookups do not check silo liveness; handoff entries retained indefinitely if successor never pulls — stale pointers and memory leaks | `packages/directory/src/local-directory-partition.ts`; `packages/runtime/src/cluster-node.ts` `handoffSnapshot` | high |
+| Directory lookups did not check silo liveness, and entries moved to a successor were lost if it never took them (closed: `GrainDirectoryPartition` hides an entry whose host is not a member and holds a snapshot until its partners collect it or leave) | `packages/directory/src/grain-directory-partition.ts` | high |
 | K8s membership relies solely on readiness probes; a silo that passes readiness but hangs on calls is undetectable | `packages/clustering-k8s/src/kubernetes-membership.ts`; `health-check.ts` | high |
 | Multi-silo activation race: both silos create local `ActivationData` before CAS arbitrates; loser is left to idle-collect rather than torn down immediately | `packages/runtime/src/distributed-dispatcher.ts` `deliverLocal`; `packages/runtime/src/catalog.ts` `activateLocal` | medium |
 | Durable-job per-job `RunId` dedup absent — a shard rebalance during execution can double-invoke the handler (idempotency required from authors) | `packages/durable-jobs/src/shard-executor.ts` `runOne` | medium |
@@ -123,13 +123,13 @@ Risks: WebSocket `send()` not explicitly ordered under concurrent sends; correla
 
 ### `@thresh/directory`
 
-Faithful: consistent hash ring with virtual nodes; deterministic ring construction; CAS register for single-activation; partition ownership routed by hash; ring-based range ownership with handoff/drop classification; location cache with per-silo invalidation; stale-view detection with bounded retry.
+Faithful: consistent hash ring with virtual nodes; deterministic ring construction; CAS register for single-activation; partition ownership routed by hash; ring-based range ownership with range locks and snapshot transfer; location cache with per-silo invalidation; stale-view detection with bounded retry.
 
-Intentional deviations (driven by K8s as SSOT): no per-range versioned locks or `WaitForRange` barriers; handoff is best-effort pull (no ACK-deletion loop); no crash-initiated broad recovery; transport-agnostic `DirectoryPeer` instead of system-target RPC.
+Intentional deviations (driven by K8s as SSOT): a snapshot is served only to a silo that moved between exactly the same two view versions, because EndpointSlice revisions do not advance by one; recovery is bounded only by an optional `directoryRecoveryPatience`; transport-agnostic `DirectoryPeer` instead of system-target RPC.
 
-Risks: `beginRecovery` (`cluster-node.ts:616-639`) silently ignores pull failures (`catch` block); activation can register while successor's recovery is still pulling; lookup returns stale pointer if the silo is dead but not yet cleaned (`local-directory-partition.ts:18`); handoff snapshot retained indefinitely if successor crashes pre-pull (`cluster-node.ts:219`); concurrent writes during `drain` and `acceptHandoff` are not locked.
+Risks: while a member is unreachable but still listed, lookups that miss the location cache for the ranges it owned wait until Kubernetes removes it (the directory fails closed); a dead process that is still listed is repaired by removing the one entry a refused dial followed, not by a failure detector.
 
-Missing Orleans features: versioned range locks; partitioned snapshot transfer with ACK and tombstone cleanup; crash-recovery broadcast; `recoveryMembershipVersion` tracking; multi-silo partition split handling.
+Ported from Orleans: range locks (`WaitForRange`), snapshot transfer with acknowledgement, recovery from the hosts (`RecoverRegisteredActivations`) and the recovery version (`_recoveryMembershipVersion`). Not ported: Orleans' contiguous-version rule (replaced by the exact pair of versions) and multi-silo partition split handling.
 
 ### `@thresh/clustering-k8s`
 
@@ -254,7 +254,7 @@ Observability is listed as Shipped but is partial; the status board should refle
 4. **Introduce a versioned, registry-based serializer** with surrogate types, polymorphism, `Map`/`Set`, circular-reference handling, and per-field version tags. Required for safe rolling upgrades and event-sourced payloads.
 5. **Add stream `IStreamFailureHandler`** with configurable fault/skip policy and exponential backoff; add explicit producer registration. Eliminates head-of-line blocking.
 6. **Add transaction lock deadlines** with cascading abort, and a confirmation-worker that periodically pings remote TMs to resolve in-doubt prepared records.
-7. **Tighten the directory**: check silo liveness on lookup; expire retained handoff snapshots; retry recovery pulls with backoff; track a `recoveryMembershipVersion` to gate concurrent registers.
+7. **Tighten the directory** (done): liveness checked on lookup; snapshots held until their partners collect them or leave; recovery retried with backoff; a recovery version gates concurrent registers.
 8. **Enforce `StatelessWorker` placement** and add runtime `@readOnly` mutation checks (at least in dev mode).
 9. **Add grain observers / typed client callbacks** and a minimal `IGrainExtension` mechanism. Unblocks push notifications and is a prerequisite for system-target style APIs.
 10. **Fix reminders**: enforce minimum period; gate register/unregister on service-ready; retry initial load; propagate fire/remove errors with logging; add `GetReminder`/`GetReminders`.

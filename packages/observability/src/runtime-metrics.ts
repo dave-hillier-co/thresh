@@ -7,10 +7,12 @@ export interface RuntimeMetricSources {
   /** Cumulative location-cache hits/misses, for the directory hit-rate metric. */
   directoryCache?: () => { hits: number; misses: number };
   /**
-   * Cumulative directory range-recovery outcomes: entries adopted by a recovery
-   * pull, and source pulls whose retry budget ran out (those ranges run on lazy
-   * reactivation until the re-armed pull gets through, so a non-zero rate is the
-   * signal that the directory is working harder than it should).
+   * Cumulative directory view-change outcomes: entries a partition took in, by snapshot
+   * transfer from a previous owner or by recovery from the members' activations, and recoveries
+   * abandoned because `directoryRecoveryPatience` elapsed before every member answered (the
+   * range was unlocked without them, so entries for activations on a member that never answered
+   * are missing and a grain may activate a second time; a non-zero rate says the directory was
+   * made to choose availability).
    */
   directoryRecovery?: () => { recovered: number; exhausted: number };
 }
@@ -65,12 +67,13 @@ export function registerRuntimeMetrics(sources: RuntimeMetricSources): () => voi
   const { directoryRecovery } = sources;
   if (directoryRecovery !== undefined) {
     const recovered = meter.createObservableCounter("thresh.directory.recovery.recovered", {
-      description: "Directory entries adopted by a range recovery",
+      description: "Directory entries a partition took in by snapshot transfer or range recovery",
       unit: "{entry}",
     });
     const exhausted = meter.createObservableCounter("thresh.directory.recovery.exhausted", {
-      description: "Directory range-recovery sources whose retry budget ran out",
-      unit: "{source}",
+      description:
+        "Range recoveries abandoned when directoryRecoveryPatience elapsed, unlocking the range without every member's answer",
+      unit: "{recovery}",
     });
     registerObservableInstrument(recovered, (result) =>
       result.observe(directoryRecovery().recovered),

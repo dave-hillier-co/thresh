@@ -520,6 +520,74 @@ Builder groups include membership (`useStaticMembership`, `useKubernetesMembersh
 (`useInProcessTransport`, `useWebSocketTransport`), operations (`useHealthEndpoints`, `useTracing`,
 `useMetrics`, `useLogging`), and memory/Redis/Postgres/Kafka providers.
 
+## A pod's life in the cluster
+
+Under `useKubernetesMembership` every silo reads its own status, and every peer's, from the
+headless service's EndpointSlices, so silos that have seen the same slices hold the same view:
+
+| Endpoint                       | Status     | Owns ranges and hosts new grains | A member |
+| ------------------------------ | ---------- | -------------------------------- | -------- |
+| ready                          | `active`   | yes                              | yes      |
+| not ready, terminating         | `draining` | no                               | yes      |
+| not ready, not terminating     | `joining`  | only while no member is active   | yes      |
+| not listed                     | absent     | no                               | no       |
+
+A **joining** pod (started, not yet marked ready by its readiness probe) owns no hash range and
+activates no grain while any peer is active. It can already call grains — a startup task, a grain it
+is asked for — and they are placed on, and answered by, the active silos. Its readiness probe passes
+once its watch lists it; it does not wait to own anything. Once Kubernetes marks it ready it becomes
+active, takes its ranges over, and new grains may be placed on it. A cold cluster, where no pod is
+ready yet, forms its ring from the joining pods so that startup tasks can run; the first pod to
+become ready takes the ring over and the others hand it their ranges.
+
+A **draining** pod (being deleted) keeps serving the grains it already hosts until it stops, but
+activates nothing new: a call to a new grain made through it is placed on an active silo. The same
+holds for stateless workers on a joining or draining pod: the workers it already has keep serving,
+its pool does not grow, and a call it cannot serve from them runs on an active silo.
+
+A pod that Kubernetes **takes out of the Service while it is still running** (its endpoint removed
+from the slices after it had been listed) fences itself: its peers have already dropped its
+directory entries, so it refuses every call, abandons its activations without running their
+deactivation hooks, stops its reminders, stream agents and durable jobs, and fails its liveness
+probe, so the kubelet restarts it. Before its endpoint is first listed a pod is simply not yet a
+member and is not fenced.
+
+## When a pod is lost
+
+Every silo owns a share of the grain directory: the record of which pod runs each grain. When
+membership changes, the silos whose share grows lock the new part until they hold its records, so a
+grain is never started a second time while its first activation may still be running. They take the
+records from the silo that held them, or, when that silo is gone, rebuild them by asking every
+listed pod which grains it runs.
+
+- **A pod that stops gracefully** hands its records on as it turns not ready; nothing waits.
+- **A pod that crashes** refuses connections once its process is gone, which counts as "I run
+  nothing". As soon as its endpoint turns not ready, its share is rebuilt from the survivors, and its
+  grains are started afresh on the next call.
+- **A pod that is unreachable but still listed** — its node is partitioned or wedged, so dials to it
+  time out — cannot answer, and the share being rebuilt stays locked until Kubernetes removes its
+  endpoint. Calls to grains in that share that are not already in a caller's location cache wait, or
+  time out with a rejection the caller may retry. On a node failure that is the node controller's
+  eviction delay (the pod's `node.kubernetes.io/unreachable` toleration, five minutes by default):
+  shorten it on silo pods to shorten the wait. A pod that cannot reach a listed peer when it starts
+  does not become ready until it can, or until the peer is removed.
+
+If availability matters more than the guarantee, `directoryRecoveryPatience` (unset by default)
+bounds the wait: once it elapses the share unlocks with what the reachable pods reported, and a
+grain the unreachable pod was running may be started a second time. Each such unlock is logged at
+error level ("directory recovery patience elapsed") and counted.
+
+```ts
+createSilo({ clusterId, local, directoryRecoveryPatience: { seconds: 30 } });
+```
+
+The directory reports through the metrics seam: `thresh.directory.range_lock.wait` (how long
+requests waited on a locked share), `thresh.directory.snapshot.transfers`,
+`thresh.directory.recoveries.started` and `.completed`, `thresh.directory.recovery.retries` (a pod
+asked again because it did not answer), and `thresh.directory.recovery.patience_expired`. A rising
+retry count with recoveries that do not complete names a pod that is listed but unreachable; each
+retry is also logged as a warning naming the pod.
+
 `useStaticMembership` lists every silo as active for good, with no liveness: a silo that exits stays
 in the view and calls routed to it hang. A view of the silo alone is exact, and is what single-silo
 development uses; a static view of several silos is refused at build unless
@@ -584,12 +652,33 @@ await cluster.kubernetes.release(a); // a catches up
 ```
 
 Each silo runs `useKubernetesMembership` over its own watch of one fake EndpointSlice API server
-(`cluster.kubernetes.api`). Silos join the way pods do: the pod is published not ready, the silo
-starts, then the pod is marked ready. The controls are `setReady`, `markNotReady`, `removePod`,
-`depart` (not ready, then removed), `hold` and `release` (one silo's watch lags, then catches up),
-and `relist` (the API server ends that silo's watch, which then re-lists). Each control resolves
-once every silo has applied the view it holds. `viewOf(silo)` returns that silo's membership view
-and the view version its node has applied. `siloMetadata` travels as pod labels.
+(`cluster.kubernetes.api`). Silos join the way pods do: the pod is listed not ready before the
+silo starts (so the silo finds itself listed and start does not wait), the silo starts, and the
+kubelet then marks the pod ready once the silo's own readiness passes. `siloMetadata` travels as
+pod labels. Each control resolves once every live silo has applied the view its own membership
+holds; `viewOf(silo)` returns that silo's membership view and the view version its node applied.
+
+The controls on `cluster.kubernetes`:
+
+- `setReady(silo, ready)` flips a pod's readiness condition. `markNotReady`, `removePod` and
+  `depart` (not ready, then removed) take a pod away in the two steps Kubernetes does.
+- `kubelet(silo)` is the readiness probe: it waits until the silo's own readiness passes (it
+  throws after `timeoutMs`, default 10s), then marks the pod ready. `startAdditionalSilo` and
+  `startAdditionalSilos` call it for you.
+- `terminate(silo)` is a pod being deleted: its endpoint turns not ready and terminating, so every
+  silo sees it `draining`. It stays listed until `removePod`.
+- `hold(silo)` queues that silo's watch events so its view falls behind, and `release(silo)`
+  delivers them in order and resumes live delivery. `relist(silo)` ends the watch as the API
+  server does on a timeout; the silo re-lists and watches again.
+- `settle()` lets watch reconnects, view reconciliation and directory traffic run.
+
+`startAdditionalSilo({ holdReadiness: true })` starts a silo and leaves its pod not ready: it
+stays a joining member, outside the ring while any peer is active, until the test flips it with
+`setReady` or `kubelet`. `startAdditionalSilos(count, options)` starts several silos at once, as a
+Deployment rolls out pods together: every pod is listed not ready before any silo starts, the
+silos start concurrently, and the kubelet marks each ready as its own readiness passes. On a
+cluster with no ready silo that is a cold start, and the ring is the joining silos until the first
+is ready.
 
 `stopSilo` marks the pod not ready, drains the silo, then removes the pod. `killSilo` leaves the
 pod listed and ready, as after a real crash, until the test calls `kubernetes.depart` (or
@@ -598,6 +687,24 @@ calls fail.
 
 The static membership stays the default because the existing suites were written against its
 instant, cluster-wide views.
+
+## Checking the directory
+
+`await cluster.checkIntegrity()` asks every live silo's directory partition (Orleans
+`IGrainDirectoryTestHooks.CheckIntegrityAsync`) whether it holds an entry outside the hash ranges it
+owns, and whether every registered, live activation in the cluster has exactly its own entry at its
+owner. An activation with no entry, or an entry naming a different activation, is how a grain ends up
+active in two places. It throws an `Error` listing every violation, one line each, prefixed with the
+pod name of the silo that found it, and returns nothing when the directory is sound.
+
+Call it after each step that moves ranges or activations, once the calls you issued have finished:
+after a join, a `stopSilo`, a `killSilo` followed by `kubernetes.depart`, a readiness flap, or a
+batch of calls made while any of those ran. Under Kubernetes membership it first runs
+`cluster.kubernetes.settle()`, so every silo has applied the view its own watch holds; under static
+membership there is nothing to settle. While a silo checks, it locks its whole range at the view it
+has applied, so other requests to it wait for the check. A member that does not answer the
+partition's question (a fault cut the link, as opposed to a refused connection, which means the
+process is gone and it hosts nothing) is asked four times and then reported as a violation.
 
 ## Network faults
 
@@ -621,8 +728,15 @@ calls. `sever` closes the connections already open on a link at the accepting en
 would: the dialler sees each one lost and fails exactly the calls pending on it. Each fault holds until
 healed, or for the given `count` of messages. A schedule decides the next messages on a link one at
 a time, then the link goes back to the standing rules. Nothing is random. Connections are pooled, so
-a refused connect only bites a link that has not connected yet; arm one before the cluster starts by
-passing `faults` in the options. Links not named by any fault are untouched. A partition also cuts
+a refused connect only bites a link that has not connected yet: `sever` the link's open connections
+first, then arm the fault. Arm a connect fault after the cluster has started, never before. A silo's
+first view recovers the ranges it gains by asking every listed member for its activations, an
+injected connect failure reports as a timeout (not as a refused connection, which would mean the
+member has no process and hosts nothing), and a member that does not answer is asked again for as
+long as it is listed, with the range locked. A fault armed before start therefore blocks that
+recovery, the silo's start does not finish, and it does not report ready. Passing `faults` in the
+options is for sharing a `NetworkFaults` you built; arm nothing on it until `start` has returned.
+Links not named by any fault are untouched. A partition also cuts
 grain-directory traffic, so an uncached call can fail even between two silos on the same side.
 `useTransport` installs the decorator on a silo built by hand.
 
@@ -776,10 +890,42 @@ summary of the deliberate deviations. [`EPICS.md`](../EPICS.md) tracks what is s
 ## Kubernetes-native hosting
 
 Kubernetes is the **membership authority**, replacing Orleans' membership table, status gossip, and
-probe-graph failure detector. A silo watches the EndpointSlices of a headless `Service`: ready
-endpoints are live silos, removed endpoints are dead. Silos run as a `StatefulSet` (stable ordinals
-keep a restarted silo in the same ring position); liveness/readiness probes drive failure detection
-and the graceful drain. Silo identity is `podName` + `podUid` rather than Orleans' `IP:port:generation`.
+probe-graph failure detector. A silo watches the EndpointSlices of a headless `Service`, and the view
+is a pure function of them, the same rule for every endpoint including the silo's own: `ready` is
+`active`, not ready and `terminating` is `draining`, not ready otherwise is `joining`, and an
+endpoint that is not listed is not a member. Silos run as a `StatefulSet` (stable ordinals keep a
+restarted silo in the same ring position); liveness/readiness probes drive failure detection and the
+graceful drain. Silo identity is `podName` + `podUid` rather than Orleans' `IP:port:generation`.
+
+The status maps onto Orleans' as follows, with `ringSilos` as the one rule for who may own a range
+or host a new activation:
+
+- **The ring is the active members** (Orleans `DirectoryMembershipSnapshot`), and when no member is
+  active it is the joining ones. That fallback has no Orleans counterpart — an Orleans silo becomes
+  active through the membership table, not through a readiness probe that waits on it — and is what
+  lets a cold cluster start: every silo sees the same joining set, so they agree on a ring and
+  startup tasks can call grains; the first silo to become ready takes it over. The same rule feeds
+  placement and migration candidates, the rebalancer and repartitioner, load publishing, the client
+  gateway list, and stream, reminder and durable-job ownership.
+- **A silo outside its ring creates no activation** (Orleans `Catalog.GetOrCreateActivation` creates
+  only while the silo is active). A call that would activate a grain there is refused before it runs
+  and its caller re-resolves; the activations it already hosts keep serving, and their directory
+  entries stay valid because it is still a member. Stateless workers are gated too: such a silo
+  serves a stateless-worker call with a worker it already hosts, without growing its pool, and
+  otherwise sends the call to a silo in its ring (forwarded, when it arrived from a client), as
+  Orleans' `StatelessWorkerDirector` places elsewhere when the local silo is not a compatible one.
+  A joining silo's startup task that calls a stateless worker is therefore served by an incumbent,
+  or locally in a cold start, where the joining silos are the ring.
+- **Readiness asks whether the silo is listed**, not whether it owns a range: a joining silo must
+  report ready for Kubernetes to mark it ready, which is what brings it into the ring.
+- **The self-probe is answered locally**: the probe grain is activated through the node's local
+  system-activation path, never placed or registered in the directory, so it measures this silo's
+  own dispatcher on a silo that is not a placement candidate.
+- **A silo that sees itself removed fences itself** (Orleans `MembershipTableManager.KillMyselfLocally`):
+  once a view omits a silo that was listed, it fails liveness, refuses every call, stops its
+  ownership services and abandons its activations without running deactivation hooks or
+  unregistering them, since its peers have already dropped its entries. The kubelet then restarts
+  it. Static membership never reports a removal and so never fences.
 
 | Orleans mechanism | Replaced by |
 | --- | --- |
@@ -797,23 +943,89 @@ highest EndpointSlice `resourceVersion` the silo's watch has observed: each list
 watch event's (a DELETED event carries the deletion's revision). For an etcd-backed resource that is
 the etcd modification revision, one cluster-wide increasing counter, so silos that have seen the
 same writes to the service's slices hold the same version and a silo whose watch lags holds a lower
-one — the cross-silo ordering the directory's `staleView` guard and `awaitView` depend on. Kubernetes
-documents `resourceVersion` as opaque; this relies on its etcd form, and a non-numeric value is
-treated as carrying no revision (the view then falls back to a per-silo counter, which only orders
-views within one silo).
+one — the cross-silo ordering the directory's versioned requests and `awaitView` depend on. Because
+the view is a pure function of the slices, two silos at one version hold the same ring. Kubernetes
+documents `resourceVersion` as opaque; this relies on its etcd form. Every watch update must carry a
+revision, and `KubernetesMembership` refuses one that does not: a change the watch cannot date (a
+slice with a non-numeric `resourceVersion`) is not reported on its own, and is carried by the next
+dated change.
 
 The list's own `resourceVersion` is not used as the version: it is the cluster's global revision at
 the moment of the list, which moves with writes to every other object, so a silo that listed later
 would number an identical view higher and its peers would wait on a version they never reach. It is
 used only when a re-list shows a change that no listed slice dates — a slice deleted while the watch
-was down. One gap remains: a silo that listed after such a deletion holds a lower version than a peer
-that saw the DELETED event, until the next write to the slices. Neither the version nor the view
-carries a rolling-upgrade compatibility story; the project has no deployments to upgrade.
+was down — and by `refresh`.
+
+`MembershipService.refresh(version)` catches a silo up on demand (Orleans
+`ClusterMembershipService.Refresh`): when a peer's directory operation carries a version this silo
+has not reached, `ClusterNode.awaitView` asks for it. Under Kubernetes it waits briefly for the
+watch, then re-lists; a list whose own `resourceVersion` is at least the requested version proves
+that the slices it returned reflect every write up to that version, so the silo adopts the
+requested version for the view the list gives. That covers a silo whose watch lags and a silo that
+listed after a slice deletion it never saw, which holds a lower version than a peer that saw the
+DELETED event: neither waits for an unrelated write to the slices. Watch events still in flight
+when such a list runs ahead of them are older than it and are ignored. Static membership has one
+view and resolves at once. Neither the version nor the view carries a rolling-upgrade compatibility
+story; the project has no deployments to upgrade.
 
 `MembershipService.updates()` has latest-value semantics like Orleans' `AsyncEnumerable<T>`, but
 coalesces: an iterator that fell several views behind yields only the latest, where Orleans walks
 every intermediate one. Every consumer re-reads `current()` to apply a view, and the host's
 reconciliation loops until the node's applied version equals it, so no view is ever left unapplied.
+
+## The grain directory fails closed across a view change
+
+The distributed directory is a port of Orleans' `DistributedGrainDirectory` and
+`GrainDirectoryPartition` (`@thresh/directory/grain-directory-partition`): each silo's partition
+holds the entries for the hash ranges it owns in the view it has applied, every entry stamped with
+that view's version. A range is `(start, end]` on the hash circle, as Orleans' `RingRange`; a
+virtual node owns the arc from its predecessor to itself, and the same arcs decide reminder, stream
+queue and durable-job ownership, so a silo fires and pulls exactly what it owns in the directory.
+On a view change a partition locks the ranges it gains and loses before anything else can run; a
+lost range's entries go into a snapshot for the new owners, and a gained range stays locked until
+its entries have been transferred from every previous owner's snapshot or rebuilt from the
+activations every member hosts. Requests carry the caller's view version; the owner catches up when
+it is behind, waits out a lock on the grain's hash, checks ownership every time, and answers
+"refresh required" with its own version when it does not own the hash. The caller refreshes,
+re-resolves and retries after a pause, a bounded number of times. It differs from Orleans here:
+
+- **The exact pair of versions, not "plus one".** Orleans takes a previous owner's snapshot only
+  when the view advanced by exactly one, and recovers otherwise. EndpointSlice revisions do not
+  advance by one, and a silo may coalesce views, so a snapshot is keyed by the pair of views its
+  silo moved between, and a new owner asks for exactly its own pair. A silo that skipped or
+  coalesced a view, a silo applying its first view, and a range whose previous owner is no longer a
+  member all recover. So does a range that no silo owned in the previous view (an empty ring), where
+  Orleans finds no previous owner to ask and unlocks the range empty.
+- **Recovery waits for every listed member.** The new owner asks every member — active, joining and
+  draining, itself included — for the registered activations it hosts in the range, and asks a
+  member that does not answer again, with backoff, for as long as Kubernetes lists it. That is the
+  cost of failing closed: with no failure detector of its own, a silo cannot tell an unreachable
+  peer from a slow one, so when a pod is unreachable but still listed, lookups that miss the
+  location cache for the ranges being recovered wait until Kubernetes removes the endpoint (or the
+  call times out and the caller may resend it). The alternative — unlocking the range — risks a
+  second activation of a grain the unreachable pod may still be running. A silo that cannot reach a
+  listed member when it starts does not finish recovering its first view's ranges, and so does not
+  report ready.
+- **A refused connection is an answer.** A member whose dial is refused outright (`ConnectFailure`
+  with cause `refused`) has no process at its address, so it hosts nothing: it has answered with
+  nothing. A dial that times out, or a connection that closes during the handshake, says nothing
+  about the process behind it and is asked again.
+- **An optional patience.** `SiloConfig.directoryRecoveryPatience`, unset by default, bounds how
+  long a recovery waits: once it elapses the range unlocks with the answers received, the event is
+  logged at error level and counted (`thresh.directory.recovery.patience_expired`). It trades the
+  guarantee for availability, and is the operator's choice.
+- **One partition per silo**, where Orleans runs thirty per silo; the ring keeps its hundred
+  virtual nodes per silo, so ranges move in the same fine slices.
+- **A recovered range is rebuilt from the answers alone**: entries a failed transfer had already
+  applied are replaced, not merged, since the hosts' answers are the truth.
+- **A registration is confirmed again inside the dispatcher.** The recovery version rule (Orleans
+  `_recoveryMembershipVersion`) is kept: a member answering a recovery raises its recovery version
+  to the request's, sends directory operations at a view at least that new, re-sends an operation
+  during which it rose, and confirms again a registration the owner stamped below it. Orleans does
+  that while its activation exists but is not yet valid; here an activation is created only once its
+  registration is confirmed, in the same synchronous step that makes it visible to a recovery, so a
+  registration that loses forwards its call to the winner and no duplicate activation exists to
+  deactivate. A migrated activation, which exists before it registers, is deactivated when it loses.
 
 ## Functional / reducer authoring
 
