@@ -36,8 +36,10 @@ survivors rebuild them once it has left. `dispose()` is a cluster stopping toget
 silo leaving first, so the ring is empty and no silo hands anything to one about to stop, then stops
 them in order. With no ring, an `onDeactivate` hook that calls a grain during `dispose()` reaches it
 only over a route its silo already holds. `stopBudgetMs` sets every silo's stop budget (the grace
-period is 0 here, so the handover may use half of it). `killSilo` is a crash, the stand-in for a killed pod (Orleans `KillSiloAsync`). The
-silo's transport is gone, so peers dialling it are refused and nothing it sends arrives. Every timer
+period is 0 here, so the handover may use half of it).
+
+`killSilo` is a crash, the stand-in for a killed pod (Orleans `KillSiloAsync`). The silo's
+transport is gone, so peers dialling it are refused and nothing it sends arrives. Every timer
 it armed is cancelled (grain timers, reminder ticks, durable-job polls, idle collection), its
 pulling-stream agents stop, and it sees no further membership change, so it runs no further
 ownership hooks. No shutdown code runs: no drain, no deactivation hook, no release of what it held.
