@@ -6,6 +6,7 @@ import { Grain } from "@thresh/core/grain";
 import { GrainId } from "@thresh/core/grain-id";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
 import type { GrainKey } from "@thresh/core/key-kinds";
+import type { LogFields, Logger } from "@thresh/core/logger";
 import type { GrainDirectoryPartition } from "@thresh/directory/grain-directory-partition";
 import { PreferLocalPlacement } from "@thresh/runtime/placement/prefer-local-placement";
 import {
@@ -462,6 +463,95 @@ describe("a silo with nobody to hand over to", () => {
     expect(run.status).toBe(0);
     expect(run.stdout).toContain("disposed static and kubernetes clusters");
   }, 60_000);
+});
+
+/** The warnings every silo logged: a stop whose handover bound elapsed logs one. */
+class WarningLogger implements Logger {
+  readonly warnings: Array<{ message: string; fields?: LogFields }> = [];
+  debug(): void {}
+  info(): void {}
+  warn(message: string, fields?: LogFields): void {
+    this.warnings.push({ message, ...(fields ? { fields } : {}) });
+  }
+  error(): void {}
+
+  /** The stops that spent their whole handover bound, and who they were still waiting for. */
+  handoversIncomplete(): unknown[] {
+    return this.warnings
+      .filter((w) => w.message.startsWith("directory handover incomplete"))
+      .map((w) => w.fields);
+  }
+}
+
+describe("a cluster stopping while a dead pod is still listed not ready", () => {
+  // Half of it is the handover bound: far longer than any of these stops may take.
+  const stopBudgetMs = 20_000;
+
+  /** Three silos hosting thirty grains, and a fourth killed with its pod left listed not ready. */
+  async function withDeadPod(logger: Logger): Promise<{
+    cluster: TestCluster;
+    live: TestSiloHandle[];
+    dead: TestSiloHandle;
+  }> {
+    const cluster = await start({ initialSilos: 4, stopBudgetMs, logger });
+    const dead = cluster.silos[1]!;
+    const results = new Results();
+    for (const [i, key] of keysFor("dead-pod", 30).entries()) {
+      await call(results, cluster.silos[i % 4]!, key);
+    }
+    expect(results.errors).toEqual([]);
+    await cluster.killSilo(dead);
+    await cluster.kubernetes.markNotReady(dead);
+    await cluster.checkIntegrity();
+    const live = [...cluster.silos];
+    expect(cluster.kubernetes.listed(dead)).toBe(true);
+    return { cluster, live, dead };
+  }
+
+  it("disposes promptly: no stop waits on the dead pod", async () => {
+    const logger = new WarningLogger();
+    const { cluster, live, dead } = await withDeadPod(logger);
+
+    const startedAt = performance.now();
+    await cluster.dispose();
+    expect(performance.now() - startedAt).toBeLessThan(stopBudgetMs / 2 / 4);
+    // No stop spent its bound, and a leaver held what it gave the dead pod without waiting on it.
+    expect(logger.handoversIncomplete()).toEqual([]);
+    for (const silo of live) expect(partitionOf(silo).awaitedPartners).toEqual([]);
+    expect(
+      live.some((silo) => partitionOf(silo).view.ringSilos.every((s) => s.equals(dead.address))),
+    ).toBe(true);
+    expect(live.some((silo) => partitionOf(silo).snapshotCount > 0)).toBe(true);
+  }, 120_000);
+
+  it("stops every silo promptly when every live pod is reported terminating at once", async () => {
+    const logger = new WarningLogger();
+    const { cluster, live, dead } = await withDeadPod(logger);
+
+    // A Deployment deleted: every live pod is terminating at once, so no silo is ready and the
+    // ring falls back to the dead pod.
+    for (const silo of live) cluster.kubernetes.api.setTerminating(silo.address.podName);
+    await cluster.kubernetes.settle();
+    for (const silo of live) {
+      expect(partitionOf(silo).view.ringSilos).toEqual([dead.address]);
+      expect(partitionOf(silo).snapshotCount).toBeGreaterThan(0);
+    }
+
+    const stoppedAfter = await Promise.all(
+      live.map(async (silo) => {
+        const startedAt = performance.now();
+        await cluster.stopSilo(silo, { keepListed: true });
+        return performance.now() - startedAt;
+      }),
+    );
+    for (const ms of stoppedAfter) expect(ms).toBeLessThan(stopBudgetMs / 2 / 4);
+    expect(logger.handoversIncomplete()).toEqual([]);
+    for (const silo of live) {
+      expect(partitionOf(silo).awaitedPartners).toEqual([]);
+      // Still held for the dead pod, had it come for it.
+      expect(partitionOf(silo).snapshotCount).toBeGreaterThan(0);
+    }
+  }, 120_000);
 });
 
 describe("a leaving silo on the default (static) membership", () => {

@@ -1,4 +1,9 @@
-import { memberSilos, ringSilos, type MembershipSnapshot } from "@thresh/core/membership";
+import {
+  activeSilos,
+  memberSilos,
+  ringSilos,
+  type MembershipSnapshot,
+} from "@thresh/core/membership";
 import type { SiloAddress } from "@thresh/core/silo-address";
 import { ConsistentHashRing } from "@thresh/directory/consistent-hash-ring";
 import type { RingRange } from "@thresh/directory/ring-range";
@@ -7,8 +12,8 @@ import type { RingRange } from "@thresh/directory/ring-range";
  * What the directory needs of one membership view (Orleans `DirectoryMembershipSnapshot`),
  * derived from it and from nothing else, so two silos holding the same view agree on every
  * answer: its version, its ring (`ringSilos`: the active members, or the joining ones while none
- * is active), its members (`memberSilos`: every listed silo, whatever its status), the owner of a
- * hash and the ranges of a silo.
+ * is active), its members (`memberSilos`: every listed silo, whatever its status), its active
+ * members (`activeSilos`: the ready ones), the owner of a hash and the ranges of a silo.
  */
 export class DirectoryView {
   /** The view a partition holds before it has applied one (Orleans `MembershipVersion.MinValue`). */
@@ -21,12 +26,19 @@ export class DirectoryView {
     readonly version: number,
     ring: readonly SiloAddress[],
     readonly members: readonly SiloAddress[],
+    /** The members whose status is `active`: ready, as opposed to listed. */
+    readonly active: readonly SiloAddress[] = [],
   ) {
     this.ring = new ConsistentHashRing(ring);
   }
 
   static of(snapshot: MembershipSnapshot): DirectoryView {
-    return new DirectoryView(snapshot.version, ringSilos(snapshot), memberSilos(snapshot));
+    return new DirectoryView(
+      snapshot.version,
+      ringSilos(snapshot),
+      memberSilos(snapshot),
+      activeSilos(snapshot),
+    );
   }
 
   /** The silos that own ranges in this view. */
@@ -57,6 +69,14 @@ export class DirectoryView {
 
   isMember(silo: SiloAddress): boolean {
     return this.members.some((m) => m.equals(silo));
+  }
+
+  /**
+   * Whether `silo` is `active` in this view. A member that is not may still be in the ring, by the
+   * cold-start fallback when no member is active, and nothing says its process is running.
+   */
+  isActive(silo: SiloAddress): boolean {
+    return this.active.some((m) => m.equals(silo));
   }
 
   inRing(silo: SiloAddress): boolean {
