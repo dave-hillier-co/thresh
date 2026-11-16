@@ -174,7 +174,9 @@ describe.skipIf(client === undefined)("LocalReminderService over RedisReminderTa
 
     await service.register(billing, "invoice", { ms: 1000 }, { ms: 1_000_000 });
     time.advance(1000);
-    await flush();
+    // The tick is delivered after a real read of the table, which a single timer turn does not
+    // always outlast.
+    await waitFor(() => fired.length >= 1);
     expect(fired).toEqual(["invoice"]);
     service.stop();
   });
@@ -199,7 +201,9 @@ describe.skipIf(client === undefined)("LocalReminderService over RedisReminderTa
     );
     await successor.refreshOwnership([WHOLE]);
     time.advance(1000);
-    await flush();
+    // The tick is delivered after a real read of the table, which a single timer turn does not
+    // always outlast.
+    await waitFor(() => fired.length >= 1);
     expect(fired).toEqual(["invoice"]);
     successor.stop();
   });
