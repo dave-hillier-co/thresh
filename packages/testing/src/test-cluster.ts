@@ -607,7 +607,7 @@ export class TestCluster {
     if (this.k8s === undefined) {
       // The view marks the silo draining before it stops and removes it after, as a terminating
       // pod's endpoint does, so its ranges move by snapshot while it still serves.
-      silo.markLeaving();
+      silo.markDraining?.();
       await silo.host.stop();
       this.shared?.removeSilo(silo.address);
       return;
@@ -680,16 +680,18 @@ export class TestCluster {
   }
 
   /**
-   * Stop the cluster together: every live silo is marked leaving first, so the ring is empty
-   * and no silo hands a range to a silo that is about to stop (there is nobody to hand over to,
-   * so no stop waits for a handover). Then stop every live silo in a deterministic order —
-   * mirroring `stopSilo`'s stop-then-remove sequencing per silo — rather than tearing them all
-   * down concurrently. A bare `Promise.all` would race: a silo mid-`stop()`
-   * runs `onDeactivate` hooks that can make cross-silo calls (the
-   * `ActivateDeactivateWatcherGrain` pattern), and if every silo's transport
-   * were closing at once, that call could land on a peer whose listener is
-   * already gone. Stopping one at a time, and updating membership between
-   * each, keeps the remaining silos reachable until it is their own turn.
+   * Stop the cluster one silo at a time, in the order the silos started, each leaving the way
+   * `stopSilo` makes a silo leave — marked draining (its pod terminating), stopped, then removed
+   * from membership — while the silos not yet stopped are still active (Orleans'
+   * `StopAllSilosAsync`, which stops each silo in turn). Each hands its ranges to the silos that
+   * remain, so an `onDeactivate` hook can still call a grain on a silo that has not stopped yet
+   * (the `ActivateDeactivateWatcherGrain` pattern); the last has nobody ready to hand over to and
+   * waits for nothing. A bare `Promise.all` would race: if every silo's transport were closing at
+   * once, such a call could land on a peer whose listener is already gone.
+   *
+   * A silo whose host a test already stopped (or began stopping) directly is taken out first, the
+   * same way: it is no longer serving, so no silo should hand a range to it. Every network fault
+   * injected through `faults` is healed first, so a link a test broke does not hold a handover.
    *
    * The cluster client (if one was ever created) is closed FIRST, matching
    * Orleans' `StopAllSilosAsync`, which calls `StopClusterClientAsync` before
@@ -704,15 +706,30 @@ export class TestCluster {
     if (client !== undefined) {
       await client.then((c) => c.close()).catch(() => undefined);
     }
-    const remaining = this.live;
-    this.live = [];
-    for (const silo of remaining) silo.markLeaving();
-    // Let every silo apply the view in which the cluster is leaving before any stops.
-    if (this.k8s !== undefined) await this.k8s.settle();
-    for (const silo of remaining) {
-      await silo.host.stop().catch(() => undefined);
-      if (this.k8s !== undefined) this.k8s.api.removePod(silo.address.podName);
-      else this.shared?.removeSilo(silo.address);
+    // A link a test broke would hold a leaver's handover for its whole bound; teardown is not
+    // under test.
+    this.faults.healAll();
+    const stopping = (s: InternalSilo): boolean => s.host.health.isDraining();
+    this.live = [...this.live.filter(stopping), ...this.live.filter((s) => !stopping(s))];
+    // Each silo is taken out of `live` only at its turn, so a settle while it leaves waits for
+    // the silos that remain to apply the view in which it is leaving, as `stopSilo` does.
+    for (let silo = this.live[0]; silo !== undefined; silo = this.live[0]) {
+      this.live = this.live.slice(1);
+      const leaving = silo;
+      await this.stopGracefully(leaving, { keepListed: true }).catch(() => undefined);
+      this.leaveMembership(leaving);
+    }
+  }
+
+  /**
+   * Take `silo` out of membership if it is still listed (a stop that failed leaves it so). The
+   * next silo's own stop lets the rest apply the change, so nothing waits for it here.
+   */
+  private leaveMembership(silo: InternalSilo): void {
+    if (this.k8s !== undefined) {
+      if (this.k8s.listed(silo)) this.k8s.api.removePod(silo.address.podName);
+    } else if (this.shared?.current().silos.some((m) => m.address.equals(silo.address))) {
+      this.shared.removeSilo(silo.address);
     }
   }
 
@@ -773,9 +790,6 @@ export class TestCluster {
         }),
       // A crashed pod's watch is gone with its process; its endpoint stays until Kubernetes acts.
       () => k8s.disconnect({ address }),
-      () => {
-        if (k8s.listed({ address })) k8s.api.setTerminating(address.podName);
-      },
     );
     return silo;
   }
@@ -786,7 +800,7 @@ export class TestCluster {
     metadata: Readonly<Record<string, string>> | undefined,
     useMembership: (builder: SiloBuilder) => void,
     stopFollowingMembership: () => void,
-    markLeaving: () => void,
+    markDraining?: () => void,
   ): InternalSilo {
     const clock = new SiloClock(this.options.time ?? systemTimeProvider);
     const transport = new CrashableTransport(
@@ -900,7 +914,13 @@ export class TestCluster {
       );
       await transportGone;
     };
-    const silo: InternalSilo = { index, address, host, crash, markLeaving };
+    const silo: InternalSilo = {
+      index,
+      address,
+      host,
+      crash,
+      ...(markDraining !== undefined ? { markDraining } : {}),
+    };
     this.live.push(silo);
     return silo;
   }
@@ -909,8 +929,11 @@ export class TestCluster {
 interface InternalSilo extends TestSiloHandle {
   /** Cut the silo off as a crash does; see `TestCluster.killSilo`. */
   crash(): Promise<void>;
-  /** Mark the silo leaving in membership (draining, or its pod terminating), without waiting. */
-  markLeaving(): void;
+  /**
+   * Mark the silo draining in the shared static view, without waiting. Static membership only: a
+   * Kubernetes pod is reported terminating through `KubernetesControls.terminate`.
+   */
+  markDraining?(): void;
 }
 
 /** A `SiloBuilder` that remembers the stream providers it was given, so a crash can stop them. */

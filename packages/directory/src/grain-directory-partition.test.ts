@@ -559,6 +559,113 @@ describe("GrainDirectoryPartition: view changes", () => {
   });
 });
 
+describe("GrainDirectoryPartition: handing over", () => {
+  /** S0 hosts and owns `count` grains at v1, then leaves at v2; `others` are the other members. */
+  async function leaving(
+    h: Harness,
+    others: Array<[SiloAddress, SiloStatus]>,
+    count = 10,
+  ): Promise<{ v1: DirectoryView; v2: DirectoryView }> {
+    const n0 = h.add(S0);
+    for (const [address] of others) h.add(address);
+    const v1 = view(1, [[S0, "active"], ...others]);
+    h.publish(v1);
+    for (let i = 0, registered = 0; registered < count; i++) {
+      const g = new GrainId("Counter", `leaving-${i}`);
+      if (!v1.owns(S0, g.getUniformHashCode())) continue;
+      ok(await n0.partition.register(1, addr(g, S0)));
+      registered++;
+    }
+    const v2 = view(2, [[S0, "draining"], ...others]);
+    // Only the leaver applies it: no partner has collected yet.
+    h.publish(v2, [S0]);
+    await n0.partition.settled();
+    expect(n0.partition.snapshotCount).toBeGreaterThan(0);
+    return { v1, v2 };
+  }
+
+  it("does not wait on a snapshot whose only partners are not active, and still serves it", async () => {
+    const h = new Harness();
+    // S1 is a dead pod still listed not ready: with S0 leaving it is the ring by the cold-start
+    // fallback, so it is the only partner of everything S0 gives up.
+    const { v1, v2 } = await leaving(h, [[S1, "joining"]]);
+    const n0 = h.node(S0);
+    expect(v2.ringSilos).toEqual([S1]);
+
+    // Settled with the clock never advanced: it did not wait for its bound.
+    expect(await stateOf(n0.partition.handedOver(10_000))).toBe("settled");
+    // Still held, and still served if the partner does come for it.
+    expect(n0.partition.snapshotCount).toBe(1);
+    const served = await n0.partition.serveSnapshot({
+      previousVersion: v1.version,
+      version: v2.version,
+      ranges: v2.rangesOf(S1),
+    });
+    expect(served).toHaveLength(10);
+  });
+
+  for (const outcome of ["collects", "leaves", "recovers"] as const) {
+    it(`waits on a snapshot with an active partner until that partner ${outcome}`, async () => {
+      const h = new Harness();
+      const { v2 } = await leaving(h, [
+        [S1, "active"],
+        [S2, "joining"],
+      ]);
+      const n0 = h.node(S0);
+      expect(v2.ringSilos).toEqual([S1]);
+      const handedOver = n0.partition.handedOver(10_000);
+      expect(await stateOf(handedOver)).toBe("pending");
+
+      if (outcome === "collects") {
+        h.publish(v2, [S1]);
+        await h.node(S1).partition.settled();
+      } else if (outcome === "leaves") {
+        h.publish(
+          view(3, [
+            [S0, "draining"],
+            [S2, "joining"],
+          ]),
+          [S0],
+        );
+      } else {
+        n0.partition.answerRecovery(S1, { version: v2.version, ranges: v2.rangesOf(S1) });
+      }
+      expect(await stateOf(handedOver)).toBe("settled");
+      expect(n0.partition.snapshotCount).toBe(0);
+    });
+  }
+
+  it("waits on a snapshot whose partner turns active, and not on one whose partner stops being", async () => {
+    const h = new Harness();
+    await leaving(h, [[S1, "joining"]]);
+    const n0 = h.node(S0);
+    expect(await stateOf(n0.partition.handedOver(10_000))).toBe("settled");
+
+    // The partner turns ready without collecting: the snapshot holds a leaver up again.
+    h.publish(
+      view(3, [
+        [S0, "draining"],
+        [S1, "active"],
+      ]),
+      [S0],
+    );
+    await n0.partition.settled();
+    const handedOver = n0.partition.handedOver(10_000);
+    expect(await stateOf(handedOver)).toBe("pending");
+
+    // It turns not ready again: the pending wait ends with the snapshot still held.
+    h.publish(
+      view(4, [
+        [S0, "draining"],
+        [S1, "joining"],
+      ]),
+      [S0],
+    );
+    expect(await stateOf(handedOver)).toBe("settled");
+    expect(n0.partition.snapshotCount).toBe(1);
+  });
+});
+
 describe("GrainDirectoryPartition: a request that outlives its range", () => {
   it("answers refresh rather than writing into a range the view moved away during its wait", async () => {
     const h = new Harness();

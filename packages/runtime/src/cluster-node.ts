@@ -1494,9 +1494,15 @@ export class ClusterNode {
    * 1. **The handover.** If this silo has applied a view in which it is out of the ring (it is
    *    leaving) and its partition holds snapshots of ranges it gave up, it waits until
    *    every one is collected (each partner has acknowledged it, left the view, or started a
-   *    recovery at or above its version), for at most HALF of `deadlineMs`. A silo that holds no
-   *    snapshot (it never saw itself leave, it owned nothing, or nobody remains to take its
-   *    ranges) waits for nothing. It goes on serving its activations meanwhile.
+   *    recovery at or above its version), for at most HALF of `deadlineMs`. It waits only for
+   *    partners that are `active` in the view it has applied
+   *    (`GrainDirectoryPartition.handedOver`): a partner that is not ready owns a range only
+   *    because no silo is ready, and nothing says its process is running — a dead pod still
+   *    listed would otherwise hold every leaver of a cluster stopping together for the whole
+   *    bound. A silo that holds no snapshot a ready partner is owed (it never saw itself leave,
+   *    it owned nothing, or nobody ready remains to take its ranges) waits for nothing. It goes on
+   *    serving its activations meanwhile, and logs a warning naming the partners still awaited
+   *    when the bound elapses first.
    * 2. **Deactivation.** `Catalog.deactivateAll` gets whatever is left of `deadlineMs`, so it
    *    always keeps at least half of it. Its unregistrations resolve the owner in the view this
    *    node has applied, so after a handover they go to the new owners.
@@ -1538,7 +1544,8 @@ export class ClusterNode {
 
   /**
    * Step 1 of `stop`: wait, for at most half of `deadlineMs`, until the partition has handed
-   * over every range this silo gave up, and return what is left of `deadlineMs`. Only a leaving
+   * over every range this silo gave up to the partners that are ready for it, and return what is
+   * left of `deadlineMs`. Only a leaving
    * silo waits: one whose applied view has it out of the ring. A silo stopped while it is still
    * in the ring (nobody marked it leaving) is not handing anything over, whatever snapshot an
    * earlier view change left behind. A fenced silo's peers have already dropped its entries, so
@@ -1548,7 +1555,14 @@ export class ClusterNode {
     if (deadlineMs === undefined || this.fenced) return deadlineMs;
     if (this.partition.view.inRing(this.options.local)) return deadlineMs;
     const startedAt = this.time.now();
-    await this.partition.handedOver(deadlineMs / 2);
+    const completed = await this.partition.handedOver(deadlineMs / 2);
+    if (!completed) {
+      this.logger.warn("directory handover incomplete when half the stop budget was spent", {
+        silo: this.options.local.toString(),
+        waitedMs: this.time.now() - startedAt,
+        awaiting: this.partition.awaitedPartners.map(String),
+      });
+    }
     return Math.max(0, deadlineMs - (this.time.now() - startedAt));
   }
 

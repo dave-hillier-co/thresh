@@ -6,6 +6,7 @@ import { Grain } from "@thresh/core/grain";
 import { GrainId } from "@thresh/core/grain-id";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
 import type { GrainKey } from "@thresh/core/key-kinds";
+import type { LogFields, Logger } from "@thresh/core/logger";
 import type { GrainDirectoryPartition } from "@thresh/directory/grain-directory-partition";
 import { PreferLocalPlacement } from "@thresh/runtime/placement/prefer-local-placement";
 import {
@@ -46,6 +47,31 @@ class LeavingCounter extends Grain implements ILeavingCounter {
     const silo = this.runtime.localSiloAddress().podName;
     deactivations.push({ silo, key: String(this.id.key), at: performance.now() });
     if (slow?.silo === silo) await sleep(slow.ms);
+    if (witness !== undefined && witness.silo !== silo) {
+      try {
+        await this.getGrain(ILeavingWitness, "witness").saw(String(this.id.key));
+      } catch (error) {
+        witness.failures.push(`${String(this.id.key)} on ${silo}: ${String(error)}`);
+      }
+    }
+  }
+}
+
+/**
+ * When set, every deactivation hook on a silo other than `silo` reports to the witness grain,
+ * which lives on `silo`: what reached it, and every report that failed.
+ */
+let witness: { silo: string; seen: string[]; failures: string[] } | undefined;
+
+interface ILeavingWitness extends GrainKey<string> {
+  saw(key: string): Promise<void>;
+}
+const ILeavingWitness = defineGrainInterface<ILeavingWitness>("ILeavingWitness");
+
+@grain({ name: "LeavingWitness" })
+class LeavingWitness extends Grain implements ILeavingWitness {
+  async saw(key: string): Promise<void> {
+    witness?.seen.push(key);
   }
 }
 
@@ -57,6 +83,7 @@ afterEach(async () => {
   slow = undefined;
   for (const c of clusters.splice(0)) await c.dispose();
   deactivations = [];
+  witness = undefined;
 });
 
 async function start(options: Partial<TestClusterOptions> = {}): Promise<TestCluster> {
@@ -217,6 +244,24 @@ function entriesNaming(
   );
 }
 
+/** The warnings every silo logged: a stop whose handover bound elapsed logs one. */
+class WarningLogger implements Logger {
+  readonly warnings: Array<{ message: string; fields?: LogFields; at: number }> = [];
+  debug(): void {}
+  info(): void {}
+  warn(message: string, fields?: LogFields): void {
+    this.warnings.push({ message, ...(fields ? { fields } : {}), at: performance.now() });
+  }
+  error(): void {}
+
+  /** The stops that spent their whole handover bound, and who they were still waiting for. */
+  handoversIncomplete(): unknown[] {
+    return this.warnings
+      .filter((w) => w.message.startsWith("directory handover incomplete"))
+      .map((w) => w.fields);
+  }
+}
+
 /** Three silos, each hosting `perSilo` counters called once through it. */
 async function seeded(
   cluster: TestCluster,
@@ -305,7 +350,8 @@ describe("a leaving silo on Kubernetes membership", () => {
 
   it("starts deactivating when half the stop budget is spent on owners that never collect, and stops inside the budget", async () => {
     const stopBudgetMs = 600;
-    const cluster = await start({ initialSilos: 3, stopBudgetMs, ...preferLocal });
+    const logger = new WarningLogger();
+    const cluster = await start({ initialSilos: 3, stopBudgetMs, logger, ...preferLocal });
     const [a, b, leaver] = cluster.silos as [TestSiloHandle, TestSiloHandle, TestSiloHandle];
     const results = new Results();
     const { leaverKeys } = await seeded(cluster, results, 5);
@@ -317,15 +363,28 @@ describe("a leaving silo on Kubernetes membership", () => {
     cluster.kubernetes.api.setTerminating(leaver.address.podName);
     await waitFor(() => partitionOf(leaver).snapshotCount > 0);
     const startedAt = performance.now();
+    // The stop completes.
     await cluster.stopSilo(leaver, { keepListed: true });
-    const stoppedAfter = performance.now() - startedAt;
 
     const hooks = deactivations.filter((d) => d.silo === leaver.address.podName);
     expect(hooks.map((d) => d.key)).toEqual(expect.arrayContaining(leaverKeys));
     // TestCluster's grace is 0, so the whole budget remains after it: the wait gets half of it.
-    const firstHookAfter = Math.min(...hooks.map((d) => d.at)) - startedAt;
-    expect(firstHookAfter).toBeGreaterThanOrEqual(stopBudgetMs / 2 - 5);
-    expect(stoppedAfter).toBeLessThan(stopBudgetMs + 250);
+    const firstHookAt = Math.min(...hooks.map((d) => d.at));
+    expect(firstHookAt - startedAt).toBeGreaterThanOrEqual(stopBudgetMs / 2 - 5);
+    // Deactivation started because the bound elapsed, not because the owners collected: the stop
+    // ended its wait once, at half the budget, still awaiting both owners, and every hook ran
+    // after that, inside what was left of the budget. (Not timed against the wall clock, which a
+    // loaded machine stretches.)
+    const incomplete = logger.warnings.filter((w) =>
+      w.message.startsWith("directory handover incomplete"),
+    );
+    expect(incomplete.map((w) => w.fields?.["silo"])).toEqual([leaver.address.toString()]);
+    const [bound] = incomplete;
+    expect(bound!.fields?.["waitedMs"]).toBeGreaterThanOrEqual(stopBudgetMs / 2);
+    expect(bound!.fields?.["awaiting"]).toEqual(
+      expect.arrayContaining([a.address.toString(), b.address.toString()]),
+    );
+    expect(firstHookAt).toBeGreaterThanOrEqual(bound!.at);
     expect(partitionOf(leaver).snapshotCount).toBeGreaterThan(0);
 
     await cluster.kubernetes.release(a);
@@ -428,26 +487,47 @@ describe("a silo with nobody to hand over to", () => {
   }, 60_000);
 
   for (const membership of ["static", "kubernetes"] as const) {
-    it(`is a cluster stopping together: dispose() marks every silo leaving first (${membership})`, async () => {
+    it(`is the last silo of a disposed cluster: dispose() stops the silos one at a time, each handing over to the rest (${membership})`, async () => {
+      const logger = new WarningLogger();
       const cluster = await TestCluster.start({
         initialSilos: 3,
         membership,
-        grains: [{ ctor: LeavingCounter, interfaces: [ILeavingCounter] }],
+        grains: [
+          { ctor: LeavingCounter, interfaces: [ILeavingCounter] },
+          { ctor: LeavingWitness, interfaces: [ILeavingWitness] },
+        ],
         reminders: false,
         stopBudgetMs: 10_000,
+        logger,
+        ...preferLocal,
       });
       const silos = [...cluster.silos];
+      const last = silos[2]!;
       const results = new Results();
-      for (const [i, key] of keysFor("together", 30).entries()) {
-        await call(results, silos[i % 3]!, key);
-      }
+      const keys = keysFor("together", 30);
+      for (const [i, key] of keys.entries()) await call(results, silos[i % 3]!, key);
+      // The witness lives on the last silo; no other silo has called it, so none holds its route.
+      await last.host.getGrain(ILeavingWitness, "witness").saw("seed");
+      witness = { silo: last.address.podName, seen: [], failures: [] };
       await cluster.checkIntegrity();
       const before = statsOf(silos);
-      const startedAt = performance.now();
+
       await cluster.dispose();
-      expect(performance.now() - startedAt).toBeLessThan(1000);
-      expect(statsOf(silos).transfers).toBe(before.transfers);
+
+      // Every hook ran, and every hook on a silo that stopped before the last reached the
+      // witness on it, which had not stopped yet.
+      expect(deactivations.map((d) => d.key)).toEqual(expect.arrayContaining(keys));
+      const reporting = deactivations.filter((d) => d.silo !== last.address.podName);
+      expect(reporting.length).toBeGreaterThan(0);
+      expect(witness.failures).toEqual([]);
+      expect([...witness.seen].sort()).toEqual(reporting.map((d) => d.key).sort());
+      // The silos that stopped first handed their ranges to the rest by snapshot.
+      expect(statsOf(silos).transfers).toBeGreaterThan(before.transfers);
+      expect(statsOf(silos).recoveries).toBe(before.recoveries);
+      // No stop spent its bound; the last silo had nobody to hand over to and held nothing.
+      expect(logger.handoversIncomplete()).toEqual([]);
       for (const silo of silos) expect(partitionOf(silo).snapshotCount).toBe(0);
+      expect(cluster.silos).toEqual([]);
       expect(results.errors).toEqual([]);
     }, 60_000);
   }
@@ -462,6 +542,77 @@ describe("a silo with nobody to hand over to", () => {
     expect(run.status).toBe(0);
     expect(run.stdout).toContain("disposed static and kubernetes clusters");
   }, 60_000);
+});
+
+describe("a cluster stopping while a dead pod is still listed not ready", () => {
+  // Half of it is the handover bound: far longer than any of these stops may take.
+  const stopBudgetMs = 20_000;
+
+  /** Three silos hosting thirty grains, and a fourth killed with its pod left listed not ready. */
+  async function withDeadPod(logger: Logger): Promise<{
+    cluster: TestCluster;
+    live: TestSiloHandle[];
+    dead: TestSiloHandle;
+  }> {
+    const cluster = await start({ initialSilos: 4, stopBudgetMs, logger });
+    const dead = cluster.silos[1]!;
+    const results = new Results();
+    for (const [i, key] of keysFor("dead-pod", 30).entries()) {
+      await call(results, cluster.silos[i % 4]!, key);
+    }
+    expect(results.errors).toEqual([]);
+    await cluster.killSilo(dead);
+    await cluster.kubernetes.markNotReady(dead);
+    await cluster.checkIntegrity();
+    const live = [...cluster.silos];
+    expect(cluster.kubernetes.listed(dead)).toBe(true);
+    return { cluster, live, dead };
+  }
+
+  it("disposes promptly: no stop waits on the dead pod", async () => {
+    const logger = new WarningLogger();
+    const { cluster, live, dead } = await withDeadPod(logger);
+
+    const startedAt = performance.now();
+    await cluster.dispose();
+    expect(performance.now() - startedAt).toBeLessThan(stopBudgetMs / 2 / 4);
+    // No stop spent its bound, and a leaver held what it gave the dead pod without waiting on it.
+    expect(logger.handoversIncomplete()).toEqual([]);
+    for (const silo of live) expect(partitionOf(silo).awaitedPartners).toEqual([]);
+    expect(
+      live.some((silo) => partitionOf(silo).view.ringSilos.every((s) => s.equals(dead.address))),
+    ).toBe(true);
+    expect(live.some((silo) => partitionOf(silo).snapshotCount > 0)).toBe(true);
+  }, 120_000);
+
+  it("stops every silo promptly when every live pod is reported terminating at once", async () => {
+    const logger = new WarningLogger();
+    const { cluster, live, dead } = await withDeadPod(logger);
+
+    // A Deployment deleted: every live pod is terminating at once, so no silo is ready and the
+    // ring falls back to the dead pod.
+    for (const silo of live) cluster.kubernetes.api.setTerminating(silo.address.podName);
+    await cluster.kubernetes.settle();
+    for (const silo of live) {
+      expect(partitionOf(silo).view.ringSilos).toEqual([dead.address]);
+      expect(partitionOf(silo).snapshotCount).toBeGreaterThan(0);
+    }
+
+    const stoppedAfter = await Promise.all(
+      live.map(async (silo) => {
+        const startedAt = performance.now();
+        await cluster.stopSilo(silo, { keepListed: true });
+        return performance.now() - startedAt;
+      }),
+    );
+    for (const ms of stoppedAfter) expect(ms).toBeLessThan(stopBudgetMs / 2 / 4);
+    expect(logger.handoversIncomplete()).toEqual([]);
+    for (const silo of live) {
+      expect(partitionOf(silo).awaitedPartners).toEqual([]);
+      // Still held for the dead pod, had it come for it.
+      expect(partitionOf(silo).snapshotCount).toBeGreaterThan(0);
+    }
+  }, 120_000);
 });
 
 describe("a leaving silo on the default (static) membership", () => {

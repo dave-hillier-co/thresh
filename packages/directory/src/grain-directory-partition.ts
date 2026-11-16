@@ -300,31 +300,55 @@ export class GrainDirectoryPartition {
   }
 
   /**
-   * Resolves once every range this partition gave up has been handed over — no release is still
-   * moving entries into a snapshot, and no snapshot is held — or once `timeoutMs` has elapsed on
-   * this partition's clock, or once it stops, whichever comes first. A snapshot is dropped when
-   * every partner has acknowledged it, left the view, or started a recovery at or above its
-   * version. A partition that holds nothing resolves at once, and no timer is left armed either
-   * way. A leaving silo waits on this before it deactivates (`ClusterNode.stop`).
+   * Resolves once every range this partition gave up has been handed over to a ready partner —
+   * no release is still moving entries into a snapshot, and no snapshot held has a partner that is
+   * `active` in the view this partition has applied — or once `timeoutMs` has elapsed on this
+   * partition's clock, or once it stops, whichever comes first. It resolves `true` when the
+   * handover completed and `false` when the bound elapsed first.
+   *
+   * A snapshot is dropped when every partner has acknowledged it, left the view, or started a
+   * recovery at or above its version. A snapshot whose remaining partners are all not ready does
+   * not hold this up: such a partner owns a range only by the cold-start fallback (no member is
+   * active), and nothing says its process is running, so a dead pod that is still listed would
+   * otherwise hold the leaver for the whole bound. That snapshot is still held, and still served
+   * if one of its partners comes for it; and a partner that turns active while this waits holds
+   * it up again. A partition that holds nothing a ready partner is owed resolves at once, and no
+   * timer is left armed either way. A leaving silo waits on this before it deactivates
+   * (`ClusterNode.stop`).
    */
-  handedOver(timeoutMs: number): Promise<void> {
-    if (this.isHandedOver()) return Promise.resolve();
-    return new Promise<void>((resolve) => {
-      const done = (): void => {
+  handedOver(timeoutMs: number): Promise<boolean> {
+    if (this.isHandedOver()) return Promise.resolve(true);
+    return new Promise<boolean>((resolve) => {
+      const done = (completed: boolean): void => {
         this.handoverListeners.delete(check);
         this.time.clearTimer(timer);
-        resolve();
+        resolve(completed);
       };
       const check = (): void => {
-        if (this.isHandedOver()) done();
+        if (this.isHandedOver()) done(true);
       };
       this.handoverListeners.add(check);
-      const timer = this.time.setTimer(done, timeoutMs);
+      const timer = this.time.setTimer(() => done(false), timeoutMs);
     });
   }
 
+  /**
+   * The partners a leaver still waits for (introspection and logging): every `active` partner of
+   * a snapshot held. Empty when `handedOver` would not wait on any snapshot.
+   */
+  get awaitedPartners(): readonly SiloAddress[] {
+    const out: SiloAddress[] = [];
+    for (const s of this.snapshots) {
+      for (const p of s.partners) {
+        if (this.current.isActive(p) && !out.some((o) => o.equals(p))) out.push(p);
+      }
+    }
+    return out;
+  }
+
   private isHandedOver(): boolean {
-    return this.stopped || (this.releasing === 0 && this.snapshots.length === 0);
+    if (this.stopped) return true;
+    return this.releasing === 0 && this.awaitedPartners.length === 0;
   }
 
   private notifyHandover(): void {

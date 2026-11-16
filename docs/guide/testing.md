@@ -32,11 +32,15 @@ marked `draining` in the shared view, so it leaves the ring while it still serve
 directory ranges move to the other silos by snapshot. It then drains, waiting for those snapshots
 to be collected before it runs its deactivation hooks, and leaves membership. A `SiloHost` stopped
 directly (`host.stop()`), which nobody marks draining, keeps its ranges through its drain, and the
-survivors rebuild them once it has left. `dispose()` is a cluster stopping together: it marks every
-silo leaving first, so the ring is empty and no silo hands anything to one about to stop, then stops
-them in order. With no ring, an `onDeactivate` hook that calls a grain during `dispose()` reaches it
-only over a route its silo already holds. `stopBudgetMs` sets every silo's stop budget (the grace
-period is 0 here, so the handover may use half of it).
+survivors rebuild them once it has left. `dispose()` closes the cluster client, then stops the silos
+one at a time in the order they started, each the way `stopSilo` stops it (marked `draining` or its
+pod terminating, stopped, then removed), while the silos not yet stopped are still active, as
+Orleans' `StopAllSilosAsync` does. Each hands its ranges to the silos that remain, so an
+`onDeactivate` hook that calls a grain during `dispose()` reaches it on a silo that has not stopped
+yet; the last silo has nobody to hand over to and waits for nothing. A silo whose host a test
+already stopped directly goes first, and `dispose()` heals every fault injected through `faults`
+before it stops anything, so neither holds up a handover. `stopBudgetMs` sets every silo's stop
+budget (the grace period is 0 here, so the handover may use half of it).
 
 `killSilo` is a crash, the stand-in for a killed pod (Orleans `KillSiloAsync`). The silo's
 transport is gone, so peers dialling it are refused and nothing it sends arrives. Every timer
