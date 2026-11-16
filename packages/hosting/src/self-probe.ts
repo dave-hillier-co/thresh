@@ -8,8 +8,12 @@
  * turned inward — no gossip, no cluster-wide agreement, K8s stays the sole
  * membership authority (see the "Constraint" note in the design doc).
  *
- * On a timer, it calls a no-op system grain (`ISiloProbe`, `preferLocal`
- * placement) on THIS silo and tracks consecutive misses. Reaching
+ * On a timer, it calls a no-op system grain (`ISiloProbe`) on THIS silo and
+ * tracks consecutive misses. The node serves that grain through its local
+ * system-activation path — never placed, never in the directory, always
+ * answered by the silo that asked, on a joining or draining silo as on an
+ * active one — while the call still goes through the dispatcher and the
+ * activation's scheduler, which is what a wedged dispatcher stalls. Reaching
  * `missedThreshold` flips `HealthCheck.dispatcherResponsive` false, which
  * pulls the endpoint from service exactly the way `draining` does; a
  * subsequent success flips it back. The cadence defaults
@@ -56,6 +60,8 @@ export interface SelfProbeWorkerOptions {
  */
 export class SelfProbeWorker {
   private handle: TimerHandle | undefined;
+  /** The deadline timer of the probe in flight, cleared by `stop()` so none outlives the worker. */
+  private probeDeadline: TimerHandle | undefined;
   private stopped = true;
   private consecutiveMisses = 0;
   private readonly logger: Logger;
@@ -76,12 +82,16 @@ export class SelfProbeWorker {
     this.scheduleNext();
   }
 
-  /** Stop probing and cancel any pending tick. */
+  /** Stop probing and cancel any pending tick, and the deadline of a probe in flight. */
   stop(): void {
     this.stopped = true;
     if (this.handle !== undefined) {
       this.options.time.clearTimer(this.handle);
       this.handle = undefined;
+    }
+    if (this.probeDeadline !== undefined) {
+      this.options.time.clearTimer(this.probeDeadline);
+      this.probeDeadline = undefined;
     }
   }
 
@@ -148,22 +158,28 @@ export class SelfProbeWorker {
     return new Promise<void>((resolve, reject) => {
       let settled = false;
       const timer = this.options.time.setTimer(() => {
+        if (this.probeDeadline === timer) this.probeDeadline = undefined;
         if (settled) return;
         settled = true;
         reject(new Error(`self-probe exceeded its ${this.timeoutMs}ms deadline`));
         call.catch(() => {});
       }, this.timeoutMs);
+      this.probeDeadline = timer;
+      const disarm = (): void => {
+        this.options.time.clearTimer(timer);
+        if (this.probeDeadline === timer) this.probeDeadline = undefined;
+      };
       call.then(
         () => {
           if (settled) return;
           settled = true;
-          this.options.time.clearTimer(timer);
+          disarm();
           resolve();
         },
         (error: unknown) => {
           if (settled) return;
           settled = true;
-          this.options.time.clearTimer(timer);
+          disarm();
           reject(error instanceof Error ? error : new Error(String(error)));
         },
       );

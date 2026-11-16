@@ -47,6 +47,26 @@ export interface StateMachineManager {
    */
   append(machineName: string, payload: unknown): Promise<void>;
   /**
+   * Buffer one mutation for `machineName` without touching storage, mirroring how an Orleans
+   * durable structure writes its command into the manager's journal writer. The caller (the
+   * machine) has already applied the payload to its own memory; the entry is framed and
+   * serialised now, so later changes to a mutated object do not alter what is persisted. It
+   * becomes durable on the next {@link writeState}.
+   */
+  buffer(machineName: string, payload: unknown): void;
+  /**
+   * Orleans' `IJournaledStateManager.WriteStateAsync`: append everything buffered across ALL the
+   * grain's structures in ONE storage write, under one version CAS. That write is the unit of
+   * durability: the buffered entries land together or not at all. A no-op when nothing is
+   * buffered. Overlapping calls run one after another; a later one writes whatever was buffered
+   * by the time it runs.
+   *
+   * A failed write surfaces its error, rolls nothing back and keeps the entries buffered for the
+   * next write; a lost-writer conflict (`InconsistentStateError`) additionally makes the NEXT
+   * write begin by re-reading the log, discarding in-memory state and buffered entries.
+   */
+  writeState(): Promise<void>;
+  /**
    * Append several mutations for `machineName`, in order, as ONE storage write: they land together
    * under one version CAS or not at all.
    */

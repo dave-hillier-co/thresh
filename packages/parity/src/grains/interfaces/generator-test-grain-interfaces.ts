@@ -24,6 +24,7 @@ export interface IGeneratorTestGrain extends GrainKey<bigint> {
 }
 export const IGeneratorTestGrain = defineGrainInterface<IGeneratorTestGrain>(
   "UnitTests.GrainInterfaces.IGeneratorTestGrain",
+  { key: "integer" },
 );
 
 /** Upstream `UnitTests.GrainInterfaces.IGeneratorTestDerivedGrain1`. */
@@ -32,6 +33,7 @@ export interface IGeneratorTestDerivedGrain1 extends IGeneratorTestGrain {
 }
 export const IGeneratorTestDerivedGrain1 = defineGrainInterface<IGeneratorTestDerivedGrain1>(
   "UnitTests.GrainInterfaces.IGeneratorTestDerivedGrain1",
+  { key: "integer" },
 );
 
 /** Upstream `UnitTests.GrainInterfaces.IGeneratorTestDerivedGrain2`. */
@@ -40,6 +42,7 @@ export interface IGeneratorTestDerivedGrain2 extends IGeneratorTestGrain {
 }
 export const IGeneratorTestDerivedGrain2 = defineGrainInterface<IGeneratorTestDerivedGrain2>(
   "UnitTests.GrainInterfaces.IGeneratorTestDerivedGrain2",
+  { key: "integer" },
 );
 
 /** Upstream `UnitTests.GrainInterfaces.ReplaceArguments`. */
@@ -56,4 +59,5 @@ export interface IGeneratorTestDerivedDerivedGrain extends IGeneratorTestDerived
 export const IGeneratorTestDerivedDerivedGrain =
   defineGrainInterface<IGeneratorTestDerivedDerivedGrain>(
     "UnitTests.GrainInterfaces.IGeneratorTestDerivedDerivedGrain",
+    { key: "integer" },
   );

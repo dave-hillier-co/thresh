@@ -8,6 +8,7 @@ import { defineGrain, useTransactionalState } from "@thresh/core/define-grain";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
 import type { GrainKey } from "@thresh/core/key-kinds";
 import { TransactionInDoubtError } from "@thresh/core/errors";
+import { registerSurrogate } from "@thresh/core/value-codec";
 import { TransactionCommitter } from "@thresh/transactions/transaction-committer";
 import type { TransactionCommitOperation } from "@thresh/transactions/transaction-committer";
 import { TestCluster } from "@thresh/testing/test-cluster";
@@ -60,20 +61,38 @@ interface CommitCoordinatorGrain extends GrainKey<string> {
   ): Promise<void>;
 }
 
-/** Orleans `PassOperation`: always succeeds. */
-const passOperation = (data: string): TransactionCommitOperation<RemoteCommitService> => ({
-  commit: (transactionId, service) => {
-    service.calls.push({ transactionId, data });
+/**
+ * Orleans `PassOperation`: always succeeds. Upstream a `[GenerateSerializer]` class carrying its
+ * `Data`, so it crosses to the committer grain as data and runs there; a surrogate does the same.
+ */
+class PassOperation implements TransactionCommitOperation<RemoteCommitService> {
+  constructor(readonly data: string) {}
+  commit(transactionId: string, service: RemoteCommitService): boolean {
+    service.calls.push({ transactionId, data: this.data });
     return true;
-  },
-});
+  }
+}
 
 /** Orleans `ThrowOperation`: throws during the commit step itself. */
-const throwOperation = (data: string): TransactionCommitOperation<RemoteCommitService> => ({
-  commit: (transactionId, service) => {
-    service.calls.push({ transactionId, data });
-    throw new Error(`transaction ${transactionId} threw with data: ${data}`);
-  },
+class ThrowOperation implements TransactionCommitOperation<RemoteCommitService> {
+  constructor(readonly data: string) {}
+  commit(transactionId: string, service: RemoteCommitService): boolean {
+    service.calls.push({ transactionId, data: this.data });
+    throw new Error(`transaction ${transactionId} threw with data: ${this.data}`);
+  }
+}
+
+registerSurrogate<PassOperation>({
+  tag: "parity.PassOperation",
+  test: (value) => value instanceof PassOperation,
+  encode: (operation) => ({ data: operation.data }),
+  decode: (fields) => new PassOperation(String(fields["data"])),
+});
+registerSurrogate<ThrowOperation>({
+  tag: "parity.ThrowOperation",
+  test: (value) => value instanceof ThrowOperation,
+  encode: (operation) => ({ data: operation.data }),
+  decode: (fields) => new ThrowOperation(String(fields["data"])),
 });
 
 const CommitTestGrainInterface = defineGrainInterface<CommitTestGrain>("CommitTestGrain", {
@@ -155,13 +174,13 @@ orleansTest(
       const coordinator = cluster.getGrain(CommitCoordinatorGrainInterface, newKey("coord"));
 
       // Golden path: a PassOperation commits cleanly.
-      await coordinator.multiGrainAdd(committerKey, passOperation("pass"), grainKeys, expected);
+      await coordinator.multiGrainAdd(committerKey, new PassOperation("pass"), grainKeys, expected);
 
       // A ThrowOperation fails only the committer's own commit step, after the
       // manager already recorded the commit — TransactionInDoubtError, not an
       // ordinary abort.
       await expect(
-        coordinator.multiGrainAdd(committerKey, throwOperation("throw"), grainKeys, expected),
+        coordinator.multiGrainAdd(committerKey, new ThrowOperation("throw"), grainKeys, expected),
       ).rejects.toBeInstanceOf(TransactionInDoubtError);
 
       // Every grain's add still landed, in both rounds: the in-doubt failure on

@@ -20,4 +20,5 @@ export interface ICountersGrain extends GrainKey<bigint> {
 
 export const ICountersGrain = defineGrainInterface<ICountersGrain>(
   "TestGrainInterfaces.ICountersGrain",
+  { key: "integer" },
 );

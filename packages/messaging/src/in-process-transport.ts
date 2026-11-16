@@ -61,12 +61,13 @@ export class InProcessNetwork {
     return this.endpoints.get(address.endpoint);
   }
 
-  deliver(to: SiloAddress, message: Message, from: SiloAddress): void {
+  /** Deliver `message` to the listener at `to`, as having arrived on the accepted `connection`. */
+  deliver(to: SiloAddress, message: Message, from: SiloAddress, connection?: Connection): void {
     const endpoint = this.endpoints.get(to.endpoint);
     if (endpoint === undefined) {
       throw new RejectionError(`no listener at ${to.toString()}`, "unknownTarget");
     }
-    queueMicrotask(() => void endpoint.onMessage(message, from));
+    queueMicrotask(() => void endpoint.onMessage(message, from, connection));
   }
 }
 
@@ -90,12 +91,12 @@ export class InProcessTransport implements Transport {
       onUnregistered: () => {
         for (const callback of closed.splice(0)) callback();
       },
-      onMessage: (message, from) => {
+      onMessage: (message, from, connection) => {
         recordMessageReceived({
           "thresh.peer": from.endpoint,
           "thresh.message.direction": message.direction,
         });
-        return onMessage(message, from);
+        return onMessage(message, from, connection);
       },
       clusterId: this.clusterId,
       address,
@@ -111,13 +112,15 @@ export class InProcessTransport implements Transport {
   }
 
   /**
-   * Dial `to`. When the target registered an `onAccept` hook, it gets back a
-   * duplex `Connection` whose `send` delivers straight to THIS dialler's own
-   * `onMessage` hook (via `queueMicrotask`, preserving the async-delivery
-   * fiction the rest of the network uses) — never to a network address, since
-   * a dialler need not (and, for a client, does not) register one. A dialler
-   * that passed no `onMessage` cannot receive anything back, so `send` throws
-   * rather than silently dropping.
+   * Dial `to`. The two ends of the connection are a pair: the dialled end delivers to the
+   * listener's handler as having arrived on the accepted end, and the accepted end (handed to
+   * the listener's `onAccept` hook and to its handler with every message) delivers straight to
+   * THIS dialler's own `onMessage` hook (via `queueMicrotask`, preserving the async-delivery
+   * fiction the rest of the network uses) — never to a network address, since a dialler need
+   * not (and, for a client, does not) register one. A dialler that passed no `onMessage` cannot
+   * receive anything back, so the accepted end's `send` throws rather than silently dropping.
+   * Closing either end reports the loss to the other end's `onClose`, and both ends refuse
+   * every send from then on, as a closed socket does.
    */
   connect(
     to: SiloAddress,
@@ -153,37 +156,56 @@ export class InProcessTransport implements Transport {
     }
     const network = this.network;
     const from = preamble.siloAddress;
-    // Fired if the dialler's `close()` runs, so the accepted side (the
-    // listener's `onAccept` hook) learns the socket dropped — mirrors the real
-    // transports, where closing either end of a TCP/WS socket fires the
-    // other's `onClose`.
-    let notifyAcceptedSideClosed: ((err?: unknown) => void) | undefined;
+    let closed = false;
+    let notifyDiallerClosed: ((err?: unknown) => void) | undefined;
+    let notifyAcceptedClosed: ((err?: unknown) => void) | undefined;
+    const refuseIfClosed = (): void => {
+      if (closed) {
+        throw new RejectionError(`connection to ${to.toString()} is closed`, "unknownTarget");
+      }
+    };
+    const dialled: Connection = {
+      send: (message) => {
+        refuseIfClosed();
+        network.deliver(to, message, from, accepted);
+      },
+      close: async () => {
+        if (closed) return;
+        closed = true;
+        notifyAcceptedClosed?.();
+      },
+      onClose: (callback) => {
+        notifyDiallerClosed = callback;
+      },
+    };
+    const accepted: Connection = {
+      send: (message) => {
+        refuseIfClosed();
+        if (onMessage === undefined) {
+          throw new RejectionError("peer connection is not duplex", "unknownTarget");
+        }
+        recordMessageReceived({
+          "thresh.peer": to.endpoint,
+          "thresh.message.direction": message.direction,
+        });
+        queueMicrotask(() => void onMessage(message, to, dialled));
+      },
+      close: async () => {
+        if (closed) return;
+        closed = true;
+        notifyDiallerClosed?.();
+      },
+      onClose: (callback) => {
+        notifyAcceptedClosed = callback;
+      },
+    };
     if (endpoint.onAccept !== undefined) {
-      const duplexConnection: Connection = {
-        send: (message) => {
-          if (onMessage === undefined) {
-            throw new RejectionError("peer connection is not duplex", "unknownTarget");
-          }
-          recordMessageReceived({
-            "thresh.peer": to.endpoint,
-            "thresh.message.direction": message.direction,
-          });
-          queueMicrotask(() => void onMessage(message, to));
-        },
-        close: async () => undefined,
-        onClose: (callback) => {
-          notifyAcceptedSideClosed = callback;
-        },
-      };
       try {
-        endpoint.onAccept(preamble, duplexConnection);
+        endpoint.onAccept(preamble, accepted);
       } catch (err) {
         throw connectFailure(to, `listener refused the connection (${String(err)})`);
       }
     }
-    return {
-      send: (message) => network.deliver(to, message, from),
-      close: async () => notifyAcceptedSideClosed?.(),
-    };
+    return dialled;
   }
 }

@@ -5,8 +5,9 @@ type ValueOp<T> = { t: "set"; v: T } | { t: "clear" };
 
 /**
  * A journalled single value, implemented as a `DurableStateMachine`. Each `set`
- * / `clear` is appended to the grain's log through the manager and then applied
- * to memory; replay reconstructs the value from the log.
+ * / `clear` is applied to memory at once and buffered on the manager; the next
+ * `writeState` appends the buffered entries to the grain's log, and replay
+ * reconstructs the value from the log.
  */
 export class DurableValueImpl<T> implements DurableValue<T>, DurableStateMachine {
   private current: T | undefined;
@@ -25,13 +26,19 @@ export class DurableValueImpl<T> implements DurableValue<T>, DurableStateMachine
     return this.value;
   }
 
-  async set(value: T): Promise<void> {
-    // The manager applies the op to memory after a successful append.
-    await this.manager.append(this.name, { t: "set", v: value } satisfies ValueOp<T>);
+  set(value: T): void {
+    this.mutate({ t: "set", v: value });
   }
 
-  async clear(): Promise<void> {
-    await this.manager.append(this.name, { t: "clear" } satisfies ValueOp<T>);
+  clear(): void {
+    this.mutate({ t: "clear" });
+  }
+
+  /** Buffers the op's log entry for the next `writeState` and applies it to memory now. */
+  private mutate(op: ValueOp<T>): void {
+    // Serialised first: a payload the codec rejects leaves memory untouched, as in Orleans.
+    this.manager.buffer(this.name, op);
+    this.apply(op);
   }
 
   reset(): void {

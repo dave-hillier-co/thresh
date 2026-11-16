@@ -6,7 +6,7 @@ import { GrainId } from "@thresh/core/grain-id";
 import type { GrainType } from "@thresh/core/grain-type";
 import type { TimeProvider, TimerHandle } from "@thresh/core/time-provider";
 import type { TransactionalState } from "@thresh/core/transactional-state";
-import type { TransactionOutcome } from "@thresh/core/transaction-info";
+import type { TransactionProtocol } from "@thresh/core/transaction-resource";
 import { MemoryTransactionalStorage } from "@thresh/transactions/memory-transactional-storage";
 import {
   bindTransactionalStates,
@@ -53,11 +53,23 @@ function fakeClock(): TimeProvider & { advance(ms: number): void } {
 }
 
 const flushMicrotasks = async (): Promise<void> => {
-  for (let i = 0; i < 5; i++) await Promise.resolve();
+  for (let i = 0; i < 5; i++) await new Promise<void>((resolve) => setImmediate(resolve));
 };
 
+/** A TM that cannot be reached: every ping sent to it fails. */
+function unreachableTm(): TransactionProtocol & { pings: number } {
+  const protocol = {
+    pings: 0,
+    invoke: async (_target: unknown, method: string) => {
+      if (method === "ping") protocol.pings += 1;
+      throw new Error("TM unreachable");
+    },
+  };
+  return protocol;
+}
+
 describe("transactional-state-activator", () => {
-  it("binds a facet whose TM is unreachable and schedules its confirmation worker", async () => {
+  it("binds a facet with a prepared record whose TM is unreachable, and keeps pinging the TM", async () => {
     const clock = fakeClock();
     const storage = new MemoryTransactionalStorage();
     // Seed a prepared-but-uncommitted record naming a remote TM (a crash right
@@ -80,26 +92,23 @@ describe("transactional-state-activator", () => {
       undefined,
     );
 
-    let calls = 0;
-    const resolveStatus = async (): Promise<TransactionOutcome> => {
-      calls += 1;
-      throw new Error("TM unreachable");
-    };
-
+    const tm = unreachableTm();
     const instance = new AccountInstance();
     const registry = new TransactionalStorageRegistry().add("default", storage);
-    await bindTransactionalStates(instance, grainId("a"), registry, resolveStatus, clock);
+    await bindTransactionalStates(instance, grainId("a"), registry, tm, clock);
 
-    // One recovery attempt during load(), failed: still in-doubt.
-    expect(calls).toBe(1);
-
-    // Left running, the confirmation worker retries on its own.
-    clock.advance(1_000);
+    // The record is queued again on load, and its TM is pinged at once.
     await flushMicrotasks();
-    expect(calls).toBe(2);
+    expect(tm.pings).toBe(1);
+
+    // Left running, it pings again at Orleans' RemoteTransactionPingFrequency.
+    clock.advance(60_000);
+    await flushMicrotasks();
+    expect(tm.pings).toBe(2);
+    unbindTransactionalStates(instance);
   });
 
-  it("unbindTransactionalStates stops the confirmation worker so it never retries again", async () => {
+  it("unbindTransactionalStates stops the pings so none is sent again", async () => {
     const clock = fakeClock();
     const storage = new MemoryTransactionalStorage();
     await storage.store(
@@ -120,24 +129,20 @@ describe("transactional-state-activator", () => {
       undefined,
     );
 
-    let calls = 0;
-    const resolveStatus = async (): Promise<TransactionOutcome> => {
-      calls += 1;
-      throw new Error("TM unreachable");
-    };
-
+    const tm = unreachableTm();
     const instance = new AccountInstance();
     const registry = new TransactionalStorageRegistry().add("default", storage);
-    await bindTransactionalStates(instance, grainId("b"), registry, resolveStatus, clock);
-    expect(calls).toBe(1);
+    await bindTransactionalStates(instance, grainId("b"), registry, tm, clock);
+    await flushMicrotasks();
+    expect(tm.pings).toBe(1);
 
-    // Deactivate: this must stop the facet's confirmation worker.
+    // Deactivate: this must stop the facet's storage worker and its timer.
     unbindTransactionalStates(instance);
 
-    // Without the unbind, this advance would fire the worker again.
+    // Without the unbind, this advance would ping again.
     clock.advance(60_000);
     await flushMicrotasks();
-    expect(calls).toBe(1);
+    expect(tm.pings).toBe(1);
   });
 });
 

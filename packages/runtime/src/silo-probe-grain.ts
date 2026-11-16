@@ -18,12 +18,16 @@ export const SILO_PROBE_GRAIN_TYPE: GrainType = "Thresh.Runtime.SiloProbeGrain";
  * DISPATCH pipeline (queueing, admission, the turn scheduler) is wedged, not
  * that some application-level dependency it calls out to is slow.
  *
- * Registered with `placement: "preferLocal"` (`ClusterNode`'s constructor):
- * every silo activates its OWN instance rather than routing to whichever
- * silo placement would otherwise pick, so `getGrain(ISiloProbe,
+ * Served by the node's local system-activation path (`ClusterNode`'s
+ * `isLocalSystemType`): a call to it is never placed, never looked up in or
+ * registered with the directory, and is always answered by an activation on
+ * the silo that made it — created through the catalog and run through its
+ * scheduler like any call's turn — so `getGrain(ISiloProbe,
  * local.ringKey).ping()` genuinely exercises the calling silo's own
- * dispatcher — the self-probe would be meaningless if it could silently
- * land on a healthy peer instead.
+ * dispatcher, including on a silo that is not a placement candidate (a
+ * joining or draining one). The self-probe would be meaningless if it could
+ * land on a healthy peer instead. `preferLocal` placement is kept on the
+ * class for a type registered without that path.
  */
 export function createSiloProbeGrainType(): new () => Grain {
   class SiloProbeGrain extends Grain implements ISiloProbe {

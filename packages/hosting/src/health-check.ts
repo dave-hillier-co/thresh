@@ -8,8 +8,19 @@ export interface HealthSignals {
   draining: boolean;
   /** Transport is listening and accepting connections. */
   transportReady: boolean;
-  /** The membership watch is connected and current. */
+  /**
+   * The membership source has completed a list and this silo is listed in the view, whatever
+   * its status. It does not ask for a ring: a joining silo owns nothing while a peer is active,
+   * and must still report ready for Kubernetes to mark it ready.
+   */
   membershipHealthy: boolean;
+  /**
+   * The silo has fenced itself: a view omitted it after it had been listed, so its peers have
+   * dropped its directory entries (Orleans `MembershipTableManager.KillMyselfLocally`). Fails
+   * liveness as well as readiness, so the kubelet restarts the pod; a fenced silo never serves
+   * again in this incarnation.
+   */
+  fenced: boolean;
   /** The silo is over capacity and should shed new placements. */
   overloaded: boolean;
   /**
@@ -58,7 +69,8 @@ export interface ProbeResult {
  *   is the signal; a wedged process simply won't respond and is restarted) and, only when
  *   `livenessFailureMs` is configured, the self-probe has not failed continuously for that long.
  *   It never depends on the Kubernetes API: an outage there freezes the membership view and
- *   must neither pull silos from service nor restart them.
+ *   must neither pull silos from service nor restart them. It fails once the silo has fenced
+ *   itself (`fenced`), which only a view that omits this silo after listing it causes.
  * - **startup**: the silo has finished starting.
  * - **ready**: started, transport accepting, membership healthy, not draining,
  *   not overloaded, dispatcher responsive to its own self-probe. Flipping to
@@ -72,6 +84,7 @@ export class HealthCheck {
     draining: false,
     transportReady: false,
     membershipHealthy: false,
+    fenced: false,
     overloaded: false,
     dispatcherResponsive: true,
     probeFailingSinceMs: undefined,
@@ -116,7 +129,11 @@ export class HealthCheck {
       since === undefined ||
       this.signals.draining ||
       this.time.now() - since < this.livenessFailureMs;
-    return { ok: dispatcherResponsive, checks: { process: true, dispatcherResponsive } };
+    const notFenced = !this.signals.fenced;
+    return {
+      ok: dispatcherResponsive && notFenced,
+      checks: { process: true, dispatcherResponsive, notFenced },
+    };
   }
 
   startup(): ProbeResult {
@@ -127,7 +144,7 @@ export class HealthCheck {
     const checks = {
       started: this.signals.started,
       transportReady: this.signals.transportReady,
-      membershipHealthy: this.signals.membershipHealthy,
+      membershipHealthy: this.signals.membershipHealthy && !this.signals.fenced,
       notDraining: !this.signals.draining,
       notOverloaded: !(this.signals.overloaded || this.overloadSource?.() === true),
       dispatcherResponsive: this.signals.dispatcherResponsive,

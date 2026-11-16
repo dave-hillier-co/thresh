@@ -24,6 +24,7 @@ export interface IMethodInterceptionGrain extends GrainKey<bigint> {
 
 export const IMethodInterceptionGrain = defineGrainInterface<IMethodInterceptionGrain>(
   "UnitTests.GrainInterfaces.IMethodInterceptionGrain",
+  { key: "integer" },
 );
 
 /**
@@ -44,6 +45,7 @@ export interface IMethodInterceptionGrainObserver extends GrainKey<bigint> {
 export const IMethodInterceptionGrainObserver =
   defineGrainInterface<IMethodInterceptionGrainObserver>(
     "UnitTests.GrainInterfaces.IMethodInterceptionGrainObserver",
+    { key: "integer" },
   );
 
 /**
@@ -65,6 +67,7 @@ export interface IOutgoingMethodInterceptionGrain extends GrainKey<bigint> {
 export const IOutgoingMethodInterceptionGrain =
   defineGrainInterface<IOutgoingMethodInterceptionGrain>(
     "UnitTests.GrainInterfaces.IOutgoingMethodInterceptionGrain",
+    { key: "integer" },
   );
 
 /**
@@ -88,6 +91,7 @@ export interface IGrainCallFilterTestGrain extends GrainKey<bigint> {
 
 export const IGrainCallFilterTestGrain = defineGrainInterface<IGrainCallFilterTestGrain>(
   "UnitTests.GrainInterfaces.IGrainCallFilterTestGrain",
+  { key: "integer" },
 );
 
 /**
@@ -106,6 +110,7 @@ export interface IGrainCallFilterTestGrainObserver extends GrainKey<bigint> {
 export const IGrainCallFilterTestGrainObserver =
   defineGrainInterface<IGrainCallFilterTestGrainObserver>(
     "UnitTests.GrainInterfaces.IGrainCallFilterTestGrainObserver",
+    { key: "integer" },
   );
 
 /**
@@ -127,5 +132,5 @@ export interface IMyGrainExtension extends GrainKey<bigint> {
 
 export const IMyGrainExtension = defineGrainInterface<IMyGrainExtension>(
   "UnitTests.GrainInterfaces.IMyGrainExtension",
-  { extension: true },
+  { key: "integer", extension: true },
 );

@@ -12,6 +12,7 @@ export interface ISimpleMigrationTracingGrain extends GrainKey<bigint> {
 
 export const ISimpleMigrationTracingGrain = defineGrainInterface<ISimpleMigrationTracingGrain>(
   "UnitTests.GrainInterfaces.ISimpleMigrationTracingGrain",
+  { key: "integer" },
 );
 
 /**
@@ -29,4 +30,5 @@ export interface IMigrationFilterTracingGrain extends GrainKey<bigint> {
 
 export const IMigrationFilterTracingGrain = defineGrainInterface<IMigrationFilterTracingGrain>(
   "UnitTests.GrainInterfaces.IMigrationFilterTracingGrain",
+  { key: "integer" },
 );

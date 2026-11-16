@@ -1,3 +1,4 @@
+import type { GrainKeyKind } from "@thresh/core/grain-key";
 import type { GrainType } from "@thresh/core/grain-type";
 import type { Logger } from "@thresh/core/logger";
 import {
@@ -58,7 +59,10 @@ export interface PullableQueue {
  */
 export interface PullingStreamProviderHost {
   setDeliver(deliver: StreamDeliver): void;
-  setImplicitSubscribers(typesFor: (namespace: string) => Iterable<GrainType>): void;
+  setImplicitSubscribers(
+    typesFor: (namespace: string) => Iterable<GrainType>,
+    keyKindFor?: (type: GrainType) => GrainKeyKind | undefined,
+  ): void;
   refreshOwnership(ranges: readonly HashRange[]): void;
 }
 

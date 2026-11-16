@@ -20,7 +20,9 @@ export interface ITestGrain extends GrainKey<bigint> {
   testRequestContext(): Promise<[string | undefined, string | undefined]>;
 }
 
-export const ITestGrain = defineGrainInterface<ITestGrain>("UnitTests.GrainInterfaces.ITestGrain");
+export const ITestGrain = defineGrainInterface<ITestGrain>("UnitTests.GrainInterfaces.ITestGrain", {
+  key: "integer",
+});
 
 /** Upstream's `ITestGrainLongOnActivateAsync`: activation validates the key like `ITestGrain`. */
 export interface ITestGrainLongOnActivateAsync extends GrainKey<bigint> {
@@ -29,4 +31,5 @@ export interface ITestGrainLongOnActivateAsync extends GrainKey<bigint> {
 
 export const ITestGrainLongOnActivateAsync = defineGrainInterface<ITestGrainLongOnActivateAsync>(
   "UnitTests.GrainInterfaces.ITestGrainLongOnActivateAsync",
+  { key: "integer" },
 );

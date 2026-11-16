@@ -3,6 +3,7 @@ import type { LogFields, Logger } from "@thresh/core/logger";
 import { SiloAddress } from "@thresh/core/silo-address";
 import { MemoryJobShardStore } from "@thresh/durable-jobs/memory-job-shard-store";
 import { InProcessNetwork } from "@thresh/messaging/in-process-transport";
+import { MemoryReminderTable } from "@thresh/reminders/memory-reminder-table";
 import { StaticMembershipService } from "@thresh/runtime/static-membership";
 import { createSilo } from "@thresh/hosting/silo-builder";
 import type { SiloHost } from "@thresh/hosting/silo-host";
@@ -74,9 +75,52 @@ describe("the membership watch", () => {
     }
   });
 
-  it("reports membership healthy only while the applied view has a silo to own ranges", async () => {
-    // A view can list silos and still give the node nothing to route on: every member
-    // draining leaves an empty ring, on which every directory route is refused.
+  it("runs no ownership hook once stop has begun, and stop waits for the reconcile in flight", async () => {
+    const membership = new StaticMembershipService(local, [local]);
+    const reminders = new MemoryReminderTable();
+    // Holding the reminder table's read holds a reconcile inside the reminder refresh.
+    const readRange = reminders.readRange.bind(reminders);
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => (open = resolve));
+    let held = false;
+    let reads = 0;
+    reminders.readRange = async (begin, end) => {
+      reads += 1;
+      if (held) await gate;
+      return readRange(begin, end);
+    };
+    // No grace period, so nothing but the reconcile can hold the stop.
+    const host: SiloHost = createSilo({ clusterId: "c", local, gracefulShutdownMs: 0 })
+      .useMembership(membership)
+      .useInProcessTransport(new InProcessNetwork())
+      .useMemoryDurableJobs(new MemoryJobShardStore())
+      .useReminders(reminders)
+      .allowSharedInMemoryState()
+      .build();
+    await host.start();
+    const readsPerRefresh = reads;
+
+    held = true;
+    membership.setSilos([local]);
+    await settle();
+    let stopped = false;
+    const stopping = host.stop().then(() => (stopped = true));
+    // Another view arrives while the silo is stopping.
+    membership.setSilos([local]);
+    await settle();
+    await new Promise((resolve) => setTimeout(resolve, 200)); // ample time for an unblocked stop
+    expect(stopped).toBe(false); // still waiting on the reconcile in flight
+
+    open();
+    await stopping;
+    await settle();
+    // The refresh in flight finished; the later view started no other.
+    expect(reads).toBe(2 * readsPerRefresh);
+  });
+
+  it("reports membership healthy while the view lists this silo, whatever its status", async () => {
+    // Readiness asks whether this silo is listed, not whether it owns a range: a silo
+    // outside the ring (joining, or here draining) is still a member serving what it hosts.
     const membership = new StaticMembershipService(local, [local]);
     const host: SiloHost = createSilo({ clusterId: "c", local })
       .useMembership(membership)
@@ -88,6 +132,9 @@ describe("the membership watch", () => {
       membership.setStatus(local, "draining");
       await settle();
       expect(membership.current().silos).toHaveLength(1);
+      expect(host.health.ready().checks.membershipHealthy).toBe(true);
+      membership.removeSilo(local);
+      await settle();
       expect(host.health.ready().checks.membershipHealthy).toBe(false);
     } finally {
       await host.stop();

@@ -30,6 +30,16 @@ describe("HealthCheck", () => {
     expect(health.ready().ok).toBe(true);
   });
 
+  it("fails liveness and readiness once the silo has fenced itself, draining or not", () => {
+    const health = new HealthCheck();
+    health.update({ ...healthy, fenced: true });
+    expect(health.live().ok).toBe(false);
+    expect(health.live().checks.notFenced).toBe(false);
+    expect(health.ready().ok).toBe(false);
+    health.update({ draining: true });
+    expect(health.live().ok).toBe(false);
+  });
+
   it("is not ready while draining (so K8s pulls it from endpoints)", () => {
     const health = new HealthCheck();
     health.update({ ...healthy, draining: true });

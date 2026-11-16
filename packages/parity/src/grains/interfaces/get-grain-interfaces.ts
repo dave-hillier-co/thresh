@@ -20,4 +20,6 @@ export interface IGuidGrain extends GrainKey<Guid> {
   foo(): Promise<boolean>;
 }
 
-export const IGuidGrain = defineGrainInterface<IGuidGrain>("UnitTests.GrainInterfaces.IGuidGrain");
+export const IGuidGrain = defineGrainInterface<IGuidGrain>("UnitTests.GrainInterfaces.IGuidGrain", {
+  key: "guid",
+});

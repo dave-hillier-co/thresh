@@ -164,6 +164,7 @@ interface IStreamInterceptionGrain extends GrainKey<Guid> {
 }
 const IStreamInterceptionGrain = defineGrainInterface<IStreamInterceptionGrain>(
   "IStreamInterceptionGrain",
+  { key: "guid" },
 );
 
 @grain()

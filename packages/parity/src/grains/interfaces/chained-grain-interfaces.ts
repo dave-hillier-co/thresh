@@ -23,4 +23,5 @@ export interface IChainedGrain extends GrainKey<bigint> {
 
 export const IChainedGrain = defineGrainInterface<IChainedGrain>(
   "UnitTests.GrainInterfaces.IChainedGrain",
+  { key: "integer" },
 );

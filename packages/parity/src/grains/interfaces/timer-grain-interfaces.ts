@@ -17,6 +17,7 @@ export interface ITimerGrain extends GrainKey<bigint> {
 
 export const ITimerGrain = defineGrainInterface<ITimerGrain>(
   "UnitTests.GrainInterfaces.ITimerGrain",
+  { key: "integer" },
 );
 
 // Upstream overloads StartTimer(name, due)/StartTimer(name, due, operationType) and
@@ -35,6 +36,7 @@ export interface ITimerCallGrain extends GrainKey<bigint> {
 
 export const ITimerCallGrain = defineGrainInterface<ITimerCallGrain>(
   "UnitTests.GrainInterfaces.ITimerCallGrain",
+  { key: "integer" },
 );
 
 export interface INonReentrantTimerCallGrain extends GrainKey<bigint> {
@@ -47,4 +49,5 @@ export interface INonReentrantTimerCallGrain extends GrainKey<bigint> {
 
 export const INonReentrantTimerCallGrain = defineGrainInterface<INonReentrantTimerCallGrain>(
   "UnitTests.GrainInterfaces.INonReentrantTimerCallGrain",
+  { key: "integer" },
 );

@@ -2,7 +2,11 @@ import { defaultLogger, safeLogger, type Logger } from "@thresh/core/logger";
 import { systemTimeProvider, type TimeProvider } from "@thresh/core/time-provider";
 import type { EndpointSlice, EndpointSliceEndpoint } from "@thresh/clustering-k8s/endpoint-slice";
 import type { EndpointWatch } from "@thresh/clustering-k8s/kubernetes-membership";
-import { WatchedEndpoints, type WatchEventType } from "@thresh/clustering-k8s/watched-endpoints";
+import {
+  parseRevision,
+  WatchedEndpoints,
+  type WatchEventType,
+} from "@thresh/clustering-k8s/watched-endpoints";
 
 /** An EndpointSlice as returned by the Kubernetes API (the fields we read). */
 export interface RawEndpointSlice {
@@ -13,7 +17,7 @@ export interface RawEndpointSlice {
   metadata?: { name?: string; resourceVersion?: string };
   endpoints?: Array<{
     addresses?: string[];
-    conditions?: { ready?: boolean };
+    conditions?: { ready?: boolean; terminating?: boolean };
     targetRef?: { name?: string; uid?: string };
     /** Pod labels, when the source resolves them (see `EndpointSliceEndpoint.metadata`). */
     metadata?: Record<string, string>;
@@ -175,8 +179,34 @@ export class KubernetesEndpointWatch implements EndpointWatch {
     };
   }
 
-  subscribe(onSlices: (slices: EndpointSlice[], revision: number | undefined) => void): () => void {
+  subscribe(onSlices: (slices: EndpointSlice[], revision: number) => void): () => void {
     return this.endpoints.subscribe(onSlices);
+  }
+
+  /**
+   * List the slices now and apply the result, without restarting the watch, and resolve with
+   * the list's own `resourceVersion` as a revision (`KubernetesMembership.refresh`). Events the
+   * watch delivers afterwards that the list already reflects are ignored (`WatchedEndpoints.apply`).
+   * A failed list rejects; the watch is unaffected.
+   */
+  async relist(): Promise<number | undefined> {
+    const { slices, resourceVersion } = await this.listSlices();
+    this.endpoints.reset(slices, resourceVersion);
+    this.lastSyncedAtMs = this.time.now();
+    return parseRevision(resourceVersion);
+  }
+
+  private async listSlices(): Promise<{
+    slices: Map<string, EndpointSlice>;
+    resourceVersion: string | undefined;
+  }> {
+    const slices = new Map<string, EndpointSlice>();
+    const { items, resourceVersion } = await this.source.list();
+    for (const raw of items) {
+      const name = raw.metadata?.name;
+      if (name !== undefined) slices.set(name, toEndpointSlice(raw));
+    }
+    return { slices, resourceVersion };
   }
 
   async start(): Promise<void> {
@@ -193,12 +223,7 @@ export class KubernetesEndpointWatch implements EndpointWatch {
 
   private async relistAndWatch(): Promise<void> {
     try {
-      const slices = new Map<string, EndpointSlice>();
-      const { items, resourceVersion } = await this.source.list();
-      for (const raw of items) {
-        const name = raw.metadata?.name;
-        if (name !== undefined) slices.set(name, toEndpointSlice(raw));
-      }
+      const { slices, resourceVersion } = await this.listSlices();
       this.endpoints.reset(slices, resourceVersion);
       this.lastSyncedAtMs = this.time.now();
       if (!this.running) return;

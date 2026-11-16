@@ -30,7 +30,7 @@ interface IStreamBatchingTestConsumerGrain extends GrainKey<Guid> {
 }
 const IStreamBatchingTestConsumerGrain = defineGrainInterface<IStreamBatchingTestConsumerGrain>(
   "IStreamBatchingTestConsumerGrain",
-  { options: { getConsumptionReport: { readOnly: true } } },
+  { key: "guid", options: { getConsumptionReport: { readOnly: true } } },
 );
 
 // Upstream's `BatchingStreamBatchingTestConsumerGrain` picks a batch or

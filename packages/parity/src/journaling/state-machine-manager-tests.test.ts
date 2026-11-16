@@ -46,6 +46,7 @@ describe("Orleans.Journaling.Tests.StateMachineManagerTests", () => {
       await grain.dictSet("key1", 1);
       await grain.listAdd("item1");
       await grain.queueEnqueue(42);
+      await grain.writeState();
 
       expect(await grain.dictGet("key1")).toBe(1);
       expect(await grain.listGet(0)).toBe("item1");
@@ -63,6 +64,7 @@ describe("Orleans.Journaling.Tests.StateMachineManagerTests", () => {
       await grain.dictSet("key2", 2);
       await grain.listAdd("item1");
       await grain.listAdd("item2");
+      await grain.writeState();
 
       await cluster.restartSilo(cluster.primary);
       const grain2 = cluster.getGrain(IDurableCollectionsGrain, key);
@@ -83,13 +85,15 @@ describe("Orleans.Journaling.Tests.StateMachineManagerTests", () => {
       const key = freshKey();
       const grain = cluster.getGrain(IDurableCollectionsGrain, key);
 
-      // Each mutator here already persists synchronously (no separate
-      // WriteStateAsync-equivalent step), so the checkpoints upstream takes
-      // between mutations are implicit.
+      // Upstream takes a WriteStateAsync checkpoint after each mutation.
       await grain.dictSet("key1", 1);
+      await grain.writeState();
       await grain.dictSet("key2", 2);
+      await grain.writeState();
       await grain.dictSet("key1", 10);
+      await grain.writeState();
       await grain.dictDelete("key2");
+      await grain.writeState();
 
       expect(await grain.dictSize()).toBe(1);
       expect(await grain.dictGet("key1")).toBe(10);
@@ -118,6 +122,7 @@ describe("Orleans.Journaling.Tests.StateMachineManagerTests", () => {
 
       const person = { id: 100, name: "Test Person", age: 30 };
       await grain.setValue(person);
+      await grain.writeState();
 
       expect(await grain.dictSize()).toBe(2);
       expect(await grain.dictGet(1)).toBe("one");
@@ -160,6 +165,7 @@ describe("Orleans.Journaling.Tests.StateMachineManagerTests", () => {
 
       await grain.dictSet("key2", 2);
       await grain.setAdd("key2");
+      await grain.writeState();
 
       expect(await grain.dictSize()).toBe(2);
       expect(await grain.setSize()).toBe(2);
@@ -180,6 +186,7 @@ describe("Orleans.Journaling.Tests.StateMachineManagerTests", () => {
 
       const itemCount = 1000;
       for (let i = 0; i < itemCount; i++) await grain.dictSet(i, `Value ${i}`);
+      await grain.writeState();
 
       await cluster.restartSilo(cluster.primary);
       const grain2 = cluster.getGrain(IDurableCollectionsGrain, key);
@@ -244,11 +251,18 @@ describe("Orleans.Journaling.Tests.StateMachineManagerTests", () => {
       // Force a value past the manager's default snapshot threshold (100),
       // triggering exactly one compaction cycle.
       const pumpKeep = async (
-        grain: { keepSet(key: unknown, value: unknown): Promise<void> },
+        grain: {
+          keepSet(key: unknown, value: unknown): Promise<void>;
+          writeState(): Promise<void>;
+        },
         count: number,
         start: number,
       ) => {
-        for (let i = 0; i < count; i += 1) await grain.keepSet("a", start + i);
+        // Upstream's TriggerCompaction writes state after every mutation.
+        for (let i = 0; i < count; i += 1) {
+          await grain.keepSet("a", start + i);
+          await grain.writeState();
+        }
       };
 
       try {
@@ -260,6 +274,7 @@ describe("Orleans.Journaling.Tests.StateMachineManagerTests", () => {
         const g1 = cluster1.getGrain(IRetiringCollectionsGrain, key);
         await g1.keepSet("a", 0);
         await g1.retireSet("b", 1);
+        await g1.writeState();
 
         // Every later cluster shares this storage, standing in for "the same
         // durable backend across silo restarts / deploys" the rest of this
@@ -294,6 +309,7 @@ describe("Orleans.Journaling.Tests.StateMachineManagerTests", () => {
         expect(await g3.retireGet("b")).toBe(1);
 
         await g3.retireSet("b", 2);
+        await g3.writeState();
         await pumpKeep(g3, 100, 200); // crosses the threshold: persists the resurrection for good
 
         // -------------- STEP 4 --------------

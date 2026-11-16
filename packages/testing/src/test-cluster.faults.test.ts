@@ -77,12 +77,15 @@ describe("TestCluster network faults", () => {
   });
 
   it("rejects a call whose connect fails with the transport's rejection", async () => {
-    // Set before the cluster starts, so no connection from silo 0 to silo 1 is ever pooled.
     const faults = new NetworkFaults();
-    faults.failConnects({ from: "test-silo-0", to: "test-silo-1" });
     const cluster = await start({ faults });
     const [a, b, c] = cluster.silos as [TestSiloHandle, TestSiloHandle, TestSiloHandle];
     await placeOn(b, "on-b");
+    // Armed once the cluster is up — a silo that cannot reach a listed member cannot finish
+    // recovering its first view's ranges, so it would never start — and with every connection
+    // silo 0 already dialled to silo 1 severed, so none is pooled.
+    faults.failConnects({ from: "test-silo-0", to: "test-silo-1" });
+    await faults.sever({ from: a.address, to: b.address });
 
     const error = await a.host
       .getGrain(Echo, "on-b")

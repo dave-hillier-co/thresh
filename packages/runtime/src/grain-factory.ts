@@ -19,7 +19,7 @@ import {
   type AnyGrainInterface,
   type GrainInterface,
 } from "@thresh/core/grain-interface";
-import type { GrainKey } from "@thresh/core/grain-key";
+import { keyKindOf, keyToString, type GrainKey } from "@thresh/core/grain-key";
 import { GRAIN_REF, GRAIN_REF_CAST } from "@thresh/core/grain-reference";
 import type { GrainType } from "@thresh/core/grain-type";
 import type { InvokeMethodOptions } from "@thresh/core/invoke-options";
@@ -98,8 +98,9 @@ export class GrainFactory {
     private readonly time: TimeProvider = systemTimeProvider,
     /**
      * Silo-wide default response timeout (ms), applied when a method has no
-     * `options.responseTimeout` of its own. Off by default (`undefined`): no
-     * silo behaves differently unless this is explicitly configured.
+     * `options.responseTimeout` of its own. `undefined` here means no deadline
+     * at all; a silo passes at least its call timeout, so every call it makes,
+     * to a grain on this silo or another, has one.
      */
     private readonly defaultResponseTimeoutMs?: number,
   ) {}
@@ -117,6 +118,15 @@ export class GrainFactory {
   }
 
   getGrain<T>(def: GrainInterface<T>, key: GrainKey): T {
+    // Where the interface declares a key kind, a key of another kind is a caller error: the grain
+    // type reads its key text as the declared kind and would otherwise fail inside the activation.
+    const declared = def.key ?? getGrainInterface(def.id)?.key;
+    if (declared !== undefined && keyKindOf(key) !== declared) {
+      throw new Error(
+        `getGrain(${def.name}): the interface declares a ${declared} key but was given a ` +
+          `${keyKindOf(key)} key (${keyToString(key)})`,
+      );
+    }
     const target = new GrainId(this.resolveGrainType(def.id), key);
     return this.buildProxy(def, target);
   }

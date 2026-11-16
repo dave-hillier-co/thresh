@@ -19,7 +19,7 @@ import { grainAddressEquals, type GrainAddress } from "@thresh/core/grain-addres
 import { GrainId } from "@thresh/core/grain-id";
 import { SiloAddress } from "@thresh/core/silo-address";
 
-/** Miniature stand-in for `LocalDirectoryPartition`'s CAS contract. */
+/** Miniature stand-in for `GrainDirectoryPartition`'s CAS contract. */
 class InMemoryGrainDirectory {
   private readonly entries = new Map<string, GrainAddress>();
 

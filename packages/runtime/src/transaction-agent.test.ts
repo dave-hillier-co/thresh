@@ -2,11 +2,17 @@ import { describe, expect, it } from "vitest";
 import {
   TransactionAbortedError,
   TransactionAlreadyResolvedError,
+  TransactionBrokenLockError,
   TransactionInDoubtError,
 } from "@thresh/core/errors";
 import type {
+  AccessCounter,
+  AgentCompletedParticipant,
   EnlistedParticipant,
+  ParticipantId,
+  TransactionalStatus,
   TransactionInfo,
+  TransactionManager,
   TransactionParticipant,
 } from "@thresh/core/transaction-info";
 import { participantKey } from "@thresh/core/transaction-info";
@@ -15,124 +21,198 @@ import { FakeTimeProvider } from "@thresh/runtime/test-support/fake-time-provide
 import { invocationContext, requireTransaction } from "@thresh/runtime/invocation-context";
 import { TransactionAgent } from "@thresh/runtime/transaction-agent";
 
-/** A trivial in-memory participant recording prepare/commit/abort calls. */
-class FakeParticipant implements TransactionParticipant {
-  committed = false;
-  aborted = false;
-  recordCommitCalls = 0;
+/**
+ * A participant that records every protocol message the agent sends it and
+ * answers as scripted. It plays both roles, so the agent may elect it TM.
+ * The agent's own job is only to start the protocol; what a resource does with
+ * the messages is covered by the `@thresh/transactions` tests.
+ */
+class RecordingParticipant implements TransactionParticipant, TransactionManager {
+  readonly received: string[] = [];
+  prepareAndCommitArgs: { writers: ParticipantId[]; total: number } | undefined;
 
   constructor(
-    private readonly onCommit?: () => void | Promise<void>,
-    private readonly onRecordCommit?: () => void | Promise<void>,
+    private readonly answer: () => Promise<TransactionalStatus> = async () => "ok",
+    private readonly readOnlyAnswer: TransactionalStatus = "ok",
   ) {}
 
-  prepare(): boolean {
-    return true;
+  async commitReadOnly(): Promise<TransactionalStatus> {
+    this.received.push("commitReadOnly");
+    return this.readOnlyAnswer;
   }
-
-  async commit(): Promise<void> {
-    if (this.onCommit !== undefined) await this.onCommit();
-    this.committed = true;
+  async prepare(
+    _transactionId: string,
+    _accessCount: AccessCounter,
+    _timeStamp: number,
+    manager: ParticipantId,
+  ): Promise<void> {
+    this.received.push(`prepare(tm=${manager.grainId.key})`);
   }
-
-  abort(): void {
-    this.aborted = true;
+  async abort(): Promise<void> {
+    this.received.push("abort");
   }
-
-  async recordCommit(): Promise<void> {
-    this.recordCommitCalls += 1;
-    if (this.onRecordCommit !== undefined) await this.onRecordCommit();
+  async cancel(_id: string, _ts: number, status: TransactionalStatus): Promise<void> {
+    this.received.push(`cancel(${status})`);
   }
-
-  status(): boolean {
-    return this.committed;
+  async confirm(): Promise<void> {
+    this.received.push("confirm");
+  }
+  async prepareAndCommit(
+    _id: string,
+    _access: AccessCounter,
+    _ts: number,
+    writers: ParticipantId[],
+    total: number,
+  ): Promise<TransactionalStatus> {
+    this.received.push("prepareAndCommit");
+    this.prepareAndCommitArgs = { writers, total };
+    return this.answer();
+  }
+  async prepared(): Promise<void> {
+    this.received.push("prepared");
+  }
+  async ping(): Promise<void> {
+    this.received.push("ping");
   }
 }
+
+/** A participant with only the resource role: it may never be elected TM. */
+class ResourceOnlyParticipant implements TransactionParticipant {
+  readonly received: string[] = [];
+  async commitReadOnly(): Promise<TransactionalStatus> {
+    this.received.push("commitReadOnly");
+    return "ok";
+  }
+  async prepare(): Promise<void> {
+    this.received.push("prepare");
+  }
+  async abort(): Promise<void> {
+    this.received.push("abort");
+  }
+  async cancel(): Promise<void> {
+    this.received.push("cancel");
+  }
+  async confirm(): Promise<void> {
+    this.received.push("confirm");
+  }
+}
+
+/** A resource the agent completes itself (the port's `TransactionCommitter`). */
+class AgentCompleted implements AgentCompletedParticipant {
+  readonly completedByAgent = true as const;
+  readonly received: string[] = [];
+  constructor(private readonly onCommit: () => Promise<void> = async () => undefined) {}
+  async commit(): Promise<void> {
+    this.received.push("commit");
+    await this.onCommit();
+  }
+  async abort(): Promise<void> {
+    this.received.push("abort");
+  }
+}
+
+const id = (key: string): ParticipantId => ({ grainId: new GrainId("test", key), stateName: "s" });
 
 function enlist(
-  grainId: string,
-  stateName: string,
-  participant: TransactionParticipant,
-): EnlistedParticipant {
-  return {
-    id: { grainId: new GrainId("test", grainId), stateName },
-    participant,
-    access: { reads: 0, writes: 1 },
-  };
+  info: TransactionInfo,
+  key: string,
+  participant: EnlistedParticipant["participant"],
+  access: AccessCounter = { reads: 0, writes: 1 },
+): void {
+  info.participants.set(participantKey(id(key)), { id: id(key), participant, access });
 }
 
-describe("TransactionAgent.resolve", () => {
-  it("commits every enlisted participant on the golden path", async () => {
+/** Let one-way sends land. */
+const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+describe("TransactionAgent.resolve starts the commit and leaves the rest to the TM (T1)", () => {
+  it("prepares every participant but the TM one-way, and awaits prepareAndCommit on the TM", async () => {
     const agent = new TransactionAgent(new FakeTimeProvider());
     const info = agent.startTransaction();
-    const a = new FakeParticipant();
-    const b = new FakeParticipant();
-    info.participants.set(participantKey(enlist("a", "s", a).id), enlist("a", "s", a));
-    info.participants.set(participantKey(enlist("b", "s", b).id), enlist("b", "s", b));
+    const tm = new RecordingParticipant();
+    const writer = new RecordingParticipant();
+    const reader = new RecordingParticipant();
+    enlist(info, "tm", tm);
+    enlist(info, "writer", writer);
+    enlist(info, "reader", reader, { reads: 1, writes: 0 });
+
+    await agent.resolve(info);
+    await settle();
+
+    expect(tm.received).toEqual(["prepareAndCommit"]);
+    expect(tm.prepareAndCommitArgs?.writers.map((p) => p.grainId.key)).toEqual(["tm", "writer"]);
+    expect(tm.prepareAndCommitArgs?.total).toBe(3);
+    // Nothing but the one-way prepare: the TM confirms them, not the agent.
+    expect(writer.received).toEqual(["prepare(tm=tm)"]);
+    expect(reader.received).toEqual(["prepare(tm=tm)"]);
+    expect(info.status).toBe("committed");
+  });
+
+  it("commits a read-only transaction in one phase with commitReadOnly", async () => {
+    const agent = new TransactionAgent(new FakeTimeProvider());
+    const info = agent.startTransaction(true);
+    const a = new RecordingParticipant();
+    const b = new RecordingParticipant();
+    enlist(info, "a", a, { reads: 1, writes: 0 });
+    enlist(info, "b", b, { reads: 2, writes: 0 });
 
     await agent.resolve(info);
 
-    expect(a.committed).toBe(true);
-    expect(b.committed).toBe(true);
+    expect(a.received).toEqual(["commitReadOnly"]);
+    expect(b.received).toEqual(["commitReadOnly"]);
+  });
+
+  it("aborts every participant of a read-only transaction when one reports a broken lock", async () => {
+    const agent = new TransactionAgent(new FakeTimeProvider());
+    const info = agent.startTransaction(true);
+    const a = new RecordingParticipant();
+    const b = new RecordingParticipant(undefined, "brokenLock");
+    enlist(info, "a", a, { reads: 1, writes: 0 });
+    enlist(info, "b", b, { reads: 1, writes: 0 });
+
+    await expect(agent.resolve(info)).rejects.toBeInstanceOf(TransactionBrokenLockError);
+
+    expect(a.received).toEqual(["commitReadOnly", "abort"]);
+    expect(b.received).toEqual(["commitReadOnly", "abort"]);
+  });
+
+  it("cancels the other write participants when the TM reports a definite abort", async () => {
+    const agent = new TransactionAgent(new FakeTimeProvider());
+    const info = agent.startTransaction();
+    const tm = new RecordingParticipant(async () => "lockValidationFailed");
+    const writer = new RecordingParticipant();
+    const reader = new RecordingParticipant();
+    enlist(info, "tm", tm);
+    enlist(info, "writer", writer);
+    enlist(info, "reader", reader, { reads: 1, writes: 0 });
+
+    const failure = agent.resolve(info);
+
+    await expect(failure).rejects.toBeInstanceOf(TransactionAbortedError);
+    await settle();
+    expect(writer.received).toEqual(["prepare(tm=tm)", "cancel(lockValidationFailed)"]);
+    expect(reader.received).toEqual(["prepare(tm=tm)"]);
   });
 
   it(
-    "raises TransactionInDoubtError — not TransactionAbortedError — when a participant's " +
-      "commit step itself fails after the manager already recorded the commit, and other " +
-      "participants still get their commit applied",
+    "raises TransactionInDoubtError, and cancels nobody, when prepareAndCommit fails without " +
+      "an answer: the TM may have committed",
     async () => {
       const agent = new TransactionAgent(new FakeTimeProvider());
       const info = agent.startTransaction();
-      const ok = new FakeParticipant();
-      const faulty = new FakeParticipant(() => {
-        throw new Error("external resource threw during commit");
+      const tm = new RecordingParticipant(async () => {
+        throw new Error("the TM's reply was lost");
       });
-      info.participants.set(participantKey(enlist("ok", "s", ok).id), enlist("ok", "s", ok));
-      info.participants.set(
-        participantKey(enlist("faulty", "s", faulty).id),
-        enlist("faulty", "s", faulty),
-      );
+      const writer = new RecordingParticipant();
+      enlist(info, "tm", tm);
+      enlist(info, "writer", writer);
 
       const failure = agent.resolve(info);
 
       await expect(failure).rejects.toBeInstanceOf(TransactionInDoubtError);
       await expect(failure).rejects.not.toBeInstanceOf(TransactionAbortedError);
-      // The other participant's write still lands: the commit decision was
-      // already durable, so an in-doubt failure elsewhere does not roll it back.
-      expect(ok.committed).toBe(true);
-    },
-  );
-
-  it(
-    "raises TransactionInDoubtError — never aborting a prepared participant — when the elected " +
-      "manager's own recordCommit fails: whether the durable record landed before the failure " +
-      "is unknowable, so recovery (querying the TM) is the only safe way to resolve it",
-    async () => {
-      const agent = new TransactionAgent(new FakeTimeProvider());
-      const info = agent.startTransaction();
-      const manager = new FakeParticipant(undefined, () => {
-        throw new Error("TM write timed out — ack lost");
-      });
-      const other = new FakeParticipant();
-      info.participants.set(
-        participantKey(enlist("manager", "s", manager).id),
-        enlist("manager", "s", manager),
-      );
-      info.participants.set(
-        participantKey(enlist("other", "s", other).id),
-        enlist("other", "s", other),
-      );
-
-      const failure = agent.resolve(info);
-
-      await expect(failure).rejects.toBeInstanceOf(TransactionInDoubtError);
-      await expect(failure).rejects.not.toBeInstanceOf(TransactionAbortedError);
-      // Every participant was already prepared and the commit may or may not
-      // have been durably recorded — neither may be rolled back.
-      expect(manager.aborted).toBe(false);
-      expect(other.aborted).toBe(false);
-      expect(manager.committed).toBe(false);
-      expect(other.committed).toBe(false);
+      await settle();
+      expect(writer.received).toEqual(["prepare(tm=tm)"]);
     },
   );
 });
@@ -154,32 +234,31 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
 describe("TransactionAgent resolution status", () => {
   // The participant set is snapshotted once, when the boundary resolves the
   // transaction, so a resource enlisting afterwards is never prepared, never
-  // committed and never aborted — and the only release points for the state
-  // locks are commit/abort. The agent therefore records where the transaction
-  // stands, and `requireTransaction` refuses a late enlistment outright rather
-  // than letting it take a lock nothing will release.
+  // committed and never aborted. The agent therefore records where the
+  // transaction stands, and `requireTransaction` refuses a late enlistment
+  // outright rather than letting it take a lock nothing will release.
   it("marks the transaction committed once its boundary has committed it", async () => {
     const agent = new TransactionAgent(new FakeTimeProvider());
     const info = agent.startTransaction();
-    const a = new FakeParticipant();
-    info.participants.set(participantKey(enlist("a", "s", a).id), enlist("a", "s", a));
+    const a = new RecordingParticipant();
+    enlist(info, "a", a);
 
     await agent.resolve(info);
 
     expect(info.status).toBe("committed");
-    expect(a.committed).toBe(true);
+    expect(a.received).toEqual(["prepareAndCommit"]);
   });
 
   it("marks the transaction aborted when its boundary aborts it", async () => {
     const agent = new TransactionAgent(new FakeTimeProvider());
     const info = agent.startTransaction();
-    const a = new FakeParticipant();
-    info.participants.set(participantKey(enlist("a", "s", a).id), enlist("a", "s", a));
+    const a = new RecordingParticipant();
+    enlist(info, "a", a);
 
     await agent.abort(info);
 
     expect(info.status).toBe("aborted");
-    expect(a.aborted).toBe(true);
+    expect(a.received).toEqual(["abort"]);
   });
 
   it("refuses an enlistment once the transaction has resolved, before any lock is taken", async () => {
@@ -191,29 +270,21 @@ describe("TransactionAgent resolution status", () => {
   });
 
   it("seals the participant set as soon as resolution begins, not only once it has decided", async () => {
-    // The window matters: resolving is asynchronous (prepare stages durably),
+    // The window matters: resolving is asynchronous (the TM stages durably),
     // and a detached callee's turn — a `oneWay` + `transaction: "supported"`
     // call, whose caller resolved the moment its call returned — can land in
     // it. Enlisting then would still be too late for the participant snapshot
     // the round is already working from, so the set must close at the start.
     const agent = new TransactionAgent(new FakeTimeProvider());
     const info = agent.startTransaction();
-    const prepare = deferred<boolean>();
-    const blocking: TransactionParticipant = {
-      prepare: () => prepare.promise,
-      commit: () => {},
-      abort: () => {},
-    };
-    info.participants.set(
-      participantKey(enlist("a", "s", blocking).id),
-      enlist("a", "s", blocking),
-    );
+    const answer = deferred<TransactionalStatus>();
+    enlist(info, "a", new RecordingParticipant(() => answer.promise));
 
     const resolving = agent.resolve(info);
     expect(info.status).toBe("resolving");
     expect(() => inTurn(info, () => requireTransaction())).toThrow(TransactionAlreadyResolvedError);
 
-    prepare.resolve(true);
+    answer.resolve("ok");
     await resolving;
     expect(info.status).toBe("committed");
   });
@@ -227,87 +298,86 @@ describe("TransactionAgent resolution status", () => {
   });
 });
 
-/**
- * A participant that is only a resource — `prepare`/`commit`/`abort`, with no
- * `status` — standing in for `TransactionCommitter` (`@thresh/transactions`),
- * which enlists as a write participant but can neither durably record a commit
- * nor answer a recovering participant's query about one.
- *
- * It keeps a runtime `recordCommit` that is deliberately not part of the
- * contract, purely so a test can see whether it was elected manager: the
- * election must key on the whole manager contract (`isTransactionManager`), not
- * on `recordCommit` being present — which is exactly the shape
- * `TransactionCommitter` had before it was made resource-only.
- */
-class ResourceOnlyParticipant implements TransactionParticipant {
-  committed = false;
-  recordCommitCalls = 0;
-
-  prepare(): boolean {
-    return true;
-  }
-
-  commit(): void {
-    this.committed = true;
-  }
-
-  abort(): void {}
-
-  recordCommit(): void {
-    this.recordCommitCalls += 1;
-  }
-}
-
 describe("TransactionAgent manager election", () => {
   // Orleans elects the transaction manager from the *write* participants that
-  // support the Manager role (`CollateParticipants`, `ParticipantId.Role`); a
-  // TOC committer upstream has a real, storage-backed `TransactionManager`
-  // behind it. This port's `TransactionCommitter` is a deliberate memory-only
-  // stand-in with no durable commit record, so it must never be elected: for a
-  // transaction whose manager-capable writers are later in the set, electing it
-  // would leave the transaction with no durable commit point at all, and no
-  // `status` for a sibling's recovery query.
+  // support the Manager role (`CollateParticipants`, `ParticipantId.Role`).
   it("skips a resource-only writer that enlisted before a manager-capable one", async () => {
     const agent = new TransactionAgent(new FakeTimeProvider());
     const info = agent.startTransaction();
     const resourceOnly = new ResourceOnlyParticipant();
-    const manager = new FakeParticipant();
-    // Insertion order decides the election today: the resource-only participant
-    // enlists first, exactly as a committer does when its reply lands first.
-    info.participants.set(
-      participantKey(enlist("committer", "s", resourceOnly).id),
-      enlist("committer", "s", resourceOnly),
-    );
-    info.participants.set(
-      participantKey(enlist("state", "s", manager).id),
-      enlist("state", "s", manager),
-    );
+    const manager = new RecordingParticipant();
+    enlist(info, "first", resourceOnly);
+    enlist(info, "state", manager);
 
     await agent.resolve(info);
+    await settle();
 
-    expect(manager.recordCommitCalls).toBe(1);
-    expect(resourceOnly.recordCommitCalls).toBe(0);
-    // Both are still committed resources of the transaction.
-    expect(manager.committed).toBe(true);
-    expect(resourceOnly.committed).toBe(true);
+    expect(manager.received).toEqual(["prepareAndCommit"]);
+    expect(resourceOnly.received).toEqual(["prepare"]);
   });
 
-  it("elects no manager at all when every writer is resource-only", async () => {
-    // Nothing to record the commit with, and nothing to answer `status` — the
-    // transaction still commits its resources, as it did before, but no
-    // participant is asked to act as a manager it cannot be.
+  it("aborts a transaction no write participant can manage", async () => {
     const agent = new TransactionAgent(new FakeTimeProvider());
     const info = agent.startTransaction();
     const resourceOnly = new ResourceOnlyParticipant();
-    info.participants.set(
-      participantKey(enlist("committer", "s", resourceOnly).id),
-      enlist("committer", "s", resourceOnly),
-    );
+    enlist(info, "only", resourceOnly);
+
+    await expect(agent.resolve(info)).rejects.toBeInstanceOf(TransactionAbortedError);
+    expect(resourceOnly.received).toEqual(["abort"]);
+  });
+});
+
+describe("TransactionAgent and an agent-completed resource (the port's committer)", () => {
+  it("commits it only after the TM has committed, outside the protocol", async () => {
+    const agent = new TransactionAgent(new FakeTimeProvider());
+    const info = agent.startTransaction();
+    const committer = new AgentCompleted();
+    const manager = new RecordingParticipant();
+    enlist(info, "committer", committer);
+    enlist(info, "state", manager);
 
     await agent.resolve(info);
 
-    expect(resourceOnly.recordCommitCalls).toBe(0);
-    expect(resourceOnly.committed).toBe(true);
+    expect(manager.prepareAndCommitArgs?.writers.map((p) => p.grainId.key)).toEqual(["state"]);
+    expect(manager.prepareAndCommitArgs?.total).toBe(1);
+    expect(committer.received).toEqual(["commit"]);
+  });
+
+  it("raises TransactionInDoubtError, not an abort, when its commit step fails", async () => {
+    const agent = new TransactionAgent(new FakeTimeProvider());
+    const info = agent.startTransaction();
+    const committer = new AgentCompleted(async () => {
+      throw new Error("external resource threw during commit");
+    });
+    enlist(info, "committer", committer);
+    enlist(info, "state", new RecordingParticipant());
+
+    const failure = agent.resolve(info);
+
+    await expect(failure).rejects.toBeInstanceOf(TransactionInDoubtError);
+    await expect(failure).rejects.not.toBeInstanceOf(TransactionAbortedError);
+  });
+
+  it("does not commit it when the TM aborts", async () => {
+    const agent = new TransactionAgent(new FakeTimeProvider());
+    const info = agent.startTransaction();
+    const committer = new AgentCompleted();
+    enlist(info, "committer", committer);
+    enlist(info, "state", new RecordingParticipant(async () => "prepareTimeout"));
+
+    await expect(agent.resolve(info)).rejects.toBeInstanceOf(TransactionAbortedError);
+    expect(committer.received).toEqual([]);
+  });
+
+  it("commits it directly when it is the only writer", async () => {
+    const agent = new TransactionAgent(new FakeTimeProvider());
+    const info = agent.startTransaction();
+    const committer = new AgentCompleted();
+    enlist(info, "committer", committer);
+
+    await agent.resolve(info);
+
+    expect(committer.received).toEqual(["commit"]);
     expect(info.status).toBe("committed");
   });
 });

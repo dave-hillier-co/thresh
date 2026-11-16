@@ -37,8 +37,11 @@ async function nestedTransactionIds(
   runtime: GrainRuntime,
   tier: number,
   tiers: readonly AttributionTierEntry[][],
-): Promise<(string | undefined)[][]> {
-  const results: (string | undefined)[][] = [];
+): Promise<((string | undefined)[] | null)[]> {
+  // Upstream: `new List<string>[tier + 1 + tiers.Length]`, whose unset elements are null.
+  const results: ((string | undefined)[] | null)[] = new Array<null>(tier + 1 + tiers.length).fill(
+    null,
+  );
   results[tier] = [runtime.getTransactionId()];
 
   if (tiers.length === 0) return results;
@@ -52,9 +55,10 @@ async function nestedTransactionIds(
     ),
   );
   for (const result of tierResults) {
-    for (let i = tier + 1; i < result.length; i++) {
+    if (result.length !== results.length) throw new Error("Invalid result length");
+    for (let i = tier + 1; i < results.length; i++) {
       const existing = results[i];
-      results[i] = existing !== undefined ? [...existing, ...result[i]!] : result[i]!;
+      results[i] = existing !== null ? [...existing!, ...result[i]!] : result[i]!;
     }
   }
   return results;
@@ -65,7 +69,7 @@ export class NoAttributionGrain extends Grain implements TransactionAttributionG
   getNestedTransactionIds(
     tier: number,
     tiers: readonly AttributionTierEntry[][],
-  ): Promise<(string | undefined)[][]> {
+  ): Promise<((string | undefined)[] | null)[]> {
     return nestedTransactionIds(this.runtime, tier, tiers);
   }
 }
@@ -75,7 +79,7 @@ export class SuppressAttributionGrain extends Grain implements TransactionAttrib
   getNestedTransactionIds(
     tier: number,
     tiers: readonly AttributionTierEntry[][],
-  ): Promise<(string | undefined)[][]> {
+  ): Promise<((string | undefined)[] | null)[]> {
     return nestedTransactionIds(this.runtime, tier, tiers);
   }
 }
@@ -85,7 +89,7 @@ export class CreateOrJoinAttributionGrain extends Grain implements TransactionAt
   getNestedTransactionIds(
     tier: number,
     tiers: readonly AttributionTierEntry[][],
-  ): Promise<(string | undefined)[][]> {
+  ): Promise<((string | undefined)[] | null)[]> {
     return nestedTransactionIds(this.runtime, tier, tiers);
   }
 }
@@ -95,7 +99,7 @@ export class CreateAttributionGrain extends Grain implements TransactionAttribut
   getNestedTransactionIds(
     tier: number,
     tiers: readonly AttributionTierEntry[][],
-  ): Promise<(string | undefined)[][]> {
+  ): Promise<((string | undefined)[] | null)[]> {
     return nestedTransactionIds(this.runtime, tier, tiers);
   }
 }
@@ -105,7 +109,7 @@ export class JoinAttributionGrain extends Grain implements TransactionAttributio
   getNestedTransactionIds(
     tier: number,
     tiers: readonly AttributionTierEntry[][],
-  ): Promise<(string | undefined)[][]> {
+  ): Promise<((string | undefined)[] | null)[]> {
     return nestedTransactionIds(this.runtime, tier, tiers);
   }
 }
@@ -115,7 +119,7 @@ export class SupportedAttributionGrain extends Grain implements TransactionAttri
   getNestedTransactionIds(
     tier: number,
     tiers: readonly AttributionTierEntry[][],
-  ): Promise<(string | undefined)[][]> {
+  ): Promise<((string | undefined)[] | null)[]> {
     return nestedTransactionIds(this.runtime, tier, tiers);
   }
 }
@@ -125,7 +129,7 @@ export class NotAllowedAttributionGrain extends Grain implements TransactionAttr
   getNestedTransactionIds(
     tier: number,
     tiers: readonly AttributionTierEntry[][],
-  ): Promise<(string | undefined)[][]> {
+  ): Promise<((string | undefined)[] | null)[]> {
     return nestedTransactionIds(this.runtime, tier, tiers);
   }
 }

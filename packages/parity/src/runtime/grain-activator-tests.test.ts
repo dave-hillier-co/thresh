@@ -33,11 +33,9 @@ class HardcodedGrainActivator implements GrainActivator {
   }
 }
 
-// Fires the collection sweep (default interval 60s). `deactivateOnIdle()`
-// short-circuits `isStale()` regardless of age (see `ActivationData.isStale`),
-// so this only needs to get a sweep to run at all, not age the activation.
-async function forceSweep(time: FakeTimeProvider): Promise<void> {
-  time.advance(65_000);
+// `deactivateOnIdle()` starts the deactivation as soon as the asking turn
+// finishes; let its pipeline (hook, then disposal) run.
+async function settleDeactivation(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
@@ -80,7 +78,7 @@ describe("UnitTests.General.GrainActivatorTests", () => {
     expect(secondReleasedInstances).toBe(initialReleasedInstances);
 
     await grain1.doDeactivate();
-    await forceSweep(time);
+    await settleDeactivation();
 
     const grain3 = cluster.getGrain(ISimpleDiGrain, randomIntegerKey());
     const finalReleasedInstances = await grain3.getLongValue();

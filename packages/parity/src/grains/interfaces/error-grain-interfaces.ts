@@ -14,4 +14,5 @@ export interface IErrorGrain extends ISimpleGrain {
 
 export const IErrorGrain = defineGrainInterface<IErrorGrain>(
   "UnitTests.GrainInterfaces.IErrorGrain",
+  { key: "integer" },
 );

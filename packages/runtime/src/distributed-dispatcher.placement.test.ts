@@ -42,7 +42,10 @@ function deps(overrides: Partial<DistributedDispatcherDeps> = {}): {
         put: () => undefined,
         invalidate: () => undefined,
       } as unknown as LocationCache,
-      catalog: { isStatelessWorkerType: () => false } as unknown as Catalog,
+      catalog: {
+        isStatelessWorkerType: () => false,
+        canonicalId: (id: unknown) => id,
+      } as unknown as Catalog,
       remote: { send },
       activeSilos: () => candidates,
       placementFor: () => new RandomPlacement(),

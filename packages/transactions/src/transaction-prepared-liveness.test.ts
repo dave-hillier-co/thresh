@@ -1,132 +1,159 @@
 import { describe, expect, it } from "vitest";
-import { GrainId } from "@thresh/core/grain-id";
-import type { GrainType } from "@thresh/core/grain-type";
-import { TransactionAbortedError } from "@thresh/core/errors";
 import { FakeTimeProvider } from "@thresh/core/test-support/fake-time-provider";
-import type { ParticipantId, TransactionInfo } from "@thresh/core/transaction-info";
-import { invocationContext } from "@thresh/runtime/invocation-context";
 import { TransactionAgent } from "@thresh/runtime/transaction-agent";
 import { MemoryTransactionalStorage } from "@thresh/transactions/memory-transactional-storage";
-import { TransactionalStateImpl } from "@thresh/transactions/transactional-state-impl";
+import type { TransactionsOptions } from "@thresh/transactions/transactions-options";
+import {
+  account,
+  accountId,
+  inTransaction,
+  openAccount,
+  settle,
+  TransactionNetwork,
+  type Balance,
+} from "@thresh/transactions/test-support/transaction-network";
 
-interface Balance {
-  cents: number;
-}
-
-const grainId = (key: string) => new GrainId("Account" as GrainType, key);
-const participant = (key: string): ParticipantId => ({
-  grainId: grainId(key),
-  stateName: "balance",
-});
-const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
-
-function inTransaction<R>(tx: TransactionInfo, fn: () => Promise<R>): Promise<R> {
-  return invocationContext.run({ senderId: undefined, ownerId: undefined, transaction: tx }, fn);
-}
-
-/** A TM `a` and a participant `b`, both prepared, whose coordinator then dies. */
-async function orphanedAfterPrepare(remoteTransactionPingFrequencyMs = 60_000) {
+/**
+ * A transfer `a` → `b` (and `c`, when asked) whose writes are done; the test
+ * then plays the agent's messages itself, so it can stop wherever the agent
+ * would have died. `a` wrote first, so it is the TM.
+ */
+async function transfer(options: Partial<TransactionsOptions>, withC = false) {
   const clock = new FakeTimeProvider();
+  const network = new TransactionNetwork();
   const storage = new MemoryTransactionalStorage();
-  const options = { prepareTimeoutMs: 20_000, remoteTransactionPingFrequencyMs };
-  const a = new TransactionalStateImpl<Balance>(
-    "balance",
-    grainId("a"),
-    () => ({ cents: 100 }),
-    storage,
-    undefined,
-    options,
-    clock,
-  );
-  await a.load();
-  const b = new TransactionalStateImpl<Balance>(
-    "balance",
-    grainId("b"),
-    () => ({ cents: 100 }),
-    storage,
-    async (_manager, transactionId) => a.status(transactionId),
-    options,
-    clock,
-  );
-  await b.load();
+  const a = await openAccount(network, storage, "a", clock, options);
+  const b = await openAccount(network, storage, "b", clock, options);
+  const c = withC ? await openAccount(network, storage, "c", clock, options) : undefined;
   const agent = new TransactionAgent(clock);
   const tx = agent.startTransaction();
   await inTransaction(tx, () => a.performUpdate((s) => (s.cents -= 30)));
   await inTransaction(tx, () => b.performUpdate((s) => (s.cents += 30)));
-  const manager = participant("a");
-  expect(await a.prepare(tx.id, { reads: 0, writes: 1 }, tx.timeStamp, manager)).toBe(true);
-  expect(await b.prepare(tx.id, { reads: 0, writes: 1 }, tx.timeStamp, manager)).toBe(true);
-  return { clock, storage, a, b, agent, tx, manager };
-}
-
-async function committed(storage: MemoryTransactionalStorage, key: string) {
-  const loaded = await storage.load("balance", grainId(key));
+  if (c !== undefined) await inTransaction(tx, () => c.performUpdate((s) => (s.cents += 1)));
+  const writers = withC ? [account("a"), account("b"), account("c")] : [account("a"), account("b")];
+  const one = { reads: 0, writes: 1 };
   return {
-    cents: loaded.committedSequenceId === 0 ? 100 : (loaded.committedState as Balance).cents,
-    pending: loaded.pendingStates.length,
+    clock,
+    network,
+    storage,
+    a,
+    b,
+    c,
+    agent,
+    tx,
+    /** The agent's one-way prepare to `b`. */
+    prepareB: () => b.prepare(tx.id, one, tx.timeStamp, account("a")),
+    /** The agent's request to the TM. */
+    prepareAndCommit: () => a.prepareAndCommit(tx.id, one, tx.timeStamp, writers, writers.length),
   };
 }
 
-describe("a prepared transaction whose coordinator dies is still resolved", () => {
-  it("a TM that prepared decides abort after PrepareTimeout, and its participants follow", async () => {
-    const { clock, storage, a, b, agent, tx, manager } = await orphanedAfterPrepare();
+async function committed(storage: MemoryTransactionalStorage, key: string) {
+  const loaded = await storage.load("balance", accountId(key));
+  return {
+    cents: loaded.committedSequenceId === 0 ? 100 : (loaded.committedState as Balance).cents,
+    pending: loaded.pendingStates.length,
+    commitRecords: Object.keys(loaded.metadata.commitRecords).length,
+  };
+}
 
-    clock.advance(20_000);
+async function advance(clock: FakeTimeProvider, ms: number, step = 1_000): Promise<void> {
+  for (let elapsed = 0; elapsed < ms; elapsed += step) {
+    clock.advance(Math.min(step, ms - elapsed));
     await settle();
-    expect(a.status(tx.id)).toBe("presumedAbort");
-    expect(a.blocksDeactivation).toBe(false);
-    await expect(a.recordCommit(tx.id, tx.timeStamp, [manager])).rejects.toBeInstanceOf(
-      TransactionAbortedError,
-    );
+  }
+}
 
-    // The participant asks at its ping interval, learns the abort, and lets go.
-    expect(b.blocksDeactivation).toBe(true);
-    clock.advance(40_000);
-    await settle();
-    expect(b.blocksDeactivation).toBe(false);
-    expect(await committed(storage, "a")).toEqual({ cents: 100, pending: 0 });
-    expect(await committed(storage, "b")).toEqual({ cents: 100, pending: 0 });
-
-    // Both locks are free again.
-    const later = agent.startTransaction();
-    await inTransaction(later, () => a.performUpdate((s) => (s.cents += 1)));
-    await inTransaction(later, () => b.performUpdate((s) => (s.cents += 1)));
-    await agent.resolve(later);
-  });
-
-  it("a participant applies a commit the TM recorded before the coordinator died", async () => {
-    const { clock, storage, a, tx, manager } = await orphanedAfterPrepare();
-    await a.recordCommit(tx.id, tx.timeStamp, [manager, participant("b")]);
-    await a.commit(tx.id);
-
-    clock.advance(60_000);
-    await settle();
-    expect(await committed(storage, "b")).toEqual({ cents: 130, pending: 0 });
-  });
-
-  it("a TM that recorded the commit but never applied it applies it at PrepareTimeout", async () => {
-    const { clock, storage, a, tx, manager } = await orphanedAfterPrepare();
-    await a.recordCommit(tx.id, tx.timeStamp, [manager, participant("b")]);
-
-    clock.advance(20_000);
-    await settle();
-    expect(await committed(storage, "a")).toEqual({ cents: 70, pending: 0 });
-  });
-
-  it("a participant keeps its record while the TM is undetermined, and asks again", async () => {
-    const { clock, storage, b } = await orphanedAfterPrepare(5_000);
-    // The TM is still deciding: its own prepare timeout is longer than the ping.
-    clock.advance(5_000);
-    await settle();
-    expect(b.blocksDeactivation).toBe(true);
-    expect(await committed(storage, "b")).toEqual({ cents: 100, pending: 1 });
-
-    // The TM decides abort at 20 s; the next ping after that learns it.
-    for (let elapsed = 5_000; elapsed < 25_000; elapsed += 5_000) {
-      clock.advance(5_000);
+describe("a prepared transaction whose coordinator dies is still resolved (T4)", () => {
+  it(
+    "the agent dies before prepareAndCommit reaches the TM: the participant pings, the TM " +
+      "presumes abort once its own lock has timed out, and the participant rolls back",
+    async () => {
+      const options = { remoteTransactionPingFrequencyMs: 1_000, lockTimeoutMs: 5_000 };
+      const { clock, network, storage, a, b, agent, prepareB } = await transfer(options);
+      await prepareB();
       await settle();
-    }
+      expect(await committed(storage, "b")).toMatchObject({ cents: 100, pending: 1 });
+
+      // Pinged while the TM still holds the transaction in its lock: no answer,
+      // the participant keeps its record.
+      await advance(clock, 1_000);
+      expect(network.messages("ping", account("a")).length).toBe(1);
+      expect(network.messages("cancel", account("b"))).toEqual([]);
+      expect(b.blocksDeactivation).toBe(true);
+
+      // The TM's lock times out; the next ping is answered with a presumed abort.
+      await advance(clock, 6_000);
+      expect(network.messages("cancel", account("b")).map((m) => m.args[2])).toContain(
+        "presumedAbort",
+      );
+      expect(await committed(storage, "b")).toMatchObject({ cents: 100, pending: 0 });
+      expect(await committed(storage, "a")).toMatchObject({ cents: 100, pending: 0 });
+      expect(a.blocksDeactivation).toBe(false);
+      expect(b.blocksDeactivation).toBe(false);
+
+      // No lock stays held.
+      const later = agent.startTransaction();
+      await inTransaction(later, () => a.performUpdate((s) => (s.cents += 1)));
+      await inTransaction(later, () => b.performUpdate((s) => (s.cents += 1)));
+      await agent.resolve(later);
+      await settle();
+      expect(await committed(storage, "a")).toMatchObject({ cents: 101 });
+      expect(await committed(storage, "b")).toMatchObject({ cents: 101 });
+    },
+  );
+
+  it("the agent dies after the TM accepted prepareAndCommit: the TM still commits and confirms", async () => {
+    const { storage, a, b, prepareB, prepareAndCommit } = await transfer({});
+    void prepareB();
+    // The agent never hears the answer.
+    void prepareAndCommit();
+    await settle();
+
+    expect(await committed(storage, "a")).toEqual({ cents: 70, pending: 0, commitRecords: 0 });
+    expect(await committed(storage, "b")).toEqual({ cents: 130, pending: 0, commitRecords: 0 });
+    expect(a.blocksDeactivation).toBe(false);
     expect(b.blocksDeactivation).toBe(false);
-    expect(await committed(storage, "b")).toEqual({ cents: 100, pending: 0 });
+  });
+
+  it("the TM aborts after PrepareTimeout when a vote never arrives, and cancels the participants", async () => {
+    const options = { prepareTimeoutMs: 20_000 };
+    const { clock, storage, a, b, prepareB, prepareAndCommit } = await transfer(options, true);
+    // The agent dies before it sent `c` its prepare.
+    void prepareB();
+    const answer = prepareAndCommit();
+    await settle();
+    expect(await committed(storage, "b")).toMatchObject({ pending: 1 });
+
+    await advance(clock, 20_000, 5_000);
+
+    await expect(answer).resolves.toBe("prepareTimeout");
+    expect(await committed(storage, "a")).toEqual({ cents: 100, pending: 0, commitRecords: 0 });
+    expect(await committed(storage, "b")).toEqual({ cents: 100, pending: 0, commitRecords: 0 });
+    expect(a.blocksDeactivation).toBe(false);
+    expect(b.blocksDeactivation).toBe(false);
+  });
+
+  it("a participant keeps its record while the TM has not decided, and pings again", async () => {
+    const options = { prepareTimeoutMs: 20_000, remoteTransactionPingFrequencyMs: 5_000 };
+    const { clock, network, storage, b, prepareB, prepareAndCommit } = await transfer(
+      options,
+      true,
+    );
+    void prepareB();
+    void prepareAndCommit();
+    await settle();
+
+    // In the TM's commit queue, so undetermined: the ping goes unanswered.
+    await advance(clock, 5_000, 5_000);
+    expect(network.messages("ping", account("a")).length).toBe(1);
+    expect(b.blocksDeactivation).toBe(true);
+    expect(await committed(storage, "b")).toMatchObject({ cents: 100, pending: 1 });
+
+    // The TM decides abort at 20 s and cancels it.
+    await advance(clock, 15_000, 5_000);
+    expect(network.messages("ping", account("a")).length).toBeGreaterThanOrEqual(3);
+    expect(b.blocksDeactivation).toBe(false);
+    expect(await committed(storage, "b")).toMatchObject({ cents: 100, pending: 0 });
   });
 });

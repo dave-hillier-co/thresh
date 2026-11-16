@@ -132,12 +132,11 @@ describe("grain migration (multi-silo)", () => {
       await counter.increment(3);
       await counter.scheduleMigration();
       const id = new GrainId("MigratingCounter", "y");
-      expect(host.isActive(id)).toBe(true);
-
-      time.advance(31_000);
       await flush();
 
-      // No migrate hook on a single silo: it simply deactivates and reactivates fresh.
+      // A migration request deactivates at once (Orleans `MigrateOnIdle`), not
+      // at the next idle sweep. No migrate hook on a single silo: it simply
+      // deactivates and reactivates fresh.
       expect(host.isActive(id)).toBe(false);
       expect(await counter.get()).toBe(0);
     } finally {

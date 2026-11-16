@@ -1,5 +1,7 @@
+import { isStaleActivationRejection } from "@thresh/core/errors";
 import type { GrainId } from "@thresh/core/grain-id";
 import { keyToString, type GrainKey } from "@thresh/core/grain-key";
+import type { GrainKeyKind } from "@thresh/core/grain-key";
 import type { GrainType } from "@thresh/core/grain-type";
 import {
   SequenceToken,
@@ -165,9 +167,14 @@ class MemoryStream<T> implements AsyncStream<T> {
             event: e.event,
             token: new SequenceToken(e.token),
           }));
+          const handler: StreamHandler<T> = sub.handler;
           try {
             await sub.handler.onNextBatch(items);
           } catch (err) {
+            if (isStaleActivationRejection(err)) {
+              if (sub.handler !== handler) continue;
+              break;
+            }
             await sub.handler.onError?.(err);
             break; // leave the cursor so the batch is redelivered
           }
@@ -182,9 +189,18 @@ class MemoryStream<T> implements AsyncStream<T> {
           continue;
         }
         const entry = this.events[sub.cursor]!;
+        const handler: StreamHandler<T> = sub.handler;
         try {
-          await sub.handler.onNext(entry.event, new SequenceToken(entry.token));
+          await handler.onNext(entry.event, new SequenceToken(entry.token));
         } catch (err) {
+          // The consumer's activation went away without running it (a held
+          // delivery released for a reroute): not the subscriber's error.
+          // Deliver it to the handler the next activation resumed with, or
+          // leave the cursor for that resume.
+          if (isStaleActivationRejection(err)) {
+            if (sub.handler !== handler) continue;
+            break;
+          }
           await sub.handler.onError?.(err);
           break; // leave the cursor so the event is redelivered
         }
@@ -212,6 +228,8 @@ export interface MemorySiloBinding {
   deliver: StreamDeliver;
   /** This silo's implicit-subscription table (`namespace -> grain types`). */
   implicitTypesFor: (namespace: string) => Iterable<GrainType>;
+  /** The key kind a grain type declares, so an implicit subscriber is addressed under it. */
+  implicitKeyKindFor?: ((type: GrainType) => GrainKeyKind | undefined) | undefined;
   /** Confirm an administratively-added subscription with its target grain through this silo. */
   confirm: (grainId: GrainId, streamKey: string) => Promise<boolean>;
   /**
@@ -313,8 +331,12 @@ export class MemoryStreamProvider implements StreamProvider {
   }
 
   /** Wire the implicit-subscription table (`namespace → grain types`); see `setDeliver`. */
-  setImplicitSubscribers(typesFor: (namespace: string) => Iterable<GrainType>): void {
+  setImplicitSubscribers(
+    typesFor: (namespace: string) => Iterable<GrainType>,
+    keyKindFor?: (type: GrainType) => GrainKeyKind | undefined,
+  ): void {
     this.standalone.implicitTypesFor = typesFor;
+    this.standalone.implicitKeyKindFor = keyKindFor;
   }
 
   /**
@@ -404,7 +426,11 @@ export class MemoryStreamProvider implements StreamProvider {
     const route = this.routeThrough();
     if (route === undefined) return;
     const streamKey = `${streamId.namespace}/${streamId.key}`;
-    const implicit = implicitSubscriberIds(streamKey, route.implicitTypesFor);
+    const implicit = implicitSubscriberIds(
+      streamKey,
+      route.implicitTypesFor,
+      route.implicitKeyKindFor,
+    );
     const admin = this.subscriptionManager.subscribersFor(streamKey);
     const seen = new Set<string>();
     const subscribers = [];

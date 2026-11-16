@@ -1,5 +1,6 @@
 import { once } from "node:events";
 import { WebSocket, WebSocketServer } from "ws";
+import { RejectionError } from "@thresh/core/errors";
 import { defaultLogger, type Logger } from "@thresh/core/logger";
 import { SiloAddress } from "@thresh/core/silo-address";
 import { systemTimeProvider, type TimeProvider } from "@thresh/core/time-provider";
@@ -80,8 +81,52 @@ export class WebSocketTransport implements Transport {
     socket.terminate();
   }
 
+  /**
+   * The `Connection` over one open socket, at either end. A send on a socket that is no longer
+   * open throws: `ws` would otherwise discard the frame silently, and a message that never left
+   * must not look as though it did.
+   */
+  private connectionOver(
+    socket: WebSocket,
+    peer: string,
+  ): {
+    connection: Connection;
+    notifyClosed: (err?: unknown) => void;
+  } {
+    let onClosed: ((err?: unknown) => void) | undefined;
+    const connection: Connection = {
+      send: (message) => {
+        if (socket.readyState !== WebSocket.OPEN) {
+          throw new RejectionError(`connection to ${peer} is closed`, "unknownTarget");
+        }
+        socket.send(this.serializer.serialize(message));
+      },
+      close: () =>
+        new Promise<void>((resolve) => {
+          // The peer may already have closed this socket (e.g. it shut down
+          // first). Once `close` has fired it won't fire again, so waiting on it
+          // would hang — resolve immediately when already closed.
+          if (socket.readyState === WebSocket.CLOSED) {
+            resolve();
+            return;
+          }
+          socket.once("close", () => resolve());
+          socket.close();
+        }),
+      onClose: (callback) => {
+        onClosed = callback;
+      },
+    };
+    return { connection, notifyClosed: (err) => onClosed?.(err) };
+  }
+
   /** Runs a message handler so that a throw or a rejection can never escape as a process fault. */
-  private dispatch(onMessage: MessageHandler, message: Message, from: SiloAddress): void {
+  private dispatch(
+    onMessage: MessageHandler,
+    message: Message,
+    from: SiloAddress,
+    connection: Connection,
+  ): void {
     const failed = (err: unknown) => {
       recordHandlerFailure({ "thresh.peer": from.endpoint });
       this.logger.error(`message handler failed for a frame from ${from.endpoint}`, {
@@ -89,7 +134,7 @@ export class WebSocketTransport implements Transport {
       });
     };
     try {
-      void Promise.resolve(onMessage(message, from)).catch(failed);
+      void Promise.resolve(onMessage(message, from, connection)).catch(failed);
     } catch (err) {
       failed(err);
     }
@@ -121,6 +166,7 @@ export class WebSocketTransport implements Transport {
     server.on("connection", (socket) => {
       socket.binaryType = "arraybuffer";
       let from: SiloAddress | undefined;
+      let accepted: Connection | undefined;
       let notifyClosed: ((err?: unknown) => void) | undefined;
       socket.on("error", () => {
         // Swallow: ws follows an established connection's 'error' (ECONNRESET,
@@ -144,27 +190,14 @@ export class WebSocketTransport implements Transport {
             return;
           }
           from = preamble.siloAddress;
+          // Writes back down THIS accepted socket — the connection the peer
+          // dialled is its own reachability, so there is nothing to dial. The
+          // same object goes to `onAccept` and with every message to `onMessage`.
+          const over = this.connectionOver(socket, from.endpoint);
+          accepted = over.connection;
+          notifyClosed = over.notifyClosed;
           socket.send(ACK);
-          if (onAccept !== undefined) {
-            // Writes back down THIS accepted socket — the connection the peer
-            // dialled is its own reachability, so there is nothing to dial.
-            const connection: Connection = {
-              send: (message) => socket.send(this.serializer.serialize(message)),
-              close: () =>
-                new Promise<void>((resolve) => {
-                  if (socket.readyState === WebSocket.CLOSED) {
-                    resolve();
-                    return;
-                  }
-                  socket.once("close", () => resolve());
-                  socket.close();
-                }),
-              onClose: (callback) => {
-                notifyClosed = callback;
-              },
-            };
-            onAccept(preamble, connection);
-          }
+          onAccept?.(preamble, accepted);
           return;
         }
         let message: Message;
@@ -178,7 +211,7 @@ export class WebSocketTransport implements Transport {
           "thresh.peer": from.endpoint,
           "thresh.message.direction": message.direction,
         });
-        this.dispatch(onMessage, message, from);
+        this.dispatch(onMessage, message, from, accepted!);
       });
     });
 
@@ -256,6 +289,7 @@ export class WebSocketTransport implements Transport {
     const ack = new Promise<void>((resolve) => {
       resolveAck = resolve;
     });
+    const { connection, notifyClosed } = this.connectionOver(socket, to.endpoint);
 
     // A single persistent `message` handler is installed BEFORE the preamble is
     // sent, so no frame can arrive with nothing listening for it.
@@ -277,12 +311,11 @@ export class WebSocketTransport implements Transport {
         "thresh.peer": to.endpoint,
         "thresh.message.direction": message.direction,
       });
-      this.dispatch(onMessage, message, to);
+      this.dispatch(onMessage, message, to, connection);
     });
-    let notifyClosed: ((err?: unknown) => void) | undefined;
     socket.once("close", (code: number) => {
       if (!ackReceived) failHandshake?.(connectFailure(to, `connection rejected (code ${code})`));
-      notifyClosed?.();
+      else notifyClosed();
     });
 
     const opened = new Promise<void>((resolve) => socket.once("open", () => resolve()));
@@ -295,24 +328,7 @@ export class WebSocketTransport implements Transport {
       throw err;
     }
 
-    return {
-      send: (message) => socket.send(this.serializer.serialize(message)),
-      close: () =>
-        new Promise<void>((resolve) => {
-          // The peer may already have closed this socket (e.g. it shut down
-          // first). Once `close` has fired it won't fire again, so waiting on it
-          // would hang — resolve immediately when already closed.
-          if (socket.readyState === WebSocket.CLOSED) {
-            resolve();
-            return;
-          }
-          socket.once("close", () => resolve());
-          socket.close();
-        }),
-      onClose: (callback) => {
-        notifyClosed = callback;
-      },
-    };
+    return connection;
   }
 
   private tryPreamble(bytes: Uint8Array): ConnectionPreamble | undefined {

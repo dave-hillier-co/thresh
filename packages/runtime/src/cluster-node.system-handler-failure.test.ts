@@ -48,6 +48,9 @@ class MembershipView implements MembershipService {
   updates() {
     return this.shared.updates();
   }
+  refresh(version: number) {
+    return this.shared.refresh(version);
+  }
   localSilo() {
     return this.local;
   }
@@ -90,15 +93,19 @@ describe("a system-message handler that throws", () => {
     });
     await node.start();
 
-    // A hand-rolled peer: it listens for the node's reply and dials the node.
+    // A hand-rolled peer: it dials the node and takes the reply on that same connection.
     const peerTransport = new InProcessTransport(network, CLUSTER);
     const replies: Message[] = [];
-    await peerTransport.listen(addresses[1]!, (m) => void replies.push(m));
-    const toNode = await peerTransport.connect(addresses[0]!, {
-      protocolVersion: PROTOCOL_VERSION,
-      siloAddress: addresses[1]!,
-      clusterId: CLUSTER,
-    });
+    const toNode = await peerTransport.connect(
+      addresses[0]!,
+      {
+        protocolVersion: PROTOCOL_VERSION,
+        siloAddress: addresses[1]!,
+        clusterId: CLUSTER,
+        epoch: 1,
+      },
+      (m) => void replies.push(m),
+    );
 
     try {
       const before = await handlerFailures();

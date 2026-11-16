@@ -22,6 +22,7 @@ export interface IOneWayGrain extends GrainKey<Guid> {
 export const IOneWayGrain = defineGrainInterface<IOneWayGrain>(
   "UnitTests.GrainInterfaces.IOneWayGrain",
   {
+    key: "guid",
     options: {
       notify: { oneWay: true },
       notifyValueTask: { oneWay: true },

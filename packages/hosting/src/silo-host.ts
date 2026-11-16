@@ -4,7 +4,12 @@ import type { GrainInterface } from "@thresh/core/grain-interface";
 import type { GrainKeyKind } from "@thresh/core/grain-key";
 import type { KeyTypeOf } from "@thresh/core/key-kinds";
 import { type Logger, defaultLogger, safeLogger } from "@thresh/core/logger";
-import type { MembershipService, MembershipSnapshot } from "@thresh/core/membership";
+import { systemTimeProvider, type TimeProvider } from "@thresh/core/time-provider";
+import {
+  localStandingOf,
+  type MembershipService,
+  type MembershipSnapshot,
+} from "@thresh/core/membership";
 import type { StreamProvider } from "@thresh/core/stream";
 import type { GrainDirectory } from "@thresh/directory/grain-directory";
 import type { ClusterNode } from "@thresh/runtime/cluster-node";
@@ -15,15 +20,43 @@ import type {
 } from "@thresh/runtime/placement/rebalancing/rebalancer-worker";
 import type { RebalancingReport } from "@thresh/runtime/placement/rebalancing/rebalancing-report";
 import type { Edge } from "@thresh/runtime/placement/repartitioning/edge";
-import { GracefulShutdown } from "@thresh/hosting/graceful-shutdown";
+import { LifecycleSubject, ServiceLifecycleStage } from "@thresh/runtime/lifecycle-subject";
+import { DEFAULT_STOP_BUDGET_MS, GracefulShutdown } from "@thresh/hosting/graceful-shutdown";
 import type { HealthCheck } from "@thresh/hosting/health-check";
 import type { HealthServer } from "@thresh/hosting/health-server";
 import type { SelfProbeWorker } from "@thresh/hosting/self-probe";
+
+/** Orleans' `ClusterMembershipOptions.MaxJoinAttemptTime` default: five minutes. */
+export const DEFAULT_JOIN_TIMEOUT_MS = 5 * 60_000;
+
+/**
+ * Slack past the stop budget before the node's stop is abandoned. The node enforces the budget
+ * itself (`GracefulShutdown`), so this outer bound only catches a node stop that fails to return.
+ */
+const NODE_STOP_BACKSTOP_MS = 1000;
+
+/**
+ * The membership reconcile's stage: just above `Active`, so it starts after, and stops before,
+ * every service its ownership hooks feed (reminders at `Active`, durable jobs and pulling agents
+ * at `BecomeActive`).
+ */
+export const MEMBERSHIP_RECONCILE_STAGE = ServiceLifecycleStage.Active + 1;
 
 /** The reminder service the host drives (a `LocalReminderService`). */
 export interface ReminderService {
   refreshOwnership(ranges: ReadonlyArray<readonly [number, number]>): Promise<void>;
   stop(): void;
+}
+
+/**
+ * One subsystem's place in the silo lifecycle (Orleans `ILifecycleParticipant`): `start` runs when
+ * the host reaches `stage` on the way up, `stop` when it passes it on the way down.
+ */
+export interface SiloLifecycleParticipant {
+  readonly name: string;
+  readonly stage: number;
+  readonly start?: () => Promise<void>;
+  readonly stop?: () => Promise<void>;
 }
 
 export interface SiloHostParts {
@@ -52,6 +85,14 @@ export interface SiloHostParts {
    */
   stopBudgetMs?: number;
   membership: MembershipService;
+  /**
+   * How long start waits for the membership service to list this silo before it fails (Orleans
+   * `ClusterMembershipOptions.MaxJoinAttemptTime`, five minutes). Unset falls back to
+   * `DEFAULT_JOIN_TIMEOUT_MS`.
+   */
+  joinTimeoutMs?: number;
+  /** The clock the join wait runs on (defaults to the system clock). */
+  time?: TimeProvider;
   reminderService?: ReminderService | undefined;
   /** The elected activation-rebalancer worker, started/stopped with the host. */
   rebalancerWorker?: ActivationRebalancerWorker | undefined;
@@ -63,8 +104,14 @@ export interface SiloHostParts {
    * calls would just record spurious misses.
    */
   selfProbeWorker?: SelfProbeWorker | undefined;
-  /** Run before the node starts — e.g. connect durable provider clients. */
-  onStart?: ReadonlyArray<() => Promise<void>>;
+  /**
+   * Every other subsystem's start and stop, each at a named stage (see
+   * `ServiceLifecycleStage`). The host adds its own — the node, startup tasks, the health
+   * listener, the view reconcile, the rebalancer, the self-probe, reminders and readiness — to the
+   * same lifecycle, starts the stages ascending and stops them descending, and rolls back a start
+   * that fails.
+   */
+  lifecycle?: ReadonlyArray<SiloLifecycleParticipant>;
   /**
    * Run on start and on every membership change with this silo's owned hash
    * ranges — e.g. take over the stream queues the ring now assigns this silo.
@@ -72,21 +119,12 @@ export interface SiloHostParts {
   onOwnershipChange?: ReadonlyArray<
     (ranges: ReadonlyArray<readonly [number, number]>) => Promise<void>
   >;
-  /** Run after the node drains — e.g. disconnect durable provider clients. */
-  onStop?: ReadonlyArray<() => Promise<void>>;
   /**
-   * Run before the node deactivates its activations (`shutdown.drain()` ->
-   * `ClusterNode.stop()` -> `Catalog.deactivateAll`) — stream providers and
-   * the durable-job manager stop here, matching Orleans' own ordering
-   * (`PersistentStreamProviderOptions.cs:58`, `LocalDurableJobManager.cs:120`
-   * both stop at `ServiceLifecycleStage.Active`, before
-   * `Catalog.DeactivateAllActivations`, `Silo.cs:387-395`): otherwise they
-   * keep delivering into activations for the whole grace period plus
-   * deactivation, creating exactly the orphaned-activation race
-   * `deactivateAll` now refuses (issue #108), then failing once the
-   * transport underneath them has closed anyway.
+   * Stops for the ownership services the builder owns (the durable-job manager, pulling-stream
+   * agents), run when the silo fences itself (see `SiloHost`'s fencing), alongside the host's own
+   * reminders, rebalancer and self-probe. Each must tolerate the lifecycle's own stop later.
    */
-  onBeforeDeactivate?: ReadonlyArray<() => Promise<void>>;
+  onFence?: ReadonlyArray<() => Promise<void>>;
   /**
    * Run after the node starts but before the silo is marked ready — e.g. call
    * grains from application startup code (Orleans `IStartupTask`).
@@ -105,6 +143,12 @@ export interface SiloHostParts {
  * `start` brings it online and flips readiness; `stop` drains gracefully.
  */
 export class SiloHost {
+  private lifecycle: LifecycleSubject | undefined;
+  private stopping: Promise<void> | undefined;
+  /** Set once readiness is published; a stop after that waits the drain grace. */
+  private serving = false;
+  /** The membership feed, positioned before the node applies the first view. */
+  private updates: AsyncIterable<MembershipSnapshot> | undefined;
   private membershipWatch: AbortController | undefined;
   private stopViewListener: (() => void) | undefined;
   /** The in-flight view reconciliation (`reconcileView`), if one is running. */
@@ -113,6 +157,14 @@ export class SiloHost {
   private reconcileAgain = false;
   /** The applied view version the ownership hooks last ran for. */
   private hookedVersion: number | undefined;
+  /**
+   * Set once stop has begun: the reconcile runs no further ownership hook, so nothing it feeds
+   * (reminders, durable jobs, pulling agents) is told to adopt ranges while it is stopping or
+   * after it has stopped.
+   */
+  private hooksHalted = false;
+  /** Set once this silo has fenced itself; never cleared for this incarnation. */
+  private fenced = false;
 
   constructor(private readonly parts: SiloHostParts) {}
 
@@ -239,37 +291,30 @@ export class SiloHost {
     await this.parts.node.flushRepartitionBuffers();
   }
 
-  /** Run a sequence of optional hooks in order, awaiting each, with the given args. */
-  private async runHooks<A extends unknown[]>(
-    hooks: ReadonlyArray<(...args: A) => Promise<void>> | undefined,
-    ...args: A
-  ): Promise<void> {
-    for (const hook of hooks ?? []) await hook(...args);
-  }
-
   /**
-   * `runHooks` for the start and stop phases: a hook that throws is logged with the phase it
-   * belongs to, then rethrown, so the failure still reaches the caller of `start`/`stop` but also
-   * leaves a line saying which phase it came from. (The ownership hooks of the membership path are
-   * logged by `reconcileLoop`, which catches them.)
+   * The silo's lifecycle, one subject per start. The host's own subsystems sit at these stages
+   * (Orleans' names and order), with the builder's participants around them:
+   *
+   * - `RuntimeInitialize`: storage clients, the membership watch, the health listener's close.
+   *   Below the node, so they come up before it listens and are torn down after it has
+   *   deactivated every activation.
+   * - `RuntimeServices`: the transport and node. Start applies the membership view, then settles
+   *   join recovery. Stop waits out the grace period, waits for the directory ranges the silo
+   *   gave up to be collected, and deactivates, all under the stop budget (`ClusterNode.stop`).
+   *   The membership reconcile goes on applying views to the node, without running any
+   *   ownership hook, until this stop has finished.
+   * - `RuntimeStorageServices`, `RuntimeGrainServices`: stream providers, grain services.
+   * - `ApplicationServices`: startup tasks.
+   * - `BecomeActive`: the health listener opens; pulling agents and the job manager stop here,
+   *   before activations are deactivated.
+   * - `Active`: the rebalancer, the self-probe and reminders.
+   * - `MEMBERSHIP_RECONCILE_STAGE` (just above `Active`): the membership reconcile, which runs the
+   *   ownership hooks. It starts after every service it feeds and stops before any of them,
+   *   waiting for a reconcile already in flight, so no hook reaches a stopping service. Its
+   *   stop ends the hooks only: the view itself is followed through the node's stop.
+   * - `Last`: readiness. It is published last on the way up and flipped first on the way down.
    */
-  private async runPhase(
-    phase: "onStart" | "startupTasks" | "onStop",
-    hooks: ReadonlyArray<() => Promise<void>> | undefined,
-  ): Promise<void> {
-    try {
-      await this.runHooks(hooks);
-    } catch (error) {
-      const logger = safeLogger(this.parts.logger ?? defaultLogger);
-      logger.error(phase === "onStop" ? "silo stop hook failed" : "silo start hook failed", {
-        phase,
-        error,
-      });
-      throw error;
-    }
-  }
-
-  async start(): Promise<void> {
+  private buildLifecycle(): LifecycleSubject {
     const {
       node,
       health,
@@ -278,80 +323,279 @@ export class SiloHost {
       membership,
       rebalancerWorker,
       selfProbeWorker,
-      onStart,
-      startupTasks,
     } = this.parts;
-    // The membership watch's first list completes inside these (a
-    // `KubernetesEndpointWatch.start()` awaits it), so the view is populated before
-    // the node applies it.
-    await this.runPhase("onStart", onStart);
-    // Positioned now, before the node applies the current view: every view published
-    // from here on is yielded once the watch below starts consuming, so none can fall
-    // between the start-up reconcile and the watch.
-    const updates = membership.updates();
-    // Listens, then applies `membership.current()` — the ring, and join recovery for
-    // the ranges it gains — so a startup task below can already call a grain.
-    await node.start();
-    // Finish that join recovery before the startup tasks and readiness. Every owned
-    // operation waits for it anyway, so this only moves the wait ahead of them — and
-    // keeps the node's recovery dials to members not listening yet from still being
-    // in flight (and shared by the connection pool) when the first calls go out.
-    await node.recoverySettled();
-    await this.runPhase("startupTasks", startupTasks);
-    health.update({ transportReady: true });
-    // Readiness follows the listener, not the moment it was last seen up.
-    node.onListenerClosed(() => health.update({ transportReady: false }));
-    if (healthServer !== undefined && healthPort !== undefined) {
-      await healthServer.listen(healthPort);
-    }
-    // Ownership hooks for the applied view, then every later one (level-triggered),
-    // whichever path applies it.
-    this.stopViewListener = node.onViewApplied(() => this.reconcileView());
-    this.reconcileView();
-    await this.reconciling;
-    rebalancerWorker?.start();
-    selfProbeWorker?.start();
-    this.watchMembership(updates);
-    health.update({ membershipHealthy: node.hasAppliedView(), started: true });
+    const { reminderService, shutdown, startupTasks } = this.parts;
+    const logger = safeLogger(this.parts.logger ?? defaultLogger);
+    const stopBudgetMs = this.parts.stopBudgetMs ?? DEFAULT_STOP_BUDGET_MS;
+    const subject = new LifecycleSubject({
+      // No participant may hold the stop past the stop budget: one whose stop has not settled by
+      // then is logged as failed and the stages below still stop.
+      stopTimeoutMs: stopBudgetMs,
+      onError: ({ phase, observerName, error }) => {
+        logger.error(phase === "stop" ? "silo stop hook failed" : "silo start hook failed", {
+          phase: observerName,
+          error,
+        });
+      },
+    });
+    const subscribe = (p: SiloLifecycleParticipant, stopTimeoutMs?: number): void => {
+      subject.subscribe(p.name, p.stage, {
+        onStart: async () => p.start?.(),
+        onStop: async () => p.stop?.(),
+        ...(stopTimeoutMs !== undefined ? { stopTimeoutMs } : {}),
+      });
+    };
+    for (const participant of this.parts.lifecycle ?? []) subscribe(participant);
+
+    // The membership watch's first list completes inside a `RuntimeInitialize` start (a
+    // `KubernetesEndpointWatch.start()` awaits it), so the view is populated before the node
+    // applies it.
+    subscribe(
+      {
+        name: "node",
+        stage: ServiceLifecycleStage.RuntimeServices,
+        start: async () => {
+          // Positioned now, before the node applies the current view: every view published from
+          // here on is yielded once the watch starts consuming, so none can fall between the
+          // start-up reconcile and the watch.
+          this.updates = membership.updates();
+          // Listens, then applies `membership.current()` — the ring, and join recovery for the
+          // ranges it gains — so a startup task can already call a grain.
+          await node.start();
+          // Finish that join recovery before the startup tasks and readiness. Every owned
+          // operation waits for it anyway, so this only moves the wait ahead of them — and keeps
+          // the node's recovery dials to members not listening yet from still being in flight (and
+          // shared by the connection pool) when the first calls go out.
+          await node.recoverySettled();
+        },
+        // A silo that was serving waits out the grace period; one rolling back a failed start has
+        // nothing to wait for. The node goes on applying views until it has deactivated, so a
+        // leaving silo sees itself out of the ring and hands its ranges over (or fences, if it
+        // sees itself removed); only then does it stop following the watch.
+        stop: async () => {
+          try {
+            await (this.serving ? shutdown.drain() : shutdown.stopWithoutGrace());
+          } finally {
+            await this.stopFollowingViews();
+          }
+        },
+      },
+      stopBudgetMs + NODE_STOP_BACKSTOP_MS,
+    );
+    // Orleans' `MembershipAgent` joins the table at `AfterRuntimeGrainServices`, before the
+    // application's startup tasks run. Here the join is the EndpointSlice controller listing this
+    // pod: until it does, the view is empty, there is no ring, and a startup task that calls a
+    // grain would fail. Wait for the listing, then apply the view it brought and settle the join
+    // recovery of the ranges it gave this silo.
+    subscribe({
+      name: "membership listing",
+      stage: ServiceLifecycleStage.AfterRuntimeGrainServices,
+      start: async () => {
+        await this.awaitListed();
+        if (node.appliedViewVersion !== membership.current().version) node.updateView();
+        await node.recoverySettled();
+      },
+    });
+    subscribe({
+      name: "startupTasks",
+      stage: ServiceLifecycleStage.ApplicationServices,
+      start: async () => {
+        for (const task of startupTasks ?? []) await task();
+      },
+    });
+    subscribe({
+      name: "health listener",
+      stage: ServiceLifecycleStage.BecomeActive,
+      start: async () => {
+        health.update({ transportReady: true });
+        // Readiness follows the listener, not the moment it was last seen up.
+        node.onListenerClosed(() => health.update({ transportReady: false }));
+        if (healthServer !== undefined && healthPort !== undefined) {
+          await healthServer.listen(healthPort);
+        }
+      },
+    });
+    // Closed after the node stops, so the readiness endpoint keeps answering through the drain.
+    subscribe({
+      name: "health server",
+      stage: ServiceLifecycleStage.RuntimeInitialize,
+      stop: async () => healthServer?.close(),
+    });
+    subscribe({
+      name: "membership reconcile",
+      stage: MEMBERSHIP_RECONCILE_STAGE,
+      start: async () => {
+        const watch = new AbortController();
+        this.membershipWatch = watch;
+        this.hookedVersion = undefined;
+        this.hooksHalted = false;
+        // Ownership hooks for the applied view, then every later one (level-triggered),
+        // whichever path applies it.
+        this.stopViewListener = node.onViewApplied(() => this.reconcileView());
+        this.reconcileView();
+        await this.reconciling;
+        if (this.updates !== undefined) this.watchMembership(this.updates, watch);
+      },
+      // Bounded by the stop budget, like every participant's stop. The ownership hooks end here
+      // (`stopLifecycle` already halted them); the views themselves are followed until the node
+      // has stopped (see the node's stop).
+      stop: async () => {
+        this.hooksHalted = true;
+        await this.reconciling;
+      },
+    });
+    subscribe({
+      name: "rebalancer",
+      stage: ServiceLifecycleStage.Active,
+      start: async () => rebalancerWorker?.start(),
+      stop: async () => rebalancerWorker?.stop(),
+    });
+    subscribe({
+      name: "self-probe",
+      stage: ServiceLifecycleStage.Active,
+      start: async () => selfProbeWorker?.start(),
+      stop: async () => selfProbeWorker?.stop(),
+    });
+    subscribe({
+      name: "reminders",
+      stage: ServiceLifecycleStage.Active,
+      stop: async () => reminderService?.stop(),
+    });
+    subscribe({
+      name: "readiness",
+      stage: ServiceLifecycleStage.Last,
+      start: async () => {
+        health.update({ membershipHealthy: this.membershipHealthy(), started: true });
+        this.serving = true;
+      },
+      stop: async () => shutdown.beginDrain(),
+    });
+    return subject;
   }
 
-  async stop(): Promise<void> {
-    const {
-      rebalancerWorker,
-      selfProbeWorker,
-      reminderService,
-      shutdown,
-      healthServer,
-      onStop,
-      onBeforeDeactivate,
-    } = this.parts;
+  /** End the membership reconcile: no further view is applied to the node. */
+  private async stopFollowingViews(): Promise<void> {
     this.membershipWatch?.abort();
     this.stopViewListener?.();
-    rebalancerWorker?.stop();
-    reminderService?.stop();
-    // Contained, unlike `onStop`: these run before the drain, so one failing
-    // provider stop must not skip deactivating every activation, closing the
-    // transport and the rest of the teardown (Orleans logs a lifecycle stage
-    // that fails to stop and carries on stopping).
-    const logger = safeLogger(this.parts.logger ?? defaultLogger);
-    for (const hook of onBeforeDeactivate ?? []) {
-      try {
-        await hook();
-      } catch (error) {
-        logger.error("pre-deactivation stop hook failed", { error });
+    this.stopViewListener = undefined;
+    await this.reconciling;
+  }
+
+  /**
+   * Resolve once the membership service lists this silo (`localStandingOf`); a silo that is
+   * already listed (static membership) does not wait at all. Rejects when the join timeout
+   * elapses first, and leaves no timer armed either way.
+   */
+  private async awaitListed(): Promise<void> {
+    const { membership } = this.parts;
+    if (localStandingOf(membership) !== "unlisted") return;
+    const time = this.parts.time ?? systemTimeProvider;
+    const timeoutMs = this.parts.joinTimeoutMs ?? DEFAULT_JOIN_TIMEOUT_MS;
+    const updates = membership.updates()[Symbol.asyncIterator]();
+    let timer: ReturnType<TimeProvider["setTimer"]> | undefined;
+    const expired = new Promise<"expired">((resolve) => {
+      timer = time.setTimer(() => resolve("expired"), timeoutMs);
+    });
+    try {
+      while (localStandingOf(membership) === "unlisted") {
+        const next = await Promise.race([updates.next(), expired]);
+        // A feed that has ended will say nothing more: only the timeout is left to wait for.
+        if (next !== "expired" && next.done === true) await expired;
+        if (next === "expired" || next.done === true) {
+          throw new Error(
+            `silo ${membership.localSilo().toString()} was never listed by the membership ` +
+              `service within the join timeout of ${timeoutMs}ms: its pod is not in the ` +
+              "EndpointSlices the silo watches. Check that the Service selector matches the " +
+              "pod's labels and that the pod's endpoint appears in the Service's EndpointSlices.",
+          );
+        }
       }
+    } finally {
+      time.clearTimer(timer);
     }
-    // `selfProbeWorker` keeps ticking through `shutdown.drain()`'s grace
-    // period rather than stopping here alongside the other workers: it reads
-    // `HealthCheck.isDraining()` to no-op its own flip once `drain()` sets
-    // `draining` true, so a probe miss during the grace window (turns being
-    // drained, connections closing) is correctly attributed to the drain
-    // rather than misreported as a hung dispatcher. Only stopped once the
-    // node itself is fully down.
-    await shutdown.drain();
+  }
+
+  /**
+   * Readiness's membership condition: the membership source has completed a list and this silo
+   * is listed in the view (`localStandingOf` — a static view counts as listed and synced from the
+   * start). It does not ask for a ring: a joining silo is listed, owns nothing while a peer is
+   * active, and must still report ready, because its readiness is what makes Kubernetes mark it
+   * ready and so bring it into the ring.
+   */
+  private membershipHealthy(): boolean {
+    return !this.fenced && localStandingOf(this.parts.membership) === "listed";
+  }
+
+  /**
+   * Fence this silo (Orleans `MembershipTableManager.KillMyselfLocally`): a view omitted it
+   * after it had been listed, so its peers have already dropped its directory entries and
+   * reassigned its ranges, and anything it went on doing would race the silos that now own them.
+   * It fails liveness (and readiness), so the kubelet restarts the pod; the node refuses every
+   * call before it runs and abandons its activations without deactivation hooks or
+   * unregistration; and its ownership services stop — no further ownership hook, reminders, the
+   * rebalancer, the self-probe, and the builder's (`onFence`: durable jobs, pulling agents). A
+   * silo that has never been listed is not fenced: it is simply not yet a member.
+   */
+  private async fence(): Promise<void> {
+    if (this.fenced) return;
+    this.fenced = true;
+    this.hooksHalted = true;
+    const { node, health, membership, reminderService, rebalancerWorker, selfProbeWorker } =
+      this.parts;
+    const logger = safeLogger(this.parts.logger ?? defaultLogger);
+    logger.error("this silo was removed from the membership view; fencing it until it restarts", {
+      silo: membership.localSilo().toString(),
+      version: membership.current().version,
+    });
+    health.update({ fenced: true, membershipHealthy: false });
+    node.fence();
+    rebalancerWorker?.stop();
     selfProbeWorker?.stop();
-    await healthServer?.close();
-    await this.runPhase("onStop", onStop);
+    reminderService?.stop();
+    for (const stop of this.parts.onFence ?? []) {
+      await stop().catch((error: unknown) => {
+        logger.error("an ownership service failed to stop while fencing", { error });
+      });
+    }
+  }
+
+  /**
+   * Start every stage in ascending order. A start that fails stops the stages already started, in
+   * reverse (the failed stage included, as Orleans' `LifecycleSubject` does), and rejects with the
+   * original error, so nothing is left listening, connected or armed.
+   */
+  async start(): Promise<void> {
+    const subject = this.buildLifecycle();
+    this.lifecycle = subject;
+    this.stopping = undefined;
+    this.serving = false;
+    try {
+      await subject.onStart();
+    } catch (error) {
+      this.hooksHalted = true;
+      await subject.onStop();
+      throw error;
+    }
+  }
+
+  /**
+   * Stop every stage in descending order, readiness first. A participant whose stop fails is
+   * logged and the stages below it still stop. Idempotent.
+   */
+  stop(): Promise<void> {
+    this.stopping ??= this.stopLifecycle();
+    return this.stopping;
+  }
+
+  private async stopLifecycle(): Promise<void> {
+    // From the moment stop begins, before readiness flips: no view reaches the ownership hooks.
+    // Views still reach the node until it has stopped (`stopFollowingViews`).
+    this.hooksHalted = true;
+    if (this.lifecycle === undefined) {
+      this.parts.shutdown.beginDrain();
+      return;
+    }
+    await this.lifecycle.onStop();
   }
 
   /**
@@ -360,9 +604,10 @@ export class SiloHost {
    * against `membership.current()` — so a view published while a reconcile is busy
    * in its hooks is picked up when they finish, never lost.
    */
-  private watchMembership(updates: AsyncIterable<MembershipSnapshot>): void {
-    const abort = new AbortController();
-    this.membershipWatch = abort;
+  private watchMembership(
+    updates: AsyncIterable<MembershipSnapshot>,
+    abort: AbortController,
+  ): void {
     void (async () => {
       try {
         for await (const _snapshot of updates) {
@@ -389,6 +634,10 @@ export class SiloHost {
    * has applied if they have not run for it yet, and go round again until neither
    * is behind. Intermediate views may be coalesced; the latest is always applied.
    *
+   * Once a stop has begun the hooks are halted but the views are still applied, and a view
+   * that has removed this silo still fences it, until the node has stopped
+   * (`stopFollowingViews`): a leaving silo follows the watch through its drain.
+   *
    * Single-flight: a request while a reconcile runs (a view published mid-hook, or
    * the node applying a view on another path — the directory's stale-view refresh,
    * `awaitView` catching up to a peer — which `onViewApplied` reports) marks it to
@@ -413,18 +662,26 @@ export class SiloHost {
     const logger = safeLogger(this.parts.logger ?? defaultLogger);
     for (;;) {
       this.reconcileAgain = false;
-      if (this.membershipWatch?.signal.aborted === true) return;
+      if (this.fenced || this.membershipWatch?.signal.aborted === true) return;
+      if (localStandingOf(membership) === "removed") {
+        await this.fence();
+        return;
+      }
       let failed = false;
       try {
         if (node.appliedViewVersion !== membership.current().version) node.updateView();
         const version = node.appliedViewVersion;
-        if (version !== this.hookedVersion) {
+        if (!this.hooksHalted && version !== this.hookedVersion) {
           // Recorded before the hooks run: a hook that fails is retried on the next
           // view change, not in a tight loop against a store that is down.
           this.hookedVersion = version;
           const ranges = node.ownedHashRanges();
-          await this.runHooks(onOwnershipChange, ranges);
-          await reminderService?.refreshOwnership(ranges);
+          // Checked before each hook: a stop that began while one ran reaches no further one.
+          for (const hook of onOwnershipChange ?? []) {
+            if (this.hooksHalted) break;
+            await hook(ranges);
+          }
+          if (!this.hooksHalted) await reminderService?.refreshOwnership(ranges);
         }
       } catch (error) {
         // Never let a failed view change END reconciliation (issue #70): a silo
@@ -434,8 +691,8 @@ export class SiloHost {
         // view's adoption work, which the next view change retries — and the hooks
         // do real I/O against Postgres/Redis/Kafka (durable-job shard claims,
         // pulling-stream queue ownership), so a store blip is the expected trigger.
-        // `membershipHealthy` below follows the applied view, not the hooks: a
-        // transient store error must not pull a serving silo out of the service.
+        // `membershipHealthy` below follows the view, not the hooks: a transient
+        // store error must not pull a serving silo out of the service.
         // (`LocalReminderService.refreshOwnership` already swallows its own store
         // errors and logs them.)
         failed = true;
@@ -444,10 +701,10 @@ export class SiloHost {
           error,
         });
       }
-      health.update({ membershipHealthy: node.hasAppliedView() });
+      health.update({ membershipHealthy: this.membershipHealthy() });
       const behind =
         node.appliedViewVersion !== membership.current().version ||
-        node.appliedViewVersion !== this.hookedVersion;
+        (!this.hooksHalted && node.appliedViewVersion !== this.hookedVersion);
       if (!this.reconcileAgain && (!behind || failed)) return;
     }
   }

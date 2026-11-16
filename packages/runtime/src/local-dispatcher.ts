@@ -1,5 +1,7 @@
 import { type Logger, defaultLogger } from "@thresh/core/logger";
 import type { InvocationRequest } from "@thresh/core/request";
+import { mayResend } from "@thresh/messaging/resend-policy";
+import { admit } from "@thresh/runtime/admission";
 import type { Catalog } from "@thresh/runtime/catalog";
 import {
   withCallDeadline,
@@ -32,21 +34,21 @@ export class LocalDispatcher implements Dispatcher {
     // [StatelessWorker] grains scale to several local activations per id
     // instead of the ordinary exactly-one; see `Catalog.pickOrScaleWorker`.
     if (this.catalog.isStatelessWorkerType(withDeadline.target.type)) {
-      return this.catalog.pickOrScaleWorker(withDeadline.target).invoke(withDeadline, opts);
+      return admit(this.catalog.pickOrScaleWorker(withDeadline.target), withDeadline, opts);
     }
     const activation = await this.catalog.getOrCreate(withDeadline.target);
     try {
-      return await activation.invoke(withDeadline, opts);
+      return await admit(activation, withDeadline, opts);
     } catch (error) {
       // The call never ran here: the activation was deactivated as stuck
       // (MaxRequestProcessingTime), or it was deactivating/migrating and held
-      // the call until it settled (`ActivationData.invoke`'s hold-and-reroute).
-      // Re-deliver it to a fresh activation, as Orleans'
-      // `RerouteAllQueuedMessages` does. Only this activation's own reroute
-      // rejections are retried, so a call that did run -- even one whose own
-      // body threw a "noActivation" rejection from a nested call -- is never
-      // executed twice.
-      if (!activation.isRerouteRejection(error)) throw error;
+      // the call until it settled (`ActivationData.invoke`'s hold-and-reroute),
+      // which `admit` marks as a refusal before execution. Re-deliver it to a
+      // fresh activation, as Orleans' `RerouteAllQueuedMessages` does. The one
+      // resend rule (`mayResend`) admits only such refusals, so a call that did
+      // run -- even one whose own body threw a "noActivation" rejection from a
+      // nested call -- is never executed twice.
+      if (!mayResend(error)) throw error;
       return this.deliver(req, opts);
     }
   }

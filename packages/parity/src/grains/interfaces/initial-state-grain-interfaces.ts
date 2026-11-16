@@ -9,4 +9,5 @@ export interface IInitialStateGrain extends GrainKey<bigint> {
 
 export const IInitialStateGrain = defineGrainInterface<IInitialStateGrain>(
   "UnitTests.GrainInterfaces.IInitialStateGrain",
+  { key: "integer" },
 );

@@ -111,4 +111,5 @@ export interface IManagementGrain extends GrainKey<bigint> {
 
 export const IManagementGrain = defineGrainInterface<IManagementGrain>(
   "Orleans.Runtime.IManagementGrain",
+  { key: "integer" },
 );

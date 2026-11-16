@@ -1,5 +1,6 @@
 import type { Kafka } from "kafkajs";
 import type { GrainKey } from "@thresh/core/grain-key";
+import type { GrainKeyKind } from "@thresh/core/grain-key";
 import type { GrainType } from "@thresh/core/grain-type";
 import type {
   ActivationBoundStreamProvider,
@@ -169,8 +170,11 @@ export class KafkaPullingStreamProvider implements ActivationBoundStreamProvider
    * fans each event out to these grain types' matching-key activations as well as
    * to the registry's explicit subscribers (Orleans' `[ImplicitStreamSubscription]`).
    */
-  setImplicitSubscribers(typesFor: (namespace: string) => Iterable<GrainType>): void {
-    this.core.setImplicitSubscribers(typesFor);
+  setImplicitSubscribers(
+    typesFor: (namespace: string) => Iterable<GrainType>,
+    keyKindFor?: (type: GrainType) => GrainKeyKind | undefined,
+  ): void {
+    this.core.setImplicitSubscribers(typesFor, keyKindFor);
   }
 
   /**

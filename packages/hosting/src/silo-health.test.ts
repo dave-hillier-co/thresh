@@ -64,6 +64,17 @@ describe("overloaded", () => {
     const host = await boot(
       silo((b) => b.useStaticMembership([local]), {
         loadShedding: { loadSheddingEnabled: true },
+        // The default source reads this process's own event loop, which a busy test runner
+        // can push past the threshold by itself. A fixed, idle reading leaves the latch as
+        // the only thing that moves the detector.
+        environmentStatistics: {
+          getEnvironmentStatistics: () => ({
+            cpuUsagePercentage: 5,
+            memoryUsageBytes: 1,
+            availableMemoryBytes: 1,
+            maximumAvailableMemoryBytes: 2,
+          }),
+        },
         // Latching the reading is a test hook; a production silo refuses it.
         testHooks: true,
       }),

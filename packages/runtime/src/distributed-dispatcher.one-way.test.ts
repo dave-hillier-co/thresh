@@ -66,7 +66,7 @@ function localDeps(invoke: ReturnType<typeof vi.fn>): {
 } {
   const { logger, warnings } = recordingLogger();
   const send = vi.fn().mockResolvedValue(undefined);
-  const activation = { activationId, invoke };
+  const activation = { activationId, invoke, isRerouteRejection: () => false };
   return {
     warnings,
     send,
@@ -80,6 +80,7 @@ function localDeps(invoke: ReturnType<typeof vi.fn>): {
       } as unknown as LocationCache,
       catalog: {
         isStatelessWorkerType: () => false,
+        canonicalId: (id: unknown) => id,
         resolveLive: async () => activation,
       } as unknown as Catalog,
       remote: { send },
@@ -289,6 +290,7 @@ function coldDeps(
   const send = vi.fn().mockResolvedValue(undefined);
   const catalog = {
     isStatelessWorkerType: () => false,
+    canonicalId: (id: unknown) => id,
     resolveLive: (id: GrainId) => Promise.resolve(activations.get(id.toString())),
     get: (id: GrainId) => activations.get(id.toString()),
     activateLocal: (id: GrainId, actId: string) => {

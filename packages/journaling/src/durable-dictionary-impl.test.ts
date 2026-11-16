@@ -16,24 +16,25 @@ function makeDict<K, V>(storage: MemoryJournalStorage) {
 describe("DurableDictionaryImpl", () => {
   it("tracks set/delete/clear in memory", async () => {
     const { dict } = makeDict<string, number>(new MemoryJournalStorage());
-    await dict.set("a", 1);
-    await dict.set("b", 2);
+    dict.set("a", 1);
+    dict.set("b", 2);
     expect(dict.size).toBe(2);
     expect(dict.get("a")).toBe(1);
-    expect(await dict.delete("a")).toBe(true);
-    expect(await dict.delete("missing")).toBe(false);
+    expect(dict.delete("a")).toBe(true);
+    expect(dict.delete("missing")).toBe(false);
     expect(dict.has("a")).toBe(false);
-    await dict.clear();
+    dict.clear();
     expect(dict.size).toBe(0);
   });
 
   it("rebuilds from the log on a fresh activation", async () => {
     const storage = new MemoryJournalStorage();
     const a = makeDict<string, number>(storage);
-    await a.dict.set("a", 1);
-    await a.dict.set("b", 2);
-    await a.dict.set("a", 10);
-    await a.dict.delete("b");
+    a.dict.set("a", 1);
+    a.dict.set("b", 2);
+    a.dict.set("a", 10);
+    a.dict.delete("b");
+    await a.manager.writeState();
 
     const b = makeDict<string, number>(storage);
     await b.manager.replay();
@@ -43,9 +44,10 @@ describe("DurableDictionaryImpl", () => {
   it("replays a clear followed by later sets", async () => {
     const storage = new MemoryJournalStorage();
     const a = makeDict<string, number>(storage);
-    await a.dict.set("x", 1);
-    await a.dict.clear();
-    await a.dict.set("y", 2);
+    a.dict.set("x", 1);
+    a.dict.clear();
+    a.dict.set("y", 2);
+    await a.manager.writeState();
 
     const b = makeDict<string, number>(storage);
     await b.manager.replay();

@@ -27,11 +27,11 @@ function fakeValue<T>(initial: T | undefined): DurableValue<T> & { sets: number;
     },
     sets: 0,
     clears: 0,
-    async set(v: T) {
+    set(v: T) {
       this.sets++;
       current = v;
     },
-    async clear() {
+    clear() {
       this.clears++;
       current = undefined;
     },
@@ -56,15 +56,15 @@ function fakeDictionary<K, V>(): DurableDictionary<K, V> & {
     sets: 0,
     deletes: 0,
     clears: 0,
-    async set(k: K, v: V) {
+    set(k: K, v: V) {
       this.sets++;
       map.set(k, v);
     },
-    async delete(k: K) {
+    delete(k: K) {
       this.deletes++;
       return map.delete(k);
     },
-    async clear() {
+    clear() {
       this.clears++;
       map.clear();
     },
@@ -82,26 +82,26 @@ function fakeList<T>(initial: T[]): DurableList<T> & { adds: number } {
     contains: (v) => items.includes(v),
     [Symbol.iterator]: () => items[Symbol.iterator](),
     adds: 0,
-    async add(v: T) {
+    add(v: T) {
       this.adds++;
       items.push(v);
     },
-    async set(i: number, v: T) {
+    set(i: number, v: T) {
       items[i] = v;
     },
-    async insert(i: number, v: T) {
+    insert(i: number, v: T) {
       items.splice(i, 0, v);
     },
-    async removeAt(i: number) {
+    removeAt(i: number) {
       items.splice(i, 1);
     },
-    async remove(v: T) {
+    remove(v: T) {
       const i = items.indexOf(v);
       if (i === -1) return false;
       items.splice(i, 1);
       return true;
     },
-    async clear() {
+    clear() {
       items.length = 0;
     },
   };
@@ -118,17 +118,17 @@ function fakeQueue<T>(initial: T[]): DurableQueue<T> & { enqueues: number } {
     toArray: () => [...items],
     [Symbol.iterator]: () => items[Symbol.iterator](),
     enqueues: 0,
-    async enqueue(v: T) {
+    enqueue(v: T) {
       this.enqueues++;
       items.push(v);
     },
-    async dequeue() {
+    dequeue() {
       return items.shift();
     },
-    async dequeueOrThrow() {
+    dequeueOrThrow() {
       return items.shift() as T;
     },
-    async clear() {
+    clear() {
       items.length = 0;
     },
   };
@@ -144,15 +144,15 @@ function fakeSet<T>(initial: T[]): DurableSet<T> & { adds: number } {
     values: () => values.values(),
     [Symbol.iterator]: () => values.values(),
     adds: 0,
-    async add(v: T) {
+    add(v: T) {
       this.adds++;
       values.add(v);
       return true;
     },
-    async delete(v: T) {
+    delete(v: T) {
       return values.delete(v);
     },
-    async clear() {
+    clear() {
       values.clear();
     },
   };
@@ -177,8 +177,8 @@ describe("guardDurableValueForReadOnly", () => {
   it("rejects set() and clear() without touching the underlying facet", async () => {
     const inner = fakeValue({ cents: 100 });
     const guarded = guardDurableValueForReadOnly(inner, "balance");
-    await expect(guarded.set({ cents: 1 })).rejects.toBeInstanceOf(ReadOnlyStateViolationError);
-    await expect(guarded.clear()).rejects.toBeInstanceOf(ReadOnlyStateViolationError);
+    expect(() => guarded.set({ cents: 1 })).toThrow(ReadOnlyStateViolationError);
+    expect(() => guarded.clear()).toThrow(ReadOnlyStateViolationError);
     expect(inner.sets).toBe(0);
     expect(inner.clears).toBe(0);
   });
@@ -198,9 +198,9 @@ describe("guardDurableDictionaryForReadOnly", () => {
   it("rejects set(), delete() and clear() without touching the underlying facet", async () => {
     const inner = fakeDictionary<string, number>();
     const guarded = guardDurableDictionaryForReadOnly(inner, "map");
-    await expect(guarded.set("a", 1)).rejects.toBeInstanceOf(ReadOnlyStateViolationError);
-    await expect(guarded.delete("a")).rejects.toBeInstanceOf(ReadOnlyStateViolationError);
-    await expect(guarded.clear()).rejects.toBeInstanceOf(ReadOnlyStateViolationError);
+    expect(() => guarded.set("a", 1)).toThrow(ReadOnlyStateViolationError);
+    expect(() => guarded.delete("a")).toThrow(ReadOnlyStateViolationError);
+    expect(() => guarded.clear()).toThrow(ReadOnlyStateViolationError);
     expect(inner.sets).toBe(0);
     expect(inner.deletes).toBe(0);
     expect(inner.clears).toBe(0);
@@ -219,12 +219,12 @@ describe("guardDurableListForReadOnly", () => {
   it("rejects every mutator without touching the underlying facet", async () => {
     const inner = fakeList<number>([1]);
     const guarded = guardDurableListForReadOnly(inner, "items");
-    await expect(guarded.add(2)).rejects.toBeInstanceOf(ReadOnlyStateViolationError);
-    await expect(guarded.set(0, 9)).rejects.toBeInstanceOf(ReadOnlyStateViolationError);
-    await expect(guarded.insert(0, 9)).rejects.toBeInstanceOf(ReadOnlyStateViolationError);
-    await expect(guarded.removeAt(0)).rejects.toBeInstanceOf(ReadOnlyStateViolationError);
-    await expect(guarded.remove(1)).rejects.toBeInstanceOf(ReadOnlyStateViolationError);
-    await expect(guarded.clear()).rejects.toBeInstanceOf(ReadOnlyStateViolationError);
+    expect(() => guarded.add(2)).toThrow(ReadOnlyStateViolationError);
+    expect(() => guarded.set(0, 9)).toThrow(ReadOnlyStateViolationError);
+    expect(() => guarded.insert(0, 9)).toThrow(ReadOnlyStateViolationError);
+    expect(() => guarded.removeAt(0)).toThrow(ReadOnlyStateViolationError);
+    expect(() => guarded.remove(1)).toThrow(ReadOnlyStateViolationError);
+    expect(() => guarded.clear()).toThrow(ReadOnlyStateViolationError);
     expect(inner.adds).toBe(0);
     expect(inner.toArray()).toEqual([1]);
   });
@@ -242,10 +242,10 @@ describe("guardDurableQueueForReadOnly", () => {
   it("rejects enqueue/dequeue/clear without touching the underlying facet", async () => {
     const inner = fakeQueue<number>([1]);
     const guarded = guardDurableQueueForReadOnly(inner, "jobs");
-    await expect(guarded.enqueue(2)).rejects.toBeInstanceOf(ReadOnlyStateViolationError);
-    await expect(guarded.dequeue()).rejects.toBeInstanceOf(ReadOnlyStateViolationError);
-    await expect(guarded.dequeueOrThrow()).rejects.toBeInstanceOf(ReadOnlyStateViolationError);
-    await expect(guarded.clear()).rejects.toBeInstanceOf(ReadOnlyStateViolationError);
+    expect(() => guarded.enqueue(2)).toThrow(ReadOnlyStateViolationError);
+    expect(() => guarded.dequeue()).toThrow(ReadOnlyStateViolationError);
+    expect(() => guarded.dequeueOrThrow()).toThrow(ReadOnlyStateViolationError);
+    expect(() => guarded.clear()).toThrow(ReadOnlyStateViolationError);
     expect(inner.enqueues).toBe(0);
     expect(inner.toArray()).toEqual([1]);
   });
@@ -263,9 +263,9 @@ describe("guardDurableSetForReadOnly", () => {
   it("rejects add/delete/clear without touching the underlying facet", async () => {
     const inner = fakeSet<number>([1]);
     const guarded = guardDurableSetForReadOnly(inner, "tags");
-    await expect(guarded.add(2)).rejects.toBeInstanceOf(ReadOnlyStateViolationError);
-    await expect(guarded.delete(1)).rejects.toBeInstanceOf(ReadOnlyStateViolationError);
-    await expect(guarded.clear()).rejects.toBeInstanceOf(ReadOnlyStateViolationError);
+    expect(() => guarded.add(2)).toThrow(ReadOnlyStateViolationError);
+    expect(() => guarded.delete(1)).toThrow(ReadOnlyStateViolationError);
+    expect(() => guarded.clear()).toThrow(ReadOnlyStateViolationError);
     expect(inner.adds).toBe(0);
     expect([...inner.values()]).toEqual([1]);
   });
@@ -279,12 +279,12 @@ describe("guardDurableFieldForReadOnly", () => {
       fakeDictionary(),
       "d",
     ) as DurableDictionary<string, number>;
-    await expect(dict.set("a", 1)).rejects.toBeInstanceOf(ReadOnlyStateViolationError);
+    expect(() => dict.set("a", 1)).toThrow(ReadOnlyStateViolationError);
     const list = guardDurableFieldForReadOnly("list", fakeList([]), "l") as DurableList<number>;
-    await expect(list.add(1)).rejects.toBeInstanceOf(ReadOnlyStateViolationError);
+    expect(() => list.add(1)).toThrow(ReadOnlyStateViolationError);
     const queue = guardDurableFieldForReadOnly("queue", fakeQueue([]), "q") as DurableQueue<number>;
-    await expect(queue.enqueue(1)).rejects.toBeInstanceOf(ReadOnlyStateViolationError);
+    expect(() => queue.enqueue(1)).toThrow(ReadOnlyStateViolationError);
     const set = guardDurableFieldForReadOnly("set", fakeSet([]), "s") as DurableSet<number>;
-    await expect(set.add(1)).rejects.toBeInstanceOf(ReadOnlyStateViolationError);
+    expect(() => set.add(1)).toThrow(ReadOnlyStateViolationError);
   });
 });

@@ -1,3 +1,4 @@
+import { writeDurableState } from "@thresh/core/durable-state-metadata";
 import { describe, expect, it } from "vitest";
 import { durableState } from "@thresh/core/decorators";
 import type { DurableValue } from "@thresh/core/durable-state";
@@ -88,7 +89,8 @@ describe("bindJournalFacets", () => {
 
     const grain = new CustomStorageWithLabel();
     await bindJournalFacets(grain, id, registry);
-    await grain.labelCell.set("alpha");
+    grain.labelCell.set("alpha");
+    await writeDurableState(grain);
     await grain.add(3);
 
     const again = new CustomStorageWithLabel();
@@ -108,7 +110,8 @@ describe("bindJournalFacets", () => {
     const grain = new OtherProviderLabel();
     await bindJournalFacets(grain, id, registry);
     await grain.add(2);
-    await grain.labelCell.set("beta");
+    grain.labelCell.set("beta");
+    await writeDurableState(grain);
 
     // The JournaledGrain log stays on the default provider (where it always
     // lived, so existing history is still found) and the durable field on its
@@ -134,7 +137,8 @@ describe("bindJournalFacets", () => {
     const grain = new OtherProviderLabel();
     await bindJournalFacets(grain, id, registry);
     await grain.add(2);
-    await grain.labelCell.set("beta");
+    grain.labelCell.set("beta");
+    await writeDurableState(grain);
     await grain.add(5);
 
     const again = new OtherProviderLabel();

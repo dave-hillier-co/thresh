@@ -1,6 +1,7 @@
 import type { GrainId } from "@thresh/core/grain-id";
 import type { DurableStateMachine, StateMachineManager } from "@thresh/core/durable-state-machine";
 import {
+  bindDurableStateWriter,
   getDurableFields,
   type DurableKind,
   type DurableStateField,
@@ -96,6 +97,7 @@ export async function bindDurableStates(
   });
 
   registerDurableMachines(instance, fields, manager);
+  bindDurableStateWriter(instance, manager);
 
   if (opts.replay ?? true) await manager.replay();
 }

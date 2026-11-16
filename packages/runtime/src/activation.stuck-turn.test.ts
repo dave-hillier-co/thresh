@@ -220,3 +220,88 @@ describe("ActivationData stuck-turn deactivation (Orleans DeactivateStuckActivat
     grain.gate.resolve("done");
   });
 });
+
+// Review of the lifecycle redesign (L2): the deactivation pipeline is an
+// operation that starts only once no request turn is running, so a wedged
+// turn must not leave a deactivate() caller (silo stop, an idle sweep, a
+// forced collection, a migration) waiting forever. Orleans
+// `AbandonStuckDeactivatingActivation` settles the deactivation completion
+// source (`TrySetResult`) when it gives the activation up.
+describe("ActivationData deactivation across a stuck-turn abandonment", () => {
+  it("resolves deactivate() once a turn wedged when the deactivation was requested is declared stuck", async () => {
+    const time = new FakeTimeProvider();
+    const removed: ActivationData[] = [];
+    const { activation, grain } = makeActivation(time, {
+      maxRequestProcessingTimeMs: 1000,
+      deactivationSteps: { remove: (a) => void removed.push(a) },
+    });
+    await flush();
+
+    void activation.invoke(call()).catch(() => undefined);
+    await flush();
+    let done = false;
+    void activation
+      .deactivate({ code: "shutting-down", description: "test" })
+      .then(() => (done = true));
+    await flush();
+    time.advance(2000);
+    await flush();
+
+    expect(activation.state).toBe("invalid");
+    expect(removed).toEqual([activation]);
+    expect(done).toBe(true);
+    // The wedged grain never got its onDeactivate: the pipeline never ran.
+    expect(grain.deactivateCalls).toHaveLength(0);
+    grain.gate.resolve("done");
+  });
+
+  it("resolves a deactivate() already pending when a waiting call declares the turn stuck", async () => {
+    const time = new FakeTimeProvider();
+    const { activation, grain } = makeActivation(time, {
+      maxRequestProcessingTimeMs: 1000,
+      deactivationSteps: {},
+    });
+    await flush();
+
+    void activation.invoke(call()).catch(() => undefined);
+    await flush();
+    time.advance(1000); // the blocking turn is overdue
+    let done = false;
+    void activation
+      .deactivate({ code: "shutting-down", description: "test" })
+      .then(() => (done = true));
+    const held = activation.invoke(call("quick"));
+    held.catch(() => undefined);
+    await flush();
+    time.advance(1000);
+    await flush();
+
+    expect(activation.state).toBe("invalid");
+    await expect(held).rejects.toMatchObject({ kind: "noActivation" });
+    expect(done).toBe(true);
+    grain.gate.resolve("done");
+  });
+
+  it("runs nothing of the abandoned deactivation once the wedged turn finally settles", async () => {
+    const time = new FakeTimeProvider();
+    const disposed: ActivationData[] = [];
+    const { activation, grain } = makeActivation(time, {
+      maxRequestProcessingTimeMs: 1000,
+      deactivationSteps: { dispose: (a) => void disposed.push(a) },
+    });
+    await flush();
+
+    void activation.invoke(call()).catch(() => undefined);
+    await flush();
+    const deactivating = activation.deactivate({ code: "shutting-down", description: "test" });
+    await flush();
+    time.advance(2000);
+    await expect(deactivating).resolves.toEqual({ migrated: false });
+
+    grain.gate.resolve("done");
+    await flush();
+    await flush();
+    expect(grain.deactivateCalls).toHaveLength(0);
+    expect(disposed).toHaveLength(0);
+  });
+});

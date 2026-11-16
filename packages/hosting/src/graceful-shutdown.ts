@@ -24,6 +24,11 @@ export interface GracefulShutdownOptions {
    * grace period and the silo gets SIGKILLed mid-stop instead of finishing
    * cleanly (issue #108). `node.stop()` gets whatever's left of the budget
    * after `graceMs`, floored at 0. Defaults to `DEFAULT_STOP_BUDGET_MS`.
+   *
+   * `ClusterNode.stop` shares what it is given: a leaving silo first waits for
+   * the directory ranges it gave up to be collected by their new owners, for
+   * at most HALF of what remains after the grace, and deactivation gets the
+   * rest, so it always keeps at least that half.
    */
   stopBudgetMs?: number;
 }
@@ -53,8 +58,10 @@ export const DEFAULT_STOP_BUDGET_MS = 30_000;
 /**
  * Drains a silo on shutdown (docs/03, docs/05): flip readiness to not-ready
  * first so Kubernetes pulls the pod from the service endpoints, wait out the
- * grace period for in-flight turns, then stop the node (deactivating grains and
- * unregistering directory entries). Idempotent.
+ * grace period for in-flight turns, then stop the node (handing its directory
+ * ranges over, deactivating grains and unregistering directory entries, see
+ * `stopBudgetMs`). The grace is never shortened by the handover: it is the
+ * time Kubernetes' own proxies need, which the silo cannot observe. Idempotent.
  */
 export class GracefulShutdown {
   private draining = false;
@@ -65,10 +72,31 @@ export class GracefulShutdown {
     private readonly options: GracefulShutdownOptions = {},
   ) {}
 
+  /**
+   * Publish not-ready (`draining`) and nothing else: no grace wait, no stop. The silo lifecycle
+   * calls this first on stop, from its last stage, so readiness flips before any subsystem is
+   * stopped; `drain` then waits the grace and stops the node. Idempotent.
+   */
+  beginDrain(): void {
+    this.health.update({ draining: true });
+  }
+
+  /**
+   * Stop the node at once, with no grace wait, under the whole stop budget: for a silo that never
+   * became ready, whose failed start is being rolled back and which no peer or Service routes to.
+   * Idempotent with `drain`.
+   */
+  async stopWithoutGrace(): Promise<void> {
+    if (this.draining) return;
+    this.draining = true;
+    this.beginDrain();
+    await this.node.stop(this.options.stopBudgetMs ?? DEFAULT_STOP_BUDGET_MS);
+  }
+
   async drain(): Promise<void> {
     if (this.draining) return;
     this.draining = true;
-    this.health.update({ draining: true });
+    this.beginDrain();
     const delay = this.options.delay ?? defaultDelay;
     const graceMs = this.options.graceMs ?? DEFAULT_GRACE_MS;
     await delay(graceMs);

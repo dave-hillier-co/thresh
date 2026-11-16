@@ -1,5 +1,6 @@
 import { RejectionError } from "@thresh/core/errors";
 import type { MembershipService, MembershipSnapshot } from "@thresh/core/membership";
+import type { StaticMembershipService } from "@thresh/runtime/static-membership";
 import type { SiloAddress } from "@thresh/core/silo-address";
 import { nowNanosOf, type TimeProvider, type TimerHandle } from "@thresh/core/time-provider";
 import type {
@@ -79,13 +80,26 @@ export class CrashableTransport implements Transport {
     onAccept?: ConnectionAcceptHandler,
   ): Promise<Listener> {
     if (this.dead) throw this.gone(address);
+    // One wrapper per accepted connection, so the accept hook and the handler see the same object.
+    const wrappers = new WeakMap<Connection, Connection>();
+    const wrapperOf = (connection: Connection): Connection => {
+      let wrapped = wrappers.get(connection);
+      if (wrapped === undefined) {
+        wrapped = this.severable(connection);
+        wrappers.set(connection, wrapped);
+      }
+      return wrapped;
+    };
     const listener = await this.inner.listen(
       address,
-      (message, from) => (this.dead ? undefined : onMessage(message, from)),
+      (message, from, connection) =>
+        this.dead
+          ? undefined
+          : onMessage(message, from, connection === undefined ? undefined : wrapperOf(connection)),
       onAccept === undefined
         ? undefined
         : (preamble, connection) => {
-            if (!this.dead) onAccept(preamble, this.severable(connection));
+            if (!this.dead) onAccept(preamble, wrapperOf(connection));
           },
     );
     this.listeners.push(listener);
@@ -98,14 +112,17 @@ export class CrashableTransport implements Transport {
     onMessage?: MessageHandler,
   ): Promise<Connection> {
     if (this.dead) throw this.gone(to);
+    const wrapper: { connection?: Connection } = {};
     const connection = await this.inner.connect(
       to,
       preamble,
       onMessage === undefined
         ? undefined
-        : (message, from) => (this.dead ? undefined : onMessage(message, from)),
+        : (message, from, via) =>
+            this.dead ? undefined : onMessage(message, from, wrapper.connection ?? via),
     );
-    return this.severable(connection);
+    wrapper.connection = this.severable(connection);
+    return wrapper.connection;
   }
 
   /** Close every listener and cut every connection, for good. */
@@ -138,14 +155,15 @@ export class CrashableTransport implements Transport {
 /**
  * One silo's window onto the shared static membership: it reports the silo's own `localSilo()`,
  * and a crash freezes it, so the dead silo sees no later view and runs no ownership hook (no
- * reminder range read, job shard claim or queue takeover) after it died.
+ * reminder range read, job shard claim or queue takeover) after it died. A graceful stop marks
+ * the silo draining through it first (`markDraining`), as a terminating pod's endpoint is.
  */
 export class SharedMembershipView implements MembershipService {
   private frozenAt: MembershipSnapshot | undefined;
   private readonly frozenListeners = new Set<() => void>();
 
   constructor(
-    private readonly shared: MembershipService,
+    private readonly shared: StaticMembershipService,
     private readonly local: SiloAddress,
   ) {}
 
@@ -184,6 +202,22 @@ export class SharedMembershipView implements MembershipService {
 
   localSilo(): SiloAddress {
     return this.local;
+  }
+
+  refresh(version: number): Promise<void> {
+    return this.frozenAt !== undefined ? Promise.resolve() : this.shared.refresh(version);
+  }
+
+  /**
+   * Mark this silo `draining` in the shared view, as Kubernetes marks a terminating pod's
+   * endpoint: it leaves the ring, so its ranges move to the silos that remain while it still
+   * serves, and it stays a member until it is removed. No-op once frozen or no longer listed.
+   */
+  markDraining(): void {
+    if (this.frozenAt !== undefined) return;
+    const member = this.shared.current().silos.find((m) => m.address.equals(this.local));
+    if (member === undefined || member.status === "draining") return;
+    this.shared.setStatus(this.local, "draining");
   }
 
   /** Stop following the shared view: hold the current snapshot and end every update stream. */

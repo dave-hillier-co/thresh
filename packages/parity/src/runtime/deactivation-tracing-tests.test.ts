@@ -15,12 +15,12 @@
 // deactivation triggered by (or observed from) a call under a given trace
 // shares that trace id — no separate wiring needed.
 //
-// `deactivateOnIdle()` is lazy here (Orleans parity: flagged during the
-// triggering turn, actually run on the NEXT call for that grain id — see
-// `Catalog.finalizeStale`), unlike upstream's synchronous
-// `HostedCluster.DeactivateAsync`. Since every case below wraps BOTH the
-// triggering call and the follow-up call in the SAME `harness.withParentSpan`,
-// this makes no observable difference to the trace-id assertions.
+// `deactivateOnIdle()` starts the deactivation once the triggering turn
+// finishes (Orleans `DeactivateOnIdle`), and the follow-up call is held until
+// it has run, then rerouted to a fresh activation — standing in for
+// upstream's synchronous `HostedCluster.DeactivateAsync`. Every case below
+// wraps BOTH the triggering call and the follow-up call in the SAME
+// `harness.withParentSpan`.
 //
 // Three cases are EXCLUDED (`orleansTest.excluded`, not `orleansTest.gap` —
 // see each call site for its precise reason):
@@ -296,11 +296,11 @@ describe("UnitTests.General.DeactivationTracingTests", () => {
         "test-parent-inconsistent-state",
         async () => {
           await expect(grain.throwInconsistentStateException()).rejects.toThrow();
-          // The escaped `InconsistentStateError` flags the activation for
-          // deactivation (Orleans' `InsideRuntimeClient.cs:326`); the catalog
-          // finalizes it — running `OnDeactivate` — on this next lookup, then
-          // serves the call from a fresh activation. That stands in for
-          // upstream's `WaitForDeactivationAsync` followed by the same call.
+          // The escaped `InconsistentStateError` deactivates the activation
+          // (Orleans' `InsideRuntimeClient.cs:326`); this next call is held
+          // until `OnDeactivate` has run, then served by a fresh activation.
+          // That stands in for upstream's `WaitForDeactivationAsync` followed
+          // by the same call.
           await grain.getActivityId();
         },
       );
@@ -379,6 +379,9 @@ describe("UnitTests.General.DeactivationTracingTests (migration)", () => {
     cluster = await TestCluster.start({
       initialSilos: 2,
       time,
+      // A directed migration is still rehydrating on its target when the sweep below leaps the
+      // fake clock 65 s; an activation timeout inside that leap would fail it, so keep it beyond.
+      activationTimeout: { minutes: 5 },
       grains: [
         {
           ctor: DeactivationMigrationTracingTestGrain,

@@ -12,4 +12,5 @@ export interface ISimpleGrainWithAsyncMethods extends GrainKey<bigint> {
 
 export const ISimpleGrainWithAsyncMethods = defineGrainInterface<ISimpleGrainWithAsyncMethods>(
   "UnitTests.GrainInterfaces.ISimpleGrainWithAsyncMethods",
+  { key: "integer" },
 );

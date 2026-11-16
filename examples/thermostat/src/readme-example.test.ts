@@ -44,7 +44,7 @@ const Thermostat = defineGrain(
 interface Ledger {
   post(amount: bigint): Promise<bigint>;
 }
-const Ledger = defineGrainInterface<Ledger, "integer">("example.Ledger");
+const Ledger = defineGrainInterface<Ledger, "integer">("example.Ledger", { key: "integer" });
 
 // implementation module — never imported by callers
 const LedgerGrain = defineGrain<Ledger, "integer">("Ledger", () => {

@@ -1,17 +1,37 @@
 import { describe, expect, it } from "vitest";
 import type { LogFields, Logger } from "@thresh/core/logger";
+import { SiloAddress } from "@thresh/core/silo-address";
+import { ServiceLifecycleStage } from "@thresh/runtime/lifecycle-subject";
 import { GracefulShutdown } from "@thresh/hosting/graceful-shutdown";
 import { HealthCheck } from "@thresh/hosting/health-check";
-import { SiloHost, type SiloHostParts } from "@thresh/hosting/silo-host";
+import {
+  SiloHost,
+  type SiloHostParts,
+  type SiloLifecycleParticipant,
+} from "@thresh/hosting/silo-host";
 import type { ClusterNode } from "@thresh/runtime/cluster-node";
 
-function buildHost(order: string[], onBeforeDeactivate: Array<() => Promise<void>>): SiloHost {
-  const health = new HealthCheck();
-  const node = {
+const LOCAL = new SiloAddress("silo-0", "uid-0", "silo-0:11111");
+
+function fakeNode(order: string[] = []): ClusterNode {
+  return {
+    start: async () => undefined,
     stop: async () => {
       order.push("node.stop (deactivateAll)");
     },
+    recoverySettled: async () => undefined,
+    onListenerClosed: () => undefined,
+    onViewApplied: () => () => undefined,
+    hasAppliedView: () => true,
+    appliedViewVersion: 0,
+    updateView: () => undefined,
+    ownedHashRanges: () => [],
   } as unknown as ClusterNode;
+}
+
+function buildHost(order: string[], lifecycle: SiloLifecycleParticipant[]): SiloHost {
+  const health = new HealthCheck();
+  const node = fakeNode(order);
   const shutdown = new GracefulShutdown(health, node, { delay: () => Promise.resolve() });
   const parts: SiloHostParts = {
     node,
@@ -21,13 +41,18 @@ function buildHost(order: string[], onBeforeDeactivate: Array<() => Promise<void
     healthPort: undefined,
     shutdown,
     membership: {
-      current: () => ({ silos: [], version: 0 }),
+      current: () => ({ silos: [{ address: LOCAL, status: "active" }], version: 0 }),
       updates: async function* () {},
+      localSilo: () => LOCAL,
     } as never,
-    onBeforeDeactivate,
-    onStop: [
-      async () => {
-        order.push("onStop");
+    lifecycle: [
+      ...lifecycle,
+      {
+        name: "teardown",
+        stage: ServiceLifecycleStage.RuntimeInitialize,
+        stop: async () => {
+          order.push("onStop");
+        },
       },
     ],
   };
@@ -35,41 +60,53 @@ function buildHost(order: string[], onBeforeDeactivate: Array<() => Promise<void
 }
 
 describe("SiloHost.stop ordering (issue #108)", () => {
-  it("runs onBeforeDeactivate hooks (stream providers, durable-job manager) before the node deactivates activations", async () => {
+  it("stops participants below the node (stream providers, the durable-job manager) before the node deactivates activations", async () => {
     const order: string[] = [];
     const host = buildHost(order, [
-      async () => {
-        order.push("stream provider stop");
+      {
+        name: "stream provider",
+        stage: ServiceLifecycleStage.BecomeActive,
+        stop: async () => void order.push("stream provider stop"),
       },
-      async () => {
-        order.push("durable job manager stop");
+      {
+        name: "durable job manager",
+        stage: ServiceLifecycleStage.BecomeActive,
+        stop: async () => void order.push("durable job manager stop"),
       },
     ]);
 
+    await host.start();
     await host.stop();
 
+    // Within one stage the stops run in the reverse of registration order.
     expect(order).toEqual([
-      "stream provider stop",
       "durable job manager stop",
+      "stream provider stop",
       "node.stop (deactivateAll)",
       "onStop",
     ]);
   });
 
-  it("still drains the node and runs onStop when an onBeforeDeactivate hook throws", async () => {
-    // These hooks now run FIRST: a provider whose stop() fails must not skip
-    // deactivating every activation, closing transport and the onStop teardown
-    // (Orleans logs a failed lifecycle stop and carries on stopping).
+  it("still drains the node and runs the teardown when a pre-deactivation stop throws", async () => {
+    // A provider whose stop() fails must not skip deactivating every activation, closing
+    // transport and the teardown (Orleans logs a failed lifecycle stop and carries on stopping).
     const order: string[] = [];
     const host = buildHost(order, [
-      async () => {
-        throw new Error("provider stop failed");
+      {
+        name: "stream provider",
+        stage: ServiceLifecycleStage.BecomeActive,
+        stop: async () => {
+          throw new Error("provider stop failed");
+        },
       },
-      async () => {
-        order.push("durable job manager stop");
+      {
+        name: "durable job manager",
+        stage: ServiceLifecycleStage.BecomeActive,
+        stop: async () => void order.push("durable job manager stop"),
       },
     ]);
 
+    await host.start();
     await host.stop();
 
     expect(order).toEqual(["durable job manager stop", "node.stop (deactivateAll)", "onStop"]);
@@ -78,7 +115,7 @@ describe("SiloHost.stop ordering (issue #108)", () => {
 
 describe("SiloHost hook failures are logged, not only thrown", () => {
   function hostWith(
-    hooks: Partial<Pick<SiloHostParts, "onStart" | "onStop" | "startupTasks">>,
+    hooks: Pick<SiloHostParts, "lifecycle" | "startupTasks">,
     throwingLogger = false,
   ): {
     host: SiloHost;
@@ -95,17 +132,7 @@ describe("SiloHost hook failures are logged, not only thrown", () => {
       },
     };
     const health = new HealthCheck();
-    const node = {
-      start: async () => undefined,
-      stop: async () => undefined,
-      recoverySettled: async () => undefined,
-      onListenerClosed: () => undefined,
-      onViewApplied: () => () => undefined,
-      hasAppliedView: () => true,
-      appliedViewVersion: 0,
-      updateView: () => undefined,
-      ownedHashRanges: () => [],
-    } as unknown as ClusterNode;
+    const node = fakeNode();
     const host = new SiloHost({
       node,
       serviceId: "svc",
@@ -114,8 +141,9 @@ describe("SiloHost hook failures are logged, not only thrown", () => {
       healthPort: undefined,
       shutdown: new GracefulShutdown(health, node, { delay: () => Promise.resolve() }),
       membership: {
-        current: () => ({ silos: [], version: 0 }),
+        current: () => ({ silos: [{ address: LOCAL, status: "active" }], version: 0 }),
         updates: async function* () {},
+        localSilo: () => LOCAL,
       } as never,
       logger,
       ...hooks,
@@ -125,23 +153,31 @@ describe("SiloHost hook failures are logged, not only thrown", () => {
 
   it("logs a start hook that throws, and still fails the start", async () => {
     const { host, errors } = hostWith({
-      onStart: [
-        async () => {
-          throw new Error("connect failed");
+      lifecycle: [
+        {
+          name: "connect",
+          stage: ServiceLifecycleStage.RuntimeInitialize,
+          start: async () => {
+            throw new Error("connect failed");
+          },
         },
       ],
     });
     await expect(host.start()).rejects.toThrow("connect failed");
     expect(errors.map((e) => e.message)).toEqual(["silo start hook failed"]);
-    expect(errors[0]!.fields).toMatchObject({ phase: "onStart" });
+    expect(errors[0]!.fields).toMatchObject({ phase: "connect" });
   });
 
   it("surfaces the original start error when the logger throws", async () => {
     const { host } = hostWith(
       {
-        onStart: [
-          async () => {
-            throw new Error("connect failed");
+        lifecycle: [
+          {
+            name: "connect",
+            stage: ServiceLifecycleStage.RuntimeInitialize,
+            start: async () => {
+              throw new Error("connect failed");
+            },
           },
         ],
       },
@@ -162,15 +198,21 @@ describe("SiloHost hook failures are logged, not only thrown", () => {
     expect(errors[0]!.fields).toMatchObject({ phase: "startupTasks" });
   });
 
-  it("logs a stop hook that throws, and still fails the stop", async () => {
+  it("logs a stop hook that throws, and completes the stop", async () => {
     const { host, errors } = hostWith({
-      onStop: [
-        async () => {
-          throw new Error("disconnect failed");
+      lifecycle: [
+        {
+          name: "disconnect",
+          stage: ServiceLifecycleStage.RuntimeInitialize,
+          stop: async () => {
+            throw new Error("disconnect failed");
+          },
         },
       ],
     });
-    await expect(host.stop()).rejects.toThrow("disconnect failed");
+    await host.start();
+    await expect(host.stop()).resolves.toBeUndefined();
     expect(errors.map((e) => e.message)).toEqual(["silo stop hook failed"]);
+    expect(errors[0]!.fields).toMatchObject({ phase: "disconnect" });
   });
 });

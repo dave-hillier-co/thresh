@@ -1,4 +1,5 @@
 import { keyToString, type GrainKey } from "@thresh/core/grain-key";
+import type { GrainKeyKind } from "@thresh/core/grain-key";
 import type { GrainType } from "@thresh/core/grain-type";
 import {
   STREAM_GENERATOR_COMMAND_CONFIGURE,
@@ -76,6 +77,7 @@ export class GeneratorPullingStreamProvider
   private stopped = false;
   private deliver: StreamDeliver = async () => undefined;
   private implicitTypesFor: (namespace: string) => Iterable<GrainType> = () => [];
+  private implicitKeyKindFor: ((type: GrainType) => GrainKeyKind | undefined) | undefined;
 
   constructor(
     private readonly name: string,
@@ -118,8 +120,12 @@ export class GeneratorPullingStreamProvider
     this.deliver = deliver;
   }
 
-  setImplicitSubscribers(typesFor: (namespace: string) => Iterable<GrainType>): void {
+  setImplicitSubscribers(
+    typesFor: (namespace: string) => Iterable<GrainType>,
+    keyKindFor?: (type: GrainType) => GrainKeyKind | undefined,
+  ): void {
     this.implicitTypesFor = typesFor;
+    this.implicitKeyKindFor = keyKindFor;
   }
 
   /** See `RedisPullingStreamProvider.refreshOwnership`: run agents for exactly the owned queues. */
@@ -194,7 +200,11 @@ export class GeneratorPullingStreamProvider
     token: number,
     signal: AbortSignal,
   ): Promise<void> {
-    const implicit = implicitSubscriberIds(streamKey, this.implicitTypesFor);
+    const implicit = implicitSubscriberIds(
+      streamKey,
+      this.implicitTypesFor,
+      this.implicitKeyKindFor,
+    );
     const seen = new Set<string>();
     const subscribers = [];
     for (const subscriber of implicit) {

@@ -43,6 +43,7 @@ export interface IClientAddressableTestGrain extends GrainKey<bigint> {
 
 export const IClientAddressableTestGrain = defineGrainInterface<IClientAddressableTestGrain>(
   "UnitTests.GrainInterfaces.IClientAddressableTestGrain",
+  { key: "integer" },
 );
 
 export interface IClientAddressableTestConsumer extends GrainKey<bigint> {
@@ -52,6 +53,7 @@ export interface IClientAddressableTestConsumer extends GrainKey<bigint> {
 
 export const IClientAddressableTestConsumer = defineGrainInterface<IClientAddressableTestConsumer>(
   "UnitTests.GrainInterfaces.IClientAddressableTestConsumer",
+  { key: "integer" },
 );
 
 export interface IClientAddressableTestRendezvousGrain extends GrainKey<bigint> {
@@ -62,4 +64,5 @@ export interface IClientAddressableTestRendezvousGrain extends GrainKey<bigint> 
 export const IClientAddressableTestRendezvousGrain =
   defineGrainInterface<IClientAddressableTestRendezvousGrain>(
     "UnitTests.GrainInterfaces.IClientAddressableTestRendezvousGrain",
+    { key: "integer" },
   );

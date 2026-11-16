@@ -133,13 +133,15 @@ describe("SiloConfig.logger", () => {
       logger,
       selfProbe: { enabled: false },
       gracefulShutdownMs: 0,
+      // With the API down the pod is never listed: start gives up after this.
+      joinTimeout: { ms: 50 },
     })
       .useKubernetesMembership(watch, { portName: "silo" })
       .useInProcessTransport(new InProcessNetwork())
       .registerGrain(ProbeGrain, { interfaces: [Probe] })
       .build();
     try {
-      await host.start();
+      await expect(host.start()).rejects.toThrow(/never listed/);
       expect(entries.some((e) => e.message === "kubernetes endpoint relist failed")).toBe(true);
     } finally {
       await host.stop();
@@ -216,6 +218,7 @@ describe("a silo with no logger", () => {
       local: a,
       selfProbe: { enabled: false },
       gracefulShutdownMs: 0,
+      joinTimeout: { ms: 50 },
     })
       .useKubernetesMembership(new KubernetesEndpointWatch(downSource, { reconnectMs: 60_000 }), {
         portName: "silo",
@@ -224,7 +227,7 @@ describe("a silo with no logger", () => {
       .registerGrain(ProbeGrain, { interfaces: [Probe] })
       .build();
     try {
-      await host.start();
+      await expect(host.start()).rejects.toThrow(/never listed/);
     } finally {
       await host.stop();
     }

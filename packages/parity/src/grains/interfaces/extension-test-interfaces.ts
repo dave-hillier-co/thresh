@@ -19,12 +19,14 @@ export interface IExtensionTestGrain extends GrainKey<bigint> {
 
 export const IExtensionTestGrain = defineGrainInterface<IExtensionTestGrain>(
   "UnitTests.GrainInterfaces.IExtensionTestGrain",
+  { key: "integer" },
 );
 
 export type INoOpTestGrain = GrainKey<bigint>;
 
 export const INoOpTestGrain = defineGrainInterface<INoOpTestGrain>(
   "UnitTests.GrainInterfaces.INoOpTestGrain",
+  { key: "integer" },
 );
 
 export interface ITestExtension extends GrainKey<bigint> {
@@ -34,7 +36,7 @@ export interface ITestExtension extends GrainKey<bigint> {
 
 export const ITestExtension = defineGrainInterface<ITestExtension>(
   "UnitTests.GrainInterfaces.ITestExtension",
-  { extension: true },
+  { key: "integer", extension: true },
 );
 
 export interface ISimpleExtension extends GrainKey<bigint> {
@@ -43,7 +45,7 @@ export interface ISimpleExtension extends GrainKey<bigint> {
 
 export const ISimpleExtension = defineGrainInterface<ISimpleExtension>(
   "UnitTests.GrainInterfaces.ISimpleExtension",
-  { extension: true },
+  { key: "integer", extension: true },
 );
 
 export interface IAutoExtension extends GrainKey<bigint> {
@@ -52,5 +54,5 @@ export interface IAutoExtension extends GrainKey<bigint> {
 
 export const IAutoExtension = defineGrainInterface<IAutoExtension>(
   "UnitTests.GrainInterfaces.IAutoExtension",
-  { extension: true },
+  { key: "integer", extension: true },
 );

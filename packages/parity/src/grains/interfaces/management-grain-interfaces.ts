@@ -8,7 +8,9 @@ export interface IDumbGrain extends GrainKey<Guid> {
   doNothing(): Promise<void>;
 }
 
-export const IDumbGrain = defineGrainInterface<IDumbGrain>("UnitTests.OrleansRuntime.IDumbGrain");
+export const IDumbGrain = defineGrainInterface<IDumbGrain>("UnitTests.OrleansRuntime.IDumbGrain", {
+  key: "guid",
+});
 
 /** Upstream `IDumbWorker`: a `[StatelessWorker]` grain with no single activation. */
 export interface IDumbWorker extends GrainKey<bigint> {
@@ -17,4 +19,5 @@ export interface IDumbWorker extends GrainKey<bigint> {
 
 export const IDumbWorker = defineGrainInterface<IDumbWorker>(
   "UnitTests.OrleansRuntime.IDumbWorker",
+  { key: "integer" },
 );

@@ -46,6 +46,12 @@ interface Partition {
   readonly sideB: readonly SiloSelector[];
 }
 
+interface Established {
+  readonly dialler: SiloAddress;
+  readonly acceptor: SiloAddress;
+  readonly accepted: Connection;
+}
+
 interface Schedule {
   readonly link: Link;
   readonly verdicts: Verdict[];
@@ -81,6 +87,8 @@ export class NetworkFaults {
   private readonly connectFailures: CountedRule[] = [];
   private readonly partitions: Partition[] = [];
   private readonly schedules: Schedule[] = [];
+  /** Established connections, by the silo that dialled and the silo that accepted. */
+  private readonly established = new Set<Established>();
   private droppedCount = 0;
   private delayedCount = 0;
   private refusedCount = 0;
@@ -131,6 +139,27 @@ export class NetworkFaults {
    */
   schedule(link: Link, verdicts: readonly Verdict[]): FaultHandle {
     return this.add(this.schedules, { link, verdicts: [...verdicts] });
+  }
+
+  /**
+   * Close every established connection on `link` (`from` the silo that dialled it, `to` the
+   * silo that accepted it) at its accepting end, as a reset socket would: the dialler sees the
+   * connection lost, and every message still to be sent on it fails. Returns how many closed.
+   * New connections on the link are not affected.
+   */
+  async sever(link: Link): Promise<number> {
+    const severed = [...this.established].filter((e) => onLink(link, e.dialler, e.acceptor));
+    for (const e of severed) this.established.delete(e);
+    await Promise.all(severed.map((e) => e.accepted.close("severed (injected fault)")));
+    return severed.length;
+  }
+
+  /**
+   * Records an accepted connection so `sever` can reach it. A connection that closed some other
+   * way stays recorded until severed; closing it again is a no-op.
+   */
+  track(dialler: SiloAddress, acceptor: SiloAddress, accepted: Connection): void {
+    this.established.add({ dialler, acceptor, accepted });
   }
 
   /** Remove every fault. */
@@ -228,12 +257,32 @@ export class FaultInjectingTransport implements Transport {
     onMessage: MessageHandler,
     onAccept?: ConnectionAcceptHandler,
   ): Promise<Listener> {
+    // One wrapper per accepted connection, so the accept hook and the handler see the same
+    // object for it, as they do on the transport underneath.
+    const wrappers = new WeakMap<Connection, Connection>();
+    const wrapperOf = (connection: Connection, peer: SiloAddress): Connection => {
+      let wrapped = wrappers.get(connection);
+      if (wrapped === undefined) {
+        wrapped = this.faulty(connection, address, peer);
+        wrappers.set(connection, wrapped);
+        this.faults.track(peer, address, wrapped);
+      }
+      return wrapped;
+    };
     const accept: ConnectionAcceptHandler | undefined =
       onAccept === undefined
         ? undefined
-        : (preamble, connection) =>
-            onAccept(preamble, this.faulty(connection, address, preamble.siloAddress));
-    return this.inner.listen(address, onMessage, accept);
+        : (preamble, connection) => onAccept(preamble, wrapperOf(connection, preamble.siloAddress));
+    return this.inner.listen(
+      address,
+      (message, from, connection) =>
+        onMessage(
+          message,
+          from,
+          connection === undefined ? undefined : wrapperOf(connection, from),
+        ),
+      accept,
+    );
   }
 
   async connect(
@@ -252,7 +301,16 @@ export class FaultInjectingTransport implements Transport {
         "timeout",
       );
     }
-    return this.faulty(await this.inner.connect(to, preamble, onMessage), from, to);
+    const wrapper: { connection?: Connection } = {};
+    const inner = await this.inner.connect(
+      to,
+      preamble,
+      onMessage === undefined
+        ? undefined
+        : (message, peer, connection) => onMessage(message, peer, wrapper.connection ?? connection),
+    );
+    wrapper.connection = this.faulty(inner, from, to);
+    return wrapper.connection;
   }
 
   private faulty(connection: Connection, from: SiloAddress, to: SiloAddress): Connection {

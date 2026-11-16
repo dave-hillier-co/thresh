@@ -107,4 +107,23 @@ describe("GracefulShutdown", () => {
     await shutdown.drain();
     expect(stops).toBe(1);
   });
+
+  it("beginDrain flips readiness without waiting or stopping, and drain still stops the node after it", async () => {
+    const health = new HealthCheck();
+    health.update(ready);
+    const order: string[] = [];
+    let stops = 0;
+    const node: Drainable = { stop: async () => void stops++ };
+    const shutdown = new GracefulShutdown(health, node, {
+      delay: async () => void order.push("grace"),
+    });
+    shutdown.beginDrain();
+    shutdown.beginDrain();
+    expect(health.ready().ok).toBe(false);
+    expect(order).toEqual([]);
+    expect(stops).toBe(0);
+    await shutdown.drain();
+    expect(order).toEqual(["grace"]);
+    expect(stops).toBe(1);
+  });
 });

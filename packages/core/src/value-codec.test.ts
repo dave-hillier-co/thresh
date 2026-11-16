@@ -184,7 +184,10 @@ describe("value-codec", () => {
       const bytes = new Uint8Array([1, 2, 3]);
 
       expect(encodeValue(bytes)).toBe(bytes);
-      expect(decodeValue(encodeValue(bytes))).toBe(bytes);
+      // Decoding hands back a fresh, exact copy (a transport's view must not alias its message).
+      const decoded = decodeValue(encodeValue(bytes)) as Uint8Array;
+      expect(decoded).not.toBe(bytes);
+      expect([...decoded]).toEqual([1, 2, 3]);
     });
   });
 

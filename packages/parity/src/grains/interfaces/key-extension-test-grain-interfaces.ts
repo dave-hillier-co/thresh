@@ -11,4 +11,5 @@ export interface IKeyExtensionTestGrain extends GrainKey<CompoundKey<Guid>> {
 
 export const IKeyExtensionTestGrain = defineGrainInterface<IKeyExtensionTestGrain>(
   "UnitTests.GrainInterfaces.IKeyExtensionTestGrain",
+  { key: "guid-compound" },
 );

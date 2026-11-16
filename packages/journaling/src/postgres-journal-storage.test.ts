@@ -163,8 +163,10 @@ describe.skipIf(pool === undefined)("PostgresJournalStorage", () => {
     const av = new DurableValueImpl<number>("v", a);
     a.register(av);
     await a.replay();
-    await av.set(1);
-    await av.set(2);
+    // A mutator applies to memory and buffers its entry; `writeState` appends the batch.
+    av.set(1);
+    av.set(2);
+    await a.writeState();
 
     const b = new StateMachineManagerImpl("journal", id, makeStorage());
     const bv = new DurableValueImpl<number>("v", b);

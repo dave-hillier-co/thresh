@@ -34,6 +34,55 @@ Each normal method call is one serialized turn. `readOnly` interface options dec
 not mutate state and enable runtime optimizations; violating read-only state guards throws. Other
 method options include response timeout, transaction behavior, interleaving, and one-way delivery.
 
+## Class form and functional form
+
+A grain is written either as a class (decorators) or as a `defineGrain` factory (options and
+hooks); both register through the same catalog, scheduler and facet binding, and the functional form
+is the recommended one for new code. The two are kept in lockstep: every authoring feature is in the
+matrix in `packages/core/src/authoring-matrix.test.ts`, which is checked against what
+`@thresh/core/decorators` and `@thresh/core/define-grain` export, and fails when a decorator or hook
+is added to one without an answer for the other.
+
+| Feature | Class form | Functional form |
+|---|---|---|
+| Registration | `@grain()` | `defineGrain(name, factory, options)` |
+| Full reentrancy | `@reentrant()` | `reentrant: true` |
+| May-interleave predicate | `@mayInterleave(predicate)` | `useMayInterleave(predicate)` |
+| Implicit stream subscription | `@implicitStreamSubscription(ns)` | `implicitSubscriptions: [ns]` |
+| Implicit channel subscription | `@implicitChannelSubscription(ns)` | `implicitChannelSubscriptions: [ns]` |
+| Regex channel subscription | `@regexImplicitChannelSubscription(re)` | `regexImplicitChannelSubscriptions: [re]` |
+| Persistent, reducer, transactional, durable state | `@persistentState` and the other field decorators | `usePersistentState` and the other `use*` hooks |
+| Third-party facet | `@grainFacet(kind, name, config)` | `useGrainFacet(kind, { name, config })` |
+| Activation and deactivation | override `onActivate` / `onDeactivate` | `useOnActivate` / `useOnDeactivate` |
+| Migration state | implement `onDehydrate` / `onRehydrate` | `useOnDehydrate` / `useOnRehydrate` |
+| Per-silo dependencies | a `GrainActivator` passes constructor arguments | `useDependency(token)` |
+| Durable job handler | `DURABLE_JOB_HANDLER` member | `useDurableJobHandler` |
+
+A few notes on the functional column:
+
+- `useMayInterleave` is per activation, so the predicate may close over the factory's state.
+- `useGrainFacet` returns a handle; `handle.get()` is the facet the factory registered with
+  `addGrainFacetFactory(kind, name, factory)`, bound before `onActivate`.
+- `useOnDehydrate` and `useOnRehydrate` make the activation a migration participant without
+  putting `onDehydrate` / `onRehydrate` on the grain's call surface: a remote call to either is
+  refused like any runtime hook, and a factory that returns one of them is rejected at activation.
+  A hook runs synchronously, as the class methods do.
+- `useDependency` reads a value the silo's builder registered with
+  `builder.addGrainDependency(token, value)`, where `token` comes from `createDependencyToken<T>(name)`
+  in `@thresh/core/grain-dependency`. It is per silo: two silos in one process can supply different
+  values. It throws, naming the token, if the silo registered none.
+- All of them follow the rules of hooks: call them at the top of the factory, synchronously.
+
+Three features are deliberately single-path:
+
+- **`JournaledGrain`** is a base class whose transition and log-view hooks the application
+  overrides; a factory has no base class. A functional grain journals with `useDurable*` or folds
+  events with `useReducerState`.
+- **Custom log-view storage** (`readStateFromStorage`, `applyUpdatesToStorage`, `clearStoredState`)
+  is an extension point of `JournaledGrain` and follows it.
+- **`defineReducerGrain`** is a whole-grain shortcut over `useReducerState`; a class grain gets the
+  same behaviour from a `@reducerState` field.
+
 ## Interleaving
 
 A turn is the whole `async` method, including every continuation after an `await`. By default a
@@ -68,7 +117,7 @@ What an interleaved call may observe is a contract, pinned by
 
 Call-chain reentrancy is off by default, as in Orleans. A non-reentrant grain that calls back into
 itself — directly, or through other grains (`A -> B -> A`) — waits on its own running turn and fails
-with `GrainCallTimeoutError` when the call's response timeout elapses. To allow it, wrap the calls in
+with `GrainCallTimeoutError` when the call's response timeout elapses (30 seconds unless the method, `defaultResponseTimeout` or `callTimeout` says otherwise, for a call to a grain on the same silo as for one on another). To allow it, wrap the calls in
 `RequestContext.allowCallChainReentrancy` (Orleans' `AllowCallChainReentrancy`):
 
 ```ts
@@ -120,3 +169,39 @@ commands to be idempotent where retry is possible. Never rely on a specific acti
 Use `RequestContext` for small cross-cutting string headers, incoming/outgoing call filters for
 logging or policy, and `GrainCancellationToken` for cancellation across a grain boundary. Class
 grains and decorators remain supported for Orleans ports; prefer functional grains for new code.
+
+## What a call does to its arguments
+
+A call to a grain on another silo serializes its arguments and its result, so the callee works on
+its own copies: a class instance with no registered surrogate arrives as a plain object of its own
+enumerable fields, a value the codec cannot carry (a function, a cycle, a sparse array, a `RegExp`)
+is refused, and an error arrives as the class the codec rebuilds. A call to a grain on the SAME silo
+does what `localCallSemantics` (a `SiloConfig` field) says:
+
+- `"copy"` (the default in a silo): the arguments and the result are deep-copied, exactly as the
+  codec round trip would deliver them but without building the encoded form, and a thrown error
+  takes the codec's path. A same-silo callee then sees what a callee on another silo would. This is
+  Orleans' behaviour.
+- `"reference"`: nothing is copied. The callee receives the caller's own objects and the caller
+  receives the callee's; a class instance keeps its class and an error its class. A callee that
+  mutates its argument changes the caller's object, and a caller that mutates a returned value
+  changes the grain's state, so the same call behaves differently on one silo and across two.
+  Choose it only for a silo where the cost of copying matters more than that.
+- `"wire"` (the default in `TestCluster`): the arguments, the result and a thrown error make the
+  full serializer round trip a message body would. The same result as `"copy"`, at the full price.
+
+Under `"copy"`, `immutable(value)` (from `@thresh/core/immutable`, Orleans' `Immutable<T>`) marks a
+value as safe to share: the copier hands it over as itself, at any depth of an argument or a result,
+instead of copying it. It is a promise you make, not one anything enforces. Neither side may mutate
+the value, or anything it reaches, after the call, because both hold the same object. The mark is
+kept by identity, so it changes nothing about the value's shape, and the codec ignores it: a call to
+another silo, or a silo set to `"wire"`, still serializes the value, flattening a class instance as
+usual. A primitive needs no mark; a function cannot be marked; a marked value inside an `Error`
+carried as a value is copied with the error.
+
+```ts
+import { immutable } from "@thresh/core/immutable";
+
+const rows = immutable(await loadReferenceRows()); // never mutated after this
+await grain.index(rows); // shared on the same silo under "copy", serialized across silos
+```
