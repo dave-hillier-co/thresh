@@ -552,6 +552,39 @@ deactivation hooks, stops its reminders, stream agents and durable jobs, and fai
 probe, so the kubelet restarts it. Before its endpoint is first listed a pod is simply not yet a
 member and is not fenced.
 
+## Shutting down
+
+`SiloHost.stop()` (what a `SIGTERM` handler awaits) drains the silo in this order:
+
+1. **Readiness flips** to not ready, before anything else stops. The ownership work stops with it:
+   no reminder range, stream queue or durable-job shard is adopted from the moment the stop begins.
+2. **The grace period** (`gracefulShutdownMs`, 5 s by default under Kubernetes membership, 0 under
+   static membership) is waited out. It is the time Kubernetes' own proxies and the EndpointSlice
+   controller need to stop routing to the pod, which the silo cannot observe.
+3. **The handover.** The silo keeps following the EndpointSlice watch through its stop, so it sees
+   its own endpoint turn terminating, as its peers do, and gives its share of the directory to the
+   silos that remain. If it holds records the new owners have not yet collected, it waits for them,
+   for at most **half of what is left of the stop budget after the grace period**. It waits only for
+   owners that are ready in the view it has applied: a pod that is listed but not ready owns a share
+   only when no pod is ready, and may have no process behind it, so a crashed pod that is still
+   listed does not hold up the stop of a Deployment being deleted. A silo that has not seen itself
+   leave (its watch lags, or its endpoint was not marked terminating), that owned nothing, or that
+   has nobody ready left to hand over to waits for nothing; its share is rebuilt from the survivors
+   once it has gone. It goes on serving the grains it hosts throughout. If the bound elapses first,
+   it logs a warning naming the owners it was still waiting for.
+4. **Deactivation.** Every activation is deactivated (`onDeactivate` runs) with whatever is left of
+   the budget, so deactivation always keeps at least half of what remained after the grace period.
+   Each unregisters at the grain's new owner.
+5. **The directory partition stops, the listener and connections close**, and the subsystems
+   below the node (storage clients, the membership watch, the health listener) are torn down.
+
+`stopBudgetMs` (30 s by default) bounds steps 2 to 4 together. Set it, with `gracefulShutdownMs`,
+to fit inside the pod's `terminationGracePeriodSeconds`: a silo still deactivating when the kubelet
+sends `SIGKILL` loses whatever its remaining `onDeactivate` hooks would have written. A pod whose
+endpoint is removed from the slices before it has finished (step 3 or 4) is fenced, as a running pod
+would be: its peers have already dropped its records, so the activations still up are abandoned
+without their hooks, and the stop completes.
+
 ## When a pod is lost
 
 Every silo owns a share of the grain directory: the record of which pod runs each grain. When
@@ -560,10 +593,21 @@ grain is never started a second time while its first activation may still be run
 records from the silo that held them, or, when that silo is gone, rebuild them by asking every
 listed pod which grains it runs.
 
-- **A pod that stops gracefully** hands its records on as it turns not ready; nothing waits.
+- **A pod that stops gracefully** hands its records on while it is still serving, and deactivates
+  only once they have been collected (see [Shutting down](#shutting-down)); nothing waits for its
+  drain.
 - **A pod that crashes** refuses connections once its process is gone, which counts as "I run
-  nothing". As soon as its endpoint turns not ready, its share is rebuilt from the survivors, and its
-  grains are started afresh on the next call.
+  nothing". As soon as its endpoint turns not ready, its share is rebuilt from the survivors, and
+  each grain it ran answers again, from a fresh activation on another pod, on its next call through
+  any survivor, while the pod is still listed: a caller whose connection to the grain's pod is
+  refused removes that grain's record and places it again. Until its endpoint turns not ready the
+  pod still owns its share, so a call that needs it may be refused with a rejection the caller may
+  retry.
+- **A container that restarts in place** (a crash loop, a failed liveness probe) is the same silo
+  address again: same pod name, uid and endpoint. Until its readiness passes it is a joining member
+  that runs nothing and starts nothing. A call that reaches it for a grain the old process ran
+  removes that grain's record there and is refused, and the caller places the grain afresh on a
+  ready pod. Once it is ready it takes a share again, like any pod that turns ready.
 - **A pod that is unreachable but still listed** — its node is partitioned or wedged, so dials to it
   time out — cannot answer, and the share being rebuilt stays locked until Kubernetes removes its
   endpoint. Calls to grains in that share that are not already in a caller's location cache wait, or
@@ -629,9 +673,23 @@ behavioural ports with `pnpm test:parity`.
 
 ## Stopping and killing silos
 
-`stopSilo` is a graceful shutdown: the silo drains, runs its deactivation hooks and leaves
-membership. `killSilo` is a crash, the stand-in for a killed pod (Orleans `KillSiloAsync`). The
-silo's transport is gone, so peers dialling it are refused and nothing it sends arrives. Every timer
+`stopSilo` is a graceful shutdown, as on Kubernetes: on the default membership the silo is first
+marked `draining` in the shared view, so it leaves the ring while it still serves and its
+directory ranges move to the other silos by snapshot. It then drains, waiting for those snapshots
+to be collected before it runs its deactivation hooks, and leaves membership. A `SiloHost` stopped
+directly (`host.stop()`), which nobody marks draining, keeps its ranges through its drain, and the
+survivors rebuild them once it has left. `dispose()` closes the cluster client, then stops the silos
+one at a time in the order they started, each the way `stopSilo` stops it (marked `draining` or its
+pod terminating, stopped, then removed), while the silos not yet stopped are still active, as
+Orleans' `StopAllSilosAsync` does. Each hands its ranges to the silos that remain, so an
+`onDeactivate` hook that calls a grain during `dispose()` reaches it on a silo that has not stopped
+yet; the last silo has nobody to hand over to and waits for nothing. A silo whose host a test
+already stopped directly goes first, and `dispose()` heals every fault injected through `faults`
+before it stops anything, so neither holds up a handover. `stopBudgetMs` sets every silo's stop
+budget (the grace period is 0 here, so the handover may use half of it).
+
+`killSilo` is a crash, the stand-in for a killed pod (Orleans `KillSiloAsync`). The silo's
+transport is gone, so peers dialling it are refused and nothing it sends arrives. Every timer
 it armed is cancelled (grain timers, reminder ticks, durable-job polls, idle collection), its
 pulling-stream agents stop, and it sees no further membership change, so it runs no further
 ownership hooks. No shutdown code runs: no drain, no deactivation hook, no release of what it held.
@@ -680,10 +738,31 @@ silos start concurrently, and the kubelet marks each ready as its own readiness 
 cluster with no ready silo that is a cold start, and the ring is the joining silos until the first
 is ready.
 
-`stopSilo` marks the pod not ready, drains the silo, then removes the pod. `killSilo` leaves the
+`stopSilo` marks the pod terminating, drains the silo, then removes the pod.
+`stopSilo(silo, { terminating: "afterStopBegins" })` begins the stop first and reports the pod
+terminating after, as when the process is signalled before the endpoint changes; the silo goes on
+following its watch through the stop either way. `stopSilo(silo, { keepListed: true })` leaves the
+pod listed and terminating once the silo has stopped, for the test to remove with
+`kubernetes.removePod`. `killSilo` leaves the
 pod listed and ready, as after a real crash, until the test calls `kubernetes.depart` (or
-`markNotReady` and `removePod`). Until then the survivors still route to the dead silo, and those
-calls fail.
+`markNotReady` and `removePod`). Until its pod turns not ready the dead silo is still in the ring
+and owns its share of the directory, so calls that need it are refused, as rejections the caller
+may resend.
+
+`restartInPlace(silo, options)` is a container that restarts in place: the silo's process dies as
+in `killSilo` (a silo already killed, whose pod is still listed, may be restarted too), its pod
+turns not ready, and a new silo process starts with the same `SiloAddress` — pod name, uid and
+endpoint — while the pod stays listed throughout. The new process is a joining member until the
+kubelet marks the pod ready once its own readiness passes, or, with `{ holdReadiness: true }`, until
+the test flips it. It returns the new silo's handle; the old handle is no longer live. Survivors
+may still hold directory entries and cached routes that name the address for activations of the
+process before it.
+
+```ts
+const restarted = await cluster.restartInPlace(c, { holdReadiness: true });
+restarted.address.equals(c.address); // true: the same pod
+await cluster.kubernetes.kubelet(restarted); // readiness passes, it rejoins the ring
+```
 
 The static membership stays the default because the existing suites were written against its
 instant, cluster-wide views.
@@ -1010,6 +1089,32 @@ re-resolves and retries after a pause, a bounded number of times. It differs fro
   with cause `refused`) has no process at its address, so it hosts nothing: it has answered with
   nothing. A dial that times out, or a connection that closes during the handshake, says nothing
   about the process behind it and is asked again.
+- **A refused dial is an answer on the call path too.** A pod whose process has died stays listed,
+  not ready, until Kubernetes removes it or restarts its container in place, and entries for its
+  activations in ranges that did not change hands stay valid, since it is still a member. When the
+  dial a caller makes to deliver a call to the host an entry or cached route names is refused
+  outright, the caller unregisters exactly that entry (host and activation id) at its owner, drops
+  the route and resolves the grain again: it finds a newer entry, or none and places the grain
+  afresh. The request never left, so this is safe for every kind of call, one-way included. The
+  owner removes the entry only while it is the one held, so an entry that replaced it meanwhile
+  survives; a call removes at most two such entries before it fails as it would have. A dial that
+  times out or a handshake that fails removes nothing. Orleans has no counterpart on the call path:
+  its membership declares a crashed silo dead, which removes every entry it hosted at once.
+- **An unhosted entry is removed by the silo it names**, as Orleans' `Catalog` unregisters an
+  activation that does not exist (`UnregistrationCause.NonexistentActivation`). A silo in its ring
+  does this before it claims the grain. A silo outside its ring (a container restarted in place
+  is one until it is ready) that is sent a call for a grain it does not host looks the grain up
+  first, waiting at most a second: an entry naming it for an activation that is neither here nor
+  coming up is unregistered, that exact entry, and the call is refused before it runs so the
+  caller resolves again; an entry naming another silo gets the call forwarded, under the forward
+  cap, as Orleans re-addresses and forwards a message it cannot deliver. Orleans unregisters by
+  silo and grain only, after a lazy-deregistration delay that keeps it from removing a newer
+  registration; the exact activation id does that here, with no delay.
+- **Both rest on one assumption**, the one recovery already makes: a refused dial means no process
+  is serving at the address. A network that answers a dial with a refusal while the process behind
+  it is alive (a firewall `REJECT` rule, say) would let a grain that process still runs be
+  activated a second time, exactly as it would let a recovery treat that process as hosting
+  nothing.
 - **An optional patience.** `SiloConfig.directoryRecoveryPatience`, unset by default, bounds how
   long a recovery waits: once it elapses the range unlocks with the answers received, the event is
   logged at error level and counted (`thresh.directory.recovery.patience_expired`). It trades the
@@ -1026,6 +1131,26 @@ re-resolves and retries after a pause, a bounded number of times. It differs fro
   registration is confirmed, in the same synchronous step that makes it visible to a recovery, so a
   registration that loses forwards its call to the winner and no duplicate activation exists to
   deactivate. A migrated activation, which exists before it registers, is deactivated when it loses.
+- **A leaving silo hands over, then deactivates, as two steps.** Orleans changes the silo's status
+  to `ShuttingDown` and deactivates its activations in the same lifecycle stage (`BecomeActive`'s
+  stop: `MembershipAgent.BecomeShuttingDown` and `Catalog.DeactivateAllActivations`), and lets the
+  range lock order them: the status change releases the silo's ranges, and an unregistration sent
+  during deactivation waits at the new owner until that owner has pulled the snapshot. Here the
+  silo does not publish its own status: Kubernetes marks the endpoint terminating, the silo learns
+  of it from its own watch like any peer, and the grace period (the time Kubernetes' proxies need
+  to stop routing to the pod) comes first. So the silo keeps following the watch through its stop
+  (its ownership hooks stay halted from the moment the stop begins), and when the grace has
+  elapsed it waits, explicitly, until every snapshot of a range it gave up has been collected
+  (each partner has acknowledged it, left the view, or started a recovery at or above its
+  version), for at most half of what remains of the stop budget, before it deactivates. Without
+  that wait a silo with little to deactivate could close its listener before a new owner had
+  pulled, and that owner would recover. It waits only for partners that are `active` in the view
+  it has applied: a partner that is not ready owns a range only by the cold-start fallback (no
+  silo is ready), and nothing says its process is running, so a dead pod still listed would
+  otherwise hold every leaver of a cluster stopping together for the whole bound. Such a snapshot
+  is still held and served if the partner comes for it. A silo that never saw itself leave, owned
+  nothing, or has nobody ready to hand over to waits for nothing; a silo that sees itself removed
+  during the drain fences as a running silo does.
 
 ## Functional / reducer authoring
 

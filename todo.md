@@ -277,11 +277,16 @@ Membership and partition ownership:
       applies the current view in `start()`; ownership hooks run from one path.
 - [x] **M3** join recovery runs with the read gate open (duplicate activations on join). An
       unknown previous owner now waits on every source, and the pull names the requester's ring.
-- [ ] **M4** **partly fixed.** A removed silo is cleared from the cache, the pool and the client
-      directory, and a peer that cannot be reached fails with the transports' one `ConnectFailure`
-      (the cached route is dropped). Still open: a grain hosted on a pod whose process died stays
-      registered there while the pod is listed, so calls to it are refused until Kubernetes
-      removes the pod or the restarted container becomes ready (slice 4 of the design note).
+- [x] **M4** a dead silo that is still listed keeps its grains. A removed silo is cleared from
+      the cache, the pool and the client directory, and a peer that cannot be reached fails with
+      the transports' one `ConnectFailure`. A dial that is refused outright removes the one entry
+      that was followed and the grain is placed afresh, and a silo that does not host what the
+      directory says it hosts removes the entry, so a crashed pod's grains answer again while the
+      pod is still listed and after its container restarts in place. Residuals: until Kubernetes
+      marks a dead pod not ready it is still in the ring, so calls that need it as a directory
+      owner or a placement target are refused (there is no failure detector: option C above); a
+      refused dial on a forwarded hop is not repaired at the forwarding silo; and the
+      unregistration a repair makes has no bound of its own.
 - [x] **M5** per-silo view versions break routine routing (#72). The view is a pure function of
       the EndpointSlices, its version is the highest `resourceVersion` observed, a watch must
       report a revision, and `MembershipService.refresh(version)` lets a silo catch up on demand.
@@ -291,11 +296,14 @@ Membership and partition ownership:
       a port of Orleans' `GrainDirectoryPartition`: range locks across a view change, snapshots
       keyed by the pair of views, recovery from every member, versioned requests, the recovery
       version rule and `TestCluster.checkIntegrity()`. Failing closed has a cost while a pod is
-      unreachable but listed (`docs/deviations.md`). Still open (slice 3): a leaving silo stops
-      applying views when its stop begins and hands its ranges over only because a new owner's
-      request makes it catch up, it does not wait for the snapshots to be collected before it
-      deactivates, and static membership never marks a leaver `draining`, so the default
-      `TestCluster` recovers a stopped silo's ranges instead of transferring them.
+      unreachable but listed (`docs/deviations.md`). A leaving silo follows the watch through
+      its stop, waits for its snapshots to be collected (only by partners that are ready, and for
+      at most half of what is left of the stop budget) and then deactivates; `TestCluster` marks
+      a silo draining before a graceful stop on either membership and disposes one silo at a
+      time. Residuals: a partner that stays a ready member but never pulls or recovers holds a
+      leaver for the whole bound; calls a stopping silo itself has in flight when its transport
+      closes are rejected; and `thresh.directory.recovery.exhausted` now duplicates
+      `thresh.directory.recovery.patience_expired`.
 - [ ] **M7** **partly fixed.** A graceful release resets a job shard's adoption count, poisoning
       is logged and counted, and job ownership follows the node's applied view. Still open: the
       three services have no shared ownership abstraction and no fencing epoch on their writes.
@@ -386,6 +394,13 @@ Verification model:
 - [ ] **V4** the parity metric covers neither the largest deviation nor functional grains
 - [x] **V5** no fault-injection seam. A fault-injecting transport (drop, delay, fail connects,
       partition) and storage decorators ship in the harness.
+- [ ] The parity stress test `DuplicateActivationsTests.DuplicateActivations` failed once in a
+      full `pnpm test:parity` run on a heavily loaded machine, after the leave-wait merge, and its
+      message was not captured. It then passed in five full runs and twelve runs alone, most of
+      them under deliberate load. If it fails again, keep the output: a timeout is load, a
+      reported duplicate is a defect in the directory.
+- [ ] `turn-scheduler.test.ts` "drains a deep queue of exclusive turns in time linear in its
+      length" asserts on wall-clock time and fails when the machine is saturated.
 
 State and journaling:
 
