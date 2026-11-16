@@ -208,14 +208,21 @@ A leaving silo hands its ranges over while it is still serving, so nothing waits
    change does. When the grace has elapsed it waits, within what is left of the stop budget, until
    every snapshot has been collected, or its partners have left or started recovery. A silo that
    never saw itself leave (a held watch, a membership that is not told) holds no snapshot and waits
-   for nothing; its ranges are recovered once it has gone.
+   for nothing; its ranges are recovered once it has gone. It waits only for partners that are
+   `active` in the view it has applied. A partner that is not ready owns a range only because no
+   silo is ready (the cold-start fallback of decision 1), and nothing says it is running: a dead
+   pod that is still listed would otherwise hold every leaver for half its budget when a cluster
+   stops together.
 4. Only then does it deactivate its activations. It keeps serving them until that point. Their
    unregistrations resolve the owner in the view it has applied, so they go to the new owners.
 5. Then the partition stops and the listener closes.
 
 A silo with nobody to hand over to (the last one, or a cluster stopping together) waits for nothing.
 Static membership takes the same path: the view marks the silo `draining` before it stops and removes
-it after, which is what `TestCluster` does for a graceful stop.
+it after, which is what `TestCluster` does for a graceful stop. `TestCluster.dispose()` stops its
+silos one at a time in that way, each leaving while the rest are still active, as Orleans'
+`StopAllSilosAsync` does, so a deactivation hook can still call a grain on a silo that has not
+stopped yet.
 
 ### Integrity
 
