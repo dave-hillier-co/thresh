@@ -2,7 +2,6 @@ import { createServer } from "node:net";
 import { once } from "node:events";
 import { describe, expect, it } from "vitest";
 import { grain } from "@thresh/core/decorators";
-import { RejectionError } from "@thresh/core/errors";
 import { Grain } from "@thresh/core/grain";
 import { GrainId } from "@thresh/core/grain-id";
 import { defineGrainInterface } from "@thresh/core/grain-interface";
@@ -41,13 +40,19 @@ async function deadSilo(): Promise<SiloAddress> {
 }
 
 describe("a call whose route points at a peer that is not listening", () => {
-  it("fails with the typed rejection rather than a raw ECONNREFUSED, and leaves no cached route", async () => {
+  // The transport reports the refused dial as the typed `ConnectFailure` (cause `refused`), not a
+  // raw ECONNREFUSED: only that lets the caller read it as "no process there", remove the entry
+  // and place the grain afresh (docs/design-membership-and-directory.md). A raw error would fail
+  // the call.
+  it("removes the entry rather than failing on a raw ECONNREFUSED, and answers from a fresh activation", async () => {
     const local = new SiloAddress("silo-0", "uid-0", "127.0.0.1:0");
     const dead = await deadSilo();
+    const membership = new StaticMembershipService(local, [local, dead]);
+    membership.setStatus(dead, "joining");
     const node = new ClusterNode({
       local,
       clusterId: CLUSTER,
-      membership: new StaticMembershipService(local, [local, dead]),
+      membership,
       transport: new WebSocketTransport(CLUSTER),
     });
     node.registerGrain(CounterGrain, { interfaces: [ICounter] });
@@ -67,19 +72,16 @@ describe("a call whose route points at a peer that is not listening", () => {
         activationId: "act-dead",
       });
 
-      const err = await node
+      const answer = await node
         .getGrain(ICounter, key)
         .increment(1)
-        .then(
-          () => undefined,
-          (e: unknown) => e,
-        );
+        .catch((e: unknown) => e);
 
-      expect(err).toBeInstanceOf(RejectionError);
-      expect((err as RejectionError).kind).toBe("unknownTarget");
-      expect((err as { code?: unknown }).code).not.toBe("ECONNREFUSED");
+      expect(answer).toBe(1);
+      const entry = await node.partition.lookup(node.appliedViewVersion, grainId);
+      expect(entry.kind === "ok" && entry.value?.silo.equals(local)).toBe(true);
       const cache = (node as unknown as { cache: LocationCache }).cache;
-      expect(cache.get(grainId)).toBeUndefined();
+      expect(cache.get(grainId)?.silo.equals(dead)).not.toBe(true);
     } finally {
       await node.stop();
     }
