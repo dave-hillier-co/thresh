@@ -1,4 +1,4 @@
-import { createServer } from "node:net";
+import { createServer, type Socket } from "node:net";
 import { once } from "node:events";
 import { describe, expect, it } from "vitest";
 import { grain } from "@thresh/core/decorators";
@@ -11,6 +11,7 @@ import { ConsistentHashRing } from "@thresh/directory/consistent-hash-ring";
 import type { LocationCache } from "@thresh/directory/location-cache";
 import { ClusterNode } from "@thresh/runtime/cluster-node";
 import { WebSocketTransport } from "@thresh/messaging/web-socket-transport";
+import type { RejectionError } from "@thresh/core/errors";
 import { StaticMembershipService } from "@thresh/runtime/static-membership";
 
 interface ICounter extends GrainKey<string> {
@@ -86,4 +87,59 @@ describe("a call whose route points at a peer that is not listening", () => {
       await node.stop();
     }
   });
+});
+
+describe("a call whose route points at a peer that closes the connection during the handshake", () => {
+  // A listener that accepts and drops the socket says nothing about the process behind it, so the
+  // entry stays and the call fails as it did before the refused-dial repair.
+  it("removes nothing and fails the call", async () => {
+    const local = new SiloAddress("silo-0", "uid-0", "127.0.0.1:0");
+    const peer = await deadSilo();
+    const membership = new StaticMembershipService(local, [local, peer]);
+    membership.setStatus(peer, "joining");
+    const node = new ClusterNode({
+      local,
+      clusterId: CLUSTER,
+      membership,
+      transport: new WebSocketTransport(CLUSTER),
+    });
+    node.registerGrain(CounterGrain, { interfaces: [ICounter] });
+    // Nothing listens at the peer's endpoint while this silo starts (a silo starting beside a
+    // listed peer it cannot reach waits until it can, and so does the recovery of its ranges);
+    // then a listener that drops every connection it accepts comes up there.
+    await node.start();
+    await node.partition.settled();
+    const sockets = new Set<Socket>();
+    const closing = createServer((socket) => {
+      sockets.add(socket);
+      socket.destroy();
+    }).listen(Number(peer.endpoint.split(":")[1]), "127.0.0.1");
+    await once(closing, "listening");
+    try {
+      const ring = new ConsistentHashRing([local, peer]);
+      let key = "k-0";
+      for (let i = 0; !ring.ownerOf(new GrainId("Counter", key)).equals(local); i++) key = `k-${i}`;
+      const grainId = new GrainId("Counter", key);
+      const held = { grainId, silo: peer, activationId: "act-alive" };
+      await node.partition.register(node.appliedViewVersion, held);
+
+      const err = await node
+        .getGrain(ICounter, key)
+        .increment(1)
+        .then(
+          () => undefined,
+          (e: unknown) => e,
+        );
+
+      expect(String(err)).toContain("unable to connect to");
+      expect((err as RejectionError).kind).toBe("unknownTarget");
+      const entry = await node.partition.lookup(node.appliedViewVersion, grainId);
+      expect(entry.kind === "ok" && entry.value?.activationId).toBe("act-alive");
+      expect(node.isActive(grainId)).toBe(false);
+    } finally {
+      await node.stop();
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>((resolve) => closing.close(() => resolve()));
+    }
+  }, 60_000);
 });

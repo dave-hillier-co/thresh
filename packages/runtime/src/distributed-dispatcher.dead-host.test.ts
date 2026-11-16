@@ -482,5 +482,26 @@ describe("a silo that does not host what the directory says it hosts", () => {
       expect(await silos.held()).toEqual(claimed);
       expect(catalog.get(grain)?.activationId).toBe(claimed!.activationId);
     });
+
+    it(`keeps an entry for a migrated activation being rehydrated here, ${inRing ? "in" : "outside"} its ring`, async () => {
+      const silos = await Silos.start();
+      const catalog = hostCatalog(silos.time);
+      const source = await silos.register(entryOn(O));
+      // The migration landed: its activation is in the catalog, rehydrating, and its
+      // registration replaced the source's entry.
+      const migrated = await catalog.activateMigrated(grain, newActivationId(), {}, source);
+      const moved = await silos.register(
+        { grainId: grain, silo: X, activationId: migrated.activationId },
+        source,
+      );
+      expect(moved.silo).toEqual(X);
+
+      const answer = await silos.host(catalog, () => inRing).deliverLocal(request());
+
+      expect(answer).toBe(1);
+      expect(silos.unregistrations).toEqual([]);
+      expect(await silos.held()).toEqual(moved);
+      expect(catalog.get(grain)).toBe(migrated);
+    });
   }
 });
