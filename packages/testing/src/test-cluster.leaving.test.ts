@@ -246,11 +246,11 @@ function entriesNaming(
 
 /** The warnings every silo logged: a stop whose handover bound elapsed logs one. */
 class WarningLogger implements Logger {
-  readonly warnings: Array<{ message: string; fields?: LogFields }> = [];
+  readonly warnings: Array<{ message: string; fields?: LogFields; at: number }> = [];
   debug(): void {}
   info(): void {}
   warn(message: string, fields?: LogFields): void {
-    this.warnings.push({ message, ...(fields ? { fields } : {}) });
+    this.warnings.push({ message, ...(fields ? { fields } : {}), at: performance.now() });
   }
   error(): void {}
 
@@ -350,7 +350,8 @@ describe("a leaving silo on Kubernetes membership", () => {
 
   it("starts deactivating when half the stop budget is spent on owners that never collect, and stops inside the budget", async () => {
     const stopBudgetMs = 600;
-    const cluster = await start({ initialSilos: 3, stopBudgetMs, ...preferLocal });
+    const logger = new WarningLogger();
+    const cluster = await start({ initialSilos: 3, stopBudgetMs, logger, ...preferLocal });
     const [a, b, leaver] = cluster.silos as [TestSiloHandle, TestSiloHandle, TestSiloHandle];
     const results = new Results();
     const { leaverKeys } = await seeded(cluster, results, 5);
@@ -362,15 +363,28 @@ describe("a leaving silo on Kubernetes membership", () => {
     cluster.kubernetes.api.setTerminating(leaver.address.podName);
     await waitFor(() => partitionOf(leaver).snapshotCount > 0);
     const startedAt = performance.now();
+    // The stop completes.
     await cluster.stopSilo(leaver, { keepListed: true });
-    const stoppedAfter = performance.now() - startedAt;
 
     const hooks = deactivations.filter((d) => d.silo === leaver.address.podName);
     expect(hooks.map((d) => d.key)).toEqual(expect.arrayContaining(leaverKeys));
     // TestCluster's grace is 0, so the whole budget remains after it: the wait gets half of it.
-    const firstHookAfter = Math.min(...hooks.map((d) => d.at)) - startedAt;
-    expect(firstHookAfter).toBeGreaterThanOrEqual(stopBudgetMs / 2 - 5);
-    expect(stoppedAfter).toBeLessThan(stopBudgetMs + 250);
+    const firstHookAt = Math.min(...hooks.map((d) => d.at));
+    expect(firstHookAt - startedAt).toBeGreaterThanOrEqual(stopBudgetMs / 2 - 5);
+    // Deactivation started because the bound elapsed, not because the owners collected: the stop
+    // ended its wait once, at half the budget, still awaiting both owners, and every hook ran
+    // after that, inside what was left of the budget. (Not timed against the wall clock, which a
+    // loaded machine stretches.)
+    const incomplete = logger.warnings.filter((w) =>
+      w.message.startsWith("directory handover incomplete"),
+    );
+    expect(incomplete.map((w) => w.fields?.["silo"])).toEqual([leaver.address.toString()]);
+    const [bound] = incomplete;
+    expect(bound!.fields?.["waitedMs"]).toBeGreaterThanOrEqual(stopBudgetMs / 2);
+    expect(bound!.fields?.["awaiting"]).toEqual(
+      expect.arrayContaining([a.address.toString(), b.address.toString()]),
+    );
+    expect(firstHookAt).toBeGreaterThanOrEqual(bound!.at);
     expect(partitionOf(leaver).snapshotCount).toBeGreaterThan(0);
 
     await cluster.kubernetes.release(a);
