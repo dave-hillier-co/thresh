@@ -649,6 +649,30 @@ export class TestCluster {
     await crashed;
   }
 
+  /**
+   * A container that restarts in place, under Kubernetes membership: the silo's process dies as
+   * in `killSilo` (if it is still live; a silo already killed, whose pod is still listed, may be
+   * restarted too), its endpoint turns not ready, and a new silo process starts with the SAME
+   * `SiloAddress` — pod name, uid and endpoint. The pod is listed throughout: a joining member
+   * while it is not ready, outside the ring while any peer is active. The kubelet marks it ready
+   * once the new process's own readiness passes, unless `holdReadiness`. What the old process
+   * hosted is gone; peers may still hold entries and routes naming the address. Throws under the
+   * default static membership, which has no pod to restart.
+   */
+  async restartInPlace(
+    handle: TestSiloHandle,
+    options: StartSiloOptions = {},
+  ): Promise<TestSiloHandle> {
+    const k8s = this.kubernetes;
+    const old = this.live.find((s) => s === handle);
+    if (old !== undefined) await this.killSilo(old);
+    const silo = this.buildKubernetesSilo(handle.index, handle.address);
+    await k8s.settle();
+    await silo.host.start();
+    if (options.holdReadiness !== true) await k8s.kubelet(silo);
+    return silo;
+  }
+
   /** Kill-then-replace: a fresh silo joins with a new uid, like a restarted pod. */
   async restartSilo(handle: TestSiloHandle): Promise<TestSiloHandle> {
     await this.killSilo(handle);
@@ -729,11 +753,15 @@ export class TestCluster {
     );
   }
 
-  private buildKubernetesSilo(index: number): InternalSilo {
+  /** A silo on a new pod, or, given the address of a listed pod, a new process on that pod. */
+  private buildKubernetesSilo(index: number, restarting?: SiloAddress): InternalSilo {
     const k8s = this.kubernetes;
-    const { address, metadata, watch } = k8s.addPod(index, (address) =>
-      this.options.siloMetadata?.({ index, address }),
-    );
+    const metadataFor = (address: SiloAddress): Readonly<Record<string, string>> | undefined =>
+      this.options.siloMetadata?.({ index, address });
+    const { address, metadata, watch } =
+      restarting === undefined
+        ? k8s.addPod(index, metadataFor)
+        : k8s.restartPod({ address: restarting }, metadataFor);
     const silo = this.buildSiloOn(
       index,
       address,

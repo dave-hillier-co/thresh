@@ -95,8 +95,17 @@ listed pod which grains it runs.
   only once they have been collected (see [Shutting down](#shutting-down)); nothing waits for its
   drain.
 - **A pod that crashes** refuses connections once its process is gone, which counts as "I run
-  nothing". As soon as its endpoint turns not ready, its share is rebuilt from the survivors, and its
-  grains are started afresh on the next call.
+  nothing". As soon as its endpoint turns not ready, its share is rebuilt from the survivors, and
+  each grain it ran answers again, from a fresh activation on another pod, on its next call through
+  any survivor, while the pod is still listed: a caller whose connection to the grain's pod is
+  refused removes that grain's record and places it again. Until its endpoint turns not ready the
+  pod still owns its share, so a call that needs it may be refused with a rejection the caller may
+  retry.
+- **A container that restarts in place** (a crash loop, a failed liveness probe) is the same silo
+  address again: same pod name, uid and endpoint. Until its readiness passes it is a joining member
+  that runs nothing and starts nothing. A call that reaches it for a grain the old process ran
+  removes that grain's record there and is refused, and the caller places the grain afresh on a
+  ready pod. Once it is ready it takes a share again, like any pod that turns ready.
 - **A pod that is unreachable but still listed** — its node is partitioned or wedged, so dials to it
   time out — cannot answer, and the share being rebuilt stays locked until Kubernetes removes its
   endpoint. Calls to grains in that share that are not already in a caller's location cache wait, or

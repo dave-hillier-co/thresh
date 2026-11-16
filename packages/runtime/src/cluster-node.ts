@@ -839,6 +839,7 @@ export class ClusterNode {
       remote: { send: (silo, req) => this.sendRemote(silo, req) },
       activeSilos: () => ringSilos(this.options.membership.current()),
       mayActivate: () => this.mayActivate(),
+      time,
       recoveryVersion: () => this.partition.recoveryVersion,
       refusal: () => (this.fenced ? this.fencedRefusal() : undefined),
       isLocalSystemType: (type) => this.isLocalSystemType(type),

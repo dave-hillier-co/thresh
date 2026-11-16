@@ -95,8 +95,24 @@ following its watch through the stop either way. `stopSilo(silo, { keepListed: t
 pod listed and terminating once the silo has stopped, for the test to remove with
 `kubernetes.removePod`. `killSilo` leaves the
 pod listed and ready, as after a real crash, until the test calls `kubernetes.depart` (or
-`markNotReady` and `removePod`). Until then the survivors still route to the dead silo, and those
-calls fail.
+`markNotReady` and `removePod`). Until its pod turns not ready the dead silo is still in the ring
+and owns its share of the directory, so calls that need it are refused, as rejections the caller
+may resend.
+
+`restartInPlace(silo, options)` is a container that restarts in place: the silo's process dies as
+in `killSilo` (a silo already killed, whose pod is still listed, may be restarted too), its pod
+turns not ready, and a new silo process starts with the same `SiloAddress` — pod name, uid and
+endpoint — while the pod stays listed throughout. The new process is a joining member until the
+kubelet marks the pod ready once its own readiness passes, or, with `{ holdReadiness: true }`, until
+the test flips it. It returns the new silo's handle; the old handle is no longer live. Survivors
+may still hold directory entries and cached routes that name the address for activations of the
+process before it.
+
+```ts
+const restarted = await cluster.restartInPlace(c, { holdReadiness: true });
+restarted.address.equals(c.address); // true: the same pod
+await cluster.kubernetes.kubelet(restarted); // readiness passes, it rejoins the ring
+```
 
 The static membership stays the default because the existing suites were written against its
 instant, cluster-wide views.

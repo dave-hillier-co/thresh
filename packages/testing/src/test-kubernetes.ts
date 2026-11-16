@@ -148,6 +148,28 @@ export class KubernetesControls {
     return { address, metadata, watch };
   }
 
+  /**
+   * @internal A container restarting in place: the pod `silo` names keeps its name, uid and
+   * endpoint, and so its silo address, and stays listed; its endpoint turns not ready, as it does
+   * when the container's process dies, and the new process gets a watch of its own.
+   */
+  restartPod(
+    silo: PodOwner,
+    metadataFor: (address: SiloAddress) => Readonly<Record<string, string>> | undefined,
+  ): {
+    address: SiloAddress;
+    metadata: Readonly<Record<string, string>> | undefined;
+    watch: KubernetesEndpointWatch;
+  } {
+    const name = silo.address.podName;
+    if (!this.listed(silo)) throw new Error(`${name} is not listed, so it cannot restart in place`);
+    this.api.setReady(name, false);
+    const source = this.api.source();
+    this.sources.set(name, source);
+    const watch = new KubernetesEndpointWatch(source, { reconnectMs: 0, random: () => 0 });
+    return { address: silo.address, metadata: metadataFor(silo.address), watch };
+  }
+
   /** Whether the slice still lists `silo`'s pod. */
   listed(silo: PodOwner): boolean {
     return this.api.pods().some((p) => p.name === silo.address.podName);
