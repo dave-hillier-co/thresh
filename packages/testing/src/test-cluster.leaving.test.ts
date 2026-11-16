@@ -490,6 +490,30 @@ describe("a leaving silo on the default (static) membership", () => {
     expect(statsOf([a, b]).transfers).toBeGreaterThan(before.transfers);
     expect(statsOf([a, b]).recoveries).toBe(before.recoveries);
   }, 60_000);
+
+  it("a silo whose host is stopped directly, which nobody marks draining, waits for nothing", async () => {
+    const cluster = await start({
+      initialSilos: 3,
+      membership: "static",
+      stopBudgetMs: 10_000,
+      ...preferLocal,
+    });
+    const [, , stopped] = cluster.silos as [TestSiloHandle, TestSiloHandle, TestSiloHandle];
+    const results = new Results();
+    await seeded(cluster, results, 5);
+    await cluster.checkIntegrity();
+
+    const startedAt = performance.now();
+    await stopped.host.stop();
+    expect(performance.now() - startedAt).toBeLessThan(1000);
+    // It never left the ring, so it released nothing and held no snapshot to wait on.
+    expect(partitionOf(stopped).view.inRing(stopped.address)).toBe(true);
+    expect(partitionOf(stopped).snapshotCount).toBe(0);
+    expect(deactivations.filter((d) => d.silo === stopped.address.podName).length).toBeGreaterThan(
+      0,
+    );
+    expect(results.errors).toEqual([]);
+  }, 60_000);
 });
 
 /** Orleans `ElasticChaos`, bounded and seeded so a failure replays. */
