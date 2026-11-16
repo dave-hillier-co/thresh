@@ -66,10 +66,14 @@ member and is not fenced.
 3. **The handover.** The silo keeps following the EndpointSlice watch through its stop, so it sees
    its own endpoint turn terminating, as its peers do, and gives its share of the directory to the
    silos that remain. If it holds records the new owners have not yet collected, it waits for them,
-   for at most **half of what is left of the stop budget after the grace period**. A silo that has
-   not seen itself leave (its watch lags, or its endpoint was not marked terminating), that owned
-   nothing, or that has nobody left to hand over to waits for nothing; its share is rebuilt from
-   the survivors once it has gone. It goes on serving the grains it hosts throughout.
+   for at most **half of what is left of the stop budget after the grace period**. It waits only for
+   owners that are ready in the view it has applied: a pod that is listed but not ready owns a share
+   only when no pod is ready, and may have no process behind it, so a crashed pod that is still
+   listed does not hold up the stop of a Deployment being deleted. A silo that has not seen itself
+   leave (its watch lags, or its endpoint was not marked terminating), that owned nothing, or that
+   has nobody ready left to hand over to waits for nothing; its share is rebuilt from the survivors
+   once it has gone. It goes on serving the grains it hosts throughout. If the bound elapses first,
+   it logs a warning naming the owners it was still waiting for.
 4. **Deactivation.** Every activation is deactivated (`onDeactivate` runs) with whatever is left of
    the budget, so deactivation always keeps at least half of what remained after the grace period.
    Each unregisters at the grain's new owner.

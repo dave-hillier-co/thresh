@@ -229,9 +229,13 @@ re-resolves and retries after a pause, a bounded number of times. It differs fro
   (each partner has acknowledged it, left the view, or started a recovery at or above its
   version), for at most half of what remains of the stop budget, before it deactivates. Without
   that wait a silo with little to deactivate could close its listener before a new owner had
-  pulled, and that owner would recover. A silo that never saw itself leave, owned nothing, or has
-  nobody to hand over to waits for nothing; a silo that sees itself removed during the drain fences
-  as a running silo does.
+  pulled, and that owner would recover. It waits only for partners that are `active` in the view
+  it has applied: a partner that is not ready owns a range only by the cold-start fallback (no
+  silo is ready), and nothing says its process is running, so a dead pod still listed would
+  otherwise hold every leaver of a cluster stopping together for the whole bound. Such a snapshot
+  is still held and served if the partner comes for it. A silo that never saw itself leave, owned
+  nothing, or has nobody ready to hand over to waits for nothing; a silo that sees itself removed
+  during the drain fences as a running silo does.
 
 ## Functional / reducer authoring
 
