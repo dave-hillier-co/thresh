@@ -266,8 +266,10 @@ Every finding's evidence and direction is in
 [`docs/project-review-2026-11-14.md`](docs/project-review-2026-11-14.md); the ids below are its
 headings. Not filed as issues. Fixes land on `integration/2026-11-14-design-review-fixes`, and
 the larger redesigns on `integration/2026-11-14-design-review-redesigns` stacked on it, each
-carrying a test that was observed failing first. Redis-, Postgres- and Kafka-backed paths were not
-executed locally in either wave: the Redis job-shard scripts and keys changed and must run in CI.
+carrying a test that was observed failing first. Redis-, Postgres- and Kafka-backed paths cannot
+run locally. CI runs the Redis and Postgres ones on the redesigns branch, where the test step is
+given the Postgres service's credentials (`PG_URL`); without that, on `main` and on the fixes
+branch, every Postgres test skips itself. Nothing runs the Kafka tests.
 
 Membership and partition ownership:
 
